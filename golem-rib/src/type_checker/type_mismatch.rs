@@ -14,7 +14,7 @@
 
 use crate::type_refinement::precise_types::*;
 use crate::type_refinement::TypeRefinement;
-use crate::{Expr, TypeInternal, TypeMismatchError};
+use crate::{Expr, InferredType, TypeInternal, TypeMismatchError};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::ops::Deref;
 
@@ -22,7 +22,7 @@ pub fn check_type_mismatch(
     expr: &Expr,
     parent_expr: Option<&Expr>,
     expected_type: &AnalysedType,
-    actual_type: &TypeInternal,
+    actual_type: &InferredType,
 ) -> Result<(), TypeMismatchError> {
     match &expected_type {
         AnalysedType::Record(expected_type_record) => {

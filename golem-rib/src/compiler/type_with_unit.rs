@@ -68,10 +68,10 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                 Err("Cannot convert Instance type to AnalysedType".to_string())
             }
             TypeInternal::Range { from, to } => {
-                let from: AnalysedType = AnalysedType::try_from(from.as_ref())?;
+                let from: AnalysedType = AnalysedType::try_from(from)?;
                 let to: Option<AnalysedType> = to
                     .as_ref()
-                    .map(|t| AnalysedType::try_from(t.as_ref()))
+                    .map(|t| AnalysedType::try_from(t))
                     .transpose()?;
                 let analysed_type = match (from, to) {
                     (from_type, Some(to_type)) => record(vec![
@@ -128,7 +128,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
             ))),
             TypeInternal::List(inferred_type) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::List(TypeList {
-                    inner: Box::new(inferred_type.as_ref().try_into()?),
+                    inner: Box::new(inferred_type.try_into()?),
                 }),
             )),
             TypeInternal::Tuple(tuple) => Ok(AnalysedTypeWithUnit::analysed_type(
@@ -164,7 +164,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
             )),
             TypeInternal::Option(option) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::Option(TypeOption {
-                    inner: Box::new(option.as_ref().try_into()?),
+                    inner: Box::new(option.try_into()?),
                 }),
             )),
             TypeInternal::Result { ok, error } => Ok(AnalysedTypeWithUnit::analysed_type(
@@ -172,10 +172,10 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                 AnalysedType::Result(TypeResult {
                     ok: ok
                         .as_ref()
-                        .and_then(|t| t.as_ref().try_into().ok().map(Box::new)),
+                        .and_then(|t| t.try_into().ok().map(Box::new)),
                     err: error
                         .as_ref()
-                        .and_then(|t| t.as_ref().try_into().ok().map(Box::new)),
+                        .and_then(|t| t.try_into().ok().map(Box::new)),
                 }),
             )),
             TypeInternal::Variant(variant) => Ok(AnalysedTypeWithUnit::analysed_type(

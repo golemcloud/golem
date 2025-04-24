@@ -16,7 +16,6 @@ pub(crate) use flatten::*;
 mod flatten;
 mod unification;
 use crate::instance_type::InstanceType;
-use crate::rib_source_span::SourceSpan;
 use crate::type_inference::GetTypeHint;
 use crate::TypeName;
 use bigdecimal::num_bigint::Sign;
@@ -530,19 +529,19 @@ pub enum InferredNumber {
     F64,
 }
 
-impl From<InferredNumber> for TypeInternal {
-    fn from(inferred_number: InferredNumber) -> Self {
+impl From<&InferredNumber> for InferredType {
+    fn from(inferred_number: &InferredNumber) -> Self {
         match inferred_number {
-            InferredNumber::S8 => TypeInternal::S8,
-            InferredNumber::U8 => TypeInternal::U8,
-            InferredNumber::S16 => TypeInternal::S16,
-            InferredNumber::U16 => TypeInternal::U16,
-            InferredNumber::S32 => TypeInternal::S32,
-            InferredNumber::U32 => TypeInternal::U32,
-            InferredNumber::S64 => TypeInternal::S64,
-            InferredNumber::U64 => TypeInternal::U64,
-            InferredNumber::F32 => TypeInternal::F32,
-            InferredNumber::F64 => TypeInternal::F64,
+            InferredNumber::S8 => InferredType::s8(),
+            InferredNumber::U8 => InferredType::u8(),
+            InferredNumber::S16 => InferredType::s16(),
+            InferredNumber::U16 => InferredType::u16(),
+            InferredNumber::S32 => InferredType::s32(),
+            InferredNumber::U32 => InferredType::u32(),
+            InferredNumber::S64 => InferredType::s64(),
+            InferredNumber::U64 => InferredType::u64(),
+            InferredNumber::F32 => InferredType::f32(),
+            InferredNumber::F64 => InferredType::f64(),
         }
     }
 }
@@ -980,121 +979,6 @@ impl InferredType {
     }
 }
 
-impl TryFrom<&InferredType> for AnalysedType {
-    type Error = String;
-
-    fn try_from(value: &InferredType) -> Result<Self, Self::Error> {
-        match value.inner.deref() {
-            TypeInternal::Bool => Ok(bool()),
-            TypeInternal::S8 => Ok(s8()),
-            TypeInternal::U8 => Ok(u8()),
-            TypeInternal::S16 => Ok(s16()),
-            TypeInternal::U16 => Ok(u16()),
-            TypeInternal::S32 => Ok(s32()),
-            TypeInternal::U32 => Ok(u32()),
-            TypeInternal::S64 => Ok(s64()),
-            TypeInternal::U64 => Ok(u64()),
-            TypeInternal::F32 => Ok(f32()),
-            TypeInternal::F64 => Ok(f64()),
-            TypeInternal::Chr => Ok(chr()),
-            TypeInternal::Str => Ok(str()),
-            TypeInternal::List(typ) => {
-                let typ: AnalysedType = typ.try_into()?;
-                Ok(list(typ))
-            }
-            TypeInternal::Tuple(types) => {
-                let types: Vec<AnalysedType> = types
-                    .into_iter()
-                    .map(|t| t.try_into())
-                    .collect::<Result<Vec<AnalysedType>, _>>()?;
-                Ok(tuple(types))
-            }
-            TypeInternal::Record(field_and_types) => {
-                let mut field_pairs: Vec<NameTypePair> = vec![];
-                for (name, typ) in field_and_types {
-                    let typ: AnalysedType = typ.try_into()?;
-                    let name = name.clone();
-                    field_pairs.push(NameTypePair { name, typ });
-                }
-                Ok(record(field_pairs))
-            }
-            TypeInternal::Flags(names) => Ok(AnalysedType::Flags(TypeFlags {
-                names: names.clone(),
-            })),
-            TypeInternal::Enum(cases) => Ok(AnalysedType::Enum(TypeEnum {
-                cases: cases.clone(),
-            })),
-            TypeInternal::Option(typ) => {
-                let typ: AnalysedType = typ.try_into()?;
-                Ok(option(typ))
-            }
-            TypeInternal::Result { ok, error } => {
-                let ok_option: Option<AnalysedType> =
-                    ok.as_ref().map(|t| t.try_into()).transpose()?;
-                let ok = ok_option.ok_or("Expected ok type in result".to_string())?;
-                let error_option: Option<AnalysedType> =
-                    error.as_ref().map(|t| t.try_into()).transpose()?;
-                let error = error_option.ok_or("Expected error type in result".to_string())?;
-                Ok(result(ok, error))
-            }
-            TypeInternal::Variant(name_and_optiona_inferred_types) => {
-                let mut cases: Vec<NameOptionTypePair> = vec![];
-                for (name, typ) in name_and_optiona_inferred_types {
-                    let typ: Option<AnalysedType> =
-                        typ.as_ref().map(|t| t.try_into()).transpose()?;
-                    cases.push(NameOptionTypePair {
-                        name: name.clone(),
-                        typ,
-                    });
-                }
-                Ok(variant(cases))
-            }
-            TypeInternal::Resource {
-                resource_id,
-                resource_mode,
-            } => Ok(handle(
-                AnalysedResourceId(*resource_id),
-                match resource_mode {
-                    0 => AnalysedResourceMode::Owned,
-                    1 => AnalysedResourceMode::Borrowed,
-                    _ => return Err("Invalid resource mode".to_string()),
-                },
-            )),
-            TypeInternal::Instance { .. } => {
-                Err("Cannot convert instance type to analysed type".to_string())
-            }
-            TypeInternal::OneOf(_) => {
-                Err("Cannot convert one of type to analysed type".to_string())
-            }
-            TypeInternal::AllOf(_) => {
-                Err("Cannot convert all of type to analysed type".to_string())
-            }
-            TypeInternal::Unknown => {
-                Err("Cannot convert unknown type to analysed type".to_string())
-            }
-            TypeInternal::Sequence(_) => {
-                Err("Cannot convert function return sequence type to analysed type".to_string())
-            }
-            TypeInternal::Range { from, to } => {
-                let from: AnalysedType = from.try_into()?;
-                let to: Option<AnalysedType> = to.as_ref().map(|t| t.try_into()).transpose()?;
-                let analysed_type = match (from, to) {
-                    (from_type, Some(to_type)) => record(vec![
-                        field("from", option(from_type)),
-                        field("to", option(to_type)),
-                        field("inclusive", bool()),
-                    ]),
-
-                    (from_type, None) => record(vec![
-                        field("from", option(from_type)),
-                        field("inclusive", bool()),
-                    ]),
-                };
-                Ok(analysed_type)
-            }
-        }
-    }
-}
 
 impl From<&AnalysedType> for InferredType {
     fn from(analysed_type: &AnalysedType) -> Self {

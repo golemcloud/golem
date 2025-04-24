@@ -759,7 +759,7 @@ mod internal {
         // First check if the inferred type is a fully valid WIT type
         // If so, we trust this as this may handle majority of the cases
         // in compiler's best effort to create precise error message
-        match AnalysedType::try_from(actual_inferred_type.clone()) {
+        match AnalysedType::try_from(actual_inferred_type) {
             Ok(wit_tpe) => {
                 TypeMismatchError::with_actual_type_kind(expr, None, wit_tpe, push_down_kind).into()
             }

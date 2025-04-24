@@ -46,20 +46,20 @@ fn compare_expr_types(left: &mut Expr, right: &mut Expr) -> bool {
 }
 
 fn compare_inferred_types(left: &InferredType, right: &InferredType) -> bool {
-    compare_inferred_types_internal(left, right, true)
+    compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), true)
 }
 
-fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bool: bool) -> bool {
+fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bool: bool) -> bool {
     match (left, right) {
         // AlLOf(AllOf(Str, Int), Unknown)
         (TypeInternal::AllOf(left), TypeInternal::AllOf(right)) => {
             left.iter().all(|left| {
                 right
                     .iter()
-                    .any(|right| compare_inferred_types_internal(left, right, false))
+                    .any(|right| compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), false))
             }) && right.iter().all(|right| {
                 left.iter()
-                    .any(|left| compare_inferred_types_internal(left, right, false))
+                    .any(|left| compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), false))
             })
         }
         // a precise type is converted to a less precise type, and hence false
@@ -67,10 +67,10 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
             left.iter().all(|left| {
                 right
                     .iter()
-                    .any(|right| compare_inferred_types_internal(left, right, false))
+                    .any(|right| compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), false))
             }) && right.iter().all(|right| {
                 left.iter()
-                    .any(|left| compare_inferred_types_internal(left, right, false))
+                    .any(|left| compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), false))
             })
         }
         // Converted a less precise type to a more precise type, and hence false
@@ -80,10 +80,10 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
             left.iter().all(|left| {
                 right
                     .iter()
-                    .any(|right| compare_inferred_types_internal(left, right, false))
+                    .any(|right| compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), false))
             }) && right.iter().all(|right| {
                 left.iter()
-                    .any(|left| compare_inferred_types_internal(left, right, false))
+                    .any(|left| compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), false))
             })
         }
 
@@ -91,10 +91,10 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
         (TypeInternal::AllOf(left), inferred_type) => {
             if bool {
                 left.iter()
-                    .all(|left| compare_inferred_types_internal(left, inferred_type, true))
+                    .all(|left| compare_inferred_types_internal(left.inner.as_ref(), inferred_type, true))
             } else {
                 left.iter()
-                    .any(|left| compare_inferred_types_internal(left, inferred_type, true))
+                    .any(|left| compare_inferred_types_internal(left.inner.as_ref(), inferred_type, true))
             }
         }
 
@@ -103,11 +103,11 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
             if bool {
                 right
                     .iter()
-                    .all(|left| compare_inferred_types_internal(left, inferred_type, true))
+                    .all(|left| compare_inferred_types_internal(left.inner.as_ref(), inferred_type, true))
             } else {
                 right
                     .iter()
-                    .any(|left| compare_inferred_types_internal(left, inferred_type, true))
+                    .any(|left| compare_inferred_types_internal(left.inner.as_ref(), inferred_type, true))
             }
         }
 
@@ -118,7 +118,7 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
                     .find(|(right_key, _)| key == right_key)
                     .map(|(_, value)| value)
                 {
-                    compare_inferred_types_internal(value, right_value, true)
+                    compare_inferred_types_internal(value.inner.as_ref(), right_value.inner.as_ref(), true)
                 } else {
                     true
                 }
@@ -128,7 +128,7 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
                     .find(|(left_key, _)| key == left_key)
                     .map(|(_, value)| value)
                 {
-                    compare_inferred_types_internal(value, left_value, true)
+                    compare_inferred_types_internal(value.inner.as_ref(), left_value.inner.as_ref(), true)
                 } else {
                     true
                 }
@@ -138,14 +138,14 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
         (TypeInternal::Tuple(left), TypeInternal::Tuple(right)) => left
             .iter()
             .zip(right.iter())
-            .all(|(left, right)| compare_inferred_types_internal(left, right, true)),
+            .all(|(left, right)| compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), true)),
 
         (TypeInternal::List(left), TypeInternal::List(right)) => {
-            compare_inferred_types_internal(left, right, true)
+            compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), true)
         }
 
         (TypeInternal::Option(left), TypeInternal::Option(right)) => {
-            compare_inferred_types_internal(left, right, true)
+            compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), true)
         }
 
         (
@@ -160,7 +160,7 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
         ) => {
             let ok = match (left_ok, right_ok) {
                 (Some(left_ok), Some(right_ok)) => {
-                    compare_inferred_types_internal(left_ok, right_ok, true)
+                    compare_inferred_types_internal(left_ok.inner.as_ref(), right_ok.inner.as_ref(), true)
                 }
                 (None, None) => true,
                 _ => false,
@@ -168,7 +168,7 @@ fn compare_inferred_types_internal(left: &InferredType, right: &InferredType, bo
 
             let error = match (left_error, right_error) {
                 (Some(left_error), Some(right_error)) => {
-                    compare_inferred_types_internal(left_error, right_error, true)
+                    compare_inferred_types_internal(left_error.inner.as_ref(), right_error.inner.as_ref(), true)
                 }
                 (None, None) => true,
                 _ => false,

@@ -278,7 +278,7 @@ mod internal {
         pred_expr_inferred_type: InferredType,
         tag: Option<Expr>,
     ) -> Option<IfThenBranch> {
-        match pred_expr_inferred_type {
+        match pred_expr_inferred_type.inner.as_ref() {
             TypeInternal::Record(field_and_types) => {
                 // Resolution body is a list of expressions which grows (maybe with some let bindings)
                 // as we recursively iterate over the bind patterns
@@ -494,8 +494,8 @@ mod internal {
                         },
                     );
                     let new_pred_type = inferred_types
-                        .get(index)
-                        .unwrap_or(&InferredType::unknown());
+                        .get(index).cloned()
+                        .unwrap_or(InferredType::unknown());
 
                     let branch = get_conditions(
                         &MatchArm::new(arm_pattern.clone(), Expr::empty_expr()),
@@ -559,7 +559,7 @@ mod internal {
                         &MatchArm::new(arm_pattern.clone(), Expr::empty_expr()),
                         &new_pred,
                         None,
-                        *new_pred_type,
+                        new_pred_type.clone(),
                     );
 
                     if let Some(x) = branch {

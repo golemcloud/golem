@@ -75,7 +75,7 @@ pub trait TypeRefinement {
 impl TypeRefinement for RecordType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let TypeInternal::Record(record_type) = inferred_type {
+            if let TypeInternal::Record(record_type) = inferred_type.inner.as_ref() {
                 Some(RecordType(record_type.clone()))
             } else {
                 None
@@ -87,7 +87,7 @@ impl TypeRefinement for RecordType {
 impl TypeRefinement for OptionalType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let TypeInternal::Option(optional_type) = inferred_type {
+            if let TypeInternal::Option(optional_type) = inferred_type.inner.as_ref() {
                 Some(OptionalType(optional_type.deref().clone()))
             } else {
                 None
@@ -99,7 +99,7 @@ impl TypeRefinement for OptionalType {
 impl TypeRefinement for OkType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let TypeInternal::Result { ok, .. } = inferred_type {
+            if let TypeInternal::Result { ok, .. } = inferred_type.inner.as_ref() {
                 Some(OkType(ok.clone()))
             } else {
                 None
@@ -111,7 +111,7 @@ impl TypeRefinement for OkType {
 impl TypeRefinement for ErrType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let TypeInternal::Result { error, .. } = inferred_type {
+            if let TypeInternal::Result { error, .. } = inferred_type.inner.as_ref() {
                 Some(ErrType(error.clone()))
             } else {
                 None
@@ -123,7 +123,7 @@ impl TypeRefinement for ErrType {
 impl TypeRefinement for ListType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let TypeInternal::List(inferred_type) = inferred_type {
+            if let TypeInternal::List(inferred_type) = inferred_type.inner.as_ref() {
                 Some(ListType(inferred_type.deref().clone()))
             } else {
                 None
@@ -138,7 +138,7 @@ impl TypeRefinement for RangeType {
         Self: Sized,
     {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let TypeInternal::Range { from, to } = inferred_type {
+            if let TypeInternal::Range { from, to } = inferred_type.inner.as_ref() {
                 Some(RangeType(from.clone(), to.as_ref().map(|t| t.clone())))
             } else {
                 None
@@ -150,7 +150,7 @@ impl TypeRefinement for RangeType {
 impl TypeRefinement for TupleType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let TypeInternal::Tuple(tuple_type) = inferred_type {
+            if let TypeInternal::Tuple(tuple_type) = inferred_type.inner.as_ref() {
                 Some(TupleType(tuple_type.clone()))
             } else {
                 None
@@ -263,7 +263,7 @@ mod internal {
     where
         F: Fn(&InferredType) -> Option<A>,
     {
-        match inferred_type {
+        match inferred_type.inner.as_ref() {
             TypeInternal::OneOf(types) => {
                 let mut refined_one_of = vec![];
 

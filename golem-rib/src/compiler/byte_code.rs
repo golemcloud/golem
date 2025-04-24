@@ -361,7 +361,7 @@ mod internal {
                 instructions.push(RibIR::SelectField(field.clone()));
             }
 
-            Expr::SelectIndex { expr, index, .. } => match index.inferred_type() {
+            Expr::SelectIndex { expr, index, .. } => match index.inferred_type().inner.as_ref() {
                 TypeInternal::Range { .. } => {
                     let list_comprehension =
                         desugar_range_selection(expr, index).map_err(|err| {
@@ -618,7 +618,7 @@ mod internal {
                 flags,
                 inferred_type,
                 ..
-            } => match inferred_type {
+            } => match inferred_type.inner.as_ref() {
                 TypeInternal::Flags(all_flags) => {
                     let mut bitmap = Vec::new();
                     let flag_values_set: HashSet<&String> = HashSet::from_iter(flags.iter());
@@ -632,7 +632,7 @@ mod internal {
                         }),
                     }));
                 }
-                inferred_type => {
+                _ => {
                     return Err(RibByteCodeGenerationError::UnexpectedTypeError {
                         expected: TypeHint::Flag(Some(flags.clone())),
                         actual: inferred_type.get_type_hint(),
@@ -694,7 +694,7 @@ mod internal {
                 range,
                 inferred_type,
                 ..
-            } => match inferred_type {
+            } => match inferred_type.inner.as_ref() {
                 TypeInternal::Range { .. } => {
                     let analysed_type = convert_to_analysed_type(range_expr, inferred_type)?;
 

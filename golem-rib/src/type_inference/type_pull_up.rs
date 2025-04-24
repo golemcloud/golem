@@ -357,13 +357,13 @@ fn handle_math_op(
         let left_number_type = get_number(lhs)?;
 
         if right_number_type == left_number_type {
-            *result_type = result_type.merge(InferredType::from(right_number_type.clone()));
+            *result_type = result_type.merge(InferredType::from(&right_number_type));
         } else {
             return Err(TypeMismatchError {
                 expr_with_wrong_type: lhs.clone(),
                 parent_expr: None,
                 expected_type: ExpectedType::Hint(TypeHint::Number),
-                actual_type: ActualType::Inferred(InferredType::from(right_number_type)),
+                actual_type: ActualType::Inferred(InferredType::from(&right_number_type)),
                 field_path: Default::default(),
                 additional_error_detail: vec![
                     "type mismatch in mathematical expression: operands have incompatible types. "
