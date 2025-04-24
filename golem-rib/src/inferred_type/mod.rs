@@ -575,6 +575,10 @@ impl Display for InferredNumber {
 }
 
 impl InferredType {
+    pub fn internal_type(&self) -> &TypeInternal {
+        self.inner.as_ref()
+    }
+
     pub fn printable(&self) -> String {
         // Try a fully blown type name or if it fails,
         // get the `kind` of inferred type
