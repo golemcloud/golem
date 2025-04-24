@@ -20,7 +20,6 @@ use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::{ApiDeployment, ApiDeploymentRequest};
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::gateway_api_deployment;
-use golem_worker_service_base::gateway_api_deployment::ApiSite;
 use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 use golem_worker_service_base::service::gateway::api_deployment::ApiDeploymentError;
@@ -227,21 +226,11 @@ impl ApiDeploymentApi {
             version: ApiVersion(version),
         };
 
-        // Split the site string into host and subdomain parts
-        let (host, subdomain) = if let Some(idx) = site.find('.') {
-            let (subdomain, host) = site.split_at(idx);
-            (
-                host.trim_start_matches('.').to_string(),
-                Some(subdomain.to_string()),
-            )
-        } else {
-            (site, None)
-        };
-
-        let api_site = ApiSite { host, subdomain };
+        // Pass ApiSiteString directly without splitting
+        let api_site_string = ApiSiteString(site);
 
         self.deployment_service
-            .undeploy_api(&namespace, api_site, api_definition_key, auth_ctx)
+            .undeploy(&namespace, api_site_string, api_definition_key, auth_ctx)
             .await
             .map_err(|err| match err {
                 ApiDeploymentError::ApiDeploymentNotFound(_, _) => {

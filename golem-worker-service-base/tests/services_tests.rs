@@ -702,9 +702,16 @@ async fn test_deployment(
         vec![def1.clone(), def2.clone(), def3.clone()]
     ));
 
-    let deployment = get_api_deployment("test.com", None, vec![&def3.id.0]);
     deployment_service
-        .undeploy(&deployment, &EmptyAuthCtx::default())
+        .undeploy(
+            &DefaultNamespace::default(),
+            ApiSiteString("test.com".to_string()),
+            ApiDefinitionIdWithVersion {
+                id: def3.id.clone(),
+                version: def3.version.clone(),
+            },
+            &EmptyAuthCtx::default(),
+        )
         .await
         .unwrap();
 
