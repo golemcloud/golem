@@ -15,6 +15,7 @@ templates:
           - src
           - wit-generated
           - ../../common-rust
+          - Cargo.toml
           targets:
           - ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
         sourceWit: wit
@@ -30,6 +31,7 @@ templates:
           - src
           - wit-generated
           - ../../common-rust
+          - Cargo.toml
           targets:
           - ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
         sourceWit: wit
