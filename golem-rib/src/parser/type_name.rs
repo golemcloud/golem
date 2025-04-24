@@ -274,15 +274,11 @@ impl From<&TypeName> for InferredType {
             TypeName::F64 => InferredType::f64(),
             TypeName::Chr => InferredType::char(),
             TypeName::Str => InferredType::string(),
-            TypeName::List(inner_type) => {
-                InferredType::list(inner_type.deref().into())
-            }
+            TypeName::List(inner_type) => InferredType::list(inner_type.deref().into()),
             TypeName::Tuple(inner_types) => {
                 InferredType::tuple(inner_types.into_iter().map(|t| t.into()).collect())
             }
-            TypeName::Option(type_name) => {
-                InferredType::option(type_name.deref().into())
-            }
+            TypeName::Option(type_name) => InferredType::option(type_name.deref().into()),
             TypeName::Result { ok, error } => InferredType::result(
                 ok.as_deref().map(|x| x.into()),
                 error.as_deref().map(|x| x.into()),
@@ -338,7 +334,7 @@ impl TryFrom<InferredType> for TypeName {
             TypeInternal::Record(name_and_types) => {
                 let mut fields = vec![];
                 for (field, typ) in name_and_types {
-                    fields.push((field.clone(),  Box::new(typ.clone().try_into()?)));
+                    fields.push((field.clone(), Box::new(typ.clone().try_into()?)));
                 }
                 Ok(TypeName::Record(fields))
             }

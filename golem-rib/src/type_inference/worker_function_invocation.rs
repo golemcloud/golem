@@ -16,7 +16,10 @@ use crate::call_type::{CallType, InstanceCreationType};
 use crate::instance_type::{FunctionName, InstanceType};
 use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
-use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, ExprVisitor, FunctionCallError, InferredType, TypeInternal, TypeName, TypeOrigin};
+use crate::{
+    DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, ExprVisitor,
+    FunctionCallError, InferredType, TypeInternal, TypeName, TypeOrigin,
+};
 use std::ops::Deref;
 
 // This phase is responsible for identifying the worker function invocations
@@ -109,9 +112,12 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 instance_type.worker_name(),
                             );
 
-                            let new_inferred_type = InferredType::new(TypeInternal::Instance {
-                                instance_type: Box::new(resource_instance_type),
-                            }, TypeOrigin::NoOrigin);
+                            let new_inferred_type = InferredType::new(
+                                TypeInternal::Instance {
+                                    instance_type: Box::new(resource_instance_type),
+                                },
+                                TypeOrigin::NoOrigin,
+                            );
 
                             let new_call_type =
                                 CallType::InstanceCreation(InstanceCreationType::Resource {

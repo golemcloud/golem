@@ -1,7 +1,7 @@
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
 use crate::{
-    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, TypeInternal, RegistryKey, RegistryValue,
+    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, RegistryKey, RegistryValue, TypeInternal,
 };
 use golem_api_grpc::proto::golem::rib::instance_type::Instance;
 use golem_api_grpc::proto::golem::rib::{

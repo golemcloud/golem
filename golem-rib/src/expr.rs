@@ -631,10 +631,7 @@ impl Expr {
         Expr::Result {
             expr: Err(Box::new(expr)),
             type_annotation,
-            inferred_type: InferredType::result(
-                Some(InferredType::unknown()),
-                Some(inferred_type),
-            ),
+            inferred_type: InferredType::result(Some(InferredType::unknown()), Some(inferred_type)),
             source_span: SourceSpan::default(),
         }
     }
@@ -1895,7 +1892,10 @@ impl ArmPattern {
                 source_span: SourceSpan::default(),
             })),
             type_annotation: None,
-            inferred_type: InferredType::result(Some(InferredType::unknown()), Some(InferredType::unknown())),
+            inferred_type: InferredType::result(
+                Some(InferredType::unknown()),
+                Some(InferredType::unknown()),
+            ),
             source_span: SourceSpan::default(),
         }))
     }
@@ -1910,7 +1910,10 @@ impl ArmPattern {
                 source_span: SourceSpan::default(),
             })),
             type_annotation: None,
-            inferred_type: InferredType::result(Some(InferredType::unknown()), Some(InferredType::unknown())),
+            inferred_type: InferredType::result(
+                Some(InferredType::unknown()),
+                Some(InferredType::unknown()),
+            ),
             source_span: SourceSpan::default(),
         }))
     }

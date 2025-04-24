@@ -273,7 +273,7 @@ mod name_binding_tests {
 
     use crate::call_type::CallType;
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
-    use crate::{Expr, TypeInternal, ParsedFunctionSite, VariableId, InferredType};
+    use crate::{Expr, InferredType, ParsedFunctionSite, TypeInternal, VariableId};
 
     #[test]
     fn test_name_binding_simple() {
@@ -500,7 +500,9 @@ mod name_binding_tests {
     }
 
     mod expectations {
-        use crate::{ArmPattern, Expr, TypeInternal, MatchArm, MatchIdentifier, VariableId, InferredType};
+        use crate::{
+            ArmPattern, Expr, InferredType, MatchArm, MatchIdentifier, TypeInternal, VariableId,
+        };
         use bigdecimal::BigDecimal;
 
         pub(crate) fn expected_match(index: usize) -> Expr {
@@ -575,9 +577,10 @@ mod name_binding_tests {
                     .with_inferred_type(InferredType::option(InferredType::unknown())),
                     None,
                 )
-                .with_inferred_type(InferredType::result(Some(InferredType::option(
-                    InferredType::unknown(),
-                )), Some(InferredType::unknown()))),
+                .with_inferred_type(InferredType::result(
+                    Some(InferredType::option(InferredType::unknown())),
+                    Some(InferredType::unknown()),
+                )),
                 vec![
                     MatchArm {
                         arm_pattern: ArmPattern::constructor(

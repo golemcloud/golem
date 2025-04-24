@@ -145,7 +145,7 @@ mod internal {
     use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        TypeInternal, InstructionId, Range, RibByteCodeGenerationError, RibIR, VariableId,
+        InstructionId, Range, RibByteCodeGenerationError, RibIR, TypeInternal, VariableId,
         WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
@@ -919,7 +919,7 @@ mod compiler_tests {
     use test_r::test;
 
     use super::*;
-    use crate::{ArmPattern, FunctionTypeRegistry, TypeInternal, MatchArm, VariableId};
+    use crate::{ArmPattern, FunctionTypeRegistry, MatchArm, TypeInternal, VariableId};
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};

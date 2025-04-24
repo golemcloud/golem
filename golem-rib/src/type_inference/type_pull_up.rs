@@ -555,8 +555,7 @@ mod type_pull_up_tests {
 
         assert_eq!(
             expr,
-            Expr::sequence(elems, None)
-                .with_inferred_type(InferredType::list(InferredType::u64()))
+            Expr::sequence(elems, None).with_inferred_type(InferredType::list(InferredType::u64()))
         );
     }
 
@@ -596,16 +595,19 @@ mod type_pull_up_tests {
 
         assert_eq!(
             expr,
-            Expr::record(elems).with_inferred_type(InferredType::all_of(vec![
-                InferredType::record(vec![
-                    ("foo".to_string(), InferredType::u64()),
-                    ("bar".to_string(), InferredType::u32())
-                ]),
-                InferredType::record(vec![
-                    ("foo".to_string(), InferredType::unknown()),
-                    ("bar".to_string(), InferredType::unknown())
+            Expr::record(elems).with_inferred_type(
+                InferredType::all_of(vec![
+                    InferredType::record(vec![
+                        ("foo".to_string(), InferredType::u64()),
+                        ("bar".to_string(), InferredType::u32())
+                    ]),
+                    InferredType::record(vec![
+                        ("foo".to_string(), InferredType::unknown()),
+                        ("bar".to_string(), InferredType::unknown())
+                    ])
                 ])
-            ]).unwrap())
+                .unwrap()
+            )
         );
     }
 
@@ -911,7 +913,10 @@ mod type_pull_up_tests {
                         "cons1".to_string(),
                         vec![ArmPattern::Literal(Box::new(Expr::select_field(
                             Expr::identifier_global("foo", None).merge_inferred_type(
-                                InferredType::record(vec![("bar".to_string(), InferredType::string())]),
+                                InferredType::record(vec![(
+                                    "bar".to_string(),
+                                    InferredType::string(),
+                                )]),
                             ),
                             "bar",
                             None,
@@ -941,7 +946,10 @@ mod type_pull_up_tests {
                     ),
                     arm_resolution_expr: Box::new(Expr::select_field(
                         Expr::identifier_global("grault", None).merge_inferred_type(
-                            InferredType::record(vec![("garply".to_string(), InferredType::string())]),
+                            InferredType::record(vec![(
+                                "garply".to_string(),
+                                InferredType::string(),
+                            )]),
                         ),
                         "garply",
                         None,

@@ -36,8 +36,11 @@ mod internal {
     use crate::rib_type_error::RibTypeError;
     use crate::type_parameter::TypeParameter;
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{CustomError, Expr, ExprVisitor, FunctionCallError, TypeInternal, ParsedFunctionReference, InferredType, TypeOrigin};
     use crate::ActualType::Inferred;
+    use crate::{
+        CustomError, Expr, ExprVisitor, FunctionCallError, InferredType, ParsedFunctionReference,
+        TypeInternal, TypeOrigin,
+    };
 
     pub(crate) fn search_for_invalid_instance_declarations(
         expr: &mut Expr,
@@ -133,9 +136,12 @@ mod internal {
                         ))
                     })?;
 
-                    *inferred_type = InferredType::new(TypeInternal::Instance {
-                        instance_type: Box::new(new_instance_type),
-                    }, TypeOrigin::NoOrigin);
+                    *inferred_type = InferredType::new(
+                        TypeInternal::Instance {
+                            instance_type: Box::new(new_instance_type),
+                        },
+                        TypeOrigin::NoOrigin,
+                    );
                 }
             }
         }

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::type_inference::type_hint::{GetTypeHint, TypeHint};
-use crate::{Expr, TypeInternal, Path, PathElem, InferredType};
+use crate::{Expr, InferredType, Path, PathElem, TypeInternal};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt;
 use std::fmt::Display;

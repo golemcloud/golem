@@ -51,9 +51,12 @@ pub fn bind_instance_types(expr: &mut Expr) {
                 ..
             } => {
                 if let Some(new_inferred_type) = instance_variables.get(variable_id) {
-                    *inferred_type = InferredType::new(TypeInternal::Instance {
-                        instance_type: new_inferred_type.clone(),
-                    }, TypeOrigin::NoOrigin);
+                    *inferred_type = InferredType::new(
+                        TypeInternal::Instance {
+                            instance_type: new_inferred_type.clone(),
+                        },
+                        TypeOrigin::NoOrigin,
+                    );
                 }
             }
 

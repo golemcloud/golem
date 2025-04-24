@@ -18,7 +18,6 @@ pub fn bind_type_annotations(expr: &mut Expr) {
     let mut visitor = ExprVisitor::top_down(expr);
 
     while let Some(expr) = visitor.pop_front() {
-
         match expr {
             Expr::Let {
                 type_annotation,
@@ -38,8 +37,6 @@ pub fn bind_type_annotations(expr: &mut Expr) {
                 }
             }
         }
-
-
     }
 }
 
@@ -50,7 +47,7 @@ mod type_binding_tests {
 
     use super::*;
     use crate::parser::type_name::TypeName;
-    use crate::{ArmPattern, TypeInternal, MatchArm, VariableId};
+    use crate::{ArmPattern, MatchArm, TypeInternal, VariableId};
 
     #[test]
     fn test_bind_type_in_let() {
@@ -110,7 +107,10 @@ mod type_binding_tests {
                 error: Some(Box::new(TypeName::Str)),
             }),
         )
-        .with_inferred_type(InferredType::result(Some(InferredType::u64()), Some(InferredType::string())));
+        .with_inferred_type(InferredType::result(
+            Some(InferredType::u64()),
+            Some(InferredType::string()),
+        ));
 
         assert_eq!(expr, expected);
     }
@@ -247,7 +247,11 @@ mod type_binding_tests {
 
         let expected = Expr::let_binding_with_variable_id(
             VariableId::global("x".to_string()),
-            Expr::number_inferred(BigDecimal::from(1), Some(TypeName::U64), InferredType::u64()),
+            Expr::number_inferred(
+                BigDecimal::from(1),
+                Some(TypeName::U64),
+                InferredType::u64(),
+            ),
             Some(TypeName::U64),
         );
 
@@ -329,8 +333,16 @@ mod type_binding_tests {
 
         let expected = Expr::cond(
             Expr::identifier_with_variable_id(VariableId::global("x".to_string()), None),
-            Expr::number_inferred(BigDecimal::from(1), Some(TypeName::U64), InferredType::u64()),
-            Expr::number_inferred(BigDecimal::from(2), Some(TypeName::U64), InferredType::u64()),
+            Expr::number_inferred(
+                BigDecimal::from(1),
+                Some(TypeName::U64),
+                InferredType::u64(),
+            ),
+            Expr::number_inferred(
+                BigDecimal::from(2),
+                Some(TypeName::U64),
+                InferredType::u64(),
+            ),
         );
 
         assert_eq!(expr, expected);

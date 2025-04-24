@@ -25,7 +25,9 @@ pub fn infer_variants(expr: &mut Expr, function_type_registry: &FunctionTypeRegi
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::{Expr, FunctionTypeRegistry, TypeInternal, RegistryKey, RegistryValue, InferredType};
+    use crate::{
+        Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeInternal,
+    };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::collections::VecDeque;
 

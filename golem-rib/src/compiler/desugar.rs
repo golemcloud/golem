@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, TypeInternal, MatchArm, Range, VariableId};
+use crate::{Expr, MatchArm, Range, TypeInternal, VariableId};
 use bigdecimal::BigDecimal;
 use std::ops::Deref;
 
@@ -92,7 +92,7 @@ pub fn desugar_pattern_match(
 mod internal {
     use crate::call_type::CallType;
     use crate::rib_source_span::SourceSpan;
-    use crate::{ArmPattern, Expr, TypeInternal, MatchArm, Number, VariableId};
+    use crate::{ArmPattern, Expr, MatchArm, Number, TypeInternal, VariableId};
     use bigdecimal::{BigDecimal, FromPrimitive};
 
     pub(crate) fn build_expr_from(if_branches: Vec<IfThenBranch>) -> Option<Expr> {
