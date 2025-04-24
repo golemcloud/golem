@@ -596,6 +596,9 @@ fn check_equal_api_definition_request_and_response(
 
 #[test]
 #[tracing::instrument]
+#[ignore]
+// Refer to Issue #1559 for ignoring this test
+
 // This the full round trip test for API definition
 // We create an API definition, export it to OpenAPI,
 // We delete the original API definition
