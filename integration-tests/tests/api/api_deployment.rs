@@ -820,3 +820,82 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
         .await;
     assert!(result.is_err());
 }
+
+#[test]
+#[tracing::instrument]
+async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
+    let component_id = deps.component("shopping-cart").unique().store().await;
+
+    fn new_api_definition_id(prefix: &str) -> String {
+        format!("{}-{}", prefix, Uuid::new_v4())
+    }
+
+    let api_definition_1 = create_api_definition(
+        deps,
+        &component_id,
+        new_api_definition_id("a"),
+        "1".to_string(),
+        "/path-undeploy".to_string(),
+    )
+    .await;
+
+    let request = ApiDeploymentRequest {
+        api_definitions: vec![ApiDefinitionInfo {
+            id: api_definition_1.id.as_ref().unwrap().value.clone(),
+            version: api_definition_1.version.clone(),
+        }],
+        site: ApiSite {
+            host: "localhost".to_string(),
+            subdomain: Some("undeploy-test".to_string()),
+        },
+    };
+
+    deps.worker_service()
+        .create_or_update_api_deployment(request.clone())
+        .await
+        .unwrap();
+
+    // Trying to update the component (with a completely different wasm)
+    // which was already used in an API definition
+    // where function get-cart-contents is being used.
+    let update_component = deps
+        .component_service()
+        .update_component(
+            &component_id,
+            &deps.component_directory().join("counters.wasm"),
+            ComponentType::Durable,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+    check!(update_component.contains("Component Constraint Error"));
+    check!(update_component.contains("Missing Functions"));
+    check!(update_component.contains("get-cart-contents"));
+
+    // Undeploy the API and see if component can be updated
+    // as constraints should be removed after undeploying the API
+    deps.worker_service()
+        .undeploy_api(
+            "undeploy-test.localhost",
+            &api_definition_1.id.as_ref().unwrap().value,
+            &api_definition_1.version,
+        )
+        .await
+        .unwrap();
+
+    let update_component = deps
+        .component_service()
+        .update_component(
+            &component_id,
+            &deps.component_directory().join("counters.wasm"),
+            ComponentType::Durable,
+            None,
+            None,
+        )
+        .await;
+
+    check!(update_component.is_ok());
+}

@@ -226,7 +226,7 @@ impl ApiDeploymentApi {
             version: ApiVersion(version),
         };
 
-        // Pass ApiSiteString directly without splitting
+        // Pass ApiSiteString directly
         let api_site_string = ApiSiteString(site);
 
         self.deployment_service

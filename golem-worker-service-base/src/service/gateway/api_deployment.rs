@@ -50,7 +50,8 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
         deployment: &ApiDeploymentRequest<Namespace>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), ApiDeploymentError<Namespace>>;
-
+    
+    // New undeploy function takes ApiSiteString and ApiDefinitionIdWithVersion
     async fn undeploy(
         &self,
         namespace: &Namespace,
