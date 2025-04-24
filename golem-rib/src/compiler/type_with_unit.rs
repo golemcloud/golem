@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{GetTypeHint, TypeInternal};
+use crate::{GetTypeHint, InferredType, TypeInternal};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record, tuple};
 use golem_wasm_ast::analysis::{
@@ -50,20 +50,20 @@ impl TryFrom<AnalysedTypeWithUnit> for AnalysedType {
     }
 }
 
-impl TryFrom<&TypeInternal> for AnalysedType {
+impl TryFrom<&InferredType> for AnalysedType {
     type Error = String;
 
-    fn try_from(value: &TypeInternal) -> Result<Self, Self::Error> {
+    fn try_from(value: &InferredType) -> Result<Self, Self::Error> {
         let with_unit = AnalysedTypeWithUnit::try_from(value)?;
         AnalysedType::try_from(with_unit)
     }
 }
 
-impl TryFrom<&TypeInternal> for AnalysedTypeWithUnit {
+impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
     type Error = String;
 
-    fn try_from(inferred_type: &TypeInternal) -> Result<Self, Self::Error> {
-        match inferred_type {
+    fn try_from(inferred_type: &InferredType) -> Result<Self, Self::Error> {
+        match inferred_type.inner.as_ref() {
             TypeInternal::Instance { .. } => {
                 Err("Cannot convert Instance type to AnalysedType".to_string())
             }
