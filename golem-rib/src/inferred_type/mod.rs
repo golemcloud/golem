@@ -28,7 +28,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, Eq, PartialOrd, Ord)]
 pub struct InferredType {
     pub inner: Box<TypeInternal>,
     pub origin: TypeOrigin,
@@ -84,7 +84,7 @@ impl TypeInternal {
     }
 }
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, Eq, PartialOrd, Ord)]
 pub enum TypeOrigin {
     Default(SourceSpan),
     NoOrigin,
@@ -657,7 +657,7 @@ impl InferredType {
                 TypeInternal::AllOf(all_variables) => {
                     let mut previous: Option<InferredNumber> = None;
                     for variable in all_variables {
-                        go(variable.as_ref(), found)?;
+                        go(variable, found)?;
 
                         if let Some(current) = found.first() {
                             match &previous {
@@ -759,8 +759,12 @@ impl InferredType {
         } else {
             let mut unique_all_of_types: Vec<InferredType> = unique_types.into_iter().collect();
             unique_all_of_types.sort();
-            let origin =
-                TypeOrigin::Multiple(unique_all_of_types.iter().map(|x| x.origin).collect());
+            let origin = TypeOrigin::Multiple(
+                unique_all_of_types
+                    .iter()
+                    .map(|x| x.origin.clone())
+                    .collect(),
+            );
 
             Some(InferredType {
                 inner: Box::new(TypeInternal::AllOf(unique_all_of_types)),
@@ -787,8 +791,12 @@ impl InferredType {
             let mut unique_one_of_types: Vec<InferredType> = unique_types.into_iter().collect();
             unique_one_of_types.sort();
 
-            let origin =
-                TypeOrigin::Multiple(unique_one_of_types.iter().map(|x| x.origin.clone()).collect());
+            let origin = TypeOrigin::Multiple(
+                unique_one_of_types
+                    .iter()
+                    .map(|x| x.origin.clone())
+                    .collect(),
+            );
 
             Some(InferredType {
                 inner: Box::new(TypeInternal::OneOf(unique_one_of_types)),
@@ -816,7 +824,7 @@ impl InferredType {
     }
 
     pub fn is_all_of(&self) -> bool {
-        matches!(self, TypeInternal::AllOf(_))
+        matches!(self.inner.deref(), TypeInternal::AllOf(_))
     }
 
     pub fn is_number(&self) -> bool {
@@ -907,7 +915,7 @@ impl InferredType {
 
             (TypeInternal::OneOf(existing_types), TypeInternal::OneOf(new_types)) => {
                 let mut one_of_types = new_types.clone();
-                if &new_types == existing_types {
+                if new_types == existing_types {
                     return new_inferred_type;
                 } else {
                     one_of_types.extend(existing_types.clone());
@@ -916,8 +924,8 @@ impl InferredType {
                 InferredType::one_of(one_of_types).unwrap_or(InferredType::unknown())
             }
 
-            (TypeInternal::OneOf(existing_types), new_type) => {
-                if existing_types.iter().map(|x| x.inner).contains(&new_type) {
+            (TypeInternal::OneOf(existing_types), new_type_internal) => {
+                if existing_types.contains(&new_inferred_type) {
                     new_inferred_type
                 } else {
                     InferredType::all_of(vec![self.clone(), new_inferred_type])
@@ -925,17 +933,19 @@ impl InferredType {
                 }
             }
 
-            (current_type, TypeInternal::OneOf(newtypes)) => {
-                if newtypes.contains(current_type) {
-                    current_type.clone()
+            (current_type_internal, TypeInternal::OneOf(newtypes)) => {
+                if newtypes.contains(self) {
+                    self.clone()
                 } else {
                     InferredType::all_of(vec![self.clone(), new_inferred_type])
                         .unwrap_or(InferredType::unknown())
                 }
             }
 
-            (_, new_type) => InferredType::all_of(vec![self.clone(), new_type.clone()])
-                .unwrap_or(InferredType::unknown()),
+            (_, new_type_internal) => {
+                InferredType::all_of(vec![self.clone(), new_inferred_type.clone()])
+                    .unwrap_or(InferredType::unknown())
+            }
         }
     }
 
@@ -1001,14 +1011,19 @@ impl TryFrom<&InferredType> for AnalysedType {
                 }
                 Ok(record(field_pairs))
             }
-            TypeInternal::Flags(names) => Ok(AnalysedType::Flags(TypeFlags { names: names.clone() })),
-            TypeInternal::Enum(cases) => Ok(AnalysedType::Enum(TypeEnum { cases: cases.clone() })),
+            TypeInternal::Flags(names) => Ok(AnalysedType::Flags(TypeFlags {
+                names: names.clone(),
+            })),
+            TypeInternal::Enum(cases) => Ok(AnalysedType::Enum(TypeEnum {
+                cases: cases.clone(),
+            })),
             TypeInternal::Option(typ) => {
                 let typ: AnalysedType = typ.try_into()?;
                 Ok(option(typ))
             }
             TypeInternal::Result { ok, error } => {
-                let ok_option: Option<AnalysedType> = ok.as_ref().map(|t| t.try_into()).transpose()?;
+                let ok_option: Option<AnalysedType> =
+                    ok.as_ref().map(|t| t.try_into()).transpose()?;
                 let ok = ok_option.ok_or("Expected ok type in result".to_string())?;
                 let error_option: Option<AnalysedType> =
                     error.as_ref().map(|t| t.try_into()).transpose()?;
@@ -1018,8 +1033,12 @@ impl TryFrom<&InferredType> for AnalysedType {
             TypeInternal::Variant(name_and_optiona_inferred_types) => {
                 let mut cases: Vec<NameOptionTypePair> = vec![];
                 for (name, typ) in name_and_optiona_inferred_types {
-                    let typ: Option<AnalysedType> = typ.as_ref().map(|t| t.try_into()).transpose()?;
-                    cases.push(NameOptionTypePair { name: name.clone(), typ });
+                    let typ: Option<AnalysedType> =
+                        typ.as_ref().map(|t| t.try_into()).transpose()?;
+                    cases.push(NameOptionTypePair {
+                        name: name.clone(),
+                        typ,
+                    });
                 }
                 Ok(variant(cases))
             }

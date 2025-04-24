@@ -1,4 +1,4 @@
-use crate::{TypeInternal, InferredType};
+use crate::{InferredType, TypeInternal, TypeOrigin};
 use std::collections::HashSet;
 
 // Convert AllOf(AllOf(x, y, z), AllOf(a, b, OneOf(c, d))) to AllOf(x, y, z, a, b, OneOf(c,d))
@@ -10,7 +10,7 @@ pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
     let mut seen = HashSet::new();
 
     for typ in types {
-        match typ {
+        match typ.inner.as_ref() {
             TypeInternal::OneOf(types) => {
                 let flattened = flatten_one_of_list(types);
                 for t in flattened {
@@ -34,7 +34,14 @@ pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
     }
 
     if !one_of_types.is_empty() {
-        all_of_types.extend(vec![InferredType::one_of(one_of_types)]);
+        let origins: Vec<TypeOrigin> = one_of_types
+            .iter()
+            .map(|t| t.origin.clone())
+            .collect::<Vec<_>>();
+        all_of_types.extend(vec![InferredType::new(
+            TypeInternal::OneOf(one_of_types),
+            TypeOrigin::Multiple(origins),
+        )]);
     }
 
     all_of_types
@@ -50,7 +57,7 @@ pub fn flatten_one_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
     let mut seen = HashSet::new();
 
     for typ in types {
-        match typ {
+        match typ.inner.as_ref() {
             TypeInternal::OneOf(types) => {
                 let flattened = flatten_one_of_list(types);
                 for t in flattened {
@@ -76,7 +83,15 @@ pub fn flatten_one_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
     }
 
     if !all_of_types.is_empty() {
-        one_of_types.extend(vec![InferredType::all_of(all_of_types)]);
+        let origins: Vec<TypeOrigin> = all_of_types
+            .iter()
+            .map(|t| t.origin.clone())
+            .collect::<Vec<_>>();
+
+        one_of_types.extend(vec![InferredType::new(
+            TypeInternal::AllOf(all_of_types),
+            TypeOrigin::Multiple(origins),
+        )]);
     }
 
     one_of_types
