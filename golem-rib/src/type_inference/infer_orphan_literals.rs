@@ -1,5 +1,5 @@
 use crate::rib_type_error::RibTypeError;
-use crate::{Expr, TypeInternal};
+use crate::{Expr, InferredType, TypeInternal};
 use std::collections::VecDeque;
 // This is more of an optional stage to help with a better
 // DX for Rib users, while not affecting the type inference reliability.
@@ -133,7 +133,7 @@ fn infer_number_literals(expr: &mut Expr) {
             } => {
                 // If a number is unresolved
                 if inferred_type.un_resolved() {
-                    *inferred_type = TypeInternal::from(&number.value);
+                    *inferred_type = InferredType::from(&number.value);
                 }
             }
 

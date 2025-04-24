@@ -319,6 +319,13 @@ impl InferredType {
         }
     }
 
+    pub fn sequence(inferred_types: Vec<InferredType>) -> InferredType {
+        InferredType {
+            inner: Box::new(TypeInternal::Sequence(inferred_types)),
+            origin: TypeOrigin::NoOrigin,
+        }
+    }
+
     pub fn default(inferred_type: TypeInternal) -> InferredType {
         InferredType {
             inner: Box::new(inferred_type),
@@ -540,18 +547,18 @@ impl From<InferredNumber> for TypeInternal {
     }
 }
 
-impl From<&BigDecimal> for TypeInternal {
+impl From<&BigDecimal> for InferredType {
     fn from(value: &BigDecimal) -> Self {
         let sign = value.sign();
 
         if value.fractional_digit_count() <= 0 {
             match sign {
-                Sign::NoSign => TypeInternal::U64,
-                Sign::Minus => TypeInternal::S64,
-                Sign::Plus => TypeInternal::U64,
+                Sign::NoSign => InferredType::u64(),
+                Sign::Minus => InferredType::s64(),
+                Sign::Plus => InferredType::u64(),
             }
         } else {
-            TypeInternal::F64
+            InferredType::f64()
         }
     }
 }
