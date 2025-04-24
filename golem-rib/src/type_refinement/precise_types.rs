@@ -12,29 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::TypeInternal;
+use crate::{InferredType, TypeInternal};
 
 // Standalone precise types
 #[derive(Clone, PartialEq, Debug)]
-pub struct RecordType(pub Vec<(String, TypeInternal)>);
+pub struct RecordType(pub Vec<(String, InferredType)>);
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct OptionalType(pub TypeInternal);
+pub struct OptionalType(pub InferredType);
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct OkType(pub Option<TypeInternal>);
+pub struct OkType(pub Option<InferredType>);
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct ErrType(pub Option<TypeInternal>);
+pub struct ErrType(pub Option<InferredType>);
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct ListType(pub TypeInternal);
+pub struct ListType(pub InferredType);
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct TupleType(pub Vec<TypeInternal>);
+pub struct TupleType(pub Vec<InferredType>);
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct VariantType(pub Vec<(String, Option<TypeInternal>)>);
+pub struct VariantType(pub Vec<(String, Option<InferredType>)>);
 #[derive(Clone, PartialEq, Debug)]
 pub struct StringType;
 
@@ -52,4 +52,4 @@ pub struct FlagsType(pub Vec<String>);
 pub struct EnumType(pub Vec<String>);
 
 #[derive(Clone, PartialEq, Debug)]
-pub struct RangeType(pub TypeInternal, pub Option<TypeInternal>);
+pub struct RangeType(pub InferredType, pub Option<InferredType>);

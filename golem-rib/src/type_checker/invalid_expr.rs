@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::type_inference::TypeHint;
-use crate::{Expr, ExprVisitor, TypeInternal};
+use crate::{Expr, ExprVisitor, InferredType, TypeInternal};
 
 // Check all exprs that cannot be the type it is tagged against
 pub fn check_invalid_expr(expr: &mut Expr) -> Result<(), InvalidExpr> {
@@ -42,7 +42,7 @@ pub fn check_invalid_expr(expr: &mut Expr) -> Result<(), InvalidExpr> {
 pub struct InvalidExpr {
     pub expr: Expr,
     pub expected_type: TypeHint,
-    pub found: TypeInternal,
+    pub found: InferredType,
     pub message: String,
 }
 

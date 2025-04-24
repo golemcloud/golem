@@ -1464,8 +1464,8 @@ mod tests {
         strip_spaces,
     };
     use crate::{
-        compiler, Expr, FunctionTypeRegistry, GlobalVariableTypeSpec, TypeInternal, InstructionId,
-        Path, VariableId,
+        compiler, Expr, FunctionTypeRegistry, GlobalVariableTypeSpec, InferredType, InstructionId,
+        Path, TypeInternal, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{
         bool, case, f32, field, list, option, r#enum, record, result, s32, s8, str, tuple, u32,
@@ -1833,12 +1833,12 @@ mod tests {
             GlobalVariableTypeSpec::new(
                 "request",
                 Path::from_elems(vec!["path"]),
-                TypeInternal::Str,
+                InferredType::string(),
             ),
             GlobalVariableTypeSpec::new(
                 "request",
                 Path::from_elems(vec!["headers"]),
-                TypeInternal::Str,
+                InferredType::string(),
             ),
         ];
 
@@ -1900,12 +1900,12 @@ mod tests {
             GlobalVariableTypeSpec::new(
                 "request",
                 Path::from_elems(vec!["path"]),
-                TypeInternal::Str,
+                InferredType::string(),
             ),
             GlobalVariableTypeSpec::new(
                 "request",
                 Path::from_elems(vec!["headers"]),
-                TypeInternal::Str,
+                InferredType::string(),
             ),
         ];
 

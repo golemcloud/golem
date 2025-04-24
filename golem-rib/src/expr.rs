@@ -19,7 +19,10 @@ use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{from_string, text, type_checker, type_inference, DynamicParsedFunctionName, GlobalVariableTypeSpec, TypeInternal, ParsedFunctionName, VariableId, InferredType};
+use crate::{
+    from_string, text, type_checker, type_inference, DynamicParsedFunctionName,
+    GlobalVariableTypeSpec, InferredType, ParsedFunctionName, TypeInternal, VariableId,
+};
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
 use combine::stream::position;
@@ -1033,7 +1036,7 @@ impl Expr {
         }
     }
 
-    pub fn inferred_type(&self) -> TypeInternal {
+    pub fn inferred_type(&self) -> InferredType {
         match self {
             Expr::Let { inferred_type, .. }
             | Expr::SelectField { inferred_type, .. }
@@ -1071,8 +1074,8 @@ impl Expr {
             | Expr::ListReduce { inferred_type, .. }
             | Expr::Call { inferred_type, .. }
             | Expr::Range { inferred_type, .. }
-            | Expr::InvokeMethodLazy { inferred_type, .. } => inferred_type.clone(),
-            Expr::Length { inferred_type, .. } => inferred_type.clone(),
+            | Expr::InvokeMethodLazy { inferred_type, .. }
+            | Expr::Length { inferred_type, .. } => inferred_type.clone(),
         }
     }
 
@@ -1315,48 +1318,122 @@ impl Expr {
 
     pub fn type_annotation(&self) -> &Option<TypeName> {
         match self {
-            Expr::Identifier { type_annotation, .. }
-            | Expr::Let { type_annotation, .. }
-            | Expr::SelectField { type_annotation, .. }
-            | Expr::SelectIndex { type_annotation, .. }
-            | Expr::Sequence { type_annotation, .. }
-            | Expr::Record { type_annotation, .. }
-            | Expr::Tuple { type_annotation, .. }
-            | Expr::Literal { type_annotation, .. }
-            | Expr::Number { type_annotation, .. }
-            | Expr::Flags { type_annotation, .. }
-            | Expr::Boolean { type_annotation, .. }
-            | Expr::Concat { type_annotation, .. }
-            | Expr::ExprBlock { type_annotation, .. }
-            | Expr::Not { type_annotation, .. }
-            | Expr::GreaterThan { type_annotation, .. }
-            | Expr::GreaterThanOrEqualTo { type_annotation, .. }
-            | Expr::LessThanOrEqualTo { type_annotation, .. }
-            | Expr::EqualTo { type_annotation, .. }
-            | Expr::LessThan { type_annotation, .. }
-            | Expr::Plus { type_annotation, .. }
-            | Expr::Minus { type_annotation, .. }
-            | Expr::Divide { type_annotation, .. }
-            | Expr::Multiply { type_annotation, .. }
-            | Expr::Cond { type_annotation, .. }
-            | Expr::PatternMatch { type_annotation, .. }
-            | Expr::Option { type_annotation, .. }
-            | Expr::Result { type_annotation, .. }
-            | Expr::Unwrap { type_annotation, .. }
-            | Expr::Throw { type_annotation, .. }
-            | Expr::And { type_annotation, .. }
-            | Expr::Or { type_annotation, .. }
-            | Expr::GetTag { type_annotation, .. }
-            | Expr::ListComprehension { type_annotation, .. }
-            | Expr::ListReduce { type_annotation, .. }
-            | Expr::InvokeMethodLazy { type_annotation, .. }
-            | Expr::Range { type_annotation, .. }
-            | Expr::Length { type_annotation, .. }
-            | Expr::Call { type_annotation, .. } => type_annotation,
+            Expr::Identifier {
+                type_annotation, ..
+            }
+            | Expr::Let {
+                type_annotation, ..
+            }
+            | Expr::SelectField {
+                type_annotation, ..
+            }
+            | Expr::SelectIndex {
+                type_annotation, ..
+            }
+            | Expr::Sequence {
+                type_annotation, ..
+            }
+            | Expr::Record {
+                type_annotation, ..
+            }
+            | Expr::Tuple {
+                type_annotation, ..
+            }
+            | Expr::Literal {
+                type_annotation, ..
+            }
+            | Expr::Number {
+                type_annotation, ..
+            }
+            | Expr::Flags {
+                type_annotation, ..
+            }
+            | Expr::Boolean {
+                type_annotation, ..
+            }
+            | Expr::Concat {
+                type_annotation, ..
+            }
+            | Expr::ExprBlock {
+                type_annotation, ..
+            }
+            | Expr::Not {
+                type_annotation, ..
+            }
+            | Expr::GreaterThan {
+                type_annotation, ..
+            }
+            | Expr::GreaterThanOrEqualTo {
+                type_annotation, ..
+            }
+            | Expr::LessThanOrEqualTo {
+                type_annotation, ..
+            }
+            | Expr::EqualTo {
+                type_annotation, ..
+            }
+            | Expr::LessThan {
+                type_annotation, ..
+            }
+            | Expr::Plus {
+                type_annotation, ..
+            }
+            | Expr::Minus {
+                type_annotation, ..
+            }
+            | Expr::Divide {
+                type_annotation, ..
+            }
+            | Expr::Multiply {
+                type_annotation, ..
+            }
+            | Expr::Cond {
+                type_annotation, ..
+            }
+            | Expr::PatternMatch {
+                type_annotation, ..
+            }
+            | Expr::Option {
+                type_annotation, ..
+            }
+            | Expr::Result {
+                type_annotation, ..
+            }
+            | Expr::Unwrap {
+                type_annotation, ..
+            }
+            | Expr::Throw {
+                type_annotation, ..
+            }
+            | Expr::And {
+                type_annotation, ..
+            }
+            | Expr::Or {
+                type_annotation, ..
+            }
+            | Expr::GetTag {
+                type_annotation, ..
+            }
+            | Expr::ListComprehension {
+                type_annotation, ..
+            }
+            | Expr::ListReduce {
+                type_annotation, ..
+            }
+            | Expr::InvokeMethodLazy {
+                type_annotation, ..
+            }
+            | Expr::Range {
+                type_annotation, ..
+            }
+            | Expr::Length {
+                type_annotation, ..
+            }
+            | Expr::Call {
+                type_annotation, ..
+            } => type_annotation,
         }
     }
-
-
 
     pub fn with_type_annotation_opt(&self, type_annotation: Option<TypeName>) -> Expr {
         if let Some(type_annotation) = type_annotation {
@@ -1616,7 +1693,7 @@ impl Expr {
     pub fn number_inferred(
         big_decimal: BigDecimal,
         type_annotation: Option<TypeName>,
-        inferred_type: TypeInternal,
+        inferred_type: InferredType,
     ) -> Expr {
         Expr::Number {
             number: Number { value: big_decimal },

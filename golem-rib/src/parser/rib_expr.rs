@@ -552,7 +552,10 @@ fn combine_with_range_info(
 #[cfg(test)]
 mod tests {
     use crate::generic_type_parameter::GenericTypeParameter;
-    use crate::{ArmPattern, DynamicParsedFunctionName, Expr, TypeInternal, MatchArm, TypeName};
+    use crate::rib_source_span::SourceSpan;
+    use crate::{
+        ArmPattern, DynamicParsedFunctionName, Expr, InferredType, MatchArm, TypeInternal, TypeName,
+    };
     use bigdecimal::{BigDecimal, FromPrimitive};
     use std::str::FromStr;
     use test_r::test;
@@ -570,12 +573,12 @@ mod tests {
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
-                    TypeInternal::number()
+                    InferredType::number(&SourceSpan::default())
                 ),
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
-                    TypeInternal::number()
+                    InferredType::number(&SourceSpan::default())
                 )
             )
         );
@@ -604,12 +607,12 @@ mod tests {
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
-                    TypeInternal::number()
+                    InferredType::number(&SourceSpan::default())
                 ),
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
-                    TypeInternal::number()
+                    InferredType::number(&SourceSpan::default())
                 )
             )
         );
@@ -631,7 +634,7 @@ mod tests {
             Expr::range_from(Expr::number_inferred(
                 bigdecimal::BigDecimal::from_u64(1).unwrap(),
                 None,
-                TypeInternal::number()
+                InferredType::number(&SourceSpan::default())
             ))
         );
     }
@@ -649,12 +652,12 @@ mod tests {
                 Expr::range_from(Expr::number_inferred(
                     BigDecimal::from_u64(1).unwrap(),
                     None,
-                    TypeInternal::number()
+                    InferredType::number(&SourceSpan::default())
                 )),
                 Expr::number_inferred(
                     BigDecimal::from_u64(2).unwrap(),
                     None,
-                    TypeInternal::number()
+                    InferredType::number(&SourceSpan::default())
                 )
             )
         );
