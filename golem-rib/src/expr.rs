@@ -258,24 +258,24 @@ pub enum Expr {
         generic_type_parameter: Option<GenericTypeParameter>,
         args: Vec<Expr>,
         type_annotation: Option<TypeName>,
-        inferred_type: TypeInternal,
+        inferred_type: InferredType,
         source_span: SourceSpan,
     },
     Unwrap {
         expr: Box<Expr>,
-        inferred_type: TypeInternal,
+        inferred_type: InferredType,
         type_annotation: Option<TypeName>,
         source_span: SourceSpan,
     },
     Throw {
         message: String,
-        inferred_type: TypeInternal,
+        inferred_type: InferredType,
         type_annotation: Option<TypeName>,
         source_span: SourceSpan,
     },
     GetTag {
         expr: Box<Expr>,
-        inferred_type: TypeInternal,
+        inferred_type: InferredType,
         type_annotation: Option<TypeName>,
         source_span: SourceSpan,
     },
@@ -294,12 +294,12 @@ pub enum Expr {
         type_annotation: Option<TypeName>,
         yield_expr: Box<Expr>,
         init_value_expr: Box<Expr>,
-        inferred_type: TypeInternal,
+        inferred_type: InferredType,
         source_span: SourceSpan,
     },
     Length {
         expr: Box<Expr>,
-        inferred_type: TypeInternal,
+        inferred_type: InferredType,
         type_annotation: Option<TypeName>,
         source_span: SourceSpan,
     },
@@ -460,7 +460,7 @@ impl Expr {
     pub fn boolean(value: bool) -> Self {
         Expr::Boolean {
             value,
-            inferred_type: TypeInternal::Bool,
+            inferred_type: InferredType::bool(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -470,7 +470,7 @@ impl Expr {
         Expr::And {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: TypeInternal::Bool,
+            inferred_type: InferredType::bool(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -479,7 +479,7 @@ impl Expr {
     pub fn throw(message: impl AsRef<str>) -> Self {
         Expr::Throw {
             message: message.as_ref().to_string(),
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -489,7 +489,7 @@ impl Expr {
         Expr::Plus {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -555,7 +555,7 @@ impl Expr {
             },
             generic_type_parameter,
             args,
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -570,7 +570,7 @@ impl Expr {
             call_type,
             generic_type_parameter,
             args,
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -587,7 +587,7 @@ impl Expr {
             method: function_name,
             generic_type_parameter,
             args,
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -607,7 +607,7 @@ impl Expr {
             cond: Box::new(cond),
             lhs: Box::new(lhs),
             rhs: Box::new(rhs),
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -670,7 +670,7 @@ impl Expr {
         Expr::Identifier {
             variable_id: VariableId::global(name.as_ref().to_string()),
             type_annotation,
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
         }
     }
@@ -683,7 +683,7 @@ impl Expr {
         Expr::Identifier {
             variable_id: VariableId::local(name.as_ref(), id),
             type_annotation,
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
         }
     }
@@ -695,7 +695,7 @@ impl Expr {
         Expr::Identifier {
             variable_id,
             type_annotation,
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
         }
     }
@@ -788,7 +788,7 @@ impl Expr {
             type_annotation,
             expr: Box::new(expr),
             source_span: SourceSpan::default(),
-            inferred_type: TypeInternal::Tuple(vec![]),
+            inferred_type: InferredType::tuple(vec![]),
         }
     }
 
@@ -798,7 +798,7 @@ impl Expr {
         iterable_expr: Expr,
         init_value_expr: Expr,
         yield_expr: Expr,
-        inferred_type: TypeInternal,
+        inferred_type: InferredType,
     ) -> Self {
         Expr::ListReduce {
             reduce_variable,
@@ -825,7 +825,7 @@ impl Expr {
             iterable_expr,
             init_value_expr,
             yield_expr,
-            TypeInternal::Unknown,
+            InferredType::unknown(),
         )
     }
 
@@ -1546,7 +1546,7 @@ impl Expr {
         }
     }
 
-    pub fn with_inferred_type(&self, new_inferred_type: TypeInternal) -> Expr {
+    pub fn with_inferred_type(&self, new_inferred_type: InferredType) -> Expr {
         let mut expr_copied = self.clone();
         expr_copied.with_inferred_type_mut(new_inferred_type);
         expr_copied
@@ -1554,7 +1554,7 @@ impl Expr {
 
     // `with_inferred_type` overrides the existing inferred_type and returns a new expr
     // This is different to `merge_inferred_type` where it tries to combine the new inferred type with the existing one.
-    pub fn with_inferred_type_mut(&mut self, new_inferred_type: TypeInternal) {
+    pub fn with_inferred_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
             Expr::Identifier { inferred_type, .. }
             | Expr::Let { inferred_type, .. }
@@ -1594,7 +1594,7 @@ impl Expr {
             | Expr::Range { inferred_type, .. }
             | Expr::Length { inferred_type, .. }
             | Expr::Call { inferred_type, .. } => {
-                if new_inferred_type != TypeInternal::Unknown {
+                if !new_inferred_type.is_unknown() {
                     *inferred_type = new_inferred_type;
                 }
             }
