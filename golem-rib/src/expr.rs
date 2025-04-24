@@ -287,7 +287,7 @@ pub enum Expr {
         iterable_expr: Box<Expr>,
         yield_expr: Box<Expr>,
         type_annotation: Option<TypeName>,
-        inferred_type: TypeInternal,
+        inferred_type: InferredType,
         source_span: SourceSpan,
     },
     ListReduce {
@@ -445,7 +445,7 @@ impl Expr {
     pub fn unwrap(&self) -> Self {
         Expr::Unwrap {
             expr: Box::new(self.clone()),
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -454,7 +454,7 @@ impl Expr {
     pub fn length(expr: Expr) -> Self {
         Expr::Length {
             expr: Box::new(expr),
-            inferred_type: TypeInternal::U64,
+            inferred_type: InferredType::u64(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -502,7 +502,7 @@ impl Expr {
         Expr::Minus {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: TypeInternal::number(),
+            inferred_type: InferredType::number(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -512,7 +512,7 @@ impl Expr {
         Expr::Divide {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: TypeInternal::number(SourceSpan::default()),
+            inferred_type: InferredType::number(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -522,7 +522,7 @@ impl Expr {
         Expr::Multiply {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: TypeInternal::number(),
+            inferred_type: InferredType::number(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -536,7 +536,7 @@ impl Expr {
             cond = Some(Expr::And {
                 lhs: left,
                 rhs: Box::new(i),
-                inferred_type: TypeInternal::Bool,
+                inferred_type: InferredType::bool(),
                 source_span: SourceSpan::default(),
                 type_annotation: None,
             });
@@ -599,7 +599,7 @@ impl Expr {
     pub fn concat(expressions: Vec<Expr>) -> Self {
         Expr::Concat {
             exprs: expressions,
-            inferred_type: TypeInternal::Str,
+            inferred_type: InferredType::string(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -620,7 +620,7 @@ impl Expr {
         Expr::EqualTo {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: TypeInternal::Bool,
+            inferred_type: InferredType::bool(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -631,10 +631,10 @@ impl Expr {
         Expr::Result {
             expr: Err(Box::new(expr)),
             type_annotation,
-            inferred_type: TypeInternal::Result {
-                ok: Some(Box::new(TypeInternal::Unknown)),
-                error: Some(Box::new(inferred_type)),
-            },
+            inferred_type: InferredType::result(
+                Some(InferredType::unknown()),
+                Some(inferred_type),
+            ),
             source_span: SourceSpan::default(),
         }
     }
@@ -642,7 +642,7 @@ impl Expr {
     pub fn flags(flags: Vec<String>) -> Self {
         Expr::Flags {
             flags: flags.clone(),
-            inferred_type: TypeInternal::Flags(flags),
+            inferred_type: InferredType::flags(flags),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -652,7 +652,7 @@ impl Expr {
         Expr::GreaterThan {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: TypeInternal::Bool,
+            inferred_type: InferredType::bool(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -662,7 +662,7 @@ impl Expr {
         Expr::GreaterThanOrEqualTo {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: TypeInternal::Bool,
+            inferred_type: InferredType::bool(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -707,7 +707,7 @@ impl Expr {
         Expr::LessThan {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: TypeInternal::Bool,
+            inferred_type: InferredType::bool(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -717,7 +717,7 @@ impl Expr {
         Expr::LessThanOrEqualTo {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: TypeInternal::Bool,
+            inferred_type: InferredType::bool(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -729,10 +729,7 @@ impl Expr {
                 from: Box::new(from.clone()),
                 to: Box::new(to.clone()),
             },
-            inferred_type: TypeInternal::Range {
-                from: Box::new(from.inferred_type()),
-                to: Some(Box::new(to.inferred_type())),
-            },
+            inferred_type: InferredType::range(from.inferred_type(), Some(to.inferred_type())),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -743,10 +740,7 @@ impl Expr {
             range: Range::RangeFrom {
                 from: Box::new(from.clone()),
             },
-            inferred_type: TypeInternal::Range {
-                from: Box::new(from.inferred_type()),
-                to: None,
-            },
+            inferred_type: InferredType::range(from.inferred_type(), None),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -758,10 +752,7 @@ impl Expr {
                 from: Box::new(from.clone()),
                 to: Box::new(to.clone()),
             },
-            inferred_type: TypeInternal::Range {
-                from: Box::new(from.inferred_type()),
-                to: Some(Box::new(to.inferred_type())),
-            },
+            inferred_type: InferredType::range(from.inferred_type(), Some(to.inferred_type())),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -777,7 +768,7 @@ impl Expr {
             type_annotation,
             expr: Box::new(expr),
             source_span: SourceSpan::default(),
-            inferred_type: TypeInternal::Tuple(vec![]),
+            inferred_type: InferredType::tuple(vec![]),
         }
     }
 
@@ -836,7 +827,7 @@ impl Expr {
         iterated_variable: VariableId,
         iterable_expr: Expr,
         yield_expr: Expr,
-        inferred_type: TypeInternal,
+        inferred_type: InferredType,
     ) -> Self {
         Expr::ListComprehension {
             iterated_variable,
@@ -857,7 +848,7 @@ impl Expr {
             variable_id,
             iterable_expr,
             yield_expr,
-            TypeInternal::List(Box::new(TypeInternal::Unknown)),
+            InferredType::list(InferredType::unknown()),
         )
     }
 
@@ -872,7 +863,7 @@ impl Expr {
     pub fn literal(value: impl AsRef<str>) -> Self {
         Expr::Literal {
             value: value.as_ref().to_string(),
-            inferred_type: TypeInternal::Str,
+            inferred_type: InferredType::string(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -885,7 +876,7 @@ impl Expr {
     pub fn expr_block(expressions: Vec<Expr>) -> Self {
         let inferred_type = expressions
             .last()
-            .map_or(TypeInternal::Unknown, |e| e.inferred_type());
+            .map_or(InferredType::unknown(), |e| e.inferred_type());
 
         Expr::ExprBlock {
             exprs: expressions,
@@ -899,7 +890,7 @@ impl Expr {
     pub fn not(expr: Expr) -> Self {
         Expr::Not {
             expr: Box::new(expr),
-            inferred_type: TypeInternal::Bool,
+            inferred_type: InferredType::bool(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -911,10 +902,7 @@ impl Expr {
         Expr::Result {
             expr: Ok(Box::new(expr)),
             type_annotation,
-            inferred_type: TypeInternal::Result {
-                ok: Some(Box::new(inferred_type)),
-                error: Some(Box::new(TypeInternal::Unknown)),
-            },
+            inferred_type: InferredType::result(Some(inferred_type), Some(InferredType::unknown())),
             source_span: SourceSpan::default(),
         }
     }
@@ -922,13 +910,13 @@ impl Expr {
     pub fn option(expr: Option<Expr>) -> Self {
         let inferred_type = match &expr {
             Some(expr) => expr.inferred_type(),
-            None => TypeInternal::Unknown,
+            None => InferredType::unknown(),
         };
 
         Expr::Option {
             expr: expr.map(Box::new),
             type_annotation: None,
-            inferred_type: TypeInternal::Option(Box::new(inferred_type)),
+            inferred_type: InferredType::option(inferred_type),
             source_span: SourceSpan::default(),
         }
     }
@@ -937,7 +925,7 @@ impl Expr {
         Expr::Or {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: TypeInternal::Bool,
+            inferred_type: InferredType::bool(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -947,14 +935,14 @@ impl Expr {
         Expr::PatternMatch {
             predicate: Box::new(expr),
             match_arms,
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
     }
 
     pub fn record(expressions: Vec<(String, Expr)>) -> Self {
-        let inferred_type = TypeInternal::Record(
+        let inferred_type = InferredType::record(
             expressions
                 .iter()
                 .map(|(field_name, expr)| (field_name.to_string(), expr.inferred_type()))
@@ -981,7 +969,7 @@ impl Expr {
             expr: Box::new(expr),
             field: field.as_ref().to_string(),
             type_annotation,
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
         }
     }
@@ -991,7 +979,7 @@ impl Expr {
             expr: Box::new(expr),
             index: Box::new(index),
             type_annotation: None,
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
         }
     }
@@ -999,14 +987,14 @@ impl Expr {
     pub fn get_tag(expr: Expr) -> Self {
         Expr::GetTag {
             expr: Box::new(expr),
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
     }
 
     pub fn tuple(expressions: Vec<Expr>) -> Self {
-        let inferred_type = TypeInternal::Tuple(
+        let inferred_type = InferredType::tuple(
             expressions
                 .iter()
                 .map(|expr| expr.inferred_type())
@@ -1022,11 +1010,11 @@ impl Expr {
     }
 
     pub fn sequence(expressions: Vec<Expr>, type_annotation: Option<TypeName>) -> Self {
-        let inferred_type = TypeInternal::List(Box::new(
+        let inferred_type = InferredType::list(
             expressions
                 .first()
-                .map_or(TypeInternal::Unknown, |x| x.inferred_type()),
-        ));
+                .map_or(InferredType::unknown(), |x| x.inferred_type()),
+        );
 
         Expr::Sequence {
             exprs: expressions,
@@ -1216,13 +1204,13 @@ impl Expr {
         Ok(())
     }
 
-    pub fn merge_inferred_type(&self, new_inferred_type: TypeInternal) -> Expr {
+    pub fn merge_inferred_type(&self, new_inferred_type: InferredType) -> Expr {
         let mut expr_copied = self.clone();
         expr_copied.add_infer_type_mut(new_inferred_type);
         expr_copied
     }
 
-    pub fn add_infer_type_mut(&mut self, new_inferred_type: TypeInternal) {
+    pub fn add_infer_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
             Expr::Identifier { inferred_type, .. }
             | Expr::Let { inferred_type, .. }
@@ -1262,7 +1250,7 @@ impl Expr {
             | Expr::Range { inferred_type, .. }
             | Expr::Length { inferred_type, .. }
             | Expr::Call { inferred_type, .. } => {
-                if new_inferred_type != TypeInternal::Unknown {
+                if !new_inferred_type.is_unknown() {
                     *inferred_type = inferred_type.merge(new_inferred_type);
                 }
             }
@@ -1704,7 +1692,7 @@ impl Expr {
     }
 
     pub fn number(big_decimal: BigDecimal) -> Expr {
-        Expr::number_inferred(big_decimal, None, TypeInternal::number())
+        Expr::number_inferred(big_decimal, None, InferredType::number())
     }
 }
 
@@ -1903,14 +1891,11 @@ impl ArmPattern {
             expr: Ok(Box::new(Expr::Identifier {
                 variable_id: VariableId::global(binding_variable.to_string()),
                 type_annotation: None,
-                inferred_type: TypeInternal::Unknown,
+                inferred_type: InferredType::unknown(),
                 source_span: SourceSpan::default(),
             })),
             type_annotation: None,
-            inferred_type: TypeInternal::Result {
-                ok: Some(Box::new(TypeInternal::Unknown)),
-                error: Some(Box::new(TypeInternal::Unknown)),
-            },
+            inferred_type: InferredType::result(Some(InferredType::unknown()), Some(InferredType::unknown())),
             source_span: SourceSpan::default(),
         }))
     }
@@ -1921,14 +1906,11 @@ impl ArmPattern {
             expr: Err(Box::new(Expr::Identifier {
                 variable_id: VariableId::global(binding_variable.to_string()),
                 type_annotation: None,
-                inferred_type: TypeInternal::Unknown,
+                inferred_type: InferredType::unknown(),
                 source_span: SourceSpan::default(),
             })),
             type_annotation: None,
-            inferred_type: TypeInternal::Result {
-                ok: Some(Box::new(TypeInternal::Unknown)),
-                error: Some(Box::new(TypeInternal::Unknown)),
-            },
+            inferred_type: InferredType::result(Some(InferredType::unknown()), Some(InferredType::unknown())),
             source_span: SourceSpan::default(),
         }))
     }
@@ -1939,11 +1921,11 @@ impl ArmPattern {
             expr: Some(Box::new(Expr::Identifier {
                 variable_id: VariableId::local_with_no_id(binding_variable),
                 type_annotation: None,
-                inferred_type: TypeInternal::Unknown,
+                inferred_type: InferredType::unknown(),
                 source_span: SourceSpan::default(),
             })),
             type_annotation: None,
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
         }))
     }
@@ -1952,7 +1934,7 @@ impl ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Option {
             expr: None,
             type_annotation: None,
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
         }))
     }
@@ -1961,7 +1943,7 @@ impl ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Identifier {
             variable_id: VariableId::global(binding_variable.to_string()),
             type_annotation: None,
-            inferred_type: TypeInternal::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
         }))
     }
@@ -2001,7 +1983,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 Expr::Length {
                     expr: Box::new((*expr).try_into()?),
                     type_annotation: None,
-                    inferred_type: TypeInternal::Unknown,
+                    inferred_type: InferredType::unknown(),
                     source_span: SourceSpan::default(),
                 }
             }
@@ -2346,7 +2328,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                                     call_type,
                                     generic_type_parameter,
                                     args: vec![],
-                                    inferred_type: TypeInternal::Unknown,
+                                    inferred_type: InferredType::unknown(),
                                     source_span: SourceSpan::default(),
                                     type_annotation: None, // TODO
                                 }
@@ -2373,7 +2355,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     generic_type_parameter: generic_type_parameter
                         .map(|value| GenericTypeParameter { value }),
                     args,
-                    inferred_type: TypeInternal::Unknown,
+                    inferred_type: InferredType::unknown(),
                     source_span: SourceSpan::default(),
                     type_annotation: None, //TODO
                 }

@@ -573,12 +573,12 @@ mod tests {
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
-                    InferredType::number(&SourceSpan::default())
+                    InferredType::number()
                 ),
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
-                    InferredType::number(&SourceSpan::default())
+                    InferredType::number()
                 )
             )
         );
@@ -607,12 +607,12 @@ mod tests {
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
-                    InferredType::number(&SourceSpan::default())
+                    InferredType::number()
                 ),
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
-                    InferredType::number(&SourceSpan::default())
+                    InferredType::number()
                 )
             )
         );
@@ -634,7 +634,7 @@ mod tests {
             Expr::range_from(Expr::number_inferred(
                 bigdecimal::BigDecimal::from_u64(1).unwrap(),
                 None,
-                InferredType::number(&SourceSpan::default())
+                InferredType::number()
             ))
         );
     }
@@ -652,12 +652,12 @@ mod tests {
                 Expr::range_from(Expr::number_inferred(
                     BigDecimal::from_u64(1).unwrap(),
                     None,
-                    InferredType::number(&SourceSpan::default())
+                    InferredType::number()
                 )),
                 Expr::number_inferred(
                     BigDecimal::from_u64(2).unwrap(),
                     None,
-                    InferredType::number(&SourceSpan::default())
+                    InferredType::number()
                 )
             )
         );

@@ -86,7 +86,7 @@ impl TypeInternal {
 
 #[derive(Debug, Hash, Clone, Eq, PartialOrd, Ord)]
 pub enum TypeOrigin {
-    Default(SourceSpan),
+    Default,
     NoOrigin,
     Multiple(Vec<TypeOrigin>),
 }
@@ -319,10 +319,10 @@ impl InferredType {
         }
     }
 
-    pub fn default(inferred_type: TypeInternal, source_span: &SourceSpan) -> InferredType {
+    pub fn default(inferred_type: TypeInternal) -> InferredType {
         InferredType {
             inner: Box::new(inferred_type),
-            origin: TypeOrigin::Default(source_span.clone()),
+            origin: TypeOrigin::Default,
         }
     }
 }
@@ -719,23 +719,23 @@ impl InferredType {
         found.first().cloned().ok_or("Failed".to_string())
     }
 
-    pub fn number(source_span: &SourceSpan) -> InferredType {
+    pub fn number() -> InferredType {
         let inferred_type = TypeInternal::OneOf(vec![
-            InferredType::default(TypeInternal::U64, source_span),
-            InferredType::default(TypeInternal::U32, source_span),
-            InferredType::default(TypeInternal::U8, source_span),
-            InferredType::default(TypeInternal::U16, source_span),
-            InferredType::default(TypeInternal::S64, source_span),
-            InferredType::default(TypeInternal::S32, source_span),
-            InferredType::default(TypeInternal::S8, source_span),
-            InferredType::default(TypeInternal::S16, source_span),
-            InferredType::default(TypeInternal::F64, source_span),
-            InferredType::default(TypeInternal::F32, source_span),
+            InferredType::default(TypeInternal::U64),
+            InferredType::default(TypeInternal::U32),
+            InferredType::default(TypeInternal::U8),
+            InferredType::default(TypeInternal::U16),
+            InferredType::default(TypeInternal::S64),
+            InferredType::default(TypeInternal::S32),
+            InferredType::default(TypeInternal::S8),
+            InferredType::default(TypeInternal::S16),
+            InferredType::default(TypeInternal::F64),
+            InferredType::default(TypeInternal::F32),
         ]);
 
         InferredType {
             inner: Box::new(inferred_type),
-            origin: TypeOrigin::Default(source_span.clone()),
+            origin: TypeOrigin::Default,
         }
     }
 
