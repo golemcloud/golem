@@ -69,10 +69,8 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
             }
             TypeInternal::Range { from, to } => {
                 let from: AnalysedType = AnalysedType::try_from(from)?;
-                let to: Option<AnalysedType> = to
-                    .as_ref()
-                    .map(|t| AnalysedType::try_from(t))
-                    .transpose()?;
+                let to: Option<AnalysedType> =
+                    to.as_ref().map(|t| AnalysedType::try_from(t)).transpose()?;
                 let analysed_type = match (from, to) {
                     (from_type, Some(to_type)) => record(vec![
                         field("from", option(from_type)),
@@ -170,12 +168,8 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
             TypeInternal::Result { ok, error } => Ok(AnalysedTypeWithUnit::analysed_type(
                 // In the case of result, there are instances users give just 1 value with zero function calls, we need to be flexible here
                 AnalysedType::Result(TypeResult {
-                    ok: ok
-                        .as_ref()
-                        .and_then(|t| t.try_into().ok().map(Box::new)),
-                    err: error
-                        .as_ref()
-                        .and_then(|t| t.try_into().ok().map(Box::new)),
+                    ok: ok.as_ref().and_then(|t| t.try_into().ok().map(Box::new)),
+                    err: error.as_ref().and_then(|t| t.try_into().ok().map(Box::new)),
                 }),
             )),
             TypeInternal::Variant(variant) => Ok(AnalysedTypeWithUnit::analysed_type(

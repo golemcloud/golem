@@ -14,7 +14,7 @@
 
 use crate::type_checker::Path;
 use crate::type_checker::PathElem;
-use crate::{Expr, TypeInternal, VariableId};
+use crate::{Expr, VariableId};
 use crate::{ExprVisitor, InferredType};
 
 #[derive(Clone, Debug)]

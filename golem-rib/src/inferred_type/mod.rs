@@ -20,7 +20,6 @@ use crate::type_inference::GetTypeHint;
 use crate::TypeName;
 use bigdecimal::num_bigint::Sign;
 use bigdecimal::BigDecimal;
-use golem_wasm_ast::analysis::analysed_type::*;
 use golem_wasm_ast::analysis::*;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
@@ -905,7 +904,7 @@ impl InferredType {
                 InferredType::all_of(all_types).unwrap_or(InferredType::unknown())
             }
 
-            (TypeInternal::AllOf(existing_types), new_type) => {
+            (TypeInternal::AllOf(existing_types), _) => {
                 let mut all_types = existing_types.clone();
                 all_types.push(new_inferred_type);
 
@@ -930,7 +929,7 @@ impl InferredType {
                 InferredType::one_of(one_of_types).unwrap_or(InferredType::unknown())
             }
 
-            (TypeInternal::OneOf(existing_types), new_type_internal) => {
+            (TypeInternal::OneOf(existing_types), _) => {
                 if existing_types.contains(&new_inferred_type) {
                     new_inferred_type
                 } else {
@@ -939,7 +938,7 @@ impl InferredType {
                 }
             }
 
-            (current_type_internal, TypeInternal::OneOf(newtypes)) => {
+            (_, TypeInternal::OneOf(newtypes)) => {
                 if newtypes.contains(self) {
                     self.clone()
                 } else {
@@ -948,10 +947,8 @@ impl InferredType {
                 }
             }
 
-            (_, new_type_internal) => {
-                InferredType::all_of(vec![self.clone(), new_inferred_type.clone()])
-                    .unwrap_or(InferredType::unknown())
-            }
+            (_, _) => InferredType::all_of(vec![self.clone(), new_inferred_type.clone()])
+                .unwrap_or(InferredType::unknown()),
         }
     }
 
@@ -978,7 +975,6 @@ impl InferredType {
         InferredType::without_origin(TypeInternal::Enum(type_enum.cases.clone()))
     }
 }
-
 
 impl From<&AnalysedType> for InferredType {
     fn from(analysed_type: &AnalysedType) -> Self {
@@ -1030,7 +1026,7 @@ impl From<&AnalysedType> for InferredType {
 }
 
 mod internal {
-    use crate::{InferredType, TypeInternal};
+    use crate::InferredType;
 
     pub(crate) fn need_update(
         current_inferred_type: &InferredType,
@@ -1042,7 +1038,6 @@ mod internal {
 
 #[cfg(test)]
 mod test {
-    use crate::InvalidItem::Type;
     use crate::{InferredType, TypeOrigin};
 
     #[test]

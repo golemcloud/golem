@@ -76,7 +76,7 @@ mod tests {
     use crate::{
         ArmPattern, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr,
         FunctionTypeRegistry, InferredExpr, InferredType, MatchArm, Number, ParsedFunctionSite,
-        TypeInternal, TypeName, VariableId,
+        TypeName, VariableId,
     };
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
@@ -2240,7 +2240,7 @@ mod tests {
         use crate::rib_source_span::SourceSpan;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
-            Number, ParsedFunctionSite, TypeInternal, VariableId,
+            Number, ParsedFunctionSite, VariableId,
         };
         use bigdecimal::BigDecimal;
         use golem_wasm_ast::analysis::analysed_type::u64;

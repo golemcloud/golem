@@ -64,7 +64,7 @@ mod tests {
     use test_r::test;
 
     use crate::parser::type_name::TypeName;
-    use crate::{InferredType, TypeInternal, VariableId};
+    use crate::{InferredType, VariableId};
 
     use super::*;
 

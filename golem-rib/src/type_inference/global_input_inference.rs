@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor, InferredType, TypeInternal};
+use crate::{Expr, ExprVisitor, InferredType};
 use std::collections::HashMap;
 
 // request.path.user is used as a string in one place

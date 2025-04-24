@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor, InferredType, TypeInternal};
+use crate::{Expr, ExprVisitor, InferredType};
 use std::ops::DerefMut;
 
 // All select indices with literal numbers don't need to explicit

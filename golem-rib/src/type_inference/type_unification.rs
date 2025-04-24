@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor, InferredType, TypeInternal, UnResolvedTypesError};
+use crate::{Expr, ExprVisitor, InferredType, UnResolvedTypesError};
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
     let mut visitor = ExprVisitor::bottom_up(expr);

@@ -173,7 +173,7 @@ impl<A> RefinedType<A> {
 
 mod internal {
     use crate::type_refinement::HeterogeneousCollectionType;
-    use crate::{InferredType, TypeInternal};
+    use crate::InferredType;
 
     // Combine takes a list of heterogeneous collection types, zips them by their positions,
     // and produces a single heterogeneous collection type.

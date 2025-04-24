@@ -1,6 +1,8 @@
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
-use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeInternal};
+use crate::{
+    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
+};
 use golem_api_grpc::proto::golem::rib::instance_type::Instance;
 use golem_api_grpc::proto::golem::rib::{
     function_name_type, FullyQualifiedFunctionName as ProtoFullyQualifiedFunctionName,
@@ -834,7 +836,7 @@ impl TryFrom<ProtoFunctionType> for FunctionType {
 
         Ok(Self {
             parameter_types,
-            return_type
+            return_type,
         })
     }
 }

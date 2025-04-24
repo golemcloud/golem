@@ -1465,7 +1465,7 @@ mod tests {
     };
     use crate::{
         compiler, Expr, FunctionTypeRegistry, GlobalVariableTypeSpec, InferredType, InstructionId,
-        Path, TypeInternal, VariableId,
+        Path, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{
         bool, case, f32, field, list, option, r#enum, record, result, s32, s8, str, tuple, u32,

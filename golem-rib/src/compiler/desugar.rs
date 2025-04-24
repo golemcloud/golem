@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, InferredType, MatchArm, Range, TypeInternal, VariableId};
+use crate::{Expr, InferredType, MatchArm, Range, VariableId};
 use bigdecimal::BigDecimal;
 use std::ops::Deref;
 
@@ -494,7 +494,8 @@ mod internal {
                         },
                     );
                     let new_pred_type = inferred_types
-                        .get(index).cloned()
+                        .get(index)
+                        .cloned()
                         .unwrap_or(InferredType::unknown());
 
                     let branch = get_conditions(
@@ -693,7 +694,7 @@ mod desugar_tests {
         }
     }
     mod expectations {
-        use crate::{Expr, InferredType, TypeInternal, TypeName, VariableId};
+        use crate::{Expr, InferredType, TypeName, VariableId};
         use bigdecimal::BigDecimal;
         pub(crate) fn expected_condition_with_identifiers() -> Expr {
             Expr::cond(

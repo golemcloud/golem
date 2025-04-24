@@ -36,7 +36,6 @@ mod internal {
     use crate::rib_type_error::RibTypeError;
     use crate::type_parameter::TypeParameter;
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::ActualType::Inferred;
     use crate::{
         CustomError, Expr, ExprVisitor, FunctionCallError, InferredType, ParsedFunctionReference,
         TypeInternal, TypeOrigin,

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{InferredType, TypeInternal};
+use crate::InferredType;
 
 // Standalone precise types
 #[derive(Clone, PartialEq, Debug)]

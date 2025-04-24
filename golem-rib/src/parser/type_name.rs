@@ -320,7 +320,7 @@ impl TryFrom<InferredType> for TypeName {
             TypeInternal::Chr => Ok(TypeName::Chr),
             TypeInternal::Str => Ok(TypeName::Str),
             TypeInternal::List(inferred_type) => {
-                let verified = inferred_type.deref().clone().try_into()?;
+                let verified = inferred_type.clone().try_into()?;
                 Ok(TypeName::List(Box::new(verified)))
             }
             TypeInternal::Tuple(inferred_types) => {
@@ -341,7 +341,7 @@ impl TryFrom<InferredType> for TypeName {
             TypeInternal::Flags(flags) => Ok(TypeName::Flags(flags.clone())),
             TypeInternal::Enum(enums) => Ok(TypeName::Enum(enums.clone())),
             TypeInternal::Option(inferred_type) => {
-                let result = inferred_type.deref().clone().try_into()?;
+                let result = inferred_type.clone().try_into()?;
                 Ok(TypeName::Option(Box::new(result)))
             }
             TypeInternal::Result { ok, error } => {

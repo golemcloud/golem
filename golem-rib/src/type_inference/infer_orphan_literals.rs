@@ -1,5 +1,5 @@
 use crate::rib_type_error::RibTypeError;
-use crate::{Expr, InferredType, TypeInternal};
+use crate::{Expr, InferredType};
 use std::collections::VecDeque;
 // This is more of an optional stage to help with a better
 // DX for Rib users, while not affecting the type inference reliability.

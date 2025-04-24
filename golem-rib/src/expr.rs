@@ -21,7 +21,7 @@ use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
     from_string, text, type_checker, type_inference, DynamicParsedFunctionName,
-    GlobalVariableTypeSpec, InferredType, ParsedFunctionName, TypeInternal, VariableId,
+    GlobalVariableTypeSpec, InferredType, ParsedFunctionName, VariableId,
 };
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;

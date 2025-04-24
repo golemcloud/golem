@@ -14,7 +14,7 @@
 
 use crate::type_refinement::precise_types::*;
 use crate::type_refinement::TypeRefinement;
-use crate::{Expr, InferredType, TypeInternal, TypeMismatchError};
+use crate::{Expr, InferredType, TypeMismatchError};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::ops::Deref;
 

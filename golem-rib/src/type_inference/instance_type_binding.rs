@@ -14,7 +14,6 @@
 
 use crate::{Expr, ExprVisitor, InferredType, TypeInternal, TypeOrigin};
 use std::collections::HashMap;
-use std::ops::Deref;
 
 // This is about binding the `InstanceType` to the corresponding identifiers.
 //
@@ -42,7 +41,9 @@ pub fn bind_instance_types(expr: &mut Expr) {
             Expr::Let {
                 variable_id, expr, ..
             } => {
-                if let TypeInternal::Instance { instance_type } = expr.inferred_type().inner.as_ref() {
+                if let TypeInternal::Instance { instance_type } =
+                    expr.inferred_type().inner.as_ref()
+                {
                     instance_variables.insert(variable_id.clone(), instance_type.clone());
                 }
             }

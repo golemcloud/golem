@@ -1094,7 +1094,7 @@ mod let_tests {
     use crate::expr::Expr;
     use crate::parser::type_name::TypeName;
     use crate::text::{from_string, to_string};
-    use crate::{InferredType, TypeInternal, VariableId};
+    use crate::{InferredType, VariableId};
 
     #[test]
     fn test_round_trip_read_write_let() {

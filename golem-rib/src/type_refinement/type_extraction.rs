@@ -15,7 +15,7 @@
 use crate::type_refinement::precise_types::{
     ErrType, ListType, OkType, OptionalType, RangeType, RecordType, TupleType, VariantType,
 };
-use crate::{InferredType, TypeInternal};
+use crate::InferredType;
 
 pub trait ExtractInnerType {
     fn inner_type(&self) -> InferredType;

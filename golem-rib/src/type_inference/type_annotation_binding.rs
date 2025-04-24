@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor, InferredType, TypeInternal};
+use crate::{Expr, ExprVisitor, InferredType};
 
 pub fn bind_type_annotations(expr: &mut Expr) {
     let mut visitor = ExprVisitor::top_down(expr);
@@ -47,7 +47,7 @@ mod type_binding_tests {
 
     use super::*;
     use crate::parser::type_name::TypeName;
-    use crate::{ArmPattern, MatchArm, TypeInternal, VariableId};
+    use crate::{ArmPattern, MatchArm, VariableId};
 
     #[test]
     fn test_bind_type_in_let() {

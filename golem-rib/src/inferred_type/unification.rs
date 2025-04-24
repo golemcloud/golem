@@ -396,7 +396,7 @@ pub fn unify_with_alternative(
                 }
             }
 
-            (TypeInternal::AllOf(a_types), inferred_types) => {
+            (TypeInternal::AllOf(a_types), _) => {
                 let unified_all_types = unify_all_required_types(a_types)?;
                 let alternative_type = other.try_unify()?;
 
@@ -411,7 +411,7 @@ pub fn unify_with_alternative(
                 }
             }
 
-            (inferred_types, TypeInternal::AllOf(b_types)) => {
+            (_, TypeInternal::AllOf(b_types)) => {
                 let unified_all_types = unify_all_required_types(b_types)?;
                 let alternative_type = inferred_type.try_unify()?;
 
@@ -549,13 +549,13 @@ pub fn unify_with_required(
                 InferredType::resolved(TypeInternal::Option(a_type.unify_with_required(b_type)?)),
             ),
 
-            (TypeInternal::Option(a_type), inferred_type) => {
+            (TypeInternal::Option(a_type), _) => {
                 let unified_left = a_type.try_unify()?;
                 let unified_right = other.try_unify()?;
                 let combined = unified_left.unify_with_required(&unified_right)?;
                 Ok(InferredType::option(combined))
             }
-            (inferred_type_internal, TypeInternal::Option(a_type)) => {
+            (_, TypeInternal::Option(a_type)) => {
                 let unified_left = a_type.try_unify()?;
                 let unified_right = inferred_type.try_unify()?;
                 let combined = unified_left.unify_with_required(&unified_right)?;
@@ -667,7 +667,7 @@ pub fn unify_with_required(
                 unify_all_required_types(all_of_types)
             }
 
-            (TypeInternal::OneOf(types), inferred_type_internal) => {
+            (TypeInternal::OneOf(types), _) => {
                 let mut unified = None;
                 for typ in types {
                     match typ.unify_with_alternative(other) {
@@ -695,7 +695,7 @@ pub fn unify_with_required(
                 }
             }
 
-            (inferred_type_internal, TypeInternal::OneOf(types)) => {
+            (_, TypeInternal::OneOf(types)) => {
                 if types.contains(inferred_type) {
                     Ok(inferred_type.clone())
                 } else {
@@ -712,7 +712,7 @@ pub fn unify_with_required(
                 }
             }
 
-            (TypeInternal::AllOf(types), inferred_type_internal) => {
+            (TypeInternal::AllOf(types), _) => {
                 let x = types
                     .iter()
                     .filter(|x| !x.is_unknown())
@@ -722,7 +722,7 @@ pub fn unify_with_required(
                 unify_all_required_types(&x)
             }
 
-            (inferred_type_internal, TypeInternal::AllOf(types)) => {
+            (_, TypeInternal::AllOf(types)) => {
                 let result =
                     InferredType::resolved(TypeInternal::AllOf(types.clone())).try_unify()?;
 
@@ -801,8 +801,8 @@ mod internal {
                     field.clone(),
                 ))))
             }
-            TypeInternal::Flags(flags) => Ok(Unified(inferred_type.clone())),
-            TypeInternal::Enum(enums) => Ok(Unified(inferred_type.clone())),
+            TypeInternal::Flags(_) => Ok(Unified(inferred_type.clone())),
+            TypeInternal::Enum(_) => Ok(Unified(inferred_type.clone())),
             TypeInternal::Option(inferred_type) => {
                 let result = validate_unified_type(inferred_type)?;
                 Ok(Unified(InferredType::option(result.inferred_type())))

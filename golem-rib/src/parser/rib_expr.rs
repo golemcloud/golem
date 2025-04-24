@@ -552,10 +552,7 @@ fn combine_with_range_info(
 #[cfg(test)]
 mod tests {
     use crate::generic_type_parameter::GenericTypeParameter;
-    use crate::rib_source_span::SourceSpan;
-    use crate::{
-        ArmPattern, DynamicParsedFunctionName, Expr, InferredType, MatchArm, TypeInternal, TypeName,
-    };
+    use crate::{ArmPattern, DynamicParsedFunctionName, Expr, InferredType, MatchArm, TypeName};
     use bigdecimal::{BigDecimal, FromPrimitive};
     use std::str::FromStr;
     use test_r::test;

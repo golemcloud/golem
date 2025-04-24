@@ -21,7 +21,6 @@ mod type_extraction;
 
 use crate::type_refinement::precise_types::*;
 use crate::{InferredType, TypeInternal};
-use std::ops::Deref;
 
 /// # Example:
 ///
@@ -88,7 +87,7 @@ impl TypeRefinement for OptionalType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
             if let TypeInternal::Option(optional_type) = inferred_type.inner.as_ref() {
-                Some(OptionalType(optional_type.deref().clone()))
+                Some(OptionalType(optional_type.clone()))
             } else {
                 None
             }
@@ -124,7 +123,7 @@ impl TypeRefinement for ListType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
             if let TypeInternal::List(inferred_type) = inferred_type.inner.as_ref() {
-                Some(ListType(inferred_type.deref().clone()))
+                Some(ListType(inferred_type.clone()))
             } else {
                 None
             }
@@ -301,7 +300,7 @@ mod type_refinement_tests {
 
     use crate::type_refinement::precise_types::OptionalType;
     use crate::type_refinement::{RefinedType, TypeRefinement};
-    use crate::{InferredType, TypeInternal};
+    use crate::InferredType;
 
     #[test]
     fn test_type_refinement_option() {

@@ -24,7 +24,6 @@ pub fn infer_all_identifiers(expr: &mut Expr) {
 }
 
 mod internal {
-
     use crate::{ArmPattern, Expr, ExprVisitor, InferredType, MatchArm, VariableId};
     use std::collections::HashMap;
 
