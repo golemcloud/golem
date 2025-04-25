@@ -18,7 +18,6 @@ use std::vec::IntoIter;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum RefinedType<A> {
-    OneOf(Vec<RefinedType<A>>),
     AllOf(Vec<RefinedType<A>>),
     Value(A),
 }
@@ -65,11 +64,6 @@ impl HeterogeneousCollectionType {
             .iter()
             .zip(other.0.iter())
             .map(|(a, b)| match a.inner.as_ref() {
-                TypeInternal::OneOf(types) => {
-                    let mut one_ofs = types.clone();
-                    one_ofs.push(b.clone());
-                    InferredType::one_of(one_ofs).unwrap_or(InferredType::unknown())
-                }
                 TypeInternal::AllOf(types) => {
                     let mut all_ofs = types.clone();
                     all_ofs.push(b.clone());
@@ -94,18 +88,6 @@ impl<A> RefinedType<A> {
         A: ExtractInnerType,
     {
         match self {
-            RefinedType::OneOf(inner) => {
-                // Handle the nested `OneOf`
-                let mut alternative_types = vec![];
-
-                // Recursively call `inner_type` on the nested structure
-
-                inner.iter().for_each(|v| {
-                    alternative_types.push(v.inner_type());
-                });
-
-                InferredType::one_of(alternative_types).unwrap_or(InferredType::unknown())
-            }
             RefinedType::AllOf(inner) => {
                 // Handle the nested `AllOf`
                 let mut required_types = vec![];
@@ -129,10 +111,6 @@ impl<A> RefinedType<A> {
         A: ExtractInnerTypes,
     {
         match self {
-            RefinedType::OneOf(inner) => {
-                let x = inner.iter().map(|v| v.inner_types()).collect::<Vec<_>>();
-                internal::combine(x, InferredType::one_of)
-            }
             RefinedType::AllOf(inner) => {
                 let x = inner.iter().map(|v| v.inner_types()).collect::<Vec<_>>();
                 internal::combine(x, InferredType::all_of)
@@ -148,14 +126,6 @@ impl<A> RefinedType<A> {
         A: GetInferredTypeByName,
     {
         match self {
-            RefinedType::OneOf(inner) => {
-                let collected_types = inner
-                    .iter()
-                    .map(|v| v.inner_type_by_name(field_name))
-                    .collect::<Vec<_>>();
-
-                InferredType::one_of(collected_types).unwrap_or(InferredType::unknown())
-            }
             RefinedType::AllOf(inner) => {
                 let collected_types = inner
                     .iter()

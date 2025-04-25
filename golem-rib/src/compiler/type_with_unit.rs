@@ -199,7 +199,6 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                 },
             ))),
 
-            TypeInternal::OneOf(_) => Err("ambiguous types".to_string()),
             TypeInternal::AllOf(types) => Err(format!(
                 "ambiguous types {}",
                 types

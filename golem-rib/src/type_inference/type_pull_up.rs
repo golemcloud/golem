@@ -349,9 +349,9 @@ fn handle_math_op(
 ) -> Result<(), TypeMismatchError> {
     // If final result  is not resolved, while both lhs and rhs are resolved
     // then we expect the
-    if result_type.un_resolved()
-        && !rhs.inferred_type().un_resolved()
-        && !lhs.inferred_type().un_resolved()
+    if result_type.is_unknown()
+        && !rhs.inferred_type().is_unknown()
+        && !lhs.inferred_type().is_unknown()
     {
         // optional steps, just to make sure we are not propagating too much errors to the end
         let _ = get_number(rhs)?;

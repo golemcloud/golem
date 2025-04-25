@@ -124,17 +124,7 @@ impl InferredType {
                 TypeInternal::Option(_) => Err(format!("used as {}", "option")),
                 TypeInternal::Result { .. } => Err(format!("used as {}", "result")),
                 TypeInternal::Variant(_) => Err(format!("used as {}", "variant")),
-
-                // It's ok to have one-of as far as there is a precise number already `found`
-                TypeInternal::OneOf(_) => {
-                    if found.is_empty() {
-                        Err("not a number.".to_string())
-                    } else {
-                        Ok(())
-                    }
-                }
                 TypeInternal::Unknown => Err("found unknown".to_string()),
-
                 TypeInternal::Sequence(_) => {
                     Err(format!("used as {}", "function-multi-parameter-return"))
                 }
@@ -174,8 +164,6 @@ impl InferredType {
             | TypeInternal::U64
             | TypeInternal::F32
             | TypeInternal::F64 => true,
-            TypeInternal::AllOf(types) => types.iter().all(|t| t.contains_only_number()),
-            TypeInternal::OneOf(types) => types.iter().all(|t| t.contains_only_number()),
             TypeInternal::Bool => false,
             TypeInternal::Chr => false,
             TypeInternal::Str => false,
@@ -192,6 +180,7 @@ impl InferredType {
             TypeInternal::Instance { .. } => false,
             TypeInternal::Unknown => false,
             TypeInternal::Sequence(_) => false,
+            TypeInternal::AllOf(types) => types.iter().all(|t| t.contains_only_number()),
         }
     }
 
@@ -435,10 +424,6 @@ impl InferredType {
             .unwrap_or(self.get_type_hint().to_string())
     }
 
-    pub fn un_resolved(&self) -> bool {
-        self.is_unknown() || self.is_one_of()
-    }
-
     pub fn all_of(types: Vec<InferredType>) -> Option<InferredType> {
         let flattened = InferredType::flatten_all_of_inferred_types(&types);
 
@@ -469,38 +454,6 @@ impl InferredType {
         }
     }
 
-    pub fn one_of(types: Vec<InferredType>) -> Option<InferredType> {
-        let flattened = InferredType::flatten_one_of_inferred_types(&types);
-
-        let mut types: Vec<InferredType> =
-            flattened.into_iter().filter(|t| !t.is_unknown()).collect();
-
-        // Make sure they are unique types
-        let mut unique_types: HashSet<InferredType> = HashSet::new();
-        types.retain(|t| unique_types.insert(t.clone()));
-
-        if types.is_empty() {
-            None
-        } else if types.len() == 1 {
-            types.into_iter().next()
-        } else {
-            let mut unique_one_of_types: Vec<InferredType> = unique_types.into_iter().collect();
-            unique_one_of_types.sort();
-
-            let origin = TypeOrigin::Multiple(
-                unique_one_of_types
-                    .iter()
-                    .map(|x| x.origin.clone())
-                    .collect(),
-            );
-
-            Some(InferredType {
-                inner: Box::new(TypeInternal::OneOf(unique_one_of_types)),
-                origin,
-            })
-        }
-    }
-
     pub fn is_unit(&self) -> bool {
         match self.inner.deref() {
             TypeInternal::Sequence(types) => types.is_empty(),
@@ -509,10 +462,6 @@ impl InferredType {
     }
     pub fn is_unknown(&self) -> bool {
         matches!(self.inner.deref(), TypeInternal::Unknown)
-    }
-
-    pub fn is_one_of(&self) -> bool {
-        matches!(self.inner.deref(), TypeInternal::OneOf(_))
     }
 
     pub fn is_valid_wit_type(&self) -> bool {
@@ -547,10 +496,6 @@ impl InferredType {
         flatten_all_of_list(types)
     }
 
-    pub fn flatten_one_of_inferred_types(types: &Vec<InferredType>) -> Vec<InferredType> {
-        flatten_one_of_list(types)
-    }
-
     // Here unification returns an inferred type, but it doesn't necessarily imply
     // its valid type, which can be converted to a wasm type.
     pub fn try_unify(&self) -> Result<InferredType, String> {
@@ -559,10 +504,6 @@ impl InferredType {
 
     pub fn unify(&self) -> Result<InferredType, String> {
         unification::unify(self).map(|unified| unified.inferred_type())
-    }
-
-    pub fn unify_all_alternative_types(types: &Vec<InferredType>) -> InferredType {
-        unification::unify_all_alternative_types(types)
     }
 
     pub fn unify_all_required_types(types: &Vec<InferredType>) -> Result<InferredType, String> {
@@ -575,13 +516,9 @@ impl InferredType {
         unification::unify_with_required(self, other)
     }
 
-    pub fn unify_with_alternative(&self, other: &InferredType) -> Result<InferredType, String> {
-        unification::unify_with_alternative(self, other)
-    }
-
     // There is only one way to merge types. If they are different, they are merged into AllOf
     pub fn merge(&self, new_inferred_type: InferredType) -> InferredType {
-        if !internal::need_update(self, &new_inferred_type) {
+        if !need_update(self, &new_inferred_type) {
             return self.clone();
         }
 
@@ -607,35 +544,6 @@ impl InferredType {
                 all_types.push(self.clone());
 
                 InferredType::all_of(all_types).unwrap_or(InferredType::unknown())
-            }
-
-            (TypeInternal::OneOf(existing_types), TypeInternal::OneOf(new_types)) => {
-                let mut one_of_types = new_types.clone();
-                if new_types == existing_types {
-                    return new_inferred_type;
-                } else {
-                    one_of_types.extend(existing_types.clone());
-                }
-
-                InferredType::one_of(one_of_types).unwrap_or(InferredType::unknown())
-            }
-
-            (TypeInternal::OneOf(existing_types), _) => {
-                if existing_types.contains(&new_inferred_type) {
-                    new_inferred_type
-                } else {
-                    InferredType::all_of(vec![self.clone(), new_inferred_type])
-                        .unwrap_or(InferredType::unknown())
-                }
-            }
-
-            (_, TypeInternal::OneOf(newtypes)) => {
-                if newtypes.contains(self) {
-                    self.clone()
-                } else {
-                    InferredType::all_of(vec![self.clone(), new_inferred_type])
-                        .unwrap_or(InferredType::unknown())
-                }
             }
 
             (_, _) => InferredType::all_of(vec![self.clone(), new_inferred_type.clone()])
@@ -785,61 +693,6 @@ impl From<&AnalysedType> for InferredType {
     }
 }
 
-mod internal {
-    use crate::InferredType;
-
-    pub(crate) fn need_update(
-        current_inferred_type: &InferredType,
-        new_inferred_type: &InferredType,
-    ) -> bool {
-        current_inferred_type != new_inferred_type && !new_inferred_type.is_unknown()
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use test_r::test;
-
-    use crate::{InferredType, TypeOrigin};
-
-    #[test]
-    fn test_flatten_one_of() {
-        use super::TypeInternal;
-        let one_of = vec![
-            InferredType::u8(),
-            InferredType::u16(),
-            InferredType::u32(),
-            InferredType::one_of(vec![
-                InferredType::u8(),
-                InferredType::u16(),
-                InferredType::u32(),
-                InferredType::all_of(vec![
-                    InferredType::u64(),
-                    InferredType::one_of(vec![InferredType::u64(), InferredType::u8()]).unwrap(),
-                ])
-                .unwrap(),
-            ])
-            .unwrap(),
-        ];
-
-        let flattened = InferredType::flatten_one_of_inferred_types(&one_of);
-
-        let expected = vec![
-            InferredType::u8(),
-            InferredType::u16(),
-            InferredType::u32(),
-            InferredType::new(
-                TypeInternal::AllOf(vec![
-                    InferredType::u64(),
-                    InferredType::new(
-                        TypeInternal::OneOf(vec![InferredType::u64(), InferredType::u8()]),
-                        TypeOrigin::Multiple(vec![]),
-                    ),
-                ]),
-                TypeOrigin::Multiple(vec![]),
-            ),
-        ];
-
-        assert_eq!(flattened, expected)
-    }
+fn need_update(current_inferred_type: &InferredType, new_inferred_type: &InferredType) -> bool {
+    current_inferred_type != new_inferred_type && !new_inferred_type.is_unknown()
 }

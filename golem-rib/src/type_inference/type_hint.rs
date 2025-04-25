@@ -314,9 +314,7 @@ impl GetTypeHint for InferredType {
                     .collect(),
             )),
             TypeInternal::Resource { .. } => TypeHint::Resource,
-            TypeInternal::OneOf(possibilities) | TypeInternal::AllOf(possibilities) => {
-                get_type_kind(possibilities)
-            }
+            TypeInternal::AllOf(possibilities) => get_type_kind(possibilities),
             TypeInternal::Unknown | TypeInternal::Sequence(_) | TypeInternal::Instance { .. } => {
                 TypeHint::Unknown
             }

@@ -71,48 +71,6 @@ fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bo
                 })
             })
         }
-        // a precise type is converted to a less precise type, and hence false
-        (TypeInternal::AllOf(left), TypeInternal::OneOf(right)) => {
-            left.iter().all(|left| {
-                right.iter().any(|right| {
-                    compare_inferred_types_internal(
-                        left.inner.as_ref(),
-                        right.inner.as_ref(),
-                        false,
-                    )
-                })
-            }) && right.iter().all(|right| {
-                left.iter().any(|left| {
-                    compare_inferred_types_internal(
-                        left.inner.as_ref(),
-                        right.inner.as_ref(),
-                        false,
-                    )
-                })
-            })
-        }
-        // Converted a less precise type to a more precise type, and hence false
-        (TypeInternal::OneOf(_), TypeInternal::AllOf(_)) => false,
-
-        (TypeInternal::OneOf(left), TypeInternal::OneOf(right)) => {
-            left.iter().all(|left| {
-                right.iter().any(|right| {
-                    compare_inferred_types_internal(
-                        left.inner.as_ref(),
-                        right.inner.as_ref(),
-                        false,
-                    )
-                })
-            }) && right.iter().all(|right| {
-                left.iter().any(|left| {
-                    compare_inferred_types_internal(
-                        left.inner.as_ref(),
-                        right.inner.as_ref(),
-                        false,
-                    )
-                })
-            })
-        }
 
         // More precision this time and therefore false
         (TypeInternal::AllOf(left), inferred_type) => {
@@ -220,10 +178,6 @@ fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bo
         }
 
         (TypeInternal::Flags(left), TypeInternal::Flags(right)) => left == right,
-
-        (TypeInternal::OneOf(_), _inferred_type) => false,
-
-        (_inferred_type, TypeInternal::OneOf(_)) => false,
 
         (left, right) => left == right,
     }
@@ -339,32 +293,6 @@ mod tests {
     }
 
     #[test]
-    fn test_inferred_type_equality_11() {
-        let left = InferredType::one_of(vec![InferredType::u64(), InferredType::u32()]).unwrap();
-        let right = InferredType::all_of(vec![
-            InferredType::string(),
-            InferredType::unknown(),
-            InferredType::one_of(vec![InferredType::u64(), InferredType::u32()]).unwrap(),
-        ])
-        .unwrap();
-
-        assert!(!compare_inferred_types(&left, &right));
-    }
-
-    #[test]
-    fn test_inferred_type_equality_12() {
-        let left = InferredType::unknown();
-        let right = InferredType::one_of(vec![
-            InferredType::string(),
-            InferredType::unknown(),
-            InferredType::one_of(vec![InferredType::u64(), InferredType::u32()]).unwrap(),
-        ])
-        .unwrap();
-
-        assert!(!compare_inferred_types(&left, &right));
-    }
-
-    #[test]
     fn test_expr_comparison_1() {
         let mut left = Expr::identifier_global("x", None);
         let mut right = Expr::identifier_global("x", None);
@@ -388,22 +316,6 @@ mod tests {
         let mut right = Expr::identifier_global("x", None).merge_inferred_type(right);
 
         assert!(compare_expr_types(&mut left, &mut right));
-    }
-
-    #[test]
-    fn test_expr_comparison_3() {
-        let left = InferredType::unknown();
-        let right = InferredType::one_of(vec![
-            InferredType::string(),
-            InferredType::unknown(),
-            InferredType::one_of(vec![InferredType::u64(), InferredType::u32()]).unwrap(),
-        ])
-        .unwrap();
-
-        let mut left = Expr::identifier_global("x", None).merge_inferred_type(left);
-        let mut right = Expr::identifier_global("x", None).merge_inferred_type(right);
-
-        assert!(!compare_expr_types(&mut left, &mut right));
     }
 
     #[test]

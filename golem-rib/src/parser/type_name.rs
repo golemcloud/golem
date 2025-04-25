@@ -366,9 +366,6 @@ impl TryFrom<InferredType> for TypeName {
             TypeInternal::Resource { .. } => {
                 Err("Cannot convert a resource type to a type name".to_string())
             }
-            TypeInternal::OneOf(_) => {
-                Err("Cannot convert a one of type to a type name".to_string())
-            }
             TypeInternal::AllOf(_) => {
                 Err("Cannot convert a all of type to a type name".to_string())
             }

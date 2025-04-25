@@ -39,7 +39,6 @@ pub enum TypeInternal {
     Instance {
         instance_type: Box<InstanceType>,
     },
-    OneOf(Vec<InferredType>),
     AllOf(Vec<InferredType>),
     Unknown,
     // Because function result can be a vector of types
@@ -128,9 +127,7 @@ impl Hash for TypeInternal {
                 23.hash(state);
                 instance_type.hash(state);
             }
-            TypeInternal::OneOf(types)
-            | TypeInternal::AllOf(types)
-            | TypeInternal::Sequence(types) => {
+            TypeInternal::AllOf(types) | TypeInternal::Sequence(types) => {
                 24.hash(state);
                 let mut sorted_types = types.clone();
                 sorted_types.sort();
@@ -200,14 +197,6 @@ impl PartialEq for TypeInternal {
             ) => t1 == t2,
             (TypeInternal::Unknown, TypeInternal::Unknown) => true,
 
-            // **Fix: Sort & Compare for OneOf, AllOf, Sequence**
-            (TypeInternal::OneOf(ts1), TypeInternal::OneOf(ts2)) => {
-                let mut ts1_sorted = ts1.clone();
-                let mut ts2_sorted = ts2.clone();
-                ts1_sorted.sort();
-                ts2_sorted.sort();
-                ts1_sorted == ts2_sorted
-            }
             (TypeInternal::AllOf(ts1), TypeInternal::AllOf(ts2)) => {
                 let mut ts1_sorted = ts1.clone();
                 let mut ts2_sorted = ts2.clone();
