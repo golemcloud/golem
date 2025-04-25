@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor, InferredType};
+use crate::{Expr, InferredType};
 use std::collections::VecDeque;
 
 pub fn bind_type_annotations(expr: &mut Expr) {
