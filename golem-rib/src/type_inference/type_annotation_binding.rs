@@ -24,8 +24,8 @@ pub fn bind_type_annotations(expr: &mut Expr) {
                 expr,
                 ..
             } => {
-                if let Some(type_name) = type_annotation {
-                    expr.with_inferred_type_mut((&*type_name).into());
+                if let Some(type_annotation) = type_annotation {
+                    expr.with_inferred_type_mut(InferredType::from(&*type_annotation));
                 }
             }
 
