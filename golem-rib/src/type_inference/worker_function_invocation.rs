@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::VecDeque;
 use crate::call_type::{CallType, InstanceCreationType};
 use crate::instance_type::{FunctionName, InstanceType};
 use crate::rib_type_error::RibTypeError;
@@ -21,6 +20,7 @@ use crate::{
     DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, ExprVisitor,
     FunctionCallError, InferredType, TypeInternal, TypeName, TypeOrigin,
 };
+use std::collections::VecDeque;
 use std::ops::Deref;
 
 // This phase is responsible for identifying the worker function invocations

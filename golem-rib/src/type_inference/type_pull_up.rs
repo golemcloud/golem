@@ -356,10 +356,10 @@ fn handle_math_op(
         // optional steps, just to make sure we are not propagating too much errors to the end
         let _ = get_number(rhs)?;
         let _ = get_number(lhs)?;
-        
-        *result_type = result_type.merge(lhs.inferred_type()).merge(
-            InferredType::from(rhs.inferred_type()),
-        );
+
+        *result_type = result_type
+            .merge(lhs.inferred_type())
+            .merge(InferredType::from(rhs.inferred_type()));
     }
 
     Ok(())
