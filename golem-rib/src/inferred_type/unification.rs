@@ -448,7 +448,6 @@ pub fn unify_with_required(
     if other.is_unknown() {
         inferred_type.try_unify()
     } else if inferred_type.is_unknown() {
-        dbg!("here?? {}", other.clone());
         other.try_unify()
     } else if inferred_type == other {
         inferred_type.try_unify()
