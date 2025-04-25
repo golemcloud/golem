@@ -270,7 +270,7 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
 
         let current = unsafe { &mut *current };
 
-        match current {
+        match &mut *current {
             Expr::Let { expr, .. } => stack.push_back(&mut **expr),
             Expr::SelectField { expr, .. } => stack.push_back(&mut **expr),
             Expr::SelectIndex { expr, index, .. } => {

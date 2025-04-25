@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::VecDeque;
 use crate::call_type::{CallType, InstanceCreationType};
 use crate::instance_type::{FunctionName, InstanceType};
 use crate::rib_type_error::RibTypeError;
@@ -26,9 +27,10 @@ use std::ops::Deref;
 // such as `worker.foo("x, y, z")` or `cart-resource.add-item(..)` etc
 // lazy method invocations are converted to actual Expr::Call
 pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError> {
-    let mut visitor = ExprVisitor::bottom_up(expr);
+    let mut queue = VecDeque::new();
+    queue.push_back(expr);
 
-    while let Some(expr) = visitor.pop_back() {
+    while let Some(expr) = queue.pop_back() {
         if let Expr::InvokeMethodLazy {
             lhs,
             method,
@@ -255,6 +257,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                 }
             }
         }
+
+        expr.visit_children_mut_bottom_up(&mut queue);
     }
 
     Ok(())
