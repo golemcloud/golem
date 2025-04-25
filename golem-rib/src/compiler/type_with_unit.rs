@@ -70,7 +70,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
             TypeInternal::Range { from, to } => {
                 let from: AnalysedType = AnalysedType::try_from(from)?;
                 let to: Option<AnalysedType> =
-                    to.as_ref().map(|t| AnalysedType::try_from(t)).transpose()?;
+                    to.as_ref().map(AnalysedType::try_from).transpose()?;
                 let analysed_type = match (from, to) {
                     (from_type, Some(to_type)) => record(vec![
                         field("from", option(from_type)),

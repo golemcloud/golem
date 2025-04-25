@@ -13,8 +13,11 @@
 // limitations under the License.
 
 pub(crate) use flatten::*;
+pub(crate) use type_origin::*;
 mod flatten;
+mod type_origin;
 mod unification;
+
 use crate::instance_type::InstanceType;
 use crate::type_inference::GetTypeHint;
 use crate::TypeName;
@@ -79,33 +82,6 @@ pub enum TypeInternal {
 impl TypeInternal {
     pub fn to_inferred_type(&self) -> InferredType {
         InferredType::new(self.clone(), TypeOrigin::NoOrigin)
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialOrd, Ord)]
-pub enum TypeOrigin {
-    Default,
-    NoOrigin,
-    Multiple(Vec<TypeOrigin>),
-}
-
-impl Hash for TypeOrigin {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match self {
-            TypeOrigin::Default => 0.hash(state),
-            TypeOrigin::NoOrigin => 1.hash(state),
-            TypeOrigin::Multiple(origins) => {
-                2.hash(state);
-                origins.hash(state);
-            }
-        }
-    }
-}
-
-// TypeOrigin doesn't matter in any equality logic
-impl PartialEq for TypeOrigin {
-    fn eq(&self, _other: &Self) -> bool {
-        true
     }
 }
 
@@ -1044,7 +1020,10 @@ mod internal {
 
 #[cfg(test)]
 mod test {
+    use test_r::test;
+
     use crate::{InferredType, TypeOrigin};
+
     #[test]
     fn test_flatten_one_of() {
         use super::TypeInternal;
@@ -1068,9 +1047,6 @@ mod test {
         let flattened = InferredType::flatten_one_of_inferred_types(&one_of);
 
         let expected = vec![
-            InferredType::u8(),
-            InferredType::u16(),
-            InferredType::u32(),
             InferredType::u8(),
             InferredType::u16(),
             InferredType::u32(),
