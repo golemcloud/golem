@@ -21,16 +21,16 @@ test = false
 golem-cli = { path = "../golem-cli", features = ["server-commands"], version = "=0.0.0" }
 
 # Golem - git deps
-golem-common = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.9" }
-golem-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.9" }
-golem-component-compilation-service = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.9" }
-golem-component-service = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.9" }
-golem-component-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.9" }
-golem-shard-manager = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.9" }
-golem-worker-executor = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.9" }
-golem-worker-executor-base = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.9" }
-golem-worker-service = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.9" }
-golem-worker-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.9" }
+golem-common = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.10" }
+golem-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.10" }
+golem-component-compilation-service = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.10" }
+golem-component-service = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.10" }
+golem-component-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.10" }
+golem-shard-manager = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.10" }
+golem-worker-executor = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.10" }
+golem-worker-executor-base = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.10" }
+golem-worker-service = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.10" }
+golem-worker-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.2.2-dev.10" }
 
 
 
@@ -40,6 +40,7 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
 clap-verbosity-flag = { workspace = true }
+darling = { workspace = true }
 dirs = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }

@@ -105,8 +105,8 @@ impl MessageWithFields for PluginInstallation {
     fn message(&self) -> String {
         format!(
             "Installed plugin {} version {}",
-            format_message_highlight(&self.name),
-            format_message_highlight(&self.version),
+            format_message_highlight(&self.plugin_name),
+            format_message_highlight(&self.plugin_version),
         )
     }
 
@@ -115,8 +115,8 @@ impl MessageWithFields for PluginInstallation {
 
         fields
             .fmt_field("ID", &self.id, format_main_id)
-            .fmt_field("Plugin name", &self.version, format_id)
-            .fmt_field("Plugin version", &self.version, format_id)
+            .fmt_field("Plugin name", &self.plugin_version, format_id)
+            .fmt_field("Plugin version", &self.plugin_version, format_id)
             .fmt_field("Priority", &self.priority, format_id);
 
         for (k, v) in &self.parameters {
@@ -146,8 +146,8 @@ impl From<&PluginInstallation> for PluginInstallationTableView {
     fn from(value: &PluginInstallation) -> Self {
         Self {
             id: value.id.to_string(),
-            name: value.name.clone(),
-            version: value.version.clone(),
+            name: value.plugin_name.clone(),
+            version: value.plugin_version.clone(),
             priority: value.priority.to_string(),
             parameters: value
                 .parameters

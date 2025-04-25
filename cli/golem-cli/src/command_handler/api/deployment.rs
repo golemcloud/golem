@@ -51,12 +51,14 @@ impl ApiDeploymentCommandHandler {
                 host,
                 subdomain,
             } => self.cmd_deploy(project, definitions, host, subdomain).await,
-            ApiDeploymentSubcommand::Get { site } => self.cmd_get(site).await,
+            ApiDeploymentSubcommand::Get { project, site } => self.cmd_get(project, site).await,
             ApiDeploymentSubcommand::List {
                 project,
                 definition,
             } => self.cmd_list(project, definition).await,
-            ApiDeploymentSubcommand::Delete { site } => self.cmd_delete(site).await,
+            ApiDeploymentSubcommand::Delete { project, site } => {
+                self.cmd_delete(project, site).await
+            }
         }
     }
 
@@ -131,7 +133,13 @@ impl ApiDeploymentCommandHandler {
         Ok(())
     }
 
-    async fn cmd_get(&self, site: String) -> anyhow::Result<()> {
+    async fn cmd_get(&self, project: ProjectNameOptionalArg, site: String) -> anyhow::Result<()> {
+        let project = self
+            .ctx
+            .cloud_project_handler()
+            .opt_select_project(None /* TODO: account id */, project.project.as_ref())
+            .await?;
+
         let result: ApiDeployment = match self.ctx.golem_clients().await? {
             GolemClients::Oss(clients) => clients
                 .api_deployment
@@ -139,12 +147,20 @@ impl ApiDeploymentCommandHandler {
                 .await
                 .map_service_error()?
                 .into(),
-            GolemClients::Cloud(clients) => clients
-                .api_deployment
-                .get_deployment(&site)
-                .await
-                .map_service_error()?
-                .into(),
+            GolemClients::Cloud(clients) => {
+                let project = self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_or_default(project)
+                    .await?;
+
+                clients
+                    .api_deployment
+                    .get_deployment(&project.project_id.0, &site)
+                    .await
+                    .map_service_error()?
+                    .into()
+            }
         };
 
         self.ctx.log_handler().log_view(&result);
@@ -204,7 +220,17 @@ impl ApiDeploymentCommandHandler {
         Ok(())
     }
 
-    async fn cmd_delete(&self, site: String) -> anyhow::Result<()> {
+    async fn cmd_delete(
+        &self,
+        project: ProjectNameOptionalArg,
+        site: String,
+    ) -> anyhow::Result<()> {
+        let project = self
+            .ctx
+            .cloud_project_handler()
+            .opt_select_project(None /* TODO: account id */, project.project.as_ref())
+            .await?;
+
         match self.ctx.golem_clients().await? {
             GolemClients::Oss(clients) => clients
                 .api_deployment
@@ -212,12 +238,20 @@ impl ApiDeploymentCommandHandler {
                 .await
                 .map(|_| ())
                 .map_service_error()?,
-            GolemClients::Cloud(clients) => clients
-                .api_deployment
-                .delete_deployment(&site)
-                .await
-                .map(|_| ())
-                .map_service_error()?,
+            GolemClients::Cloud(clients) => {
+                let project = self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_or_default(project)
+                    .await?;
+
+                clients
+                    .api_deployment
+                    .delete_deployment(&project.project_id.0, &site)
+                    .await
+                    .map(|_| ())
+                    .map_service_error()?
+            }
         };
 
         log_warn_action("Deleted", format!("site {}", site.log_color_highlight()));
