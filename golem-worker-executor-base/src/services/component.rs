@@ -50,7 +50,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
 use prost::Message;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::task::spawn_blocking;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -63,8 +63,7 @@ use crate::{DefaultGolemTypes, GolemTypes};
 
 use super::additional_config::{ComponentCacheConfig, ComponentServiceConfig};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct ComponentMetadataPoly<ComponentOwner> {
     pub version: ComponentVersion,
     pub size: u64,
@@ -74,8 +73,6 @@ pub struct ComponentMetadataPoly<ComponentOwner> {
     pub files: Vec<InitialComponentFile>,
     pub plugin_installations: Vec<PluginInstallation>,
     pub component_owner: ComponentOwner,
-
-    #[serde(default)]
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
 }
 

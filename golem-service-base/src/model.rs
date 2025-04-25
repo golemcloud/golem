@@ -525,9 +525,7 @@ pub struct InvokeResult {
     pub result: TypeAnnotatedValue,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct Component {
     pub versioned_component_id: VersionedComponentId,
     pub component_name: ComponentName,

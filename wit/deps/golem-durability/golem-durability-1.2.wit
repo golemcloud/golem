@@ -4,6 +4,7 @@ interface durability {
     use golem:api/host@1.1.6.{persistence-level};
     use golem:api/oplog@1.1.6.{oplog-index, wrapped-function-type};
     use wasi:clocks/wall-clock@0.2.0.{datetime};
+    use wasi:io/poll@0.2.0.{pollable};
     use golem:rpc/types@0.2.0.{value-and-type};
 
     type durable-function-type = wrapped-function-type;
@@ -83,4 +84,15 @@ interface durability {
     /// Reads the next persisted durable function invocation from the oplog during replay, assuming it
     /// was created with `persist-typed-durable-function-invocation`
     read-persisted-typed-durable-function-invocation: func() -> persisted-typed-durable-function-invocation;
+
+    resource lazy-initialized-pollable {
+        /// Creates a `pollable` that is never ready until it gets attached to a real `pollable` implementation
+        /// using `set-lazy-initialized-pollable`.
+        constructor();
+
+        /// Sets the underlying `pollable` for a pollable created with `create-lazy-initialized-pollable`.
+        set: func(pollable: pollable);
+
+        subscribe: func() -> pollable;
+    }
 }

@@ -4,5 +4,5 @@
 # yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
 
 components:
-  server:
+  it:scheduled-invocation-server:
     template: rust

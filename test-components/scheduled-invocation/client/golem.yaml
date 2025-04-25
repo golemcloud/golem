@@ -4,11 +4,11 @@
 # yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
 
 components:
-  client:
+  it:scheduled-invocation-client:
     template: rust
 dependencies:
-  client:
-  - target: server
+  it:scheduled-invocation-client:
+  - target: it:scheduled-invocation-server
     type: wasm-rpc
-  - target: client
+  - target: it:scheduled-invocation-client
     type: wasm-rpc

@@ -2,13 +2,16 @@
 mod bindings;
 
 use crate::bindings::exports::golem::it_exports::golem_it_api::*;
-use golem_rust::bindings::golem::durability::durability::DurableFunctionType;
+use golem_rust::bindings::golem::durability::durability::{
+    DurableFunctionType, LazyInitializedPollable,
+};
 use golem_rust::durability::Durability;
 use golem_rust::value_and_type::type_builder::TypeNodeBuilder;
 use golem_rust::value_and_type::{FromValueAndType, IntoValue};
-use golem_rust::wasm_rpc::{NodeBuilder, WitValueExtractor};
+use golem_rust::wasm_rpc::{NodeBuilder, Pollable, WitValueExtractor};
 use golem_rust::{with_persistence_level, PersistenceLevel};
-use reqwest::{Client, Method};
+use reqwest::{Client, InputStream, Method};
+use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
@@ -108,6 +111,8 @@ impl FromValueAndType for UnusedError {
 struct Component;
 
 impl Guest for Component {
+    type LazyPollableTest = LazyPollableTest;
+
     fn callback(payload: String) -> String {
         let durability = Durability::<StructuredResult, UnusedError>::new(
             "golem-it",
@@ -119,10 +124,7 @@ impl Guest for Component {
                 perform_callback(payload.clone())
             });
             durability
-                .persist_infallible(
-                    StructuredInput { payload },
-                    StructuredResult { result },
-                )
+                .persist_infallible(StructuredInput { payload }, StructuredResult { result })
                 .result
         } else {
             durability.replay_infallible::<StructuredResult>().result
@@ -141,6 +143,78 @@ fn perform_callback(payload: String) -> String {
         .expect("Request failed")
         .text()
         .expect("Failed to read response text")
+}
+
+struct LazyPollableTest {
+    pub lazy_pollable: LazyInitializedPollable,
+    pub pollable: Pollable,
+    pub response: RefCell<Option<reqwest::Response>>,
+    pub input_stream: RefCell<Option<InputStream>>,
+}
+
+impl GuestLazyPollableTest for LazyPollableTest {
+    fn new() -> Self {
+        let lazy_pollable = LazyInitializedPollable::new();
+        let pollable = lazy_pollable.subscribe();
+        Self {
+            lazy_pollable,
+            pollable,
+            response: RefCell::new(None),
+            input_stream: RefCell::new(None),
+        }
+    }
+
+    fn test(&self, n: u32) -> String {
+        let durability = Durability::<StructuredResult, UnusedError>::new(
+            "golem-it",
+            "test-callback",
+            DurableFunctionType::WriteRemote,
+        );
+        if durability.is_live() {
+            let result = with_persistence_level(PersistenceLevel::PersistNothing, || {
+                let mut response = self.response.borrow_mut();
+                if response.is_none() {
+                    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+                    let client = Client::new();
+                    let mut new_response = client
+                        .request(
+                            Method::GET,
+                            format!("http://localhost:{port}/fetch?idx={n}"),
+                        )
+                        .send()
+                        .expect("Request failed");
+                    let input_stream = new_response.get_raw_input_stream();
+                    let pollable = input_stream.subscribe();
+                    self.lazy_pollable
+                        .set(unsafe { std::mem::transmute(pollable) });
+                    *response = Some(new_response);
+                    self.input_stream.replace(Some(input_stream));
+                }
+
+                self.pollable.block();
+                let buf = self
+                    .input_stream
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .read(100)
+                    .unwrap();
+                let result = String::from_utf8(buf).unwrap();
+                result
+            });
+
+            durability
+                .persist_infallible(
+                    StructuredInput {
+                        payload: n.to_string(),
+                    },
+                    StructuredResult { result },
+                )
+                .result
+        } else {
+            durability.replay_infallible::<StructuredResult>().result
+        }
+    }
 }
 
 bindings::export!(Component with_types_in bindings);
