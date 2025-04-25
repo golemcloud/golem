@@ -21,35 +21,44 @@ use golem_worker_service_base::metrics;
 use opentelemetry::global;
 use prometheus::Registry;
 use tokio::task::JoinSet;
+use rib::FunctionTypeRegistry;
 
 fn main() -> Result<(), anyhow::Error> {
-    if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?
-            .block_on(dump_openapi_yaml())
-    } else if let Some(config) = make_config_loader().load_or_dump_config() {
-        init_tracing_with_default_env_filter(&config.tracing);
 
-        let prometheus = metrics::register_all();
+    let mut rib_expr = rib::Expr::from_text(r#"some(1): option<u64>"#).unwrap();
 
-        let exporter = opentelemetry_prometheus::exporter()
-            .with_registry(prometheus.clone())
-            .build()?;
+    let result = rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+    dbg!(rib_expr.clone());
 
-        global::set_meter_provider(
-            opentelemetry_sdk::metrics::MeterProviderBuilder::default()
-                .with_reader(exporter)
-                .build(),
-        );
+    Ok(())
 
-        Ok(tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?
-            .block_on(async_main(config, prometheus))?)
-    } else {
-        Ok(())
-    }
+    // if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
+    //     tokio::runtime::Builder::new_multi_thread()
+    //         .enable_all()
+    //         .build()?
+    //         .block_on(dump_openapi_yaml())
+    // } else if let Some(config) = make_config_loader().load_or_dump_config() {
+    //     init_tracing_with_default_env_filter(&config.tracing);
+    //
+    //     let prometheus = metrics::register_all();
+    //
+    //     let exporter = opentelemetry_prometheus::exporter()
+    //         .with_registry(prometheus.clone())
+    //         .build()?;
+    //
+    //     global::set_meter_provider(
+    //         opentelemetry_sdk::metrics::MeterProviderBuilder::default()
+    //             .with_reader(exporter)
+    //             .build(),
+    //     );
+    //
+    //     Ok(tokio::runtime::Builder::new_multi_thread()
+    //         .enable_all()
+    //         .build()?
+    //         .block_on(async_main(config, prometheus))?)
+    // } else {
+    //     Ok(())
+    // }
 }
 
 async fn async_main(

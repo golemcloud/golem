@@ -153,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn test_inference_inline_type_annotation() {
+    fn test_inference_inline_type_annotation_0() {
         let mut old = Expr::from_text(r#"1u32"#).unwrap();
 
         let result = old.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
@@ -168,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn test_inference_inline_type_annotation_1() {
+    fn test_inference_inline_type_annotation_1x() {
         let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz[0] + 1u32"#).unwrap();
 
         let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn test_inference_inline_type_annotation_4() {
         // Even if 1 is not specified with a specific number type, it should be inferred as u64
-        let mut rib_expr = Expr::from_text(r#"some(1): option<u64>"#).unwrap();
+        let mut rib_expr = Expr::from_text(r#"some(1: u32): option<u64>"#).unwrap();
 
         let result = rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
 

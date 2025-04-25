@@ -651,11 +651,7 @@ mod tests {
                     None,
                     InferredType::s32()
                 )),
-                Expr::number_inferred(
-                    BigDecimal::from_u64(2).unwrap(),
-                    None,
-                    InferredType::s32()
-                )
+                Expr::number_inferred(BigDecimal::from_u64(2).unwrap(), None, InferredType::s32())
             )
         );
     }

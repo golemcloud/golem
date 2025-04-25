@@ -3616,6 +3616,7 @@ dependencies = [
  "futures-util",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-service-base",
  "golem-wasm-rpc",
  "golem-worker-service-base",

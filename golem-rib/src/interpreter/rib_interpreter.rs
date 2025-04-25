@@ -2527,7 +2527,6 @@ mod tests {
         );
 
         let expr = r#"
-
            let input = { request : { path : { user : "jak" } }, y : "baz" };
            let result = my-worker-function(input);
            match result {

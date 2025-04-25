@@ -22,6 +22,7 @@ mod type_origin;
 mod unification;
 
 use crate::instance_type::InstanceType;
+use crate::rib_source_span::SourceSpan;
 use crate::type_inference::GetTypeHint;
 use crate::TypeName;
 use bigdecimal::BigDecimal;
@@ -30,7 +31,6 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
-use crate::rib_source_span::SourceSpan;
 
 #[derive(Debug, Clone, Eq, PartialOrd, Ord)]
 pub struct InferredType {
@@ -201,11 +201,12 @@ impl InferredType {
         }
     }
 
-    pub fn declared_at(&self, source_span: SourceSpan) -> InferredType {
-        InferredType {
-            inner: self.inner.clone(),
-            origin: TypeOrigin::Declared(source_span),
-        }
+    pub fn declared_at(&mut self, source_span: SourceSpan) {
+        self.origin.add_origin(TypeOrigin::Declared(source_span.clone()))
+    }
+
+    pub fn set_as_default(&mut self) {
+        self.origin = TypeOrigin::Default;
     }
 
     pub fn enum_(cases: Vec<String>) -> InferredType {
@@ -263,26 +264,6 @@ impl InferredType {
         }
     }
 
-    pub fn number() -> InferredType {
-        let inferred_type = TypeInternal::OneOf(vec![
-            InferredType::default_type(TypeInternal::U64),
-            InferredType::default_type(TypeInternal::U32),
-            InferredType::default_type(TypeInternal::U8),
-            InferredType::default_type(TypeInternal::U16),
-            InferredType::default_type(TypeInternal::S64),
-            InferredType::default_type(TypeInternal::S32),
-            InferredType::default_type(TypeInternal::S8),
-            InferredType::default_type(TypeInternal::S16),
-            InferredType::default_type(TypeInternal::F64),
-            InferredType::default_type(TypeInternal::F32),
-        ]);
-
-        InferredType {
-            inner: Box::new(inferred_type),
-            origin: TypeOrigin::Default,
-        }
-    }
-
     pub fn option(inner: InferredType) -> InferredType {
         InferredType {
             inner: Box::new(TypeInternal::Option(inner)),
@@ -295,6 +276,10 @@ impl InferredType {
             inner: Box::new(TypeInternal::Range { from, to }),
             origin: TypeOrigin::NoOrigin,
         }
+    }
+
+    pub fn eliminate_default(inferred_types: Vec<&InferredType>) -> Vec<&InferredType> {
+        inferred_types.into_iter().filter(|&t| !t.origin.is_default()).collect::<Vec<_>>()
     }
 
     pub fn record(fields: Vec<(String, InferredType)>) -> InferredType {

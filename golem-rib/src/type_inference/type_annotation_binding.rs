@@ -21,19 +21,27 @@ pub fn bind_type_annotations(expr: &mut Expr) {
         match expr {
             Expr::Let {
                 type_annotation,
-                expr,
+                expr: rhs,
+                source_span,
                 ..
             } => {
                 if let Some(type_annotation) = type_annotation {
-                    expr.with_inferred_type_mut(InferredType::from(&*type_annotation));
+                    let mut inferred_type = InferredType::from(&*type_annotation);
+                    inferred_type.declared_at(source_span.clone());
+
+                    rhs.with_inferred_type_mut(inferred_type)
                 }
             }
 
-            expr => {
+            _ => {
+                let source_span = expr.source_span();
                 let type_annotation = expr.type_annotation();
 
                 if let Some(type_annotation) = type_annotation {
-                    expr.with_inferred_type_mut(InferredType::from(type_annotation));
+                    let mut inferred_type = InferredType::from(&*type_annotation);
+                    inferred_type.declared_at(source_span);
+
+                    expr.with_inferred_type_mut(inferred_type);
                 }
             }
         }

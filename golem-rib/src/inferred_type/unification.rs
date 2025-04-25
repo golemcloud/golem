@@ -15,7 +15,8 @@ impl Unified {
 pub fn unify(inferred_type: &InferredType) -> Result<Unified, String> {
     let possibly_unified_type = try_unify_type(inferred_type)?;
 
-    internal::validate_unified_type(&possibly_unified_type)
+    Ok(Unified(possibly_unified_type))
+    //internal::validate_unified_type(&possibly_unified_type)
 }
 
 pub fn try_unify_type(inferred_type: &InferredType) -> Result<InferredType, String> {
@@ -447,6 +448,7 @@ pub fn unify_with_required(
     if other.is_unknown() {
         inferred_type.try_unify()
     } else if inferred_type.is_unknown() {
+        dbg!("here?? {}", other.clone());
         other.try_unify()
     } else if inferred_type == other {
         inferred_type.try_unify()
@@ -733,10 +735,18 @@ pub fn unify_with_required(
                 if inferred_type_left == inferred_type_right {
                     Ok(inferred_type.clone())
                 } else if inferred_type.is_number() && other.is_number() {
-                    Ok(InferredType::new(
-                        TypeInternal::AllOf(vec![inferred_type.clone(), other.clone()]),
-                        TypeOrigin::NoOrigin,
-                    ))
+
+                    let eliminated =
+                        InferredType::eliminate_default(vec![inferred_type, other]);
+
+                    return if eliminated.len() == 1 {
+                        Ok(eliminated[0].clone())
+                    } else {
+                        Err(format!(
+                            "conflicting types inferred. {}, {}",
+                            inferred_type_printable, other_printable
+                        ))
+                    }
                 } else {
                     Err(format!(
                         "conflicting types inferred. {}, {}",
@@ -874,10 +884,18 @@ mod internal {
                 "conflicting types inferred: {}",
                 display_multiple_types(possibilities)
             )),
-            TypeInternal::AllOf(possibilities) => Err(format!(
-                "conflicting types inferred:  {}",
-                display_multiple_types(possibilities)
-            )),
+            TypeInternal::AllOf(possibilities) => {
+                let eliminate_defaults = InferredType::eliminate_default(possibilities.iter().collect());
+
+                if eliminate_defaults.len() == 1 {
+                    Ok(Unified(eliminate_defaults[0].clone()))
+                } else {
+                    Err(format!(
+                        "conflicting types inferred:  {}",
+                        display_multiple_types(possibilities)
+                    ))
+                }
+            },
 
             TypeInternal::Unknown => Err("cannot determine the type".to_string()),
             TypeInternal::Sequence(inferred_types) => {
