@@ -19,9 +19,10 @@ use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
+use crate::ActualType::Inferred;
 use crate::{
     from_string, text, type_checker, type_inference, DynamicParsedFunctionName,
-    GlobalVariableTypeSpec, InferredType, ParsedFunctionName, VariableId,
+    GlobalVariableTypeSpec, InferredNumber, InferredType, ParsedFunctionName, VariableId,
 };
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
@@ -1689,7 +1690,9 @@ impl Expr {
     }
 
     pub fn number(big_decimal: BigDecimal) -> Expr {
-        Expr::number_inferred(big_decimal, None, InferredType::number())
+        let inferred_number = InferredType::from(&big_decimal);
+
+        Expr::number_inferred(big_decimal, None, inferred_number)
     }
 }
 

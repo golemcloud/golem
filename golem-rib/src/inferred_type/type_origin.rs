@@ -1,9 +1,11 @@
 use std::hash::{Hash, Hasher};
+use crate::rib_source_span::SourceSpan;
 
 #[derive(Debug, Clone, Eq, PartialOrd, Ord)]
 pub enum TypeOrigin {
     Default,
     NoOrigin,
+    Declared(SourceSpan),
     Multiple(Vec<TypeOrigin>),
 }
 
