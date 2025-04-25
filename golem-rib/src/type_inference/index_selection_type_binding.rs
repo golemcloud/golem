@@ -25,9 +25,7 @@ pub fn bind_default_types_to_index_expressions(expr: &mut Expr) {
         match expr {
             Expr::SelectIndex { index, .. } => {
                 if let Expr::Number { inferred_type, .. } = index.deref_mut() {
-                    if inferred_type.is_unknown() || inferred_type.is_one_of() {
-                        *inferred_type = InferredType::u64()
-                    }
+                    *inferred_type = InferredType::u64()
                 }
 
                 if let Expr::Range { range, .. } = index.deref_mut() {
@@ -35,9 +33,7 @@ pub fn bind_default_types_to_index_expressions(expr: &mut Expr) {
 
                     for expr in exprs {
                         if let Expr::Number { inferred_type, .. } = expr.deref_mut() {
-                            if inferred_type.is_unknown() || inferred_type.is_one_of() {
-                                *inferred_type = InferredType::u64()
-                            }
+                            *inferred_type = InferredType::u64()
                         }
                     }
                 }
@@ -48,9 +44,7 @@ pub fn bind_default_types_to_index_expressions(expr: &mut Expr) {
 
                 for expr in exprs {
                     if let Expr::Number { inferred_type, .. } = expr.deref_mut() {
-                        if inferred_type.is_unknown() || inferred_type.is_one_of() {
-                            *inferred_type = InferredType::u64()
-                        }
+                        *inferred_type = InferredType::u64()
                     }
                 }
             }

@@ -570,12 +570,12 @@ mod tests {
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
-                    InferredType::u32()
+                    InferredType::s32()
                 ),
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
-                    InferredType::u32()
+                    InferredType::s32()
                 )
             )
         );

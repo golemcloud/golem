@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn test_inference_inline_type_annotation_4() {
         // Even if 1 is not specified with a specific number type, it should be inferred as u64
-        let mut rib_expr = Expr::from_text(r#"some(1: u32): option<u64>"#).unwrap();
+        let mut rib_expr = Expr::from_text(r#"some(1): option<u64>"#).unwrap();
 
         let result = rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
 

@@ -2540,7 +2540,7 @@ mod tests {
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         let expected = test_utils::get_value_and_type(
-            &record(vec![field("body", u64()), field("status", u64())]),
+            &record(vec![field("body", u64()), field("status", s32())]),
             r#"{body: 1, status: 200}"#,
         );
 

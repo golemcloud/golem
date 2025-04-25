@@ -15,8 +15,7 @@ impl Unified {
 pub fn unify(inferred_type: &InferredType) -> Result<Unified, String> {
     let possibly_unified_type = try_unify_type(inferred_type)?;
 
-    Ok(Unified(possibly_unified_type))
-    //internal::validate_unified_type(&possibly_unified_type)
+    internal::validate_unified_type(&possibly_unified_type)
 }
 
 pub fn try_unify_type(inferred_type: &InferredType) -> Result<InferredType, String> {
