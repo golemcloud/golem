@@ -442,9 +442,11 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
     }
 }
 
-// This is to be replaced with the usage of `ExprVisitor`
-// https://github.com/golemcloud/golem/issues/1428
-pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mut Expr>) {
+// This is almost a lazy visit, that we don't put the expr into the queue
+// unless it is needed. To a great extent both ExprVisitor and this function
+// can be used instead of each other, but depending on situations one can perform better
+// over the other.
+pub fn visit_expr_nodes_lazy<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mut Expr>) {
     match expr {
         Expr::Let { expr, .. } => queue.push_back(&mut *expr),
         Expr::SelectField { expr, .. } => queue.push_back(&mut *expr),

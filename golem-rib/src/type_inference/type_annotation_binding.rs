@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use crate::{Expr, ExprVisitor, InferredType};
+use std::collections::VecDeque;
 
 pub fn bind_type_annotations(expr: &mut Expr) {
-    let mut visitor = ExprVisitor::top_down(expr);
+    let mut queue = VecDeque::new();
+    queue.push_back(expr);
 
-    while let Some(expr) = visitor.pop_front() {
+    while let Some(expr) = queue.pop_front() {
         match expr {
             Expr::Let {
                 type_annotation,
@@ -31,9 +33,11 @@ pub fn bind_type_annotations(expr: &mut Expr) {
 
                     rhs.with_inferred_type_mut(new_inferred_type)
                 }
+
+                queue.push_back(rhs);
             }
 
-            _ => {
+            expr => {
                 let source_span = expr.source_span();
                 let type_annotation = expr.type_annotation();
 
@@ -43,6 +47,8 @@ pub fn bind_type_annotations(expr: &mut Expr) {
 
                     expr.with_inferred_type_mut(new_inferred_type);
                 }
+
+                expr.visit_expr_nodes_lazy(&mut queue)
             }
         }
     }

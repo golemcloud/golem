@@ -258,7 +258,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
             }
         }
 
-        expr.visit_children_mut_bottom_up(&mut queue);
+        expr.visit_expr_nodes_lazy(&mut queue);
     }
 
     Ok(())

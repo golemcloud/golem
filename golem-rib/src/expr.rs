@@ -1666,8 +1666,8 @@ impl Expr {
         type_inference::infer_variants(self, function_type_registry);
     }
 
-    pub fn visit_children_mut_bottom_up<'a>(&'a mut self, queue: &mut VecDeque<&'a mut Expr>) {
-        type_inference::visit_children_bottom_up_mut(self, queue);
+    pub fn visit_expr_nodes_lazy<'a>(&'a mut self, queue: &mut VecDeque<&'a mut Expr>) {
+        type_inference::visit_expr_nodes_lazy(self, queue);
     }
 
     pub fn number_inferred(

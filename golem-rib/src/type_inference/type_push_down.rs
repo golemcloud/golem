@@ -345,7 +345,7 @@ mod internal {
                             }
                         }
                     }
-                    _ => expr.visit_children_mut_bottom_up(&mut queue),
+                    _ => expr.visit_expr_nodes_lazy(&mut queue),
                 }
             }
         }
@@ -399,7 +399,7 @@ mod internal {
                         }
                     }
 
-                    _ => expr.visit_children_mut_bottom_up(&mut queue),
+                    _ => expr.visit_expr_nodes_lazy(&mut queue),
                 }
             }
         }
