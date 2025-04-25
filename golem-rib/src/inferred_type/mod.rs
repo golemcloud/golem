@@ -191,13 +191,24 @@ impl InferredType {
         }
     }
 
-    pub fn declared_at(&mut self, source_span: SourceSpan) {
-        self.origin
-            .add_origin(TypeOrigin::Declared(source_span.clone()))
+    pub fn declared_at(&self, source_span: SourceSpan) -> InferredType {
+        let new_origin = self
+            .origin
+            .add_origin(TypeOrigin::Declared(source_span.clone()));
+
+        InferredType {
+            inner: self.inner.clone(),
+            origin: new_origin,
+        }
     }
 
-    pub fn set_as_default(&mut self) {
-        self.origin = TypeOrigin::Default;
+    pub fn as_default(&self) -> InferredType {
+        let new_origin = TypeOrigin::Default;
+
+        InferredType {
+            inner: self.inner.clone(),
+            origin: new_origin,
+        }
     }
 
     pub fn enum_(cases: Vec<String>) -> InferredType {
@@ -518,10 +529,6 @@ impl InferredType {
 
     // There is only one way to merge types. If they are different, they are merged into AllOf
     pub fn merge(&self, new_inferred_type: InferredType) -> InferredType {
-        if !need_update(self, &new_inferred_type) {
-            return self.clone();
-        }
-
         match (self.inner.deref(), new_inferred_type.inner.deref()) {
             (TypeInternal::Unknown, _) => new_inferred_type,
 
@@ -546,8 +553,14 @@ impl InferredType {
                 InferredType::all_of(all_types).unwrap_or(InferredType::unknown())
             }
 
-            (_, _) => InferredType::all_of(vec![self.clone(), new_inferred_type.clone()])
-                .unwrap_or(InferredType::unknown()),
+            (_, _) => {
+                if self != &new_inferred_type && !new_inferred_type.is_unknown() {
+                    InferredType::all_of(vec![self.clone(), new_inferred_type.clone()])
+                        .unwrap_or(InferredType::unknown())
+                } else {
+                    self.clone()
+                }
+            }
         }
     }
 
@@ -691,8 +704,4 @@ impl From<&AnalysedType> for InferredType {
             }
         }
     }
-}
-
-fn need_update(current_inferred_type: &InferredType, new_inferred_type: &InferredType) -> bool {
-    current_inferred_type != new_inferred_type && !new_inferred_type.is_unknown()
 }

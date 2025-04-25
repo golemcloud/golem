@@ -18,17 +18,18 @@ impl TypeOrigin {
         matches!(self, TypeOrigin::Default)
     }
 
-    pub fn add_origin(&mut self, new_origin: TypeOrigin) {
+    pub fn add_origin(&self, new_origin: TypeOrigin) -> TypeOrigin {
         match self {
-            TypeOrigin::NoOrigin => *self = new_origin,
+            TypeOrigin::NoOrigin => new_origin,
             TypeOrigin::Multiple(origins) => {
+                let mut new_origins = origins.clone();
                 if !origins.contains(&new_origin) {
-                    origins.push(new_origin);
+                    new_origins.push(new_origin);
                 }
+
+                TypeOrigin::Multiple(new_origins)
             }
-            _ => {
-                *self = TypeOrigin::Multiple(vec![self.clone(), new_origin]);
-            }
+            _ => TypeOrigin::Multiple(vec![self.clone(), new_origin]),
         }
     }
 }

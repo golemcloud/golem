@@ -26,10 +26,10 @@ pub fn bind_type_annotations(expr: &mut Expr) {
                 ..
             } => {
                 if let Some(type_annotation) = type_annotation {
-                    let mut inferred_type = InferredType::from(&*type_annotation);
-                    inferred_type.declared_at(source_span.clone());
+                    let new_inferred_type =
+                        InferredType::from(&*type_annotation).declared_at(source_span.clone());
 
-                    rhs.with_inferred_type_mut(inferred_type)
+                    rhs.with_inferred_type_mut(new_inferred_type)
                 }
             }
 
@@ -38,10 +38,10 @@ pub fn bind_type_annotations(expr: &mut Expr) {
                 let type_annotation = expr.type_annotation();
 
                 if let Some(type_annotation) = type_annotation {
-                    let mut inferred_type = InferredType::from(type_annotation);
-                    inferred_type.declared_at(source_span);
+                    let new_inferred_type =
+                        InferredType::from(type_annotation).declared_at(source_span);
 
-                    expr.with_inferred_type_mut(inferred_type);
+                    expr.with_inferred_type_mut(new_inferred_type);
                 }
             }
         }

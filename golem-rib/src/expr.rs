@@ -1684,10 +1684,9 @@ impl Expr {
     }
 
     pub fn number(big_decimal: BigDecimal) -> Expr {
-        let mut inferred_number = InferredType::from(&big_decimal);
-        inferred_number.set_as_default();
+        let inferred_type = InferredType::from(&big_decimal).as_default();
 
-        Expr::number_inferred(big_decimal, None, inferred_number)
+        Expr::number_inferred(big_decimal, None, inferred_type)
     }
 }
 
