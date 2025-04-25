@@ -503,7 +503,7 @@ impl Expr {
         Expr::Minus {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: InferredType::number(),
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -513,7 +513,7 @@ impl Expr {
         Expr::Divide {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: InferredType::number(),
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -523,7 +523,7 @@ impl Expr {
         Expr::Multiply {
             lhs: Box::new(left),
             rhs: Box::new(right),
-            inferred_type: InferredType::number(),
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }

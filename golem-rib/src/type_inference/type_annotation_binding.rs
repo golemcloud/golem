@@ -81,7 +81,7 @@ mod type_binding_tests {
         let expected = Expr::option(Some(Expr::number_inferred(
             BigDecimal::from(1),
             None,
-            InferredType::number(),
+            InferredType::s32(),
         )))
         .with_type_annotation(TypeName::Option(Box::new(TypeName::U64)))
         .with_inferred_type(InferredType::option(InferredType::u64()));
@@ -101,7 +101,7 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::ok(
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::s32()),
             Some(TypeName::Result {
                 ok: Some(Box::new(TypeName::U64)),
                 error: Some(Box::new(TypeName::Str)),
@@ -127,7 +127,7 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::ok(
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number(BigDecimal::from(1)),
             Some(TypeName::Result {
                 ok: Some(Box::new(TypeName::U64)),
                 error: None,
@@ -150,7 +150,7 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::err(
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number(BigDecimal::from(1)),
             Some(TypeName::Result {
                 ok: None,
                 error: Some(Box::new(TypeName::U64)),
@@ -172,7 +172,7 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::ok(
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number(BigDecimal::from(1)),
             Some(TypeName::Result {
                 ok: None,
                 error: None,
@@ -227,7 +227,7 @@ mod type_binding_tests {
                 "baz",
                 None,
             ),
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number(BigDecimal::from(1)),
         )
         .with_type_annotation(TypeName::U32)
         .with_inferred_type(InferredType::u32());

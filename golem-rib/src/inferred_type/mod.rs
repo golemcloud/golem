@@ -200,7 +200,7 @@ impl InferredType {
             origin: TypeOrigin::Default,
         }
     }
-    
+
     pub fn declared_at(&self, source_span: SourceSpan) -> InferredType {
         InferredType {
             inner: self.inner.clone(),

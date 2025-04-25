@@ -570,12 +570,12 @@ mod tests {
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
-                    InferredType::number()
+                    InferredType::u32()
                 ),
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
-                    InferredType::number()
+                    InferredType::u32()
                 )
             )
         );
@@ -604,12 +604,12 @@ mod tests {
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
-                    InferredType::number()
+                    InferredType::s32()
                 ),
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
-                    InferredType::number()
+                    InferredType::s32()
                 )
             )
         );
@@ -631,7 +631,7 @@ mod tests {
             Expr::range_from(Expr::number_inferred(
                 bigdecimal::BigDecimal::from_u64(1).unwrap(),
                 None,
-                InferredType::number()
+                InferredType::s32()
             ))
         );
     }
@@ -649,12 +649,12 @@ mod tests {
                 Expr::range_from(Expr::number_inferred(
                     BigDecimal::from_u64(1).unwrap(),
                     None,
-                    InferredType::number()
+                    InferredType::s32()
                 )),
                 Expr::number_inferred(
                     BigDecimal::from_u64(2).unwrap(),
                     None,
-                    InferredType::number()
+                    InferredType::s32()
                 )
             )
         );
