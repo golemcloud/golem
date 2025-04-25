@@ -1,7 +1,20 @@
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE SCHEMA IF NOT EXISTS extensions;
+
+-- grant public access to extensions schema
+GRANT usage ON SCHEMA extensions TO public;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA extensions TO public;
+
+-- include future extensions
+ALTER DEFAULT PRIVILEGES IN SCHEMA extensions
+   GRANT EXECUTE ON FUNCTIONS TO public;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA extensions
+   GRANT usage ON TYPES TO public;
+
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" schema extensions;
 
 ALTER TABLE plugins
-    ADD COLUMN id uuid NOT NULL DEFAULT (uuid_generate_v4());
+    ADD COLUMN id uuid NOT NULL DEFAULT (extensions.uuid_generate_v4());
 
 ALTER TABLE plugins
     ALTER COLUMN id DROP DEFAULT;
