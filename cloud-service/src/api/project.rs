@@ -1,16 +1,17 @@
 use crate::api::{ApiTags, LimitedApiError, LimitedApiResult};
 use crate::model::*;
+use crate::service::api_mapper::RemoteCloudApiMapper;
 use crate::service::auth::AuthService;
 use crate::service::project::ProjectService;
 use crate::service::project_auth::ProjectAuthorisationService;
 use cloud_common::auth::GolemSecurityScheme;
 use cloud_common::model::ProjectAction;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_common::model::error::ErrorBody;
-use golem_common::model::plugin::{
-    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
-};
+use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
 use golem_common::model::{Empty, PluginInstallationId, ProjectId};
 use golem_common::recorded_http_api_request;
+use golem_component_service_base::api::dto;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -21,6 +22,7 @@ pub struct ProjectApi {
     pub auth_service: Arc<dyn AuthService + Sync + Send>,
     pub project_service: Arc<dyn ProjectService + Sync + Send>,
     pub project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
+    pub api_mapper: Arc<RemoteCloudApiMapper>,
 }
 
 #[OpenApi(prefix_path = "/v1/projects", tag = ApiTags::Project)]
@@ -257,7 +259,7 @@ impl ProjectApi {
         &self,
         project_id: Path<ProjectId>,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<Vec<PluginInstallation>>> {
+    ) -> LimitedApiResult<Json<Vec<dto::PluginInstallation>>> {
         let record = recorded_http_api_request!(
             "get_installed_plugins_of_project",
             project_id = project_id.0.to_string(),
@@ -275,14 +277,21 @@ impl ProjectApi {
         &self,
         project_id: ProjectId,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<Vec<PluginInstallation>>> {
+    ) -> LimitedApiResult<Json<Vec<dto::PluginInstallation>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
 
-        self.project_service
+        let response = self
+            .project_service
             .get_plugin_installations_for_project(&project_id, &auth)
-            .await
-            .map_err(|e| e.into())
-            .map(Json)
+            .await?;
+
+        let secret = &token.secret();
+        let converted = stream::iter(response)
+            .then(|pi| self.api_mapper.convert_plugin_installation(secret, pi))
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        Ok(Json(converted))
     }
 
     /// Installs a new plugin for this project
@@ -296,7 +305,7 @@ impl ProjectApi {
         project_id: Path<ProjectId>,
         plugin: Json<PluginInstallationCreation>,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<PluginInstallation>> {
+    ) -> LimitedApiResult<Json<dto::PluginInstallation>> {
         let record = recorded_http_api_request!(
             "install_plugin",
             project_id = project_id.0.to_string(),
@@ -317,14 +326,20 @@ impl ProjectApi {
         project_id: ProjectId,
         plugin: PluginInstallationCreation,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<PluginInstallation>> {
+    ) -> LimitedApiResult<Json<dto::PluginInstallation>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let token = token.secret();
 
-        self.project_service
-            .create_plugin_installation_for_project(&project_id, plugin, &auth)
-            .await
-            .map_err(|e| e.into())
-            .map(Json)
+        let plugin_installation = self
+            .project_service
+            .create_plugin_installation_for_project(&project_id, plugin, &auth, &token)
+            .await?;
+
+        Ok(Json(
+            self.api_mapper
+                .convert_plugin_installation(&token, plugin_installation)
+                .await?,
+        ))
     }
 
     /// Updates the priority or parameters of a plugin installation

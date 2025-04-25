@@ -169,7 +169,7 @@ impl TestDependencies for RegularWorkerExecutorPerTestDependencies {
         &self.component_directory
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+    fn component_service(&self) -> Arc<dyn ComponentService + 'static> {
         self.component_service.clone()
     }
 
@@ -315,7 +315,7 @@ impl TestDependencies for RegularWorkerExecutorTestDependencies {
         &self.component_directory
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+    fn component_service(&self) -> Arc<dyn ComponentService + 'static> {
         self.component_service.clone()
     }
 

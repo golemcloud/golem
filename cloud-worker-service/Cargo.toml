@@ -35,6 +35,7 @@ bincode = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
+darling = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
@@ -47,7 +48,9 @@ opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 poem = { workspace = true, features = ["prometheus", "opentelemetry"] }
+poem-derive = { workspace = true }
 poem-openapi = { workspace = true }
+poem-openapi-derive = { workspace = true }
 prometheus = { workspace = true }
 regex = "1.10.3"
 rusoto_acm = "0.48.0"
@@ -59,7 +62,7 @@ rusoto_sts = "0.48.0"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-sqlx = { version = "0.8", features = [
+sqlx = { version = "=0.8.3", features = [
     "runtime-tokio",
     "sqlite",
     "postgres",

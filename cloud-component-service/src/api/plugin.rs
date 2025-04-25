@@ -1,8 +1,7 @@
 use crate::api::{ApiTags, ComponentError, Result};
-use crate::model::CloudPluginScope;
 use crate::service::plugin::CloudPluginService;
 use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
-use cloud_common::model::CloudPluginOwner;
+use cloud_common::model::{CloudPluginOwner, CloudPluginScope};
 use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::PluginDefinition;
 use golem_common::model::Empty;

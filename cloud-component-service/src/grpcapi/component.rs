@@ -347,7 +347,7 @@ impl ComponentGrpcApi {
                 .ok_or_else(|| bad_request_error("Component not found"))?,
         };
 
-        let response = self
+        let (_, response) = self
             .component_service
             .get_plugin_installations_for_component(&auth, &component_id, version)
             .await?;
@@ -371,7 +371,7 @@ impl ComponentGrpcApi {
             parameters: request.parameters.clone(),
         };
 
-        let response = self
+        let (_, response) = self
             .component_service
             .create_plugin_installation_for_component(
                 &auth,

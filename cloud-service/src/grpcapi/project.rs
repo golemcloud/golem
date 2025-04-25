@@ -68,6 +68,16 @@ impl From<project::ProjectError> for ProjectError {
                     error: value.to_safe_string(),
                 })
             }
+            project::ProjectError::PluginNotFound { .. } => {
+                project_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                })
+            }
+            project::ProjectError::InternalPluginError(_) => {
+                project_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
         };
         ProjectError { error: Some(error) }
     }

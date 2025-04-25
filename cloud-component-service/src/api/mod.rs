@@ -41,7 +41,10 @@ type ApiServices = (
 pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices, ()> {
     OpenApiService::new(
         (
-            component::ComponentApi::new(services.component_service.clone()),
+            component::ComponentApi::new(
+                services.component_service.clone(),
+                services.api_mapper.clone(),
+            ),
             healthcheck::HealthcheckApi,
             plugin::PluginApi::new(services.plugin_service.clone()),
         ),

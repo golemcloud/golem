@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::model::{Plan, PlanData};
+use cloud_common::config::RemoteCloudServiceConfig;
 use cloud_common::model::PlanId;
 use cloud_common::model::Role;
 use golem_common::config::ConfigLoader;
@@ -9,8 +11,6 @@ use golem_common::tracing::TracingConfig;
 use serde::{Deserialize, Serialize};
 use uuid::uuid;
 use uuid::Uuid;
-
-use crate::model::{Plan, PlanData};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CloudServiceConfig {
@@ -24,6 +24,7 @@ pub struct CloudServiceConfig {
     pub ed_dsa: EdDsaConfig,
     pub accounts: AccountsConfig,
     pub oauth2: OAuth2Config,
+    pub component_service: RemoteCloudServiceConfig,
 }
 
 impl Default for CloudServiceConfig {
@@ -39,6 +40,7 @@ impl Default for CloudServiceConfig {
             ed_dsa: EdDsaConfig::default(),
             accounts: AccountsConfig::default(),
             oauth2: OAuth2Config::default(),
+            component_service: RemoteCloudServiceConfig::default(),
         }
     }
 }

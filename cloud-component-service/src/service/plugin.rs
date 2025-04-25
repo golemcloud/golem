@@ -1,10 +1,10 @@
-use crate::model::CloudPluginScope;
 use crate::service::component::CloudComponentService;
 use crate::service::CloudComponentError;
 use cloud_common::auth::CloudAuthCtx;
 use cloud_common::clients::auth::BaseAuthService;
-use cloud_common::model::{CloudPluginOwner, Role};
+use cloud_common::model::{CloudPluginOwner, CloudPluginScope, Role};
 use golem_common::model::plugin::PluginDefinition;
+use golem_common::model::PluginId;
 use golem_component_service_base::model::plugin::PluginDefinitionCreation;
 use golem_component_service_base::service::plugin::PluginService;
 use std::sync::Arc;
@@ -92,6 +92,16 @@ impl CloudPluginService {
     {
         let owner = self.authorize(auth, Role::ViewPlugin).await?;
         Ok(self.base_plugin_service.get(&owner, name, version).await?)
+    }
+
+    pub async fn get_by_id(
+        &self,
+        auth: &CloudAuthCtx,
+        id: &PluginId,
+    ) -> Result<Option<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, CloudComponentError>
+    {
+        let owner = self.authorize(auth, Role::ViewPlugin).await?;
+        Ok(self.base_plugin_service.get_by_id(&owner, id).await?)
     }
 
     pub async fn delete(

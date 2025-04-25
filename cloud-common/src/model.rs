@@ -1,17 +1,23 @@
-use crate::auth::CloudNamespace;
+use crate::auth::{CloudAuthCtx, CloudNamespace};
 use crate::repo::component::CloudComponentOwnerRow;
+use crate::repo::plugin::CloudPluginScopeRow;
 use crate::repo::CloudPluginOwnerRow;
+use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::plugin::PluginOwner;
-use golem_common::model::{AccountId, ProjectId};
+use golem_common::model::plugin::{ComponentPluginScope, PluginOwner, PluginScope};
+use golem_common::model::{AccountId, ComponentId, Empty, ProjectId};
 use golem_common::newtype_uuid;
+use poem::web::Field;
+use poem_openapi::types::{ParseError, ParseFromMultipartField, ParseFromParameter, ParseResult};
 use poem_openapi::{Enum, Object};
+use poem_openapi_derive::Union;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use std::sync::Arc;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, FromRepr};
 use uuid::Uuid;
@@ -445,6 +451,196 @@ impl ComponentOwner for CloudComponentOwner {
 
     fn account_id(&self) -> AccountId {
         self.account_id.clone()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ProjectPluginScope {
+    pub project_id: ProjectId,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Union)]
+#[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
+pub enum CloudPluginScope {
+    Global(Empty),
+    Component(ComponentPluginScope),
+    Project(ProjectPluginScope),
+}
+
+impl CloudPluginScope {
+    pub fn global() -> Self {
+        CloudPluginScope::Global(Empty {})
+    }
+
+    pub fn component(component_id: ComponentId) -> Self {
+        CloudPluginScope::Component(ComponentPluginScope { component_id })
+    }
+
+    pub fn project(project_id: ProjectId) -> Self {
+        CloudPluginScope::Project(ProjectPluginScope { project_id })
+    }
+
+    pub fn valid_in_component(&self, component_id: &ComponentId, project_id: &ProjectId) -> bool {
+        match self {
+            CloudPluginScope::Global(_) => true,
+            CloudPluginScope::Component(scope) => &scope.component_id == component_id,
+            CloudPluginScope::Project(scope) => &scope.project_id == project_id,
+        }
+    }
+}
+
+impl Default for CloudPluginScope {
+    fn default() -> Self {
+        CloudPluginScope::global()
+    }
+}
+
+impl Display for CloudPluginScope {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            CloudPluginScope::Global(_) => write!(f, "global"),
+            CloudPluginScope::Component(scope) => write!(f, "component:{}", scope.component_id),
+            CloudPluginScope::Project(scope) => write!(f, "project:{}", scope.project_id),
+        }
+    }
+}
+
+impl ParseFromParameter for CloudPluginScope {
+    fn parse_from_parameter(value: &str) -> ParseResult<Self> {
+        if value == "global" {
+            Ok(Self::global())
+        } else if let Some(id_part) = value.strip_prefix("component:") {
+            let component_id = ComponentId::try_from(id_part);
+            match component_id {
+                Ok(component_id) => Ok(Self::component(component_id)),
+                Err(err) => Err(ParseError::custom(err)),
+            }
+        } else if let Some(id_part) = value.strip_prefix("project:") {
+            let project_id = ProjectId::try_from(id_part);
+            match project_id {
+                Ok(project_id) => Ok(Self::project(project_id)),
+                Err(err) => Err(ParseError::custom(err)),
+            }
+        } else {
+            Err(ParseError::custom("Unexpected representation of plugin scope - must be 'global', 'component:<component_id>' or 'project:<project_id>'"))
+        }
+    }
+}
+
+impl ParseFromMultipartField for CloudPluginScope {
+    async fn parse_from_multipart(field: Option<Field>) -> ParseResult<Self> {
+        use poem_openapi::types::ParseFromParameter;
+        match field {
+            Some(field) => {
+                let s = field.text().await?;
+                Self::parse_from_parameter(&s)
+            }
+            None => Err(ParseError::expected_input()),
+        }
+    }
+}
+
+impl From<CloudPluginScope> for cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope {
+    fn from(scope: CloudPluginScope) -> Self {
+        match scope {
+            CloudPluginScope::Global(_) => cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope {
+                scope: Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Global(
+                    golem_api_grpc::proto::golem::common::Empty {},
+                )),
+            },
+            CloudPluginScope::Component(scope) => cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope {
+                scope: Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Component(
+                    golem_api_grpc::proto::golem::component::ComponentPluginScope {
+                        component_id: Some(scope.component_id.into()),
+                    },
+                )),
+            },
+            CloudPluginScope::Project(scope) => cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope {
+                scope: Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Project(
+                    cloud_api_grpc::proto::golem::cloud::component::ProjectPluginScope {
+                        project_id: Some(scope.project_id.into()),
+                    },
+                )),
+            },
+        }
+    }
+}
+
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope>
+    for CloudPluginScope
+{
+    type Error = String;
+
+    fn try_from(
+        proto: cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope,
+    ) -> Result<Self, Self::Error> {
+        match proto.scope {
+            Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Global(
+                     _,
+                 )) => Ok(Self::global()),
+            Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Component(
+                     scope,
+                 )) => Ok(Self::component(scope.component_id.ok_or("Missing component_id")?.try_into()?)),
+            Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Project(
+                     scope,
+                 )) => Ok(Self::project(scope.project_id.ok_or("Missing project_id")?.try_into()?)),
+            None => Err("Missing scope".to_string()),
+        }
+    }
+}
+
+#[async_trait]
+pub trait ComponentOwnershipQuery: Send + Sync {
+    async fn get_project(
+        &self,
+        component_id: &ComponentId,
+        auth_ctx: &CloudAuthCtx,
+    ) -> Result<Option<ProjectId>, String>;
+}
+
+#[async_trait]
+impl PluginScope for CloudPluginScope {
+    type Row = CloudPluginScopeRow;
+
+    type RequestContext = (Arc<dyn ComponentOwnershipQuery>, CloudAuthCtx);
+
+    async fn accessible_scopes(&self, context: Self::RequestContext) -> Result<Vec<Self>, String> {
+        match self {
+            CloudPluginScope::Global(_) =>
+            // In global scope we only have access to plugins in global scope
+            {
+                Ok(vec![self.clone()])
+            }
+            CloudPluginScope::Component(component) => {
+                // In a component scope we have access to
+                // - plugins in that particular scope
+                // - plugins of the component's owner project
+                // - and all the global ones
+
+                let (component_service, auth_ctx) = context;
+                let project = component_service
+                    .get_project(&component.component_id, &auth_ctx)
+                    .await?;
+
+                if let Some(project_id) = project {
+                    Ok(vec![
+                        Self::global(),
+                        Self::project(project_id),
+                        self.clone(),
+                    ])
+                } else {
+                    Ok(vec![Self::global(), self.clone()])
+                }
+            }
+            CloudPluginScope::Project(_) =>
+            // In a project scope we have access to plugins in that particular scope, and all the global ones
+            {
+                Ok(vec![Self::global(), self.clone()])
+            }
+        }
     }
 }
 

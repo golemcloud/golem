@@ -105,7 +105,7 @@ impl ApiDeploymentApi {
 
         let data = self
             .deployment_service
-            .get_by_site(&ApiSiteString(payload.site.to_string()))
+            .get_by_site(&namespace, &ApiSiteString(payload.site.to_string()))
             .await?;
 
         let deployment = data
@@ -171,12 +171,13 @@ impl ApiDeploymentApi {
     #[oai(path = "/:site", method = "get", operation_id = "get_deployment")]
     async fn get(
         &self,
+        #[oai(name = "project-id")] project_id: Query<ProjectId>,
         site: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         let record = recorded_http_api_request!("get_deployment", site = site.0);
         let response = self
-            .get_internal(site.0, token)
+            .get_internal(&project_id.0, site.0, token)
             .instrument(record.span.clone())
             .await;
 
@@ -185,6 +186,7 @@ impl ApiDeploymentApi {
 
     async fn get_internal(
         &self,
+        project_id: &ProjectId,
         site: String,
         token: GolemSecurityScheme,
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
@@ -192,16 +194,18 @@ impl ApiDeploymentApi {
         let site = ApiSiteString(site);
         let auth_ctx = CloudAuthCtx::new(token);
 
-        let api_deployment = self.deployment_service.get_by_site(&site).await?.ok_or(
-            ApiEndpointError::not_found(safe("API deployment not found".to_string())),
-        )?;
-
-        let project_id = &api_deployment.namespace.project_id;
-
-        let _ = self
+        let namespace = self
             .auth_service
             .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
             .await?;
+
+        let api_deployment = self
+            .deployment_service
+            .get_by_site(&namespace, &site)
+            .await?
+            .ok_or(ApiEndpointError::not_found(safe(
+                "API deployment not found".to_string(),
+            )))?;
 
         Ok(Json(api_deployment.into()))
     }
@@ -212,12 +216,21 @@ impl ApiDeploymentApi {
     #[oai(path = "/:site", method = "delete", operation_id = "delete_deployment")]
     async fn delete(
         &self,
+        #[oai(name = "project-id")] project_id: Query<ProjectId>,
         site: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<String>, ApiEndpointError> {
         let record = recorded_http_api_request!("delete_deployment", site = site.0);
+
+        let auth_ctx = CloudAuthCtx::new(token.secret());
+
+        let namespace = self
+            .auth_service
+            .authorize_project_action(&project_id.0, ProjectAction::ViewApiDefinition, &auth_ctx)
+            .await?;
+
         let response = self
-            .delete_internal(site.0, token)
+            .delete_internal(&namespace, &auth_ctx, site.0)
             .instrument(record.span.clone())
             .await;
 
@@ -226,27 +239,22 @@ impl ApiDeploymentApi {
 
     async fn delete_internal(
         &self,
+        namespace: &CloudNamespace,
+        auth_ctx: &CloudAuthCtx,
         site: String,
-        token: GolemSecurityScheme,
     ) -> Result<Json<String>, ApiEndpointError> {
-        let token = token.secret();
-
         let site = ApiSiteString(site);
-        let auth_ctx = CloudAuthCtx::new(token);
 
-        let api_deployment = self.deployment_service.get_by_site(&site).await?.ok_or(
-            ApiEndpointError::not_found(safe("API deployment not found".to_string())),
-        )?;
-
-        let project_id = &api_deployment.namespace.project_id;
-
-        let namespace = self
-            .auth_service
-            .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
-            .await?;
+        let api_deployment = self
+            .deployment_service
+            .get_by_site(namespace, &site)
+            .await?
+            .ok_or(ApiEndpointError::not_found(safe(
+                "API deployment not found".to_string(),
+            )))?;
 
         self.deployment_service
-            .delete(&namespace, &auth_ctx, &site)
+            .delete(namespace, auth_ctx, &site)
             .await?;
 
         self.domain_route

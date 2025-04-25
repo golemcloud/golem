@@ -1,5 +1,7 @@
 use crate::config::CloudServiceConfig;
 use crate::repo;
+use crate::service::api_mapper::RemoteCloudApiMapper;
+use cloud_common::clients::plugin::PluginServiceClientDefault;
 use golem_common::config::DbConfig;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -8,6 +10,7 @@ use std::sync::Arc;
 pub mod account;
 pub mod account_grant;
 pub mod account_summary;
+pub mod api_mapper;
 pub mod auth;
 pub mod login;
 pub mod oauth2;
@@ -40,6 +43,7 @@ pub struct Services {
     pub project_service: Arc<dyn project::ProjectService + Sync + Send>,
     pub project_policy_service: Arc<dyn project_policy::ProjectPolicyService + Sync + Send>,
     pub project_grant_service: Arc<dyn project_grant::ProjectGrantService + Sync + Send>,
+    pub api_mapper: Arc<RemoteCloudApiMapper>,
 }
 
 impl Services {
@@ -161,12 +165,18 @@ impl Services {
                 project_policy_service.clone(),
             ));
 
+        let plugin_service_client =
+            Arc::new(PluginServiceClientDefault::new(&config.component_service));
+
         let project_service: Arc<dyn project::ProjectService + Sync + Send> =
             Arc::new(project::ProjectServiceDefault::new(
                 repositories.project_repo.clone(),
                 project_auth_service.clone(),
                 plan_limit_service.clone(),
+                plugin_service_client.clone(),
             ));
+
+        let api_mapper = Arc::new(RemoteCloudApiMapper::new(plugin_service_client));
 
         Ok(Services {
             auth_service,
@@ -184,6 +194,7 @@ impl Services {
             project_service,
             token_service,
             login_service,
+            api_mapper,
         })
     }
 }

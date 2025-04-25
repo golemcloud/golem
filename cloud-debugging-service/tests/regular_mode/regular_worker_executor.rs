@@ -70,12 +70,8 @@ impl TestDependencies for TestRegularWorkerExecutor {
 
     fn component_service(
         &self,
-    ) -> Arc<
-        dyn golem_test_framework::components::component_service::ComponentService
-            + Send
-            + Sync
-            + 'static,
-    > {
+    ) -> Arc<dyn golem_test_framework::components::component_service::ComponentService + 'static>
+    {
         self.deps.component_service()
     }
 

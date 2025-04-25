@@ -6,6 +6,7 @@ use sqlx::{Database, Encode, QueryBuilder, Type};
 use std::fmt::Display;
 
 pub mod component;
+pub mod plugin;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct CloudPluginOwnerRow {

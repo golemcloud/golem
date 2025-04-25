@@ -18,6 +18,18 @@ name = "Initial User"
 role = "Admin"
 token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
 
+[component_service]
+access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+host = "localhost"
+port = 8080
+
+[component_service.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
 [db]
 type = "Sqlite"
 

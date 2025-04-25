@@ -1,5 +1,4 @@
 use crate::config::ComponentServiceConfig;
-use crate::model::CloudPluginScope;
 use crate::service::component::CloudComponentService;
 use crate::service::plugin::CloudPluginService;
 use cloud_api_grpc::proto::golem::cloud::project::v1::project_error;
@@ -7,9 +6,10 @@ use cloud_common::clients::auth::{AuthServiceError, BaseAuthService, CloudAuthSe
 use cloud_common::clients::grant::{GrantService, GrantServiceDefault};
 use cloud_common::clients::limit::{LimitError, LimitService, LimitServiceDefault};
 use cloud_common::clients::project::{ProjectError, ProjectService, ProjectServiceDefault};
-use cloud_common::model::{CloudComponentOwner, CloudPluginOwner};
+use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, CloudPluginScope};
 use golem_common::config::DbConfig;
 use golem_common::SafeDisplay;
+use golem_component_service_base::api::mapper::{ApiMapper, DefaultApiMapper};
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
@@ -49,6 +49,7 @@ pub struct Services {
     pub component_service: Arc<CloudComponentService>,
     pub compilation_service: Arc<dyn ComponentCompilationService + Send + Sync>,
     pub plugin_service: Arc<CloudPluginService>,
+    pub api_mapper: Arc<dyn ApiMapper<CloudComponentOwner> + Send + Sync>,
 }
 
 impl Services {
@@ -183,10 +184,14 @@ impl Services {
             auth_service.clone(),
         ));
 
+        let api_mapper: Arc<dyn ApiMapper<CloudComponentOwner> + Send + Sync> =
+            Arc::new(DefaultApiMapper::new(base_plugin_service.clone()));
+
         Ok(Services {
             component_service,
             compilation_service,
             plugin_service,
+            api_mapper,
         })
     }
 }

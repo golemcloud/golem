@@ -7,6 +7,7 @@ use crate::service::project_grant::ProjectGrantError;
 use crate::service::project_policy::ProjectPolicyError;
 use crate::service::token::TokenServiceError;
 use crate::service::Services;
+use cloud_common::clients::plugin::PluginError;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
@@ -287,6 +288,14 @@ impl From<ProjectError> for LimitedApiError {
             ProjectError::LimitExceeded(_) => LimitedApiError::LimitExceeded(Json(ErrorBody {
                 error: value.to_safe_string(),
             })),
+            ProjectError::PluginNotFound { .. } => LimitedApiError::BadRequest(Json(ErrorsBody {
+                errors: vec![value.to_safe_string()],
+            })),
+            ProjectError::InternalPluginError(_) => {
+                LimitedApiError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
         }
     }
 }
@@ -352,6 +361,14 @@ impl From<ProjectPolicyError> for LimitedApiError {
     }
 }
 
+impl From<PluginError> for LimitedApiError {
+    fn from(value: PluginError) -> Self {
+        LimitedApiError::InternalError(Json(ErrorBody {
+            error: value.to_safe_string(),
+        }))
+    }
+}
+
 pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) -> Route {
     let api_service = make_open_api_service(services);
 
@@ -408,6 +425,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
                 auth_service: services.auth_service.clone(),
                 project_service: services.project_service.clone(),
                 project_auth_service: services.project_auth_service.clone(),
+                api_mapper: services.api_mapper.clone(),
             },
             project_grant::ProjectGrantApi {
                 auth_service: services.auth_service.clone(),

@@ -1,14 +1,15 @@
 use crate::grpcapi::{auth, bad_request_error};
-use crate::model::CloudPluginScope;
 use crate::service::plugin::CloudPluginService;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::component::v1::plugin_service_server::PluginService;
 use cloud_api_grpc::proto::golem::cloud::component::v1::{
-    get_plugin_response, list_plugins_response, CreatePluginRequest, GetPluginResponse,
-    GetPluginSuccessResponse, ListPluginsRequest, ListPluginsResponse, ListPluginsSuccessResponse,
+    get_plugin_by_id_response, get_plugin_response, list_plugins_response, CreatePluginRequest,
+    GetPluginByIdRequest, GetPluginByIdResponse, GetPluginResponse, GetPluginSuccessResponse,
+    ListPluginsRequest, ListPluginsResponse, ListPluginsSuccessResponse,
 };
 use cloud_api_grpc::proto::golem::cloud::component::PluginDefinition;
-use cloud_common::model::CloudPluginOwner;
+use cloud_common::grpc::plugin_definition_to_grpc;
+use cloud_common::model::CloudPluginScope;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::component::v1::{
     component_error, create_plugin_response, delete_plugin_response, ComponentError,
@@ -120,6 +121,31 @@ impl PluginGrpcApi {
             .await?;
 
         Ok(())
+    }
+
+    async fn get_plugin_by_id(
+        &self,
+        request: &GetPluginByIdRequest,
+        metadata: MetadataMap,
+    ) -> Result<PluginDefinition, ComponentError> {
+        let auth = auth(metadata)?;
+
+        let plugin_id = &request
+            .id
+            .ok_or(bad_request_error("Missing plugin id"))?
+            .try_into()
+            .map_err(|err| bad_request_error(&format!("Invalid plugin id: {err}")))?;
+
+        let plugin = self.plugin_service.get_by_id(&auth, plugin_id).await?;
+
+        match plugin {
+            Some(plugin) => Ok(plugin_definition_to_grpc(plugin)),
+            None => Err(ComponentError {
+                error: Some(component_error::Error::NotFound(ErrorBody {
+                    error: "Plugin not found".to_string(),
+                })),
+            }),
+        }
     }
 }
 
@@ -258,27 +284,39 @@ impl PluginService for PluginGrpcApi {
 
         Ok(Response::new(response))
     }
-}
 
-// NOTE: Can't define a `From` instance because the gRPC type is defined in `cloud-api-grpc` and the model is defined in `golem-component-service-base`
-fn plugin_definition_to_grpc(
-    plugin_definition: golem_common::model::plugin::PluginDefinition<
-        CloudPluginOwner,
-        CloudPluginScope,
-    >,
-) -> PluginDefinition {
-    PluginDefinition {
-        name: plugin_definition.name,
-        version: plugin_definition.version,
-        scope: Some(plugin_definition.scope.into()),
-        description: plugin_definition.description,
-        icon: plugin_definition.icon,
-        homepage: plugin_definition.homepage,
-        specs: Some(plugin_definition.specs.into()),
+    async fn get_plugin_by_id(
+        &self,
+        request: Request<GetPluginByIdRequest>,
+    ) -> Result<Response<GetPluginByIdResponse>, Status> {
+        let (metadata, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!("get_plugin_by_id",);
+
+        let response = match self
+            .get_plugin_by_id(&request, metadata)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(plugin) => record.succeed(GetPluginByIdResponse {
+                result: Some(get_plugin_by_id_response::Result::Success(
+                    GetPluginSuccessResponse {
+                        plugin: Some(plugin),
+                    },
+                )),
+            }),
+            Err(error) => record.fail(
+                GetPluginByIdResponse {
+                    result: Some(get_plugin_by_id_response::Result::Error(error.clone())),
+                },
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(response))
     }
 }
 
-fn grpc_to_plugin_creation(
+pub fn grpc_to_plugin_creation(
     value: cloud_api_grpc::proto::golem::cloud::component::v1::CreatePluginRequest,
 ) -> Result<PluginDefinitionCreation<CloudPluginScope>, String> {
     let plugin = value.plugin.ok_or("missing plugin definition")?;

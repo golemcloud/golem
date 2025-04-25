@@ -4,12 +4,13 @@ use crate::repo::project::{ProjectRecord, ProjectRepo};
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
 use crate::service::project_auth::{ProjectAuthorisationError, ProjectAuthorisationService};
 use async_trait::async_trait;
-use cloud_common::model::Role;
+use cloud_common::clients::plugin::{PluginError, PluginServiceClient};
+use cloud_common::model::{Role, TokenSecret};
 use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
 };
-use golem_common::model::ProjectId;
 use golem_common::model::{AccountId, PluginInstallationId};
+use golem_common::model::{PluginId, ProjectId};
 use golem_common::SafeDisplay;
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
@@ -33,6 +34,13 @@ pub enum ProjectError {
     InternalRepoError(#[from] RepoError),
     #[error("Internal error: failed to convert {what}: {error}")]
     InternalConversionError { what: String, error: String },
+    #[error("Plugin not found: {plugin_name}@{plugin_version}")]
+    PluginNotFound {
+        plugin_name: String,
+        plugin_version: String,
+    },
+    #[error("Internal plugin error: {0}")]
+    InternalPluginError(#[from] PluginError),
 }
 
 impl ProjectError {
@@ -68,6 +76,8 @@ impl SafeDisplay for ProjectError {
             ProjectError::FailedToCreateDefaultProject(_) => self.to_string(),
             ProjectError::InternalRepoError(inner) => inner.to_safe_string(),
             ProjectError::InternalConversionError { .. } => self.to_string(),
+            ProjectError::PluginNotFound { .. } => self.to_string(),
+            ProjectError::InternalPluginError(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -137,6 +147,7 @@ pub trait ProjectService {
         project_id: &ProjectId,
         installation: PluginInstallationCreation,
         auth: &AccountAuthorisation,
+        token: &TokenSecret,
     ) -> Result<PluginInstallation, ProjectError>;
 
     async fn update_plugin_installation_for_project(
@@ -156,21 +167,24 @@ pub trait ProjectService {
 }
 
 pub struct ProjectServiceDefault {
-    project_repo: Arc<dyn ProjectRepo + Sync + Send>,
-    project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
-    plan_limit_service: Arc<dyn PlanLimitService + Sync + Send>,
+    project_repo: Arc<dyn ProjectRepo + Send + Sync>,
+    project_auth_service: Arc<dyn ProjectAuthorisationService + Send + Sync>,
+    plan_limit_service: Arc<dyn PlanLimitService + Send + Sync>,
+    plugin_service: Arc<dyn PluginServiceClient + Send + Sync>,
 }
 
 impl ProjectServiceDefault {
     pub fn new(
-        project_repo: Arc<dyn ProjectRepo + Sync + Send>,
-        project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
-        plan_limit_service: Arc<dyn PlanLimitService + Sync + Send>,
+        project_repo: Arc<dyn ProjectRepo + Send + Sync>,
+        project_auth_service: Arc<dyn ProjectAuthorisationService + Send + Sync>,
+        plan_limit_service: Arc<dyn PlanLimitService + Send + Sync>,
+        plugin_service: Arc<dyn PluginServiceClient + Send + Sync>,
     ) -> Self {
         ProjectServiceDefault {
             project_repo,
             project_auth_service,
             plan_limit_service,
+            plugin_service,
         }
     }
 }
@@ -353,15 +367,23 @@ impl ProjectService for ProjectServiceDefault {
         project_id: &ProjectId,
         installation: PluginInstallationCreation,
         auth: &AccountAuthorisation,
+        token: &TokenSecret,
     ) -> Result<PluginInstallation, ProjectError> {
         is_authorised(&Role::UpdateProject, auth)?;
         let owner_record = auth.as_plugin_owner().into();
 
-        let installation = installation.with_generated_id();
+        let plugin_definition = self
+            .plugin_service
+            .get(&installation.name, &installation.version, token)
+            .await?
+            .ok_or(ProjectError::PluginNotFound {
+                plugin_name: installation.name.clone(),
+                plugin_version: installation.version.clone(),
+            })?;
+
         let record = PluginInstallationRecord {
-            installation_id: installation.id.0,
-            plugin_name: installation.name.clone(),
-            plugin_version: installation.version.clone(),
+            installation_id: PluginId::new_v4().0,
+            plugin_id: plugin_definition.id.0,
             priority: installation.priority,
             parameters: serde_json::to_vec(&installation.parameters).map_err(|e| {
                 ProjectError::conversion_error("plugin installation parameters", e.to_string())
@@ -374,6 +396,9 @@ impl ProjectService for ProjectServiceDefault {
         };
 
         self.project_repo.install_plugin(&record).await?;
+
+        let installation = PluginInstallation::try_from(record)
+            .map_err(|e| ProjectError::conversion_error("plugin record", e))?;
 
         Ok(installation)
     }

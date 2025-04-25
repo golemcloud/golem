@@ -1,11 +1,13 @@
-use crate::model::CloudPluginScope;
 use crate::service::CloudComponentError;
+use async_trait::async_trait;
 use bytes::Bytes;
 use cloud_common::auth::CloudAuthCtx;
 use cloud_common::clients::auth::BaseAuthService;
 use cloud_common::clients::limit::LimitService;
 use cloud_common::clients::project::ProjectService;
-use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, ProjectAction};
+use cloud_common::model::{
+    CloudComponentOwner, CloudPluginOwner, CloudPluginScope, ComponentOwnershipQuery, ProjectAction,
+};
 use futures_util::stream::BoxStream;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::FunctionConstraints;
@@ -15,8 +17,9 @@ use golem_common::model::plugin::{
 };
 use golem_common::model::{ComponentId, ComponentType, ComponentVersion, PluginInstallationId};
 use golem_common::model::{InitialComponentFile, ProjectId};
+use golem_common::SafeDisplay;
 use golem_component_service_base::model::{
-    ComponentConstraints, InitialComponentFilesArchiveAndPermissions,
+    Component, ComponentConstraints, InitialComponentFilesArchiveAndPermissions,
 };
 use golem_component_service_base::service::component::{ComponentError, ComponentService};
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
@@ -76,7 +79,7 @@ impl CloudComponentService {
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &CloudAuthCtx,
-    ) -> Result<crate::model::Component, CloudComponentError> {
+    ) -> Result<Component<CloudComponentOwner>, CloudComponentError> {
         let component_id = ComponentId::new_v4();
 
         let owner = self.get_owner(project_id, auth).await?;
@@ -110,7 +113,7 @@ impl CloudComponentService {
             )
             .await?;
 
-        Ok(component.into())
+        Ok(component)
     }
 
     pub async fn create_internal(
@@ -122,7 +125,7 @@ impl CloudComponentService {
         files: Vec<InitialComponentFile>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &CloudAuthCtx,
-    ) -> Result<crate::model::Component, CloudComponentError> {
+    ) -> Result<Component<CloudComponentOwner>, CloudComponentError> {
         let component_id = ComponentId::new_v4();
 
         let owner = self.get_owner(project_id, auth).await?;
@@ -156,7 +159,7 @@ impl CloudComponentService {
             )
             .await?;
 
-        Ok(component.into())
+        Ok(component)
     }
 
     pub async fn update(
@@ -167,7 +170,7 @@ impl CloudComponentService {
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &CloudAuthCtx,
-    ) -> Result<crate::model::Component, CloudComponentError> {
+    ) -> Result<Component<CloudComponentOwner>, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
@@ -190,7 +193,7 @@ impl CloudComponentService {
             )
             .await?;
 
-        Ok(component.into())
+        Ok(component)
     }
 
     pub async fn update_internal(
@@ -201,7 +204,7 @@ impl CloudComponentService {
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &CloudAuthCtx,
-    ) -> Result<crate::model::Component, CloudComponentError> {
+    ) -> Result<Component<CloudComponentOwner>, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
@@ -224,7 +227,7 @@ impl CloudComponentService {
             )
             .await?;
 
-        Ok(component.into())
+        Ok(component)
     }
 
     pub async fn download(
@@ -267,7 +270,7 @@ impl CloudComponentService {
         project_id: Option<ProjectId>,
         component_name: Option<ComponentName>,
         auth: &CloudAuthCtx,
-    ) -> Result<Vec<crate::model::Component>, CloudComponentError> {
+    ) -> Result<Vec<Component<CloudComponentOwner>>, CloudComponentError> {
         let owner = self.get_owner(project_id, auth).await?;
 
         let result = self
@@ -275,14 +278,14 @@ impl CloudComponentService {
             .find_by_name(component_name, &owner)
             .await?;
 
-        Ok(result.into_iter().map(|c| c.into()).collect())
+        Ok(result)
     }
 
     pub async fn get_by_project(
         &self,
         project_id: &ProjectId,
         auth: &CloudAuthCtx,
-    ) -> Result<Vec<crate::model::Component>, CloudComponentError> {
+    ) -> Result<Vec<Component<CloudComponentOwner>>, CloudComponentError> {
         let owner = self
             .is_authorized_by_project(auth, project_id, &ProjectAction::ViewComponent)
             .await?;
@@ -291,14 +294,14 @@ impl CloudComponentService {
             .base_component_service
             .find_by_name(None, &owner)
             .await?;
-        Ok(result.into_iter().map(|c| c.into()).collect())
+        Ok(result)
     }
 
     pub async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
         auth: &CloudAuthCtx,
-    ) -> Result<Option<crate::model::Component>, CloudComponentError> {
+    ) -> Result<Option<Component<CloudComponentOwner>>, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(
                 auth,
@@ -312,14 +315,14 @@ impl CloudComponentService {
             .get_by_version(component_id, &owner)
             .await?;
 
-        Ok(result.map(|c| c.into()))
+        Ok(result)
     }
 
     pub async fn get_latest_version(
         &self,
         component_id: &ComponentId,
         auth: &CloudAuthCtx,
-    ) -> Result<Option<crate::model::Component>, CloudComponentError> {
+    ) -> Result<Option<Component<CloudComponentOwner>>, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
             .await?;
@@ -327,14 +330,14 @@ impl CloudComponentService {
             .base_component_service
             .get_latest_version(component_id, &owner)
             .await?;
-        Ok(result.map(|c| c.into()))
+        Ok(result)
     }
 
     pub async fn get(
         &self,
         component_id: &ComponentId,
         auth: &CloudAuthCtx,
-    ) -> Result<Vec<crate::model::Component>, CloudComponentError> {
+    ) -> Result<Vec<Component<CloudComponentOwner>>, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
             .await?;
@@ -343,7 +346,7 @@ impl CloudComponentService {
             .get(component_id, &owner)
             .await?;
 
-        Ok(result.into_iter().map(|c| c.into()).collect())
+        Ok(result)
     }
 
     pub async fn create_or_update_constraint(
@@ -403,13 +406,16 @@ impl CloudComponentService {
         auth: &CloudAuthCtx,
         component_id: &ComponentId,
         component_version: ComponentVersion,
-    ) -> Result<Vec<PluginInstallation>, PluginError> {
+    ) -> Result<(CloudPluginOwner, Vec<PluginInstallation>), PluginError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
-        self.base_component_service
+        let installations = self
+            .base_component_service
             .get_plugin_installations_for_component(&owner, component_id, component_version)
-            .await
+            .await?;
+
+        Ok((owner.into(), installations))
     }
 
     pub async fn create_plugin_installation_for_component(
@@ -417,7 +423,7 @@ impl CloudComponentService {
         auth: &CloudAuthCtx,
         component_id: &ComponentId,
         installation: PluginInstallationCreation,
-    ) -> Result<PluginInstallation, PluginError> {
+    ) -> Result<(CloudPluginOwner, PluginInstallation), PluginError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
@@ -433,9 +439,12 @@ impl CloudComponentService {
                 .scope
                 .valid_in_component(component_id, &owner.project_id)
             {
-                self.base_component_service
+                let installation = self
+                    .base_component_service
                     .create_plugin_installation_for_component(&owner, component_id, installation)
-                    .await
+                    .await?;
+
+                Ok((owner.into(), installation))
             } else {
                 Err(PluginError::InvalidScope {
                     plugin_name: installation.name.clone(),
@@ -532,5 +541,20 @@ impl CloudComponentService {
             account_id: namespace.account_id,
             project_id: namespace.project_id,
         })
+    }
+}
+
+#[async_trait]
+impl ComponentOwnershipQuery for CloudComponentService {
+    async fn get_project(
+        &self,
+        component_id: &ComponentId,
+        auth: &CloudAuthCtx,
+    ) -> Result<Option<ProjectId>, String> {
+        let component = self
+            .get_latest_version(component_id, auth)
+            .await
+            .map_err(|err| err.to_safe_string())?;
+        Ok(component.map(|component| component.owner.project_id.clone()))
     }
 }

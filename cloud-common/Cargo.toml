@@ -23,23 +23,20 @@ cloud-api-grpc = { path = "../cloud-api-grpc" }
 async-trait = { workspace = true }
 axum = { workspace = true }
 bincode = { workspace = true }
+darling = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true }
 headers = { workspace = true }
 http = { workspace = true }
 num-traits = { workspace = true }
 poem = { workspace = true, features = ["test"] }
+poem-derive = { workspace = true }
 poem-openapi = { workspace = true }
+poem-openapi-derive = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
-thiserror = { workspace = true }
-tokio = { workspace = true }
-tonic = { workspace = true }
-tracing = { workspace = true }
-url = { workspace = true }
-uuid = { workspace = true }
 sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "sqlite",
@@ -48,6 +45,12 @@ sqlx = { version = "0.8", features = [
     "migrate",
     "chrono",
 ] }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }

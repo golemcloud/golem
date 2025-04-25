@@ -1,18 +1,19 @@
 use crate::api::{ApiTags, ComponentError, Result};
-use crate::model::{Component, ComponentQuery};
+use crate::model::ComponentQuery;
 use crate::service::component::CloudComponentService;
 use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
-use futures_util::TryStreamExt;
+use cloud_common::model::CloudComponentOwner;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
-use golem_common::model::plugin::{
-    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
-};
+use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
 use golem_common::model::{
     ComponentFilePathWithPermissionsList, Empty, PluginInstallationId, ProjectId,
 };
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_http_api_request;
+use golem_component_service_base::api::dto;
+use golem_component_service_base::api::mapper::ApiMapper;
 use golem_component_service_base::model::{
     DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
@@ -40,12 +41,19 @@ pub struct UploadPayload {
 
 pub struct ComponentApi {
     component_service: Arc<CloudComponentService>,
+    api_mapper: Arc<dyn ApiMapper<CloudComponentOwner> + Send + Sync>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
 impl ComponentApi {
-    pub fn new(component_service: Arc<CloudComponentService>) -> Self {
-        Self { component_service }
+    pub fn new(
+        component_service: Arc<CloudComponentService>,
+        api_mapper: Arc<dyn ApiMapper<CloudComponentOwner> + Send + Sync>,
+    ) -> Self {
+        Self {
+            component_service,
+            api_mapper,
+        }
     }
 
     /// Get the metadata for all component versions
@@ -68,10 +76,32 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<Component>>> {
+    ) -> Result<Json<Vec<dto::Component>>> {
         let auth = CloudAuthCtx::new(token.secret());
-        let response = self.component_service.get(&component_id.0, &auth).await?;
-        Ok(Json(response))
+        let record = recorded_http_api_request!(
+            "get_component_metadata_all_versions",
+            component_id = component_id.0.to_string()
+        );
+        let response = self
+            .get_component_metadata_all_versions_internal(&component_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn get_component_metadata_all_versions_internal(
+        &self,
+        component_id: &ComponentId,
+        auth: CloudAuthCtx,
+    ) -> Result<Json<Vec<dto::Component>>> {
+        let components = self.component_service.get(component_id, &auth).await?;
+
+        let converted = stream::iter(components)
+            .then(|c| self.api_mapper.convert_component(c))
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        Ok(Json(converted))
     }
 
     /// Update a component
@@ -88,7 +118,7 @@ impl ComponentApi {
         /// is used.
         component_type: Query<Option<ComponentType>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "upload_component",
@@ -107,9 +137,10 @@ impl ComponentApi {
         wasm: Body,
         component_type: Option<ComponentType>,
         auth: CloudAuthCtx,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let data = wasm.into_vec().await?;
-        self.component_service
+        let response = self
+            .component_service
             .update(
                 &component_id,
                 component_type,
@@ -118,9 +149,9 @@ impl ComponentApi {
                 HashMap::new(),
                 &auth,
             )
-            .await
-            .map_err(|e| e.into())
-            .map(Json)
+            .await?;
+
+        Ok(Json(self.api_mapper.convert_component(response).await?))
     }
 
     /// Update a component
@@ -134,7 +165,7 @@ impl ComponentApi {
         component_id: Path<ComponentId>,
         payload: UpdatePayload,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "update_component",
@@ -152,7 +183,7 @@ impl ComponentApi {
         component_id: ComponentId,
         payload: UpdatePayload,
         auth: CloudAuthCtx,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let data = payload.component.into_vec().await?;
         let files_file = payload.files.map(|f| f.into_file());
 
@@ -165,7 +196,8 @@ impl ComponentApi {
                 },
             );
 
-        self.component_service
+        let response = self
+            .component_service
             .update(
                 &component_id,
                 payload.component_type,
@@ -178,9 +210,9 @@ impl ComponentApi {
                     .dynamic_linking,
                 &auth,
             )
-            .await
-            .map_err(|e| e.into())
-            .map(Json)
+            .await?;
+
+        Ok(Json(self.api_mapper.convert_component(response).await?))
     }
 
     /// Create a new component
@@ -192,7 +224,7 @@ impl ComponentApi {
         &self,
         payload: UploadPayload,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "create_component",
@@ -210,7 +242,7 @@ impl ComponentApi {
         &self,
         payload: UploadPayload,
         auth: CloudAuthCtx,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let data = payload.component.into_vec().await?;
         let component_name = payload.query.0.component_name;
         let project_id = payload.query.0.project_id;
@@ -226,7 +258,8 @@ impl ComponentApi {
                 },
             );
 
-        self.component_service
+        let response = self
+            .component_service
             .create(
                 project_id,
                 &component_name,
@@ -240,9 +273,9 @@ impl ComponentApi {
                     .dynamic_linking,
                 &auth,
             )
-            .await
-            .map_err(|e| e.into())
-            .map(Json)
+            .await?;
+
+        Ok(Json(self.api_mapper.convert_component(response).await?))
     }
 
     /// Download a component
@@ -292,7 +325,7 @@ impl ComponentApi {
         #[oai(name = "component_id")] component_id: Path<ComponentId>,
         #[oai(name = "version")] version: Path<String>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "get_component_metadata",
@@ -313,7 +346,7 @@ impl ComponentApi {
         component_id: ComponentId,
         version: String,
         auth: CloudAuthCtx,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let version_int = Self::parse_version_path_segment(&version)?;
 
         let versioned_component_id = VersionedComponentId {
@@ -321,11 +354,20 @@ impl ComponentApi {
             version: version_int,
         };
 
-        self.component_service
+        let response = self
+            .component_service
             .get_by_version(&versioned_component_id, &auth)
-            .await
-            .map_err(|e| e.into())
-            .and_then(Self::handle_not_found)
+            .await?;
+
+        match response {
+            Some(component) => {
+                let converted = self.api_mapper.convert_component(component).await?;
+                Ok(Json(converted))
+            }
+            None => Err(ComponentError::NotFound(Json(ErrorBody {
+                error: "Component not found".to_string(),
+            }))),
+        }
     }
 
     /// Get the latest version of a given component
@@ -340,7 +382,7 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Component>> {
+    ) -> Result<Json<dto::Component>> {
         let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "get_latest_component_metadata",
@@ -348,14 +390,32 @@ impl ComponentApi {
         );
 
         let response = self
-            .component_service
-            .get_latest_version(&component_id.0, &auth)
+            .get_latest_component_metadata_internal(component_id.0, auth)
             .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .and_then(Self::handle_not_found);
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_latest_component_metadata_internal(
+        &self,
+        component_id: ComponentId,
+        auth: CloudAuthCtx,
+    ) -> Result<Json<dto::Component>> {
+        let response = self
+            .component_service
+            .get_latest_version(&component_id, &auth)
+            .await?;
+
+        match response {
+            Some(component) => {
+                let converted = self.api_mapper.convert_component(component).await?;
+                Ok(Json(converted))
+            }
+            None => Err(ComponentError::NotFound(Json(ErrorBody {
+                error: "Component not found".to_string(),
+            }))),
+        }
     }
 
     /// Get all components
@@ -371,7 +431,7 @@ impl ComponentApi {
         #[oai(name = "component-name")]
         component_name: Query<Option<ComponentName>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<Component>>> {
+    ) -> Result<Json<Vec<dto::Component>>> {
         let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "get_components",
@@ -380,14 +440,30 @@ impl ComponentApi {
         );
 
         let response = self
-            .component_service
-            .find_by_project_and_name(project_id.0, component_name.0, &auth)
+            .get_components_internal(project_id.0, component_name.0, auth)
             .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(Json);
+            .await;
 
         record.result(response)
+    }
+
+    async fn get_components_internal(
+        &self,
+        project_id: Option<ProjectId>,
+        component_name: Option<ComponentName>,
+        auth: CloudAuthCtx,
+    ) -> Result<Json<Vec<dto::Component>>> {
+        let components = self
+            .component_service
+            .find_by_project_and_name(project_id, component_name, &auth)
+            .await?;
+
+        let converted = stream::iter(components)
+            .then(|c| self.api_mapper.convert_component(c))
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        Ok(Json(converted))
     }
 
     /// Gets the list of plugins installed for the given component version
@@ -401,7 +477,7 @@ impl ComponentApi {
         component_id: Path<ComponentId>,
         version: Path<String>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<PluginInstallation>>> {
+    ) -> Result<Json<Vec<dto::PluginInstallation>>> {
         let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "get_installed_plugins",
@@ -422,14 +498,20 @@ impl ComponentApi {
         component_id: ComponentId,
         version: String,
         auth: CloudAuthCtx,
-    ) -> Result<Json<Vec<PluginInstallation>>> {
+    ) -> Result<Json<Vec<dto::PluginInstallation>>> {
         let version_int = Self::parse_version_path_segment(&version)?;
 
-        self.component_service
+        let (owner, installations) = self
+            .component_service
             .get_plugin_installations_for_component(&auth, &component_id, version_int)
-            .await
-            .map_err(|e| e.into())
-            .map(Json)
+            .await?;
+
+        let converted = stream::iter(installations)
+            .then(|pi| self.api_mapper.convert_plugin_installation(&owner, pi))
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        Ok(Json(converted))
     }
 
     /// Installs a new plugin for this component
@@ -443,7 +525,7 @@ impl ComponentApi {
         component_id: Path<ComponentId>,
         plugin: Json<PluginInstallationCreation>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<PluginInstallation>> {
+    ) -> Result<Json<dto::PluginInstallation>> {
         let auth = CloudAuthCtx::new(token.secret());
 
         let record = recorded_http_api_request!(
@@ -454,14 +536,29 @@ impl ComponentApi {
         );
 
         let response = self
-            .component_service
-            .create_plugin_installation_for_component(&auth, &component_id.0, plugin.0)
+            .install_plugin_internal(component_id.0, plugin.0, auth)
             .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(Json);
+            .await;
 
         record.result(response)
+    }
+
+    async fn install_plugin_internal(
+        &self,
+        component_id: ComponentId,
+        plugin: PluginInstallationCreation,
+        auth: CloudAuthCtx,
+    ) -> Result<Json<dto::PluginInstallation>> {
+        let (owner, installation) = self
+            .component_service
+            .create_plugin_installation_for_component(&auth, &component_id, plugin)
+            .await?;
+
+        Ok(Json(
+            self.api_mapper
+                .convert_plugin_installation(&owner, installation)
+                .await?,
+        ))
     }
 
     /// Updates the priority or parameters of a plugin installation
@@ -579,15 +676,6 @@ impl ComponentApi {
                     std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
                 })))
             })
-    }
-
-    fn handle_not_found(response: Option<Component>) -> Result<Json<Component>> {
-        match response {
-            Some(component) => Ok(Json(component)),
-            None => Err(ComponentError::NotFound(Json(ErrorBody {
-                error: "Component not found".to_string(),
-            }))),
-        }
     }
 
     fn parse_version_path_segment(version: &str) -> Result<u64> {
