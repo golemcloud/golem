@@ -1710,13 +1710,13 @@ mod tests {
 
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(result.get_val().unwrap(), 3u64.into_value_and_type());
+        assert_eq!(result.get_val().unwrap(), 3i32.into_value_and_type());
     }
 
     #[test]
     async fn test_interpreter_variable_scope_1() {
         let rib_expr = r#"
-               let x: u64 = 1;
+               let x = 1;
                let z = {foo : x};
                let x = x + 2u64;
                { bar: x, baz: z }

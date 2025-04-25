@@ -353,24 +353,13 @@ fn handle_math_op(
         && !rhs.inferred_type().un_resolved()
         && !lhs.inferred_type().un_resolved()
     {
-        let right_number_type = get_number(rhs)?;
-        let left_number_type = get_number(lhs)?;
-
-        if right_number_type == left_number_type {
-            *result_type = result_type.merge(InferredType::from(&right_number_type));
-        } else {
-            return Err(TypeMismatchError {
-                expr_with_wrong_type: lhs.clone(),
-                parent_expr: None,
-                expected_type: ExpectedType::Hint(TypeHint::Number),
-                actual_type: ActualType::Inferred(InferredType::from(&right_number_type)),
-                field_path: Default::default(),
-                additional_error_detail: vec![
-                    "type mismatch in mathematical expression: operands have incompatible types. "
-                        .to_string(),
-                ],
-            });
-        }
+        // optional steps, just to make sure we are not propagating too much errors to the end
+        let _ = get_number(rhs)?;
+        let _ = get_number(lhs)?;
+        
+        *result_type = result_type.merge(lhs.inferred_type()).merge(
+            InferredType::from(rhs.inferred_type()),
+        );
     }
 
     Ok(())

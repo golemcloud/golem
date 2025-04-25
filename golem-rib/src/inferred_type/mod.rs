@@ -59,7 +59,7 @@ impl InferredType {
                     Ok(())
                 }
                 TypeInternal::S32 => {
-                    found.push(InferredNumber::U16);
+                    found.push(InferredNumber::S32);
                     Ok(())
                 }
                 TypeInternal::U32 => {
