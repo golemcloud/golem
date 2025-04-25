@@ -38,7 +38,7 @@ pub fn bind_type_annotations(expr: &mut Expr) {
                 let type_annotation = expr.type_annotation();
 
                 if let Some(type_annotation) = type_annotation {
-                    let mut inferred_type = InferredType::from(&*type_annotation);
+                    let mut inferred_type = InferredType::from(type_annotation);
                     inferred_type.declared_at(source_span);
 
                     expr.with_inferred_type_mut(inferred_type);

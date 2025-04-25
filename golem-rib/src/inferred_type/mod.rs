@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use type_internal::*;
+
 pub(crate) use flatten::*;
-pub(crate) use type_internal::*;
 pub(crate) use type_origin::*;
 
 mod flatten;

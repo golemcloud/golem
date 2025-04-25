@@ -359,7 +359,7 @@ fn handle_math_op(
 
         *result_type = result_type
             .merge(lhs.inferred_type())
-            .merge(InferredType::from(rhs.inferred_type()));
+            .merge(rhs.inferred_type());
     }
 
     Ok(())
