@@ -734,9 +734,7 @@ pub fn unify_with_required(
                 if inferred_type_left == inferred_type_right {
                     Ok(inferred_type.clone())
                 } else if inferred_type.is_number() && other.is_number() {
-
-                    let eliminated =
-                        InferredType::eliminate_default(vec![inferred_type, other]);
+                    let eliminated = InferredType::eliminate_default(vec![inferred_type, other]);
 
                     return if eliminated.len() == 1 {
                         Ok(eliminated[0].clone())
@@ -745,7 +743,7 @@ pub fn unify_with_required(
                             "conflicting types inferred. {}, {}",
                             inferred_type_printable, other_printable
                         ))
-                    }
+                    };
                 } else {
                     Err(format!(
                         "conflicting types inferred. {}, {}",
@@ -884,7 +882,8 @@ mod internal {
                 display_multiple_types(possibilities)
             )),
             TypeInternal::AllOf(possibilities) => {
-                let eliminate_defaults = InferredType::eliminate_default(possibilities.iter().collect());
+                let eliminate_defaults =
+                    InferredType::eliminate_default(possibilities.iter().collect());
 
                 if eliminate_defaults.len() == 1 {
                     Ok(Unified(eliminate_defaults[0].clone()))
@@ -894,7 +893,7 @@ mod internal {
                         display_multiple_types(possibilities)
                     ))
                 }
-            },
+            }
 
             TypeInternal::Unknown => Err("cannot determine the type".to_string()),
             TypeInternal::Sequence(inferred_types) => {

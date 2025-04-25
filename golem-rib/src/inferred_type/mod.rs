@@ -202,7 +202,8 @@ impl InferredType {
     }
 
     pub fn declared_at(&mut self, source_span: SourceSpan) {
-        self.origin.add_origin(TypeOrigin::Declared(source_span.clone()))
+        self.origin
+            .add_origin(TypeOrigin::Declared(source_span.clone()))
     }
 
     pub fn set_as_default(&mut self) {
@@ -279,7 +280,10 @@ impl InferredType {
     }
 
     pub fn eliminate_default(inferred_types: Vec<&InferredType>) -> Vec<&InferredType> {
-        inferred_types.into_iter().filter(|&t| !t.origin.is_default()).collect::<Vec<_>>()
+        inferred_types
+            .into_iter()
+            .filter(|&t| !t.origin.is_default())
+            .collect::<Vec<_>>()
     }
 
     pub fn record(fields: Vec<(String, InferredType)>) -> InferredType {
