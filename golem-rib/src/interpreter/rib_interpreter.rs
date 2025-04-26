@@ -1779,7 +1779,7 @@ mod tests {
     #[test]
     async fn test_interpreter_variable_scope_3() {
         let rib_expr = r#"
-               let x: u64 = 1;
+               let x = 1;
                let x = x;
 
                let result1 = match some(x + 1:u64) {
@@ -2406,10 +2406,10 @@ mod tests {
         let mut interpreter = Interpreter::default();
 
         let expr = r#"
-           let x: u64 = 1;
+           let x = 1;
 
            match x {
-                1 => ok(1: u64),
+                1 => ok(1),
                 2 => err("none")
            }
         "#;
@@ -2419,8 +2419,8 @@ mod tests {
         let rib_result = interpreter.run(compiled.byte_code).await.unwrap();
 
         let expected = ValueAndType::new(
-            Value::Result(Ok(Some(Box::new(Value::U64(1))))),
-            result(u64(), str()),
+            Value::Result(Ok(Some(Box::new(Value::S32(1))))),
+            result(s32(), str()),
         );
 
         assert_eq!(rib_result.get_val().unwrap(), expected);
@@ -2431,7 +2431,7 @@ mod tests {
         let mut interpreter = Interpreter::default();
 
         let expr = r#"
-           let x = some({foo: 1:u64});
+           let x = some({foo: 1});
 
            match x {
                some(x) => ok(x.foo),
@@ -2444,8 +2444,8 @@ mod tests {
         let rib_result = interpreter.run(compiled.byte_code).await.unwrap();
 
         let expected = ValueAndType::new(
-            Value::Result(Ok(Some(Box::new(Value::U64(1))))),
-            result(u64(), str()),
+            Value::Result(Ok(Some(Box::new(Value::S32(1))))),
+            result(s32(), str()),
         );
 
         assert_eq!(rib_result.get_val().unwrap(), expected);
@@ -3180,7 +3180,7 @@ mod tests {
     #[test]
     async fn test_interpreter_range_returns_5() {
         let expr = r#"
-              let y = 1:u64 + 10: u64;
+              let y = 1 + 10;
               1..y
               "#;
 
@@ -3192,10 +3192,10 @@ mod tests {
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         let expected = ValueAndType::new(
-            Value::Record(vec![Value::U64(1), Value::U64(11), Value::Bool(false)]),
+            Value::Record(vec![Value::U64(1), Value::S32(11), Value::Bool(false)]),
             record(vec![
                 field("from", option(u64())),
-                field("to", option(u64())),
+                field("to", option(s32())),
                 field("inclusive", bool()),
             ]),
         );
@@ -3269,7 +3269,7 @@ mod tests {
         // infinite computation will respond with an error - than a stack overflow
         // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
         let expr = r#"
-              let range = 1:u64..;
+              let range = 1..;
               for i in range {
                 yield i;
               }
@@ -3290,8 +3290,8 @@ mod tests {
         // infinite computation will respond with an error - than a stack overflow
         // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
         let expr = r#"
-                let initial: u8 = 1;
-                let final: u8 = 5;
+                let initial = 1;
+                let final = 5;
                 let x = initial..final;
 
                 reduce z, a in x from 0u8 {
@@ -4330,8 +4330,8 @@ mod tests {
     async fn test_interpreter_durable_worker_with_resource_18() {
         let expr = r#"
 
-            let initial = 1: u64;
-            let final = 5: u64;
+            let initial = 1;
+            let final = 5;
             let range = initial..final;
             let worker = instance("my-worker");
             let cart = worker.cart[golem:it]("bar");
@@ -4386,8 +4386,8 @@ mod tests {
     async fn test_interpreter_durable_worker_with_resource_19() {
         let expr = r#"
 
-            let initial = 1: u64;
-            let final = 5: u64;
+            let initial = 1;
+            let final = 5;
             let range = initial..final;
 
             for i in range {
