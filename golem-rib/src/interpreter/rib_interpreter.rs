@@ -3532,6 +3532,44 @@ mod tests {
     }
 
     #[test]
+    async fn test_interpreter_durable_worker_1_1() {
+        let expr = r#"
+                let x = 1;
+                let y = 2;
+                instance("my-worker").foo-number(x, y)
+            "#;
+        let expr = Expr::from_text(expr).unwrap();
+        let component_metadata = test_utils::get_metadata();
+
+        let compiled = compiler::compile(expr, &component_metadata).unwrap();
+
+        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+
+        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+        let analysed_type = record(vec![
+            field("worker-name", option(str())),
+            field("function-name", str()),
+            field("args0", u64()),
+            field("args1", s32()),
+        ]);
+
+        let expected_val = get_value_and_type(
+            &analysed_type,
+            r#"
+              {
+                 worker-name: some("my-worker"),
+                 function-name: "amazon:shopping-cart/api1.{foo-number}",
+                 args0: 1,
+                 args1: 2
+              }
+            "#,
+        );
+
+        assert_eq!(result.get_val().unwrap(), expected_val);
+    }
+
+    #[test]
     async fn test_interpreter_durable_worker_2() {
         let expr = r#"
                 let result = instance("my-worker").foo("bar");
@@ -4446,8 +4484,8 @@ mod tests {
         };
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
-            case, f32, field, handle, list, option, r#enum, record, result, str, tuple, u32, u64,
-            unit_case, variant,
+            case, f32, field, handle, list, option, r#enum, record, result, s32, str, tuple, u32,
+            u64, unit_case, variant,
         };
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
@@ -4584,6 +4622,24 @@ mod tests {
                 }],
             };
 
+            let analysed_function_in_api1_number = AnalysedFunction {
+                name: "foo-number".to_string(),
+                parameters: vec![
+                    AnalysedFunctionParameter {
+                        name: "arg1".to_string(),
+                        typ: u64(),
+                    },
+                    AnalysedFunctionParameter {
+                        name: "arg2".to_string(),
+                        typ: s32(),
+                    },
+                ],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: s32(),
+                }],
+            };
+
             // Exist in both amazon:shopping-cart/api1 and amazon:shopping-cart/api2
             let analysed_function_in_api1_and_api2 = AnalysedFunction {
                 name: "bar".to_string(),
@@ -4627,6 +4683,7 @@ mod tests {
                 name: "amazon:shopping-cart/api1".to_string(),
                 functions: vec![
                     analysed_function_in_api1,
+                    analysed_function_in_api1_number,
                     analysed_function_in_api1_and_api2.clone(),
                     analysed_function_in_wasi_and_api1.clone(),
                 ],
