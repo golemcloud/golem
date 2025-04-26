@@ -202,6 +202,8 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
+                lhs.add_infer_type_mut(rhs.inferred_type());
+                rhs.add_infer_type_mut(lhs.inferred_type());
                 lhs.add_infer_type_mut(inferred_type.clone());
                 rhs.add_infer_type_mut(inferred_type.clone());
             }
@@ -212,6 +214,8 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
+                lhs.add_infer_type_mut(rhs.inferred_type());
+                rhs.add_infer_type_mut(lhs.inferred_type());
                 lhs.add_infer_type_mut(inferred_type.clone());
                 rhs.add_infer_type_mut(inferred_type.clone());
             }
@@ -222,6 +226,8 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
+                lhs.add_infer_type_mut(rhs.inferred_type());
+                rhs.add_infer_type_mut(lhs.inferred_type());
                 lhs.add_infer_type_mut(inferred_type.clone());
                 rhs.add_infer_type_mut(inferred_type.clone());
             }
@@ -232,6 +238,8 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
+                lhs.add_infer_type_mut(rhs.inferred_type());
+                rhs.add_infer_type_mut(lhs.inferred_type());
                 lhs.add_infer_type_mut(inferred_type.clone());
                 rhs.add_infer_type_mut(inferred_type.clone());
             }

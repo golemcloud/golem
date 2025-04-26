@@ -143,7 +143,9 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                handle_math_op(lhs, rhs, inferred_type).map_err(|e| e.with_parent_expr(expr))?;
+                *inferred_type = inferred_type
+                    .merge(lhs.inferred_type())
+                    .merge(rhs.inferred_type());
             }
 
             Expr::Minus {
@@ -152,7 +154,9 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                handle_math_op(lhs, rhs, inferred_type).map_err(|e| e.with_parent_expr(expr))?;
+                *inferred_type = inferred_type
+                    .merge(lhs.inferred_type())
+                    .merge(rhs.inferred_type());
             }
 
             Expr::Multiply {
@@ -161,7 +165,9 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                handle_math_op(lhs, rhs, inferred_type).map_err(|e| e.with_parent_expr(expr))?;
+                *inferred_type = inferred_type
+                    .merge(lhs.inferred_type())
+                    .merge(rhs.inferred_type());
             }
 
             Expr::Divide {
@@ -170,7 +176,9 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
                 inferred_type,
                 ..
             } => {
-                handle_math_op(lhs, rhs, inferred_type).map_err(|e| e.with_parent_expr(expr))?;
+                *inferred_type = inferred_type
+                    .merge(lhs.inferred_type())
+                    .merge(rhs.inferred_type());
             }
 
             Expr::Let { .. } => {}
@@ -340,42 +348,6 @@ fn handle_multiple(expr_block: &[Expr], inferred_type: &mut InferredType) {
     if let Some(new_inferred_type) = new_inferred_type {
         *inferred_type = inferred_type.merge(new_inferred_type);
     }
-}
-
-fn handle_math_op(
-    lhs: &Expr,
-    rhs: &Expr,
-    result_type: &mut InferredType,
-) -> Result<(), TypeMismatchError> {
-    // If final result  is not resolved, while both lhs and rhs are resolved
-    // then we expect the
-    if result_type.is_unknown()
-        && !rhs.inferred_type().is_unknown()
-        && !lhs.inferred_type().is_unknown()
-    {
-        // optional steps, just to make sure we are not propagating too much errors to the end
-        let _ = get_number(rhs)?;
-        let _ = get_number(lhs)?;
-
-        *result_type = result_type
-            .merge(lhs.inferred_type())
-            .merge(rhs.inferred_type());
-    }
-
-    Ok(())
-}
-
-fn get_number(number_expr: &Expr) -> Result<InferredNumber, TypeMismatchError> {
-    let rhs_type = number_expr.inferred_type();
-
-    rhs_type.as_number().map_err(|_| TypeMismatchError {
-        expr_with_wrong_type: number_expr.clone(),
-        parent_expr: None,
-        expected_type: ExpectedType::Hint(TypeHint::Number),
-        actual_type: ActualType::Inferred(rhs_type),
-        field_path: Default::default(),
-        additional_error_detail: vec![],
-    })
 }
 
 fn handle_sequence(current_expr_list: &[Expr], current_inferred_type: &mut InferredType) {
