@@ -1743,7 +1743,7 @@ mod tests {
     #[test]
     async fn test_interpreter_variable_scope_2() {
         let rib_expr = r#"
-               let x: u64 = 1;
+               let x = 1;
                let x = x;
 
                let result1 = match some(x + 1:u64) {

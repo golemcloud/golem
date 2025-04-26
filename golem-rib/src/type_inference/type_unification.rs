@@ -25,7 +25,6 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                dbg!(inferred_type.clone());
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
