@@ -151,6 +151,66 @@ mod tests {
     }
 
     #[test]
+    fn test_inference_with_default_number_type_0() {
+        let rib_expr = r#"
+            let res1 = 1;
+            let res2 = 2;
+
+            res1 + res2;
+            res1 - res2;
+            res1 / res2;
+            res1 * res2
+
+         "#;
+
+        let mut expr = Expr::from_text(rib_expr).unwrap();
+
+        assert!(expr
+            .infer_types(&FunctionTypeRegistry::empty(), &vec![])
+            .is_ok());
+    }
+
+    #[test]
+    fn test_inference_with_default_number_type_1() {
+        let rib_expr = r#"
+            let res1 = 1;
+            let res2 = 2;
+
+            let x: u64 = if res1 > res2 then res1 else res2;
+            x
+         "#;
+
+        let mut expr = Expr::from_text(rib_expr).unwrap();
+
+        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+            .unwrap();
+
+        assert!(expr
+            .infer_types(&FunctionTypeRegistry::empty(), &vec![])
+            .is_ok());
+    }
+
+    #[test]
+    fn test_inference_with_default_number_type_2() {
+        let rib_expr = r#"
+            let res1 = 1;
+            let res2 = 2;
+
+            let x: u64 = match res1 { 1 => res1, 2 => res2 };
+            x
+         "#;
+
+        let mut expr = Expr::from_text(rib_expr).unwrap();
+
+        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+            .unwrap();
+
+        assert!(expr
+            .infer_types(&FunctionTypeRegistry::empty(), &vec![])
+            .is_ok());
+    }
+
+    #[test]
     fn test_inference_inline_type_annotation_0() {
         let mut old = Expr::from_text(r#"1u32"#).unwrap();
 
@@ -166,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn test_inference_inline_type_annotation_1x() {
+    fn test_inference_inline_type_annotation_1() {
         let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz[0] + 1u32"#).unwrap();
 
         let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);

@@ -17,8 +17,7 @@ use crate::type_inference::type_hint::TypeHint;
 use crate::type_refinement::precise_types::{ListType, RecordType};
 use crate::type_refinement::TypeRefinement;
 use crate::{
-    ActualType, ExpectedType, GetTypeHint, InferredNumber, InferredType, MatchArm, Path, Range,
-    TypeMismatchError,
+    ActualType, ExpectedType, GetTypeHint, InferredType, MatchArm, Path, Range, TypeMismatchError,
 };
 use crate::{CustomError, Expr, ExprVisitor};
 

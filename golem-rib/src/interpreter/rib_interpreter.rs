@@ -1782,8 +1782,8 @@ mod tests {
                let x = 1;
                let x = x;
 
-               let result1 = match some(x + 1:u64) {
-                  some(x) => match some(x + 1:u64) {
+               let result1 = match some(x + 1) {
+                  some(x) => match some(x + 1) {
                      some(x) => x,
                      none => x
                   },
@@ -1794,7 +1794,7 @@ mod tests {
 
                let result2 = match z {
                   some(x) => x,
-                  none => match some(x + 1:u64) {
+                  none => match some(x + 1) {
                      some(x) => x,
                      none => x
                   }
