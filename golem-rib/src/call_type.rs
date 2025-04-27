@@ -15,7 +15,6 @@
 use crate::instance_type::FullyQualifiedResourceConstructor;
 use crate::{DynamicParsedFunctionName, Expr};
 use std::fmt::Display;
-use std::ops::Deref;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum CallType {
@@ -40,14 +39,10 @@ pub enum InstanceCreationType {
 }
 
 impl InstanceCreationType {
-    pub fn worker_name(&self) -> Option<Expr> {
+    pub fn worker_name(&self) -> Option<&Expr> {
         match self {
-            InstanceCreationType::Worker { worker_name, .. } => {
-                worker_name.clone().map(|w| w.deref().clone())
-            }
-            InstanceCreationType::Resource { worker_name, .. } => {
-                worker_name.clone().map(|w| w.deref().clone())
-            }
+            InstanceCreationType::Worker { worker_name, .. } => worker_name.as_deref(),
+            InstanceCreationType::Resource { worker_name, .. } => worker_name.as_deref(),
         }
     }
 }

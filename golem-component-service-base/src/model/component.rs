@@ -30,7 +30,7 @@ use std::fmt::Debug;
 use std::time::SystemTime;
 use tempfile::NamedTempFile;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Component<Owner: ComponentOwner> {
     pub owner: Owner,
     pub versioned_component_id: VersionedComponentId,

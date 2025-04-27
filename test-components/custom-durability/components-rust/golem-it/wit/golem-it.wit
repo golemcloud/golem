@@ -4,6 +4,11 @@ package golem:it;
 
 interface golem-it-api {
   callback: func(payload: string) -> string;
+
+  resource lazy-pollable-test {
+    constructor();
+    test: func(n: u32) -> string;
+  }
 }
 
 world golem-it {

@@ -517,7 +517,7 @@ impl TestDependencies for EnvBasedTestDependencies {
         &self.config.golem_test_components
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
         self.component_service.clone()
     }
 

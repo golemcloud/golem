@@ -17,6 +17,7 @@ mod debug_render;
 
 use crate::config::TestDependencies;
 use crate::dsl::debug_render::debug_render_oplog_entry;
+use crate::model::PluginDefinitionCreation;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -41,9 +42,7 @@ use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedIn
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
 };
-use golem_common::model::plugin::{
-    DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginWasmFileKey,
-};
+use golem_common::model::plugin::PluginWasmFileKey;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
@@ -422,10 +421,10 @@ pub trait TestDsl {
         path: &str,
     ) -> crate::Result<Bytes>;
 
-    async fn create_plugin(
-        &self,
-        definition: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>,
-    ) -> crate::Result<()>;
+    async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()>;
+
+    async fn delete_plugin(&self, name: &str, version: &str) -> crate::Result<()>;
+
     async fn install_plugin_to_component(
         &self,
         component_id: &ComponentId,
@@ -1406,11 +1405,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .await
     }
 
-    async fn create_plugin(
-        &self,
-        definition: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>,
-    ) -> crate::Result<()> {
+    async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()> {
         self.component_service().create_plugin(definition).await
+    }
+
+    async fn delete_plugin(&self, name: &str, version: &str) -> crate::Result<()> {
+        self.component_service().delete_plugin(name, version).await
     }
 
     async fn install_plugin_to_component(
@@ -2022,10 +2022,10 @@ pub trait TestDslUnsafe {
         path: &str,
     ) -> Bytes;
 
-    async fn create_plugin(
-        &self,
-        definition: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>,
-    );
+    async fn create_plugin(&self, definition: PluginDefinitionCreation);
+
+    async fn delete_plugin(&self, name: &str, version: &str);
+
     async fn install_plugin_to_component(
         &self,
         component_id: &ComponentId,
@@ -2377,13 +2377,16 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to get file contents")
     }
 
-    async fn create_plugin(
-        &self,
-        definition: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>,
-    ) {
+    async fn create_plugin(&self, definition: PluginDefinitionCreation) {
         <T as TestDsl>::create_plugin(self, definition)
             .await
             .expect("Failed to create plugin")
+    }
+
+    async fn delete_plugin(&self, name: &str, version: &str) {
+        <T as TestDsl>::delete_plugin(self, name, version)
+            .await
+            .expect("Failed to delete plugin")
     }
 
     async fn install_plugin_to_component(

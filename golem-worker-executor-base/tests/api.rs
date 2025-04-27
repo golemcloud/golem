@@ -3382,8 +3382,8 @@ async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
               deps: &WorkerExecutorTestDependencies,
               tracing: &Tracing| async {
             scheduled_invocation_test(
-                "scheduled_invocation_server",
-                "scheduled_invocation_client",
+                "it_scheduled_invocation_server",
+                "it_scheduled_invocation_client",
                 last_unique_id,
                 deps,
                 tracing,
@@ -3402,8 +3402,8 @@ async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
               deps: &WorkerExecutorTestDependencies,
               tracing: &Tracing| async {
             scheduled_invocation_test(
-                "scheduled_invocation_stubless_server",
-                "scheduled_invocation_stubless_client",
+                "it_scheduled_invocation_server_stubless",
+                "it_scheduled_invocation_client_stubless",
                 last_unique_id,
                 deps,
                 tracing,

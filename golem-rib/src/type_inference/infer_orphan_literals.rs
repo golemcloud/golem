@@ -20,7 +20,7 @@ pub fn infer_orphan_literals(expr: &mut Expr) -> Result<(), RibTypeError> {
                 pull_types_up_for_standalone_expr(expr)?
             }
 
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
 
         expr => pull_types_up_for_standalone_expr(expr)?,
@@ -32,50 +32,50 @@ pub fn infer_orphan_literals(expr: &mut Expr) -> Result<(), RibTypeError> {
 fn pull_types_up_for_standalone_expr(expr: &mut Expr) -> Result<(), RibTypeError> {
     match expr {
         Expr::Sequence { .. } => {
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
         Expr::Range { .. } => {
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
         Expr::Record { .. } => {
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
         Expr::Tuple { .. } => {
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
         Expr::Plus { .. } => {
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
         Expr::Multiply { .. } => {
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
         Expr::Minus { .. } => {
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
         Expr::Divide { .. } => {
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
         Expr::Cond { .. } => {
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
         Expr::PatternMatch { match_arms, .. } => {
             for arm in match_arms {
-                *arm.arm_resolution_expr = arm.arm_resolution_expr.pull_types_up()?;
+                arm.arm_resolution_expr.pull_types_up()?;
             }
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
         Expr::Option { .. } => {
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
         Expr::Result { .. } => {
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
         Expr::ListReduce { .. } => {
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
 
         Expr::ListComprehension { .. } => {
-            *expr = expr.pull_types_up()?;
+            expr.pull_types_up()?;
         }
         Expr::Length { .. } => {}
         Expr::Unwrap { .. } => {}

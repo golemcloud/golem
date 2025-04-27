@@ -7,11 +7,16 @@ import public "golem/component/v1/component_error.proto";
 import public "golem/component/plugin_definition.proto";
 
 service PluginService {
+  // Will only return non-deleted plugins
   rpc ListPlugins (ListPluginsRequest) returns (ListPluginsResponse);
+  // Will only return non-deleted plugins
   rpc ListPluginVersions (ListPluginVersionsRequest) returns (ListPluginsResponse);
   rpc CreatePlugin (CreatePluginRequest) returns (CreatePluginResponse);
+  // Will only return non-deleted plugins
   rpc GetPlugin (GetPluginRequest) returns (GetPluginResponse);
   rpc DeletePlugin (DeletePluginRequest) returns (DeletePluginResponse);
+ // Will only return both deleted and non-deleted plugins
+  rpc GetPluginById (GetPluginByIdRequest) returns (GetPluginByIdResponse);
 }
 
 message ListPluginsRequest {
@@ -34,7 +39,7 @@ message ListPluginsSuccessResponse {
 }
 
 message CreatePluginRequest {
-  golem.component.PluginDefinition plugin = 1;
+  golem.component.PluginDefinitionCreation plugin = 1;
 }
 
 message CreatePluginResponse {
@@ -50,6 +55,17 @@ message GetPluginRequest {
 }
 
 message GetPluginResponse {
+  oneof result {
+    GetPluginSuccessResponse success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
+message GetPluginByIdRequest {
+  golem.component.PluginId id = 1;
+}
+
+message GetPluginByIdResponse {
   oneof result {
     GetPluginSuccessResponse success = 1;
     golem.component.v1.ComponentError error = 2;

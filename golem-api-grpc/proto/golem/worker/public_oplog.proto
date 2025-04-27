@@ -67,6 +67,7 @@ message PluginInstallationDescription {
   string plugin_name = 2;
   string plugin_version = 3;
   map<string, string> parameters = 4;
+  bool registered = 5;
 }
 
 message CreateParameters {

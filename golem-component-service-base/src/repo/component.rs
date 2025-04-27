@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::{Component, ComponentConstraints};
+use crate::service::component::{ComponentByNameAndVersion, VersionType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use conditional_trait_gen::{trait_gen, when};
@@ -32,7 +33,7 @@ use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
 };
 use golem_service_base::repo::RepoError;
-use sqlx::Row;
+use sqlx::{Postgres, QueryBuilder, Row, Sqlite};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::result::Result;
@@ -303,6 +304,12 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug + Send + Sync {
         name: &str,
     ) -> Result<Vec<ComponentRecord<Owner>>, RepoError>;
 
+    async fn get_by_names(
+        &self,
+        namespace: &str,
+        names: &[ComponentByNameAndVersion],
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError>;
+
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError>;
 
     async fn get_namespace(&self, component_id: &Uuid) -> Result<Option<String>, RepoError>;
@@ -485,6 +492,17 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         name: &str,
     ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
         self.repo.get_by_name(namespace, name).await
+    }
+
+    async fn get_by_names(
+        &self,
+        namespace: &str,
+        names: &[ComponentByNameAndVersion],
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        self.repo
+            .get_by_names(namespace, names)
+            .instrument(info_span!("get_by_names", namespace = %namespace))
+            .await
     }
 
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError> {
@@ -1407,6 +1425,218 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
         self.add_installed_plugins(self.add_files(components).await?)
             .await
+    }
+
+    #[when(golem_service_base::db::postgres::PostgresPool -> get_by_names)]
+    async fn get_by_names_postgres(
+        &self,
+        namespace: &str,
+        components: &[ComponentByNameAndVersion],
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+            r#"
+        WITH input_components(name, version, is_latest) AS (
+        "#,
+        );
+
+        // Build VALUES (...) clause safely
+        query_builder.push_values(components, |mut b, comp| {
+            let name = comp.component_name.to_string();
+            match &comp.version_type {
+                VersionType::Latest => {
+                    b.push_bind(name)
+                        .push_bind(Option::<i64>::None)
+                        .push_bind(true);
+                }
+                VersionType::Exact(ver) => {
+                    b.push_bind(name)
+                        .push_bind(Some(*ver as i64))
+                        .push_bind(false);
+                }
+            }
+        });
+
+        query_builder.push(
+            r#")
+        ,
+        exact_matches AS (
+            SELECT
+                c.namespace,
+                c.name,
+                c.component_id,
+                cv.version,
+                cv.size,
+                cv.metadata,
+                cv.created_at::timestamptz,
+                cv.component_type,
+                cv.available,
+                cv.object_store_key,
+                cv.transformed_object_store_key,
+                cv.root_package_name,
+                cv.root_package_version
+            FROM components c
+            JOIN component_versions cv ON c.component_id = cv.component_id
+            JOIN input_components ic ON ic.name = c.name
+            WHERE ic.is_latest = FALSE
+              AND ic.version = cv.version
+              AND c.namespace = "#,
+        );
+        query_builder.push_bind(namespace);
+        query_builder.push(
+            r#"
+        ),
+        latest_matches AS (
+            SELECT DISTINCT ON (c.name)
+                c.namespace,
+                c.name,
+                c.component_id,
+                cv.version,
+                cv.size,
+                cv.metadata,
+                cv.created_at::timestamptz,
+                cv.component_type,
+                cv.available,
+                cv.object_store_key,
+                cv.transformed_object_store_key,
+                cv.root_package_name,
+                cv.root_package_version
+            FROM components c
+            JOIN component_versions cv ON c.component_id = cv.component_id
+            JOIN input_components ic ON ic.name = c.name
+            WHERE ic.is_latest = TRUE
+              AND cv.available = TRUE
+              AND c.namespace = "#,
+        );
+        query_builder.push_bind(namespace);
+        query_builder.push(
+            r#"
+            ORDER BY c.name, cv.version DESC
+        )
+        SELECT * FROM exact_matches
+        UNION
+        SELECT * FROM latest_matches
+        ORDER BY name, version
+        "#,
+        );
+
+        let query = query_builder.build_query_as::<ComponentRecord<Owner>>();
+
+        let components = self
+            .db_pool
+            .with("component", "get_by_names")
+            .fetch_all(query)
+            .await?;
+
+        let components = self
+            .add_installed_plugins(self.add_files(components).await?)
+            .await?;
+
+        Ok(components)
+    }
+
+    #[when(golem_service_base::db::sqlite::SqlitePool -> get_by_names)]
+    async fn get_by_names_sqlite(
+        &self,
+        namespace: &str,
+        components: &[ComponentByNameAndVersion],
+    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        let mut query_builder: QueryBuilder<Sqlite> = QueryBuilder::new(
+            r#"
+        WITH input_components(name, version, is_latest) AS (
+        "#,
+        );
+
+        // Build the VALUES clause
+        query_builder.push_values(components, |mut b, item| {
+            b.push_bind(item.component_name.0.as_str());
+            match &item.version_type {
+                VersionType::Exact(version) => {
+                    b.push_bind(Some(*version as i64));
+                    b.push_bind(0); // is_latest = false
+                }
+                VersionType::Latest => {
+                    b.push_bind::<Option<&str>>(None);
+                    b.push_bind(1); // is_latest = true
+                }
+            }
+        });
+
+        query_builder.push(
+            r#"
+        ),
+        exact_matches AS (
+            SELECT
+                c.namespace,
+                c.name,
+                c.component_id,
+                cv.version,
+                cv.size,
+                cv.metadata,
+                cv.created_at,
+                cv.component_type,
+                cv.available,
+                cv.object_store_key,
+                cv.transformed_object_store_key,
+                cv.root_package_name,
+                cv.root_package_version
+            FROM components c
+            JOIN component_versions cv ON c.component_id = cv.component_id
+            JOIN input_components ic ON ic.name = c.name
+            WHERE ic.is_latest = 0
+              AND ic.version = cv.version
+              AND c.namespace = ?
+        ),
+        latest_matches AS (
+            SELECT
+                c.namespace,
+                c.name,
+                c.component_id,
+                cv.version,
+                cv.size,
+                cv.metadata,
+                cv.created_at,
+                cv.component_type,
+                cv.available,
+                cv.object_store_key,
+                cv.transformed_object_store_key,
+                cv.root_package_name,
+                cv.root_package_version
+            FROM component_versions cv
+            JOIN components c ON c.component_id = cv.component_id
+            JOIN input_components ic ON ic.name = c.name
+            WHERE ic.is_latest = 1
+              AND cv.available = 1
+              AND c.namespace = ?
+              AND cv.version = (
+                  SELECT MAX(cv2.version)
+                  FROM component_versions cv2
+                  WHERE cv2.component_id = cv.component_id
+                    AND cv2.available = 1
+              )
+        )
+        SELECT * FROM exact_matches
+        UNION
+        SELECT * FROM latest_matches
+        ORDER BY name, version
+        "#,
+        );
+
+        let query = query_builder
+            .build_query_as::<ComponentRecord<Owner>>()
+            .bind(namespace)
+            .bind(namespace);
+
+        let records = self
+            .db_pool
+            .with_ro("component", "get_by_names_sqlite")
+            .fetch_all(query)
+            .await?;
+
+        let records = self
+            .add_installed_plugins(self.add_files(records).await?)
+            .await?;
+
+        Ok(records)
     }
 
     #[when(golem_service_base::db::sqlite::SqlitePool -> get_by_name)]

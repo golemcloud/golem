@@ -126,6 +126,14 @@ mod tests {
         )
         .await
     }
+
+    #[test]
+    #[tracing::instrument]
+    async fn component_find_by_names(
+        component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
+    ) {
+        crate::all::repo::test_repo_component_find_by_names(component_repo.clone()).await
+    }
 }
 
 pub struct SqliteDb {

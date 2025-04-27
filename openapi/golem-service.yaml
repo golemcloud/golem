@@ -3002,6 +3002,62 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/components/search:
+    post:
+      tags:
+      - Component
+      operationId: search_components
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ComponentSearch'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Component'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/components/{component_id}/versions/{version}/plugins/installs:
     get:
       tags:
@@ -5447,6 +5503,8 @@ components:
           type: string
         pluginVersion:
           type: string
+        registered:
+          type: boolean
         parameters:
           type: object
           additionalProperties:
@@ -5455,6 +5513,7 @@ components:
       - installationId
       - pluginName
       - pluginVersion
+      - registered
       - parameters
     PromiseId:
       type: object
@@ -7065,6 +7124,8 @@ components:
       - componentName
       - componentSize
       - metadata
+      - createdAt
+      - componentType
       - files
       - installedPlugins
     ComponentFilePathWithPermissions:
@@ -7127,6 +7188,25 @@ components:
           format: uuid
       required:
       - componentId
+    ComponentSearch:
+      type: object
+      properties:
+        components:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComponentSearchParameters'
+      required:
+      - components
+    ComponentSearchParameters:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: integer
+          format: uint64
+      required:
+      - name
     ComponentTransformerDefinition:
       type: object
       properties:
@@ -7330,10 +7410,13 @@ components:
         id:
           type: string
           format: uuid
-        name:
+        pluginName:
           type: string
-        version:
+        pluginVersion:
           type: string
+        pluginRegistered:
+          description: Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
+          type: boolean
         priority:
           type: integer
           format: int32
@@ -7343,8 +7426,9 @@ components:
             type: string
       required:
       - id
-      - name
-      - version
+      - pluginName
+      - pluginVersion
+      - pluginRegistered
       - priority
       - parameters
     PluginInstallationCreation:
