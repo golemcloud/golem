@@ -88,7 +88,6 @@ pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResu
     let mut resource_types = HashMap::new();
     for ((interface_name, resource_name), methods) in resources {
         let resource_type = DynamicRpcResource::analyse(&resource_name, &methods, rpc_metadata)?;
-        warn!("Resource {interface_name}.{resource_name} has type {resource_type:?}");
 
         if let Some(resource_type) = &resource_type {
             resource_types.insert(
@@ -142,7 +141,6 @@ pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResu
             rpc_metadata,
             &resource_types,
         )?;
-        warn!("Function {} has call type {call_type:?}", function.name);
 
         if let Some(call_type) = call_type {
             instance.func_new_async(

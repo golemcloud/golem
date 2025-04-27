@@ -205,7 +205,12 @@ impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCt
             "durability::lazy_initialized_pollable",
             "drop",
         );
-        let _ = self.table().delete(rep)?;
+
+        let entry = self.table().delete(rep)?;
+        if let LazyInitializedPollableEntry::Subscribed { pollable } = entry {
+            let _ = self.table().delete(pollable)?;
+        }
+
         Ok(())
     }
 }
