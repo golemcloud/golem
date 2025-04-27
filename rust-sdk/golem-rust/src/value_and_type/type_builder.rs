@@ -545,6 +545,9 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeContainerBuilder
 
     fn record(mut self) -> WitTypeRecordBuilder<Self> {
         let record_idx = self.parent_builder().add_record();
+        self.builder
+            .parent_builder()
+            .finish_container(self.target_idx, record_idx);
         WitTypeRecordBuilder {
             builder: self,
             target_idx: record_idx,
@@ -554,6 +557,9 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeContainerBuilder
 
     fn tuple(mut self) -> WitTypeTupleBuilder<Self> {
         let tuple_idx = self.parent_builder().add_tuple();
+        self.builder
+            .parent_builder()
+            .finish_container(self.target_idx, tuple_idx);
         WitTypeTupleBuilder {
             builder: self,
             target_idx: tuple_idx,
@@ -563,6 +569,9 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeContainerBuilder
 
     fn variant(mut self) -> WitTypeVariantBuilder<Self> {
         let variant_idx = self.parent_builder().add_variant();
+        self.builder
+            .parent_builder()
+            .finish_container(self.target_idx, variant_idx);
         WitTypeVariantBuilder {
             builder: self,
             target_idx: variant_idx,
@@ -572,6 +581,9 @@ impl<ParentBuilder: TypeNodeBuilder> TypeNodeBuilder for WitTypeContainerBuilder
 
     fn result(mut self) -> WitTypeResultBuilder<Self> {
         let result_idx = self.parent_builder().add_result();
+        self.builder
+            .parent_builder()
+            .finish_container(self.target_idx, result_idx);
         WitTypeResultBuilder {
             builder: self,
             target_idx: result_idx,
