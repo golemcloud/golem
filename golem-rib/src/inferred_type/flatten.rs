@@ -1,7 +1,7 @@
 use crate::{InferredType, TypeInternal};
 use std::collections::HashSet;
 
-// Convert AllOf(AllOf(x, y, z), AllOf(a, b, OneOf(c, d))) to AllOf(x, y, z, a, b, OneOf(c,d))
+// Convert AllOf(AllOf(x, y, z), AllOf(a, b, All(c, d))) to AllOf(x, y, z, a, b, AllOf(c,d))
 // In Rib inference, there is no situation of a OneOf having AllOf
 // We intentionally make sure we have only AllOf(OneOf) and not OneOf(AllOf)
 pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {

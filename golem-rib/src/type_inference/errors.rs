@@ -105,6 +105,9 @@ impl InvalidPatternMatchError {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct UnificationError {}
+
 #[derive(Clone, Debug)]
 pub struct TypeMismatchError {
     pub expr_with_wrong_type: Expr,
@@ -119,6 +122,7 @@ pub struct TypeMismatchError {
 pub enum ExpectedType {
     AnalysedType(AnalysedType),
     Hint(TypeHint),
+    InferredType(InferredType),
 }
 
 // If the actual type is not fully known but only a hint through TypeKind

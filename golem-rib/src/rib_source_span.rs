@@ -59,7 +59,11 @@ impl Ord for SourceSpan {
 
 impl Debug for SourceSpan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "<SourceSpan>")
+        write!(
+            f,
+            "SourceSpan {{ start: {}, end: {} }}",
+            self.start, self.end
+        )
     }
 }
 

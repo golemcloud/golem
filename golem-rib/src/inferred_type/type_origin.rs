@@ -7,6 +7,7 @@ pub enum TypeOrigin {
     NoOrigin,
     Declared(SourceSpan),
     Multiple(Vec<TypeOrigin>),
+    PatternMatch(SourceSpan),
 }
 
 impl TypeOrigin {
@@ -15,7 +16,16 @@ impl TypeOrigin {
     }
 
     pub fn is_default(&self) -> bool {
-        matches!(self, TypeOrigin::Default)
+        match self {
+            TypeOrigin::Default => true,
+            TypeOrigin::NoOrigin => false,
+            TypeOrigin::Declared(_) => false,
+            TypeOrigin::Multiple(origins) => {
+                origins.first().map_or(false, |origin| origin.is_default())
+            }
+
+            TypeOrigin::PatternMatch(_) => false,
+        }
     }
 
     pub fn add_origin(&self, new_origin: TypeOrigin) -> TypeOrigin {
@@ -45,6 +55,10 @@ impl Hash for TypeOrigin {
             }
             TypeOrigin::Declared(span) => {
                 3.hash(state);
+                span.hash(state);
+            }
+            TypeOrigin::PatternMatch(span) => {
+                4.hash(state);
                 span.hash(state);
             }
         }

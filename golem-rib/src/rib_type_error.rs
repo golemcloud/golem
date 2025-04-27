@@ -97,6 +97,9 @@ impl From<TypeMismatchError> for RibTypeError {
                 .map(|x| format!("expected {}", x))
                 .ok(),
             ExpectedType::Hint(kind) => Some(format!("expected {}", kind)),
+            ExpectedType::InferredType(type_name) => {
+                Some(format!("expected {}", type_name.printable()))
+            }
         };
 
         let actual = match value.actual_type {

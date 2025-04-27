@@ -84,11 +84,12 @@ mod type_check_tests {
             error in the following rib found at line 4, column 18
             `x`
             cause: cannot determine the type
-            invalid identifier, conflicting types inferred. u64, string
+            invalid identifier, type mismatch: expected u64, found string. expected string based on pattern match branch at line 5 column 21
             help: try specifying the expected type explicitly
             help: if the issue persists, please review the script for potential type inconsistencies
             "#;
 
+            //assert!(false);
             assert_eq!(error_msg, strip_spaces(expected));
         }
 

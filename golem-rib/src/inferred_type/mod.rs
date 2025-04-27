@@ -16,6 +16,7 @@ pub use type_internal::*;
 
 pub(crate) use flatten::*;
 pub(crate) use type_origin::*;
+pub(crate) use unification::*;
 
 mod flatten;
 mod type_internal;
@@ -40,6 +41,10 @@ pub struct InferredType {
 }
 
 impl InferredType {
+    pub fn origin(&self) -> TypeOrigin {
+        self.origin.clone()
+    }
+
     pub fn as_number(&self) -> Result<InferredNumber, String> {
         fn go(with_origin: &InferredType, found: &mut Vec<InferredNumber>) -> Result<(), String> {
             match with_origin.inner.deref() {
@@ -413,10 +418,17 @@ impl InferredType {
         }
     }
 
-    pub fn with_origin(&self, origin: TypeOrigin) -> InferredType {
+    pub fn override_origin(&self, origin: TypeOrigin) -> InferredType {
         InferredType {
             inner: self.inner.clone(),
             origin,
+        }
+    }
+
+    pub fn add_origin(&self, origin: TypeOrigin) -> InferredType {
+        InferredType {
+            inner: self.inner.clone(),
+            origin: self.origin.add_origin(origin),
         }
     }
 
@@ -509,22 +521,17 @@ impl InferredType {
 
     // Here unification returns an inferred type, but it doesn't necessarily imply
     // its valid type, which can be converted to a wasm type.
-    pub fn try_unify(&self) -> Result<InferredType, String> {
-        unification::try_unify_type(self)
-    }
-
-    pub fn unify(&self) -> Result<InferredType, String> {
-        unification::unify(self).map(|unified| unified.inferred_type())
-    }
-
-    pub fn unify_all_required_types(types: &Vec<InferredType>) -> Result<InferredType, String> {
-        unification::unify_all_required_types(types)
+    pub fn unify(&self) -> Result<InferredType, UnificationFailureInternal> {
+        try_unify_type(self)
     }
 
     // Unify types where both types do matter. Example in reality x can form to be both U64 and U32 in the IR, resulting in AllOf
     // Result of this type hardly becomes OneOf
-    pub fn unify_with_required(&self, other: &InferredType) -> Result<InferredType, String> {
-        unification::unify_with_required(self, other)
+    pub fn unify_with(
+        &self,
+        other: &InferredType,
+    ) -> Result<InferredType, UnificationFailureInternal> {
+        unify_both_inferred_types(self, other)
     }
 
     // There is only one way to merge types. If they are different, they are merged into AllOf
