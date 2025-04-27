@@ -28,7 +28,10 @@ pub fn try_unify_type(
                 None => None,
             };
 
-            handle_result(unified_ok, unified_error)
+            Ok(InferredType::resolved(TypeInternal::Result {
+                ok: unified_ok.transpose()?,
+                error: unified_error.transpose()?,
+            }))
         }
 
         TypeInternal::Record(fields) => {
@@ -243,7 +246,7 @@ pub fn unify_both_inferred_types(
             let mut fields: Vec<(String, InferredType)> = vec![];
             for (a_name, a_type) in a_fields {
                 if let Some((_, b_type)) = b_fields.iter().find(|(b_name, _)| b_name == a_name) {
-                    fields.push((a_name.clone(), a_type.unify_with(b_type)?));
+                    fields.push((a_name.clone(), unify_both_inferred_types(a_type, b_type)?));
                 } else {
                     fields.push((a_name.clone(), a_type.clone()));
                 }
@@ -270,12 +273,12 @@ pub fn unify_both_inferred_types(
             }
             let mut types = Vec::new();
             for (a_type, b_type) in a_types.iter().zip(b_types) {
-                types.push(a_type.unify_with(b_type)?);
+                types.push(unify_both_inferred_types(a_type, b_type)?);
             }
             Ok(InferredType::resolved(TypeInternal::Tuple(types)))
         }
         (TypeInternal::List(a_type), TypeInternal::List(b_type)) => Ok(InferredType::resolved(
-            TypeInternal::List(a_type.unify_with(b_type)?),
+            TypeInternal::List(unify_both_inferred_types(a_type, b_type)?),
         )),
         (TypeInternal::Flags(a_flags), TypeInternal::Flags(b_flags)) => {
             if a_flags.len() >= b_flags.len() {
@@ -312,9 +315,9 @@ pub fn unify_both_inferred_types(
                 to: b_end,
             },
         ) => {
-            let unified_start = a_start.unify_with(b_start)?;
+            let unified_start = unify_both_inferred_types(a_start, b_start)?;
             let unified_end = match (a_end, b_end) {
-                (Some(a_end), Some(b_end)) => Some(a_end.unify_with(b_end)?),
+                (Some(a_end), Some(b_end)) => Some(unify_both_inferred_types(a_end, b_end)?),
                 (None, None) => None,
                 (Some(end), None) => Some(end.clone()),
                 (None, Some(end)) => Some(end.clone()),
@@ -341,19 +344,19 @@ pub fn unify_both_inferred_types(
             )))
         }
         (TypeInternal::Option(a_type), TypeInternal::Option(b_type)) => Ok(InferredType::resolved(
-            TypeInternal::Option(a_type.unify_with(b_type)?),
+            TypeInternal::Option(unify_both_inferred_types(a_type, b_type)?),
         )),
 
         (TypeInternal::Option(a_type), _) => {
             let unified_left = a_type.unify()?;
             let unified_right = right_inferred_type.unify()?;
-            let combined = unified_left.unify_with(&unified_right)?;
+            let combined = unify_both_inferred_types(&unified_left, &unified_right)?;
             Ok(InferredType::option(combined))
         }
         (_, TypeInternal::Option(a_type)) => {
             let unified_left = a_type.unify()?;
             let unified_right = left_inferred_type.unify()?;
-            let combined = unified_left.unify_with(&unified_right)?;
+            let combined = unify_both_inferred_types(&unified_left, &unified_right)?;
             Ok(InferredType::option(combined))
         }
 
@@ -368,20 +371,23 @@ pub fn unify_both_inferred_types(
             },
         ) => {
             let ok = match (a_ok, b_ok) {
-                (Some(a_inner), Some(b_inner)) => Some(a_inner.unify_with(b_inner)),
+                (Some(a_inner), Some(b_inner)) => Some(unify_both_inferred_types(a_inner, b_inner)),
                 (None, None) => None,
                 (Some(ok), None) => Some(Ok(ok.clone())),
                 (None, Some(ok)) => Some(Ok(ok.clone())),
             };
 
             let error = match (a_error, b_error) {
-                (Some(a_inner), Some(b_inner)) => Some(a_inner.unify_with(b_inner)),
+                (Some(a_inner), Some(b_inner)) => Some(unify_both_inferred_types(a_inner, b_inner)),
                 (None, None) => None,
                 (Some(ok), None) => Some(Ok(ok.clone())),
                 (None, Some(ok)) => Some(Ok(ok.clone())),
             };
 
-            handle_result(ok, error)
+            Ok(InferredType::resolved(TypeInternal::Result {
+                ok: ok.transpose()?,
+                error: error.transpose()?,
+            }))
         }
         (TypeInternal::Variant(a_variants), TypeInternal::Variant(b_variants)) => {
             let mut variants = vec![];
@@ -389,7 +395,7 @@ pub fn unify_both_inferred_types(
                 if let Some((_, b_type)) = b_variants.iter().find(|(b_name, _)| b_name == a_name) {
                     let unified_type = match (a_type, b_type) {
                         (Some(a_inner), Some(b_inner)) => {
-                            Some(Box::new(a_inner.unify_with(b_inner)?))
+                            Some(Box::new(unify_both_inferred_types(a_inner, b_inner)?))
                         }
                         (None, None) => None,
                         (Some(_), None) => None,
@@ -433,7 +439,7 @@ pub fn unify_both_inferred_types(
             let mut unified_types = vec![];
 
             for typ in types {
-                let unified = typ.unify_with(&right_inferred_type)?;
+                let unified = unify_both_inferred_types(typ, &right_inferred_type)?;
                 unified_types.push(unified);
             }
 
@@ -444,7 +450,7 @@ pub fn unify_both_inferred_types(
             let mut unified_types = vec![];
 
             for typ in types {
-                let unified = typ.unify_with(&left_inferred_type)?;
+                let unified = unify_both_inferred_types(typ, &left_inferred_type)?;
                 unified_types.push(unified);
             }
 
@@ -470,56 +476,6 @@ pub fn unify_both_inferred_types(
     }
 }
 
-fn handle_result(
-    unified_ok: Option<Result<InferredType, UnificationFailureInternal>>,
-    unified_error: Option<Result<InferredType, UnificationFailureInternal>>,
-) -> Result<InferredType, UnificationFailureInternal> {
-    match (unified_ok, unified_error) {
-        // only right is known
-        (Some(Err(UnificationFailureInternal::UnknownType)), Some(Ok(typ))) => {
-            Ok(InferredType::resolved(TypeInternal::Result {
-                ok: None,
-                error: Some(typ),
-            }))
-        }
-
-        // only left is known
-        (Some(Ok(typ)), Some(Err(UnificationFailureInternal::UnknownType))) => {
-            Ok(InferredType::resolved(TypeInternal::Result {
-                ok: Some(typ),
-                error: None,
-            }))
-        }
-
-        // both are known
-        (Some(Ok(typ1)), Some(Ok(typ2))) => Ok(InferredType::resolved(TypeInternal::Result {
-            ok: Some(typ1),
-            error: Some(typ2),
-        })),
-
-        // both are unknown
-        (None, None) => Ok(InferredType::resolved(TypeInternal::Result {
-            ok: None,
-            error: None,
-        })),
-
-        // only left is known
-        (Some(Ok(typ)), None) => Ok(InferredType::resolved(TypeInternal::Result {
-            ok: Some(typ),
-            error: None,
-        })),
-
-        // only right is unknown
-        (None, Some(Ok(typ))) => Ok(InferredType::resolved(TypeInternal::Result {
-            ok: None,
-            error: Some(typ),
-        })),
-
-        (Some(Err(err)), _) => Err(err),
-
-        (_, Some(Err(err))) => Err(err),
-    }
-}
 fn conflict_error(left: &InferredType, right: &InferredType) -> UnificationFailureInternal {
     let right_origin = &right.origin;
 

@@ -525,15 +525,6 @@ impl InferredType {
         try_unify_type(self)
     }
 
-    // Unify types where both types do matter. Example in reality x can form to be both U64 and U32 in the IR, resulting in AllOf
-    // Result of this type hardly becomes OneOf
-    pub fn unify_with(
-        &self,
-        other: &InferredType,
-    ) -> Result<InferredType, UnificationFailureInternal> {
-        unify_both_inferred_types(self, other)
-    }
-
     // There is only one way to merge types. If they are different, they are merged into AllOf
     pub fn merge(&self, new_inferred_type: InferredType) -> InferredType {
         match (self.inner.deref(), new_inferred_type.inner.deref()) {
