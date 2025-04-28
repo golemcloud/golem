@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use chrono::Utc;
-use golem_common::model::component::{ComponentOwner, VersionedComponentId};
+use golem_common::model::component::{ComponentOwner, DefaultComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{
     FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
 };
@@ -117,10 +117,8 @@ impl<Owner: ComponentOwner> From<Component<Owner>> for golem_service_base::model
     }
 }
 
-impl<Owner: ComponentOwner> From<Component<Owner>>
-    for golem_api_grpc::proto::golem::component::Component
-{
-    fn from(value: Component<Owner>) -> Self {
+impl From<Component<DefaultComponentOwner>> for golem_api_grpc::proto::golem::component::Component {
+    fn from(value: Component<DefaultComponentOwner>) -> Self {
         let component_type: golem_api_grpc::proto::golem::component::ComponentType =
             value.component_type.into();
         Self {
