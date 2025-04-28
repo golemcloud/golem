@@ -4620,6 +4620,8 @@ components:
           type: string
         idempotencyKey:
           type: string
+        invocationContext:
+          type: string
         response:
           type: string
         bindingType:
