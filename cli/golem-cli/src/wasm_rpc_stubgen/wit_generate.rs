@@ -28,11 +28,13 @@ use itertools::Itertools;
 use semver::Version;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use wit_encoder::{
-    Ident, Interface, InterfaceItem, Package, PackageItem, Params, ResourceFunc, ResourceFuncKind,
-    StandaloneFunc, Type, TypeDef, TypeDefKind, Use, World, WorldItem,
+    packages_from_parsed, Ident, Interface, InterfaceItem, Package, PackageItem, Params,
+    ResourceFunc, ResourceFuncKind, StandaloneFunc, Type, TypeDef, TypeDefKind, Use, World,
+    WorldItem,
 };
-use wit_parser::{PackageId, PackageName};
+use wit_parser::{PackageId, Resolve, UnresolvedPackageGroup};
 
 pub fn generate_client_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
     log_action(
@@ -289,15 +291,15 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
     let _indent = LogIndent::new();
 
     let partial_stub_dep_packages = HashSet::from([
-        PackageName {
+        wit_parser::PackageName {
             namespace: "wasi".to_string(),
             name: "io".to_string(),
-            version: Some(Version::new(0, 0, 0)),
+            version: Some(Version::from_str(WASI_WIT_VERSION)?),
         },
-        PackageName {
+        wit_parser::PackageName {
             namespace: "wasi".to_string(),
             name: "clocks".to_string(),
-            version: Some(Version::new(0, 2, 0)),
+            version: Some(Version::from_str(WASI_WIT_VERSION)?),
         },
     ]);
 
@@ -345,23 +347,55 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
         }
     }
 
-    write_embedded_source(
-        &target_deps.join("golem-rpc"),
-        "wasm-rpc.wit",
-        golem_wit::WASM_RPC_WIT,
-    )?;
+    let pkg_group = UnresolvedPackageGroup::parse_dir(target_wit_root)?;
+    let contains_golem_rpc = pkg_group.nested.iter().any(|pkg| {
+        pkg.name
+            == wit_parser::PackageName {
+                namespace: "golem".to_string(),
+                name: "rpc".to_string(),
+                version: Some(Version::from_str(GOLEM_RPC_WIT_VERSION).unwrap()),
+            }
+    });
+    let contains_wasi_io = pkg_group.nested.iter().any(|pkg| {
+        pkg.name
+            == wit_parser::PackageName {
+                namespace: "wasi".to_string(),
+                name: "io".to_string(),
+                version: Some(Version::from_str(WASI_WIT_VERSION).unwrap()),
+            }
+    });
+    let contains_wasi_clocks = pkg_group.nested.iter().any(|pkg| {
+        pkg.name
+            == wit_parser::PackageName {
+                namespace: "wasi".to_string(),
+                name: "clocks".to_string(),
+                version: Some(Version::from_str(WASI_WIT_VERSION).unwrap()),
+            }
+    });
 
-    write_embedded_source(
-        &target_deps.join("io"),
-        "poll.wit",
-        golem_wit::WASI_POLL_WIT,
-    )?;
+    if !contains_golem_rpc {
+        write_embedded_source(
+            &target_deps.join("golem-rpc"),
+            "wasm-rpc.wit",
+            golem_wit::WASM_RPC_WIT,
+        )?;
+    }
 
-    write_embedded_source(
-        &target_deps.join("clocks"),
-        "wall-clock.wit",
-        golem_wit::WASI_WALL_CLOCKS_WIT,
-    )?;
+    if !contains_wasi_io {
+        write_embedded_source(
+            &target_deps.join("io"),
+            "poll.wit",
+            golem_wit::WASI_POLL_WIT,
+        )?;
+    }
+
+    if !contains_wasi_clocks {
+        write_embedded_source(
+            &target_deps.join("clocks"),
+            "wall-clock.wit",
+            golem_wit::WASI_WALL_CLOCKS_WIT,
+        )?;
+    }
 
     Ok(())
 }
@@ -394,6 +428,33 @@ pub struct AddClientAsDepConfig {
     pub client_wit_root: PathBuf,
     pub dest_wit_root: PathBuf,
     pub update_cargo_toml: UpdateCargoToml,
+}
+
+fn can_skip(
+    source_resolve: &Resolve,
+    target_resolve: &Resolve,
+    package_name: &wit_parser::PackageName,
+) -> bool {
+    if target_resolve.package_names.contains_key(package_name) {
+        let source_packages = packages_from_parsed(source_resolve);
+        let target_packages = packages_from_parsed(target_resolve);
+
+        let source_package = source_packages
+            .iter()
+            .find(|pkg| pkg.name().to_string() == package_name.to_string())
+            .unwrap();
+        let target_package = target_packages
+            .iter()
+            .find(|pkg| pkg.name().to_string() == package_name.to_string())
+            .unwrap();
+
+        let wit_source = source_package.to_string();
+        let wit_target = target_package.to_string();
+
+        wit_source == wit_target
+    } else {
+        false
+    }
 }
 
 pub fn add_client_as_dependency_to_wit_dir(config: AddClientAsDepConfig) -> anyhow::Result<()> {
@@ -439,7 +500,11 @@ pub fn add_client_as_dependency_to_wit_dir(config: AddClientAsDepConfig) -> anyh
                         .join(PathExtra::new(&source).file_name_to_string()?),
                 });
             }
-        } else {
+        } else if !can_skip(
+            &client_resolved_wit_root.resolve,
+            &dest_resolved_wit_root.resolve,
+            package_name,
+        ) {
             package_names_to_package_path.insert(
                 package_name.clone(),
                 naming::wit::package_wit_dep_dir_from_package_dir_name(
@@ -455,6 +520,14 @@ pub fn add_client_as_dependency_to_wit_dir(config: AddClientAsDepConfig) -> anyh
                         .join(PathExtra::new(&source).strip_prefix(&config.client_wit_root)?),
                 });
             }
+        } else {
+            log_warn_action(
+                "Skipping",
+                format!(
+                    "package dependency {}, already exists in destination",
+                    package_name.to_string().log_color_highlight()
+                ),
+            );
         }
     }
 

@@ -151,9 +151,19 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
                 } else {
                     command.global_flags.verbosity()
                 };
+                #[cfg(feature = "server-commands")]
+                let pretty_mode = if matches!(command.subcommand, GolemCliSubcommand::Server { .. })
+                {
+                    Hooks::override_pretty_mode()
+                } else {
+                    false
+                };
                 #[cfg(not(feature = "server-commands"))]
                 let verbosity = command.global_flags.verbosity();
-                init_tracing(verbosity, false);
+                #[cfg(not(feature = "server-commands"))]
+                let pretty_mode = false;
+
+                init_tracing(verbosity, pretty_mode);
 
                 match Self::new_with_init_hint_error_handler(&command.global_flags, hooks) {
                     Ok(mut handler) => {

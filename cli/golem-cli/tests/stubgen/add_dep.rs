@@ -556,7 +556,7 @@ fn self_circular() {
 }
 
 fn init_stub(name: &str) -> (TempDir, TempDir) {
-    let source = TempDir::new().unwrap();
+    let source = tempfile::Builder::new().keep(false).tempdir().unwrap();
     let canonical_source = source.path().canonicalize().unwrap();
 
     fs_extra::dir::copy(
@@ -566,7 +566,7 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
     )
     .unwrap();
 
-    let target = TempDir::new().unwrap();
+    let target = tempfile::Builder::new().keep(false).tempdir().unwrap();
     let canonical_target = target.path().canonicalize().unwrap();
 
     let def = StubDefinition::new(StubConfig {
@@ -602,7 +602,7 @@ fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
 }
 
 fn init_caller(name: &str) -> TempDir {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = tempfile::Builder::new().keep(false).tempdir().unwrap();
     let source = Path::new("test-data/wit").join(name);
 
     fs_extra::dir::copy(
