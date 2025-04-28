@@ -25,7 +25,7 @@ use golem_wasm_rpc::{CancellationTokenEntry, HostWasmRpc, Uri, Value, WasmRpcEnt
 use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use std::collections::HashMap;
-use tracing::{warn, Instrument};
+use tracing::Instrument;
 use uuid::Uuid;
 use wasmtime::component::types::{ComponentInstance, ComponentItem};
 use wasmtime::component::{LinkerInstance, Resource, ResourceType, Type, Val};
