@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Embedding Tester</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .container { display: flex; gap: 20px; }
+        .input-section, .output-section { flex: 1; }
+        textarea { width: 100%; height: 150px; margin: 10px 0; }
+        button { background: #007bff; color: white; border: none; padding: 10px 20px; cursor: pointer; }
+        .results { margin-top: 20px; padding: 15px; background: #f5f5f5; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="input-section">
+            <h2>Test Embeddings</h2>
+            <textarea id="inputText" placeholder="Enter text to embed..."></textarea>
+            <button onclick="generateEmbedding()">Generate Embedding</button>
+            <div class="results" id="embeddingResult"></div>
+        </div>
+        
+        <div class="output-section">
+            <h2>API Response</h2>
+            <pre id="apiResponse"></pre>
+        </div>
+    </div>
+
+    <script>
+        async function generateEmbedding() {
+            const text = document.getElementById('inputText').value;
+            try {
+                const response = await fetch('http://localhost:3000/embed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text })
+                });
+                
+                const result = await response.json();
+                document.getElementById('apiResponse').textContent = JSON.stringify(result, null, 2);
+                
+                if(result.embedding) {
+                    document.getElementById('embeddingResult').innerHTML = `
+                        <h3>Embedding Generated (${result.embedding.length} dimensions):</h3>
+                        <div>First 5 values: [${result.embedding.slice(0,5).join(', ')}...]</div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+    </script>
+</body>
+</html>
