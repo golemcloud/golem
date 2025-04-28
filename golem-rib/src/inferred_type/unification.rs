@@ -33,15 +33,9 @@ pub fn try_unify_type(
         }
 
         TypeInternal::Result { ok, error } => {
-            let unified_ok = match ok {
-                Some(ok) => Some(try_unify_type(ok)),
-                None => None,
-            };
+            let unified_ok = ok.as_ref().map(try_unify_type);
 
-            let unified_error = match error {
-                Some(error) => Some(try_unify_type(error)),
-                None => None,
-            };
+            let unified_error = error.as_ref().map(try_unify_type);
 
             Ok(InferredType::resolved(TypeInternal::Result {
                 ok: unified_ok.transpose()?,
@@ -79,7 +73,7 @@ pub fn try_unify_type(
             to: end,
         } => {
             let unified_start = try_unify_type(start)?;
-            let unified_end = end.as_ref().map(|end| try_unify_type(end)).transpose()?;
+            let unified_end = end.as_ref().map(try_unify_type).transpose()?;
             Ok(InferredType::resolved(TypeInternal::Range {
                 from: unified_start,
                 to: unified_end,

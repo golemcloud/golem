@@ -22,7 +22,7 @@ impl TypeOrigin {
             TypeOrigin::NoOrigin => false,
             TypeOrigin::Declared(_) => false,
             TypeOrigin::Multiple(origins) => {
-                origins.first().map_or(false, |origin| origin.is_default())
+                origins.first().is_some_and(|origin| origin.is_default())
             }
 
             TypeOrigin::PatternMatch(_) => false,
