@@ -20,7 +20,7 @@ harness = false
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true }
 golem-service-base = { workspace = true }
-golem-component-service-base = { workspace = true } # TODO: to be removed in 1.2.2-dev.11
+golem-component-service-base = { workspace = true } # TODO: to be removed in 1.2.2-dev.13
 
 cloud-common = { path = "../cloud-common" }
 cloud-api-grpc = { path = "../cloud-api-grpc" }

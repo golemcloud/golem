@@ -8,12 +8,14 @@ use crate::service::auth::AuthService;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace, GolemSecurityScheme};
 use cloud_common::model::ProjectAction;
 use golem_common::model::ProjectId;
-use golem_common::{recorded_http_api_request, safe};
-use golem_worker_service_base::gateway_api_definition::ApiDefinitionId;
+use golem_common::{recorded_http_api_request, safe, SafeDisplay};
+use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::gateway_api_deployment;
 use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionIdWithVersion;
-use golem_worker_service_base::service::gateway::api_deployment::ApiDeploymentService;
+use golem_worker_service_base::service::gateway::api_deployment::{
+    ApiDeploymentError, ApiDeploymentService,
+};
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -224,6 +226,7 @@ impl ApiDeploymentApi {
 
         let auth_ctx = CloudAuthCtx::new(token.secret());
 
+        // TODO: should not use ProjectAction::ViewApiDefinition, rather a deployment action
         let namespace = self
             .auth_service
             .authorize_project_action(&project_id.0, ProjectAction::ViewApiDefinition, &auth_ctx)
@@ -265,5 +268,76 @@ impl ApiDeploymentApi {
             .await?;
 
         Ok(Json("API deployment deleted".to_string()))
+    }
+
+    /// Undeploy a single API definition from a site
+    ///
+    /// Removes a specific API definition (by id and version) from a site without deleting the entire deployment.
+    #[oai(
+        path = "/:site/:id/:version",
+        method = "delete",
+        operation_id = "undeploy_api"
+    )]
+    async fn undeploy_api(
+        &self,
+        #[oai(name = "project-id")] project_id: Query<ProjectId>,
+        site: Path<String>,
+        id: Path<String>,
+        version: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<String>, ApiEndpointError> {
+        let record = recorded_http_api_request!(
+            "undeploy_api",
+            site = site.0.clone(),
+            id = id.0.clone(),
+            version = version.0.clone()
+        );
+
+        let auth_ctx = CloudAuthCtx::new(token.secret());
+
+        // TODO: should not use ProjectAction::ViewApiDefinition, rather a deployment action,
+        //       for now kept in sync with delete
+        let namespace = self
+            .auth_service
+            .authorize_project_action(&project_id.0, ProjectAction::ViewApiDefinition, &auth_ctx)
+            .await?;
+
+        let response = self
+            .undeploy_api_internal(&namespace, &auth_ctx, site.0, id.0, version.0)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn undeploy_api_internal(
+        &self,
+        namespace: &CloudNamespace,
+        auth_ctx: &CloudAuthCtx,
+        site: String,
+        id: String,
+        version: String,
+    ) -> Result<Json<String>, ApiEndpointError> {
+        let api_definition_key = ApiDefinitionIdWithVersion {
+            id: ApiDefinitionId(id),
+            version: ApiVersion(version),
+        };
+
+        let api_site_string = ApiSiteString(site);
+
+        self.deployment_service
+            .undeploy(namespace, api_site_string, api_definition_key, auth_ctx)
+            .await
+            .map_err(|err| match err {
+                ApiDeploymentError::ApiDeploymentNotFound(_, _) => {
+                    ApiEndpointError::not_found(safe("Site not found".to_string()))
+                }
+                ApiDeploymentError::ApiDefinitionNotFound(_, _, _) => {
+                    ApiEndpointError::not_found(safe("API definition not found".to_string()))
+                }
+                _ => ApiEndpointError::internal(safe(err.to_safe_string())),
+            })?;
+
+        Ok(Json("API definition undeployed from site".to_string()))
     }
 }
