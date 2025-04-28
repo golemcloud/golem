@@ -29,7 +29,7 @@ use crate::type_inference::GetTypeHint;
 use crate::TypeName;
 use bigdecimal::BigDecimal;
 use golem_wasm_ast::analysis::*;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -43,6 +43,10 @@ pub struct InferredType {
 impl InferredType {
     pub fn origin(&self) -> TypeOrigin {
         self.origin.clone()
+    }
+
+    pub fn origin_root(&self) -> TypeOrigin {
+        self.origin.root()
     }
 
     pub fn as_number(&self) -> Result<InferredNumber, String> {
@@ -197,14 +201,7 @@ impl InferredType {
     }
 
     pub fn declared_at(&self, source_span: SourceSpan) -> InferredType {
-        let new_origin = self
-            .origin
-            .add_origin(TypeOrigin::Declared(source_span.clone()));
-
-        InferredType {
-            inner: self.inner.clone(),
-            origin: new_origin,
-        }
+        self.add_origin(TypeOrigin::Declared(source_span.clone()))
     }
 
     pub fn as_default(&self) -> InferredType {
@@ -426,10 +423,88 @@ impl InferredType {
     }
 
     pub fn add_origin(&self, origin: TypeOrigin) -> InferredType {
-        InferredType {
-            inner: self.inner.clone(),
-            origin: self.origin.add_origin(origin),
+        let mut inferred_type = self.clone();
+
+        let mut queue = VecDeque::new();
+        queue.push_back(&mut inferred_type as *mut InferredType); // <- push pointer
+
+        while let Some(inferred_type_ptr) = queue.pop_back() {
+            unsafe {
+                let inferred_type = &mut *inferred_type_ptr; // unsafe reborrow
+
+                match &mut inferred_type.inner.as_mut() {
+                    TypeInternal::Bool => {}
+                    TypeInternal::S8 => {}
+                    TypeInternal::U8 => {}
+                    TypeInternal::S16 => {}
+                    TypeInternal::U16 => {}
+                    TypeInternal::S32 => {}
+                    TypeInternal::U32 => {}
+                    TypeInternal::S64 => {}
+                    TypeInternal::U64 => {}
+                    TypeInternal::F32 => {}
+                    TypeInternal::F64 => {}
+                    TypeInternal::Chr => {}
+                    TypeInternal::Str => {}
+                    TypeInternal::List(inner) => {
+                        queue.push_back(inner as *mut _);
+                    }
+                    TypeInternal::Tuple(inferred_types) => {
+                        for inferred_type in inferred_types {
+                            queue.push_back(inferred_type as *mut _);
+                        }
+                    }
+                    TypeInternal::Record(inferred_types) => {
+                        for (_, inferred_type) in inferred_types {
+                            queue.push_back(inferred_type as *mut _);
+                        }
+                    }
+                    TypeInternal::Flags(_) => {}
+                    TypeInternal::Enum(_) => {}
+                    TypeInternal::Option(inner) => {
+                        queue.push_back(inner as *mut _);
+                    }
+                    TypeInternal::Result { ok, error } => {
+                        if let Some(ok) = ok {
+                            queue.push_back(ok as *mut _);
+                        }
+                        if let Some(error) = error {
+                            queue.push_back(error as *mut _);
+                        }
+                    }
+                    TypeInternal::Variant(variants) => {
+                        for (_, inferred_type) in variants {
+                            if let Some(inferred_type) = inferred_type {
+                                queue.push_back(inferred_type as *mut _);
+                            }
+                        }
+                    }
+                    TypeInternal::Resource { .. } => {}
+                    TypeInternal::Range { from, to } => {
+                        queue.push_back(from as *mut _);
+                        if let Some(to) = to {
+                            queue.push_back(to as *mut _);
+                        }
+                    }
+                    TypeInternal::Instance { .. } => {}
+                    TypeInternal::AllOf(all_of) => {
+                        for inferred_type in all_of {
+                            queue.push_back(inferred_type as *mut _);
+                        }
+                    }
+                    TypeInternal::Unknown => {}
+                    TypeInternal::Sequence(_) => {}
+                }
+
+                inferred_type.add_origin_mut(origin.clone());
+            }
         }
+
+        inferred_type
+    }
+
+    pub fn add_origin_mut(&mut self, origin: TypeOrigin) {
+        self.origin = self.origin.add_origin(origin);
     }
 
     pub fn without_origin(inferred_type: TypeInternal) -> InferredType {
@@ -522,7 +597,7 @@ impl InferredType {
     // Here unification returns an inferred type, but it doesn't necessarily imply
     // its valid type, which can be converted to a wasm type.
     pub fn unify(&self) -> Result<InferredType, UnificationFailureInternal> {
-        try_unify_type(self)
+        unify(self).map(|x| x.inferred_type())
     }
 
     // There is only one way to merge types. If they are different, they are merged into AllOf

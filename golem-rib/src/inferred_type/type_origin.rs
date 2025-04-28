@@ -1,7 +1,8 @@
 use crate::rib_source_span::SourceSpan;
+use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
-#[derive(Debug, Clone, Eq, PartialOrd, Ord)]
+#[derive(Clone, Eq, PartialOrd, Ord)]
 pub enum TypeOrigin {
     Default,
     NoOrigin,
@@ -28,6 +29,18 @@ impl TypeOrigin {
         }
     }
 
+    pub fn root(&self) -> TypeOrigin {
+        match self {
+            TypeOrigin::Default => TypeOrigin::Default,
+            TypeOrigin::NoOrigin => TypeOrigin::NoOrigin,
+            TypeOrigin::Declared(_) => self.clone(),
+            TypeOrigin::Multiple(origins) => {
+                origins.first().map_or(self.clone(), |origin| origin.root())
+            }
+            TypeOrigin::PatternMatch(_) => self.clone(),
+        }
+    }
+
     pub fn add_origin(&self, new_origin: TypeOrigin) -> TypeOrigin {
         match self {
             TypeOrigin::NoOrigin => new_origin,
@@ -40,6 +53,18 @@ impl TypeOrigin {
                 TypeOrigin::Multiple(new_origins)
             }
             _ => TypeOrigin::Multiple(vec![self.clone(), new_origin]),
+        }
+    }
+}
+
+impl Debug for TypeOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeOrigin::Default => write!(f, "Default"),
+            TypeOrigin::NoOrigin => write!(f, "NoOrigin"),
+            TypeOrigin::Declared(_) => write!(f, "Declared"),
+            TypeOrigin::Multiple(_) => write!(f, "Multiple<Origin>"),
+            TypeOrigin::PatternMatch(_) => write!(f, "PatternMatch"),
         }
     }
 }

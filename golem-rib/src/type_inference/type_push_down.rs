@@ -885,7 +885,7 @@ mod type_push_down_tests {
         let expected = r#"
         error in the following rib found at line 2, column 36
         `[1, 2]`
-        cause: type mismatch. expected tuple<u32, u16>. found list
+        cause: type mismatch. expected tuple<u32, u16>, found list
         "#;
 
         assert_eq!(error_message, strip_spaces(expected));

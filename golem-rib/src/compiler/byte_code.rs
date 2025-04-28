@@ -1548,7 +1548,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 2, column 33\n`1: u64`\nfound within:\n`foo(1: u64)`\ncause: type mismatch. expected string. found u64\ninvalid argument to the function `foo`\n"
+                "error in the following rib found at line 2, column 33\n`1: u64`\nfound within:\n`foo(1: u64)`\ncause: type mismatch. expected string, found u64\ninvalid argument to the function `foo`\n"
             );
         }
 
@@ -1565,7 +1565,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 3, column 54\n`\"apple\"`\nfound within:\n`golem:it/api.{cart(user_id).add-item}(\"apple\")`\ncause: type mismatch. expected record { name: string }. found string\ninvalid argument to the function `[method]cart.add-item`\n"
+                "error in the following rib found at line 3, column 54\n`\"apple\"`\nfound within:\n`golem:it/api.{cart(user_id).add-item}(\"apple\")`\ncause: type mismatch. expected record { name: string }, found string\ninvalid argument to the function `[method]cart.add-item`\n"
             );
         }
 
@@ -1581,7 +1581,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 1, column 1\n`{foo: \"bar\"}`\nfound within:\n`golem:it/api.{cart({foo: \"bar\"}).add-item}(\"apple\")`\ncause: type mismatch. expected string. found record { foo: string }\ninvalid argument to the function `[constructor]cart`\n"
+                "error in the following rib found at line 1, column 1\n`{foo: \"bar\"}`\nfound within:\n`golem:it/api.{cart({foo: \"bar\"}).add-item}(\"apple\")`\ncause: type mismatch. expected string, found record { foo: string }\ninvalid argument to the function `[constructor]cart`\n"
             );
         }
 
@@ -1599,7 +1599,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 2, column 56\n`\"foo\"`\nfound within:\n`register-user(\"foo\")`\ncause: type mismatch. expected u64. found string\ninvalid argument to the function `register-user`\n"
+                "error in the following rib found at line 2, column 56\n`\"foo\"`\nfound within:\n`register-user(\"foo\")`\ncause: type mismatch. expected u64, found string\ninvalid argument to the function `register-user`\n"
             );
         }
     }

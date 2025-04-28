@@ -3,6 +3,21 @@ use crate::{InferredType, TypeInternal};
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 
+#[derive(Clone, Debug)]
+pub struct Unified(InferredType);
+
+impl Unified {
+    pub fn inferred_type(&self) -> InferredType {
+        self.0.clone()
+    }
+}
+
+pub fn unify(inferred_type: &InferredType) -> Result<Unified, UnificationFailureInternal> {
+    let possibly_unified_type = try_unify_type(inferred_type)?;
+
+    validate_unified_type(&possibly_unified_type)
+}
+
 pub fn try_unify_type(
     inferred_type: &InferredType,
 ) -> Result<InferredType, UnificationFailureInternal> {
@@ -14,7 +29,7 @@ pub fn try_unify_type(
 
         TypeInternal::Option(inner_type) => {
             let unified_inner_type = try_unify_type(inner_type)?;
-            Ok(InferredType::option(unified_inner_type))
+            Ok(InferredType::option(unified_inner_type).override_origin(inferred_type.origin()))
         }
 
         TypeInternal::Result { ok, error } => {
@@ -31,7 +46,8 @@ pub fn try_unify_type(
             Ok(InferredType::resolved(TypeInternal::Result {
                 ok: unified_ok.transpose()?,
                 error: unified_error.transpose()?,
-            }))
+            })
+            .override_origin(inferred_type.origin()))
         }
 
         TypeInternal::Record(fields) => {
@@ -40,7 +56,8 @@ pub fn try_unify_type(
                 let unified_type = try_unify_type(typ)?;
                 unified_fields.push((field.clone(), unified_type));
             }
-            Ok(InferredType::resolved(TypeInternal::Record(unified_fields)))
+            Ok(InferredType::resolved(TypeInternal::Record(unified_fields))
+                .override_origin(inferred_type.origin()))
         }
 
         TypeInternal::Tuple(types) => {
@@ -458,12 +475,15 @@ pub fn unify_both_inferred_types(
         }
 
         (inferred_type_left, inferred_type_right) => {
-            // one of them was just originated _by default_
-            let eliminated =
-                InferredType::eliminate_default(vec![&left_inferred_type, &right_inferred_type]);
+            if left_inferred_type.is_number() && right_inferred_type.is_number() {
+                let eliminated = InferredType::eliminate_default(vec![
+                    &left_inferred_type,
+                    &right_inferred_type,
+                ]);
 
-            if eliminated.len() == 1 {
-                return Ok(eliminated[0].clone());
+                if eliminated.len() == 1 {
+                    return Ok(eliminated[0].clone());
+                }
             }
 
             // both of them are equal
@@ -476,23 +496,174 @@ pub fn unify_both_inferred_types(
     }
 }
 
+// We assume left is original and right is expected
 fn conflict_error(left: &InferredType, right: &InferredType) -> UnificationFailureInternal {
-    let right_origin = &right.origin;
+    let origin_of_expected = &right.origin_root();
 
-    let expected = right.printable();
-    match right_origin {
+    match origin_of_expected {
         TypeOrigin::PatternMatch(source_span) => UnificationFailureInternal::type_mismatch(
-            left.clone(),
             right.clone(),
+            left.clone(),
             vec![format!(
                 "expected {} based on pattern match branch at line {} column {}",
-                expected,
+                right.printable(),
                 source_span.start_line(),
                 source_span.start_column()
             )],
         ),
+        TypeOrigin::Declared(source_span) => UnificationFailureInternal::type_mismatch(
+            right.clone(),
+            left.clone(),
+            vec![format!(
+                "expected {} based on declaration at line {} column {}",
+                right.printable(),
+                source_span.start_line(),
+                source_span.start_column()
+            )],
+        ),
+
         _ => {
             UnificationFailureInternal::conflicting_types(vec![left.clone(), right.clone()], vec![])
         }
     }
+}
+
+pub(crate) fn validate_unified_type(
+    inferred_type: &InferredType,
+) -> Result<Unified, UnificationFailureInternal> {
+    match inferred_type.inner.as_ref() {
+        TypeInternal::Bool => Ok(Unified(InferredType::bool())),
+        TypeInternal::S8 => Ok(Unified(InferredType::s8())),
+        TypeInternal::U8 => Ok(Unified(InferredType::u8())),
+        TypeInternal::S16 => Ok(Unified(InferredType::s16())),
+        TypeInternal::U16 => Ok(Unified(InferredType::u16())),
+        TypeInternal::S32 => Ok(Unified(InferredType::s32())),
+        TypeInternal::U32 => Ok(Unified(InferredType::u32())),
+        TypeInternal::S64 => Ok(Unified(InferredType::s64())),
+        TypeInternal::U64 => Ok(Unified(InferredType::u64())),
+        TypeInternal::F32 => Ok(Unified(InferredType::f32())),
+        TypeInternal::F64 => Ok(Unified(InferredType::f64())),
+        TypeInternal::Chr => Ok(Unified(InferredType::char())),
+        TypeInternal::Str => Ok(Unified(InferredType::string())),
+        TypeInternal::List(inferred_type) => {
+            let verified = validate_unified_type(inferred_type)?;
+            Ok(Unified(InferredType::list(verified.inferred_type())))
+        }
+        TypeInternal::Tuple(types) => {
+            let mut verified_types = vec![];
+
+            for typ in types {
+                let verified = validate_unified_type(typ)?;
+                verified_types.push(verified.inferred_type());
+            }
+
+            Ok(Unified(InferredType::tuple(verified_types)))
+        }
+        TypeInternal::Record(field) => {
+            for (field, typ) in field {
+                if let Err(unresolved) = validate_unified_type(typ) {
+                    return Err(UnificationFailureInternal::conflicting_types(
+                        vec![inferred_type.clone()],
+                        vec![format!(
+                            "cannot determine the type of field {} in record: {}",
+                            field, unresolved
+                        )],
+                    ));
+                }
+            }
+
+            Ok(Unified(InferredType::record(field.clone())))
+        }
+        TypeInternal::Flags(flags) => Ok(Unified(InferredType::flags(flags.clone()))),
+        TypeInternal::Enum(enums) => Ok(Unified(InferredType::enum_(enums.clone()))),
+        TypeInternal::Option(inferred_type) => {
+            let result = validate_unified_type(inferred_type)?;
+            Ok(Unified(InferredType::option(result.inferred_type())))
+        }
+        TypeInternal::Result { ok, error } => {
+            // For Result, we try to be flexible with types
+            // Example: Allow Rib script to simply return ok(x) as the final output, even if it doesn't know anything about error
+            match (ok, error) {
+                (Some(ok), Some(err)) => {
+                    let ok_unified = validate_unified_type(ok);
+                    let err_unified = validate_unified_type(err);
+
+                    match (ok_unified, err_unified) {
+                        // We fail only if both are unknown
+                        (Err(ok_err), Err(_)) => Err(ok_err),
+                        (_, _) => Ok(Unified(inferred_type.clone())),
+                    }
+                }
+
+                (Some(ok), None) => {
+                    let ok_unified = validate_unified_type(ok);
+                    match ok_unified {
+                        Err(ok_err) => Err(ok_err),
+                        _ => Ok(Unified(inferred_type.clone())),
+                    }
+                }
+
+                (None, Some(err)) => {
+                    let err_unified = validate_unified_type(err);
+                    match err_unified {
+                        Err(err_err) => Err(err_err),
+                        _ => Ok(Unified(inferred_type.clone())),
+                    }
+                }
+
+                (None, None) => Ok(Unified(inferred_type.clone())),
+            }
+        }
+        TypeInternal::Variant(variant) => {
+            for (_, typ) in variant {
+                if let Some(typ) = typ {
+                    validate_unified_type(typ)?;
+                }
+            }
+            Ok(Unified(inferred_type.clone()))
+        }
+        TypeInternal::Range {
+            from: start,
+            to: end,
+        } => {
+            let unified_start = validate_unified_type(start)?;
+            let unified_end = end
+                .clone()
+                .map(|end| validate_unified_type(&end))
+                .transpose()?;
+
+            Ok(Unified(InferredType::range(
+                unified_start.inferred_type(),
+                unified_end.map(|end| end.inferred_type()),
+            )))
+        }
+
+        TypeInternal::Instance { .. } => Ok(Unified(inferred_type.clone())),
+        TypeInternal::Resource { .. } => Ok(Unified(inferred_type.clone())),
+        TypeInternal::AllOf(possibilities) => Err(UnificationFailureInternal::conflicting_types(
+            possibilities.clone(),
+            vec![format!(
+                "conflicting types: {}",
+                display_multiple_types(possibilities)
+            )],
+        )),
+
+        TypeInternal::Unknown => Err(UnificationFailureInternal::ConflictingTypes {
+            conflicting_types: vec![inferred_type.clone()],
+            additional_error_detail: vec!["cannot determine type".to_string()],
+        }),
+        TypeInternal::Sequence(inferred_types) => {
+            for typ in inferred_types {
+                validate_unified_type(typ)?;
+            }
+
+            Ok(Unified(inferred_type.clone()))
+        }
+    }
+}
+
+fn display_multiple_types(types: &[InferredType]) -> String {
+    let types = types.iter().map(|x| x.printable()).collect::<Vec<_>>();
+
+    types.join(", ")
 }

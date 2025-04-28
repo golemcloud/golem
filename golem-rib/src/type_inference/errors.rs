@@ -186,6 +186,49 @@ impl TypeMismatchError {
     }
 }
 
+// A type unification can fail either due to a type mismatch or due to unresolved types
+pub enum TypeUnificationError {
+    TypeMismatchError { error: TypeMismatchError },
+
+    UnresolvedTypesError { error: UnResolvedTypesError },
+}
+
+impl TypeUnificationError {
+    pub fn unresolved_types_error(
+        expr: Expr,
+        parent_expr: Option<Expr>,
+        additional_messages: Vec<String>,
+    ) -> TypeUnificationError {
+        TypeUnificationError::UnresolvedTypesError {
+            error: UnResolvedTypesError {
+                unresolved_expr: expr,
+                parent_expr,
+                additional_messages,
+                help_messages: vec![],
+                path: Default::default(),
+            },
+        }
+    }
+    pub fn type_mismatch_error(
+        expr: Expr,
+        parent_expr: Option<Expr>,
+        expected_type: InferredType,
+        actual_type: InferredType,
+        additional_error_detail: Vec<String>,
+    ) -> TypeUnificationError {
+        TypeUnificationError::TypeMismatchError {
+            error: TypeMismatchError {
+                expr_with_wrong_type: expr,
+                parent_expr,
+                expected_type: ExpectedType::InferredType(expected_type),
+                actual_type: ActualType::Inferred(actual_type),
+                field_path: Path::default(),
+                additional_error_detail,
+            },
+        }
+    }
+}
+
 pub struct MultipleUnResolvedTypesError(pub Vec<UnResolvedTypesError>);
 
 #[derive(Debug, Clone)]
