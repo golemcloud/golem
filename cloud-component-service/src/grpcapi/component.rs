@@ -3,6 +3,7 @@ use crate::service;
 use crate::service::component::CloudComponentService;
 use async_trait::async_trait;
 use cloud_common::grpc::proto_project_id_string;
+use cloud_common::model::CloudComponentOwner;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
@@ -42,6 +43,7 @@ use golem_component_service_base::service::component::ComponentError as BaseComp
 use golem_component_service_base::service::plugin::PluginError;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::Instrument;
@@ -112,7 +114,7 @@ impl ComponentGrpcApi {
         let auth = auth(metadata)?;
         let id = require_component_id(&request.component_id)?;
         let result = self.component_service.get(&id, &auth).await?;
-        Ok(result.into_iter().map(|p| p.into()).collect())
+        Ok(result.into_iter().map(component_to_grpc).collect())
     }
 
     async fn get_component_metadata(
@@ -134,7 +136,7 @@ impl ComponentGrpcApi {
             .component_service
             .get_by_version(&versioned_component_id, &auth)
             .await?;
-        Ok(result.map(|p| p.into()))
+        Ok(result.map(component_to_grpc))
     }
 
     async fn get_all(
@@ -151,7 +153,7 @@ impl ComponentGrpcApi {
             .component_service
             .find_by_project_and_name(project_id, name, &auth)
             .await?;
-        Ok(result.into_iter().map(|p| p.into()).collect())
+        Ok(result.into_iter().map(component_to_grpc).collect())
     }
 
     async fn get_latest_component_metadata(
@@ -166,7 +168,7 @@ impl ComponentGrpcApi {
             .get_latest_version(&id, &auth)
             .await?;
         match result {
-            Some(component) => Ok(component.into()),
+            Some(component) => Ok(component_to_grpc(component)),
             None => Err(ComponentError {
                 error: Some(component_error::Error::NotFound(ErrorBody {
                     error: "Component not found".to_string(),
@@ -229,7 +231,7 @@ impl ComponentGrpcApi {
                 &auth,
             )
             .await?;
-        Ok(result.into())
+        Ok(component_to_grpc(result))
     }
 
     async fn update(
@@ -274,7 +276,7 @@ impl ComponentGrpcApi {
             .component_service
             .update_internal(&id, data, component_type, files, dynamic_linking, &auth)
             .await?;
-        Ok(result.into())
+        Ok(component_to_grpc(result))
     }
 
     async fn create_component_constraints(
@@ -1013,5 +1015,31 @@ impl ComponentService for ComponentGrpcApi {
         Ok(Response::new(UninstallPluginResponse {
             result: Some(response),
         }))
+    }
+}
+
+fn component_to_grpc(
+    value: golem_component_service_base::model::Component<CloudComponentOwner>,
+) -> golem_api_grpc::proto::golem::component::Component {
+    let component_type: golem_api_grpc::proto::golem::component::ComponentType =
+        value.component_type.into();
+
+    golem_api_grpc::proto::golem::component::Component {
+        versioned_component_id: Some(value.versioned_component_id.into()),
+        component_name: value.component_name.0,
+        component_size: value.component_size,
+        metadata: Some(value.metadata.into()),
+        account_id: Some(value.owner.account_id.into()),
+        project_id: Some(value.owner.project_id.into()),
+        created_at: Some(prost_types::Timestamp::from(SystemTime::from(
+            value.created_at,
+        ))),
+        component_type: Some(component_type.into()),
+        files: value.files.into_iter().map(|file| file.into()).collect(),
+        installed_plugins: value
+            .installed_plugins
+            .into_iter()
+            .map(|plugin| plugin.into())
+            .collect(),
     }
 }
