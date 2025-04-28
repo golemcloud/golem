@@ -1247,6 +1247,18 @@ pub trait WorkerService: WorkerServiceInternal {
     }
 
     async fn kill(&self);
+
+    async fn undeploy_api(&self, site: &str, id: &str, version: &str) -> crate::Result<()> {
+        match self.api_deployment_client() {
+            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("undeploy_api"),
+            ApiDeploymentServiceClient::Http(client) => {
+                match client.undeploy_api(site, id, version).await {
+                    Ok(_) => Ok(()),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+        }
+    }
 }
 
 async fn new_worker_grpc_client(host: &str, grpc_port: u16) -> WorkerServiceGrpcClient<Channel> {
