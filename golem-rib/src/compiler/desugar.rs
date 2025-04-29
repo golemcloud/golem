@@ -34,10 +34,10 @@ pub fn desugar_range_selection(select_from: &Expr, range_expr: &Expr) -> Result<
             Range::RangeFrom { from, .. } => {
                 let length = VariableId::local("__size__", 0);
                 let length_identifier = Expr::identifier_with_variable_id(length.clone(), None)
-                    .with_inferred_type(InferredType::U64);
+                    .with_inferred_type(InferredType::u64());
                 let index = VariableId::local("__index__", 0);
                 let index_identifier = Expr::identifier_with_variable_id(index.clone(), None)
-                    .with_inferred_type(InferredType::U64);
+                    .with_inferred_type(InferredType::u64());
 
                 Ok(Expr::expr_block(vec![
                     Expr::let_binding_with_variable_id(
@@ -49,12 +49,13 @@ pub fn desugar_range_selection(select_from: &Expr, range_expr: &Expr) -> Result<
                         index,
                         Expr::minus(
                             length_identifier,
-                            Expr::number(BigDecimal::from(1)).with_inferred_type(InferredType::U64),
+                            Expr::number(BigDecimal::from(1))
+                                .with_inferred_type(InferredType::u64()),
                         )
-                        .with_inferred_type(InferredType::U64),
+                        .with_inferred_type(InferredType::u64()),
                         None,
                     )
-                    .with_inferred_type(InferredType::U64),
+                    .with_inferred_type(InferredType::u64()),
                     Expr::list_comprehension(
                         iterable_expr.clone(),
                         Expr::range(from.deref().clone(), index_identifier),
@@ -92,7 +93,7 @@ pub fn desugar_pattern_match(
 mod internal {
     use crate::call_type::CallType;
     use crate::rib_source_span::SourceSpan;
-    use crate::{ArmPattern, Expr, InferredType, MatchArm, Number, VariableId};
+    use crate::{ArmPattern, Expr, InferredType, MatchArm, Number, TypeInternal, VariableId};
     use bigdecimal::{BigDecimal, FromPrimitive};
 
     pub(crate) fn build_expr_from(if_branches: Vec<IfThenBranch>) -> Option<Expr> {
@@ -277,8 +278,8 @@ mod internal {
         pred_expr_inferred_type: InferredType,
         tag: Option<Expr>,
     ) -> Option<IfThenBranch> {
-        match pred_expr_inferred_type {
-            InferredType::Record(field_and_types) => {
+        match pred_expr_inferred_type.internal_type() {
+            TypeInternal::Record(field_and_types) => {
                 // Resolution body is a list of expressions which grows (maybe with some let bindings)
                 // as we recursively iterate over the bind patterns
                 // where bind patterns are {name: x, age: _, address : _ } in the case of `match record { {name: x, age: _, address : _ } ) =>`
@@ -299,7 +300,7 @@ mod internal {
                         .iter()
                         .find(|(f, _)| f == field)
                         .map(|(_, t)| t.clone())
-                        .unwrap_or(InferredType::Unknown);
+                        .unwrap_or(InferredType::unknown());
 
                     let branch = get_conditions(
                         &MatchArm::new(arm_pattern.clone(), Expr::empty_expr()),
@@ -342,8 +343,8 @@ mod internal {
         pred_expr_inferred_type: InferredType,
         tag: Option<Expr>,
     ) -> Option<IfThenBranch> {
-        match pred_expr_inferred_type {
-            InferredType::Variant(variant) => {
+        match pred_expr_inferred_type.internal_type() {
+            TypeInternal::Variant(variant) => {
                 let arg_pattern_opt = bind_patterns.first();
 
                 let inner_type = &variant
@@ -377,7 +378,7 @@ mod internal {
                 }
             }
 
-            InferredType::Option(inner) if constructor_name == "some" => {
+            TypeInternal::Option(inner) if constructor_name == "some" => {
                 let cond = if let Some(t) = tag {
                     Expr::and(
                         t,
@@ -398,13 +399,13 @@ mod internal {
                         &MatchArm::new(pattern.clone(), resolution.clone()),
                         &pred_expr.unwrap(),
                         Some(cond),
-                        *inner,
+                        inner.clone(),
                     ),
                     _ => None,
                 }
             }
 
-            InferredType::Option(_) if constructor_name == "none" => {
+            TypeInternal::Option(_) if constructor_name == "none" => {
                 let cond = if let Some(t) = tag {
                     Expr::and(
                         t,
@@ -426,11 +427,11 @@ mod internal {
                 })
             }
 
-            InferredType::Result { ok, error } => {
+            TypeInternal::Result { ok, error } => {
                 let inner_variant_arg_type = if constructor_name == "ok" {
-                    ok.as_deref()
+                    ok
                 } else if constructor_name == "err" {
-                    error.as_deref()
+                    error
                 } else {
                     return None;
                 };
@@ -456,7 +457,8 @@ mod internal {
                         &pred_expr.unwrap(),
                         Some(cond),
                         inner_variant_arg_type
-                            .unwrap_or(&InferredType::Unknown)
+                            .clone()
+                            .unwrap_or(InferredType::unknown())
                             .clone(),
                     ),
 
@@ -464,7 +466,7 @@ mod internal {
                 }
             }
 
-            InferredType::Tuple(inferred_types) => {
+            TypeInternal::Tuple(inferred_types) => {
                 // Resolution body is a list of expressions which grows (may be with some let bindings)
                 // as we recursively iterate over the bind patterns
                 // where bind patterns are x, _, y in the case of `match tuple_variable { (x, _, y)) =>`
@@ -487,11 +489,14 @@ mod internal {
                                 value: BigDecimal::from_usize(index).unwrap(),
                             },
                             type_annotation: None,
-                            inferred_type: InferredType::U64,
+                            inferred_type: InferredType::u64(),
                             source_span: SourceSpan::default(),
                         },
                     );
-                    let new_pred_type = inferred_types.get(index).unwrap_or(&InferredType::Unknown);
+                    let new_pred_type = inferred_types
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(InferredType::unknown());
 
                     let branch = get_conditions(
                         &MatchArm::new(arm_pattern.clone(), Expr::empty_expr()),
@@ -522,7 +527,7 @@ mod internal {
                 })
             }
 
-            InferredType::List(inferred_type) => {
+            TypeInternal::List(inferred_type) => {
                 // Resolution body is a list of expressions which grows (may be with some let bindings)
                 // as we recursively iterate over the bind patterns
                 // where bind patterns are x, _, y in the case of `match list_ { [x, _, y]) =>`
@@ -545,7 +550,7 @@ mod internal {
                                 value: BigDecimal::from_usize(index).unwrap(),
                             },
                             type_annotation: None,
-                            inferred_type: InferredType::U64,
+                            inferred_type: InferredType::u64(),
                             source_span: SourceSpan::default(),
                         },
                     );
@@ -555,7 +560,7 @@ mod internal {
                         &MatchArm::new(arm_pattern.clone(), Expr::empty_expr()),
                         &new_pred,
                         None,
-                        *new_pred_type,
+                        new_pred_type.clone(),
                     );
 
                     if let Some(x) = branch {
@@ -580,7 +585,7 @@ mod internal {
                 })
             }
 
-            InferredType::Unknown => Some(IfThenBranch {
+            TypeInternal::Unknown => Some(IfThenBranch {
                 condition: Expr::boolean(false),
                 body: resolution.clone(),
             }),
@@ -696,48 +701,46 @@ mod desugar_tests {
                 Expr::equal_to(
                     Expr::get_tag(
                         Expr::identifier_with_variable_id(VariableId::local("x", 0), None)
-                            .with_inferred_type(InferredType::Option(Box::new(InferredType::U64))),
+                            .with_inferred_type(InferredType::option(InferredType::u64())),
                     ),
                     Expr::literal("some"),
                 )
-                .with_inferred_type(InferredType::Bool),
+                .with_inferred_type(InferredType::bool()),
                 Expr::expr_block(vec![
                     Expr::let_binding_with_variable_id(
                         VariableId::match_identifier("x".to_string(), 1),
                         Expr::identifier_with_variable_id(VariableId::local("x", 0), None)
-                            .with_inferred_type(InferredType::Option(Box::new(InferredType::U64)))
+                            .with_inferred_type(InferredType::option(InferredType::u64()))
                             .unwrap(),
                         None,
                     )
-                    .with_inferred_type(InferredType::U64),
+                    .with_inferred_type(InferredType::u64()),
                     Expr::identifier_with_variable_id(
                         VariableId::match_identifier("x".to_string(), 1),
                         None,
                     )
-                    .with_inferred_type(InferredType::U64),
+                    .with_inferred_type(InferredType::u64()),
                 ])
-                .with_inferred_type(InferredType::U64),
+                .with_inferred_type(InferredType::u64()),
                 Expr::cond(
                     Expr::equal_to(
                         Expr::get_tag(
                             Expr::identifier_with_variable_id(VariableId::local("x", 0), None)
-                                .with_inferred_type(InferredType::Option(Box::new(
-                                    InferredType::U64,
-                                ))),
+                                .with_inferred_type(InferredType::option(InferredType::u64())),
                         ),
                         Expr::literal("none"),
                     )
-                    .with_inferred_type(InferredType::Bool),
+                    .with_inferred_type(InferredType::bool()),
                     Expr::number_inferred(
                         BigDecimal::from(1),
                         Some(TypeName::U64),
-                        InferredType::U64,
+                        InferredType::u64(),
                     ),
                     Expr::throw("No match found"),
                 )
-                .with_inferred_type(InferredType::U64),
+                .with_inferred_type(InferredType::u64()),
             )
-            .with_inferred_type(InferredType::U64)
+            .with_inferred_type(InferredType::u64())
         }
     }
 }

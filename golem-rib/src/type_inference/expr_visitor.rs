@@ -1,4 +1,4 @@
-use crate::{Expr, InferredType};
+use crate::{Expr, TypeInternal};
 use std::collections::VecDeque;
 
 // A structure that allows to visit expressions in a bottom-up or top-down order.
@@ -188,7 +188,7 @@ fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
                 }
 
                 // The expr existing in the inferred type should be visited
-                if let InferredType::Instance { instance_type } = inferred_type {
+                if let TypeInternal::Instance { instance_type } = inferred_type.inner.as_mut() {
                     if let Some(worker_expr) = instance_type.worker_mut() {
                         stack.push_front(&mut **worker_expr);
                     }
@@ -235,7 +235,7 @@ fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
                 inferred_type,
                 ..
             } => {
-                if let InferredType::Instance { instance_type } = inferred_type {
+                if let TypeInternal::Instance { instance_type } = inferred_type.inner.as_mut() {
                     if let Some(worker_expr) = instance_type.worker_mut() {
                         stack.push_front(&mut **worker_expr);
                     }
@@ -270,7 +270,7 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
 
         let current = unsafe { &mut *current };
 
-        match current {
+        match &mut *current {
             Expr::Let { expr, .. } => stack.push_back(&mut **expr),
             Expr::SelectField { expr, .. } => stack.push_back(&mut **expr),
             Expr::SelectIndex { expr, index, .. } => {
@@ -372,7 +372,7 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
                 }
 
                 // The expr existing in the inferred type should be visited
-                if let InferredType::Instance { instance_type } = inferred_type {
+                if let TypeInternal::Instance { instance_type } = inferred_type.inner.as_mut() {
                     if let Some(worker_expr) = instance_type.worker_mut() {
                         stack.push_back(&mut **worker_expr);
                     }
@@ -417,7 +417,7 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
                 inferred_type,
                 ..
             } => {
-                if let InferredType::Instance { instance_type } = inferred_type {
+                if let TypeInternal::Instance { instance_type } = inferred_type.inner.as_mut() {
                     if let Some(worker_expr) = instance_type.worker_mut() {
                         stack.push_back(&mut **worker_expr);
                     }
@@ -442,9 +442,11 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
     }
 }
 
-// This is to be replaced with the usage of `ExprVisitor`
-// https://github.com/golemcloud/golem/issues/1428
-pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mut Expr>) {
+// This is almost a lazy visit, that we don't put the expr into the queue
+// unless it is needed. To a great extent both ExprVisitor and this function
+// can be used instead of each other, but depending on situations one can perform better
+// over the other.
+pub fn visit_expr_nodes_lazy<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mut Expr>) {
     match expr {
         Expr::Let { expr, .. } => queue.push_back(&mut *expr),
         Expr::SelectField { expr, .. } => queue.push_back(&mut *expr),
@@ -542,7 +544,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
             }
 
             // The expr existing in the inferred type should be visited
-            if let InferredType::Instance { instance_type } = inferred_type {
+            if let TypeInternal::Instance { instance_type } = inferred_type.inner.as_mut() {
                 if let Some(worker_expr) = instance_type.worker_mut() {
                     queue.push_back(worker_expr);
                 }
@@ -587,7 +589,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
             inferred_type,
             ..
         } => {
-            if let InferredType::Instance { instance_type } = inferred_type {
+            if let TypeInternal::Instance { instance_type } = inferred_type.inner.as_mut() {
                 if let Some(worker_expr) = instance_type.worker_mut() {
                     queue.push_back(worker_expr);
                 }
