@@ -91,7 +91,8 @@ impl TypeOrigin {
         matches!(self, TypeOrigin::NoOrigin)
     }
 
-    pub fn immediate_critical_origin(&self) -> TypeOrigin {
+    // It simply picks up the origin based on a priority
+    pub fn critical_origin(&self) -> TypeOrigin {
         let mut queue = VecDeque::new();
         queue.push_back(self);
 

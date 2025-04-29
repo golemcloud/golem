@@ -50,7 +50,7 @@ impl InferredType {
     }
 
     pub fn critical_origin(&self) -> TypeOrigin {
-        self.origin.immediate_critical_origin()
+        self.origin.critical_origin()
     }
 
     pub fn source_span(&self) -> Option<SourceSpan> {
