@@ -34,6 +34,8 @@ pub enum TypeOrigin {
 }
 
 impl TypeOrigin {
+    // To not interfere with equality logic of types
+    // yet if we need to specifically compare the type origins
     pub fn eq(&self, other: &TypeOrigin) -> bool {
         match (self, other) {
             (TypeOrigin::NoOrigin, TypeOrigin::NoOrigin) => true,
@@ -164,69 +166,46 @@ impl TypeOrigin {
             },
 
             TypeOrigin::Multiple(existing_origins) => {
-                let mut updated_origins = existing_origins.clone();
+                let mut updated = existing_origins.clone();
 
-                match &new_origin {
+                match new_origin {
                     TypeOrigin::Multiple(new_origins) => {
-                        for new_origin in new_origins {
-                            let mut contains = false;
-
-                            for existing_origin in existing_origins.iter() {
-                                if existing_origin.eq(new_origin) {
-                                    contains = true;
-                                }
-                            }
-
-                            if !contains {
-                                updated_origins.push(new_origin.clone());
+                        for origin in new_origins {
+                            if !updated.iter().any(|o| o.eq(&origin)) {
+                                updated.push(origin);
                             }
                         }
                     }
-                    _ => {
-                        let mut contains = false;
-
-                        for updated_origin in existing_origins.iter() {
-                            if updated_origin.eq(&new_origin) {
-                                contains = true;
-                            }
-                        }
-
-                        if !contains {
-                            updated_origins.push(new_origin.clone());
+                    origin => {
+                        if !updated.iter().any(|o| o.eq(&origin)) {
+                            updated.push(origin);
                         }
                     }
                 }
-                TypeOrigin::Multiple(updated_origins)
+
+                TypeOrigin::Multiple(updated)
             }
 
-            any_other_origin => match new_origin {
+            other => match new_origin {
                 TypeOrigin::Multiple(origins) => {
-                    let mut updated = vec![any_other_origin.clone()];
+                    let mut updated = vec![other.clone()];
 
                     for origin in origins {
-                        if !any_other_origin.eq(&origin) {
-                            return self.clone();
-                        } else {
-                            updated.push(origin.clone());
+                        if !updated.iter().any(|o| o.eq(&origin)) {
+                            updated.push(origin);
                         }
                     }
 
                     if updated.len() == 1 {
-                        return updated.pop().unwrap().clone();
-                    }
-
-                    TypeOrigin::Multiple(updated)
-                }
-
-                new_origin => {
-                    if new_origin.eq(any_other_origin) {
-                        self.clone()
+                        updated.pop().unwrap()
                     } else {
-                        let mut updated = vec![any_other_origin.clone()];
-                        updated.push(new_origin);
                         TypeOrigin::Multiple(updated)
                     }
                 }
+
+                origin if origin.eq(other) => other.clone(),
+
+                origin => TypeOrigin::Multiple(vec![other.clone(), origin]),
             },
         }
     }
