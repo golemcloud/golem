@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::inferred_type::UnificationFailureInternal;
+use crate::inferred_type::{TypeOrigin, UnificationFailureInternal};
 use crate::{Expr, ExprVisitor, InferredType, TypeUnificationError};
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
+    let mut original_expr = expr.clone();
+
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(expr) = visitor.pop_front() {
@@ -27,6 +29,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::number(number.value.clone()).with_source_span(source_span.clone()),
                     inferred_type,
                 )?;
@@ -46,6 +49,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                     .collect();
 
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::record(exprs).with_source_span(source_span.clone()),
                     inferred_type,
                 )?;
@@ -59,6 +63,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::tuple(exprs.clone()).with_source_span(source_span.clone()),
                     inferred_type,
                 )?;
@@ -73,6 +78,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 type_annotation,
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::Range {
                         range: range.clone(),
                         source_span: source_span.clone(),
@@ -93,6 +99,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::sequence(exprs.clone(), type_annotation.clone())
                         .with_source_span(source_span.clone()),
                     inferred_type,
@@ -108,6 +115,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::option(expr.as_deref().cloned())
                         .with_type_annotation_opt(type_annotation.clone())
                         .with_source_span(source_span.clone()),
@@ -125,6 +133,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::ok(expr.as_ref().clone(), type_annotation.clone())
                         .with_source_span(source_span.clone()),
                     inferred_type,
@@ -141,6 +150,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::err(expr.as_ref().clone(), type_annotation.clone())
                         .with_source_span(source_span.clone()),
                     inferred_type,
@@ -157,6 +167,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::cond(
                         cond.as_ref().clone(),
                         lhs.as_ref().clone(),
@@ -175,6 +186,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::length(expr.as_ref().clone()).with_source_span(source_span.clone()),
                     inferred_type,
                 )?;
@@ -191,6 +203,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::list_comprehension(
                         iterated_variable.clone(),
                         iterable_expr.as_ref().clone(),
@@ -214,6 +227,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::list_reduce(
                         reduce_variable.clone(),
                         iterated_variable.clone(),
@@ -236,6 +250,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::pattern_match(predicate.as_ref().clone(), match_arms.clone())
                         .with_source_span(source_span.clone()),
                     inferred_type,
@@ -260,7 +275,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                     type_annotation: type_annotation.clone(),
                 };
 
-                let unified_type = unify_inferred_type(expr, inferred_type)?;
+                let unified_type = unify_inferred_type(&mut original_expr, expr, inferred_type)?;
 
                 *inferred_type = unified_type;
             }
@@ -275,7 +290,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                     Expr::select_field(expr.as_ref().clone(), field, type_annotation.clone())
                         .with_source_span(source_span.clone());
 
-                let unified_type = unify_inferred_type(expr, inferred_type)?;
+                let unified_type = unify_inferred_type(&mut original_expr, expr, inferred_type)?;
 
                 *inferred_type = unified_type;
             }
@@ -288,6 +303,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::select_index(expr.as_ref().clone(), index.as_ref().clone())
                         .with_source_span(source_span.clone()),
                     inferred_type,
@@ -304,6 +320,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::literal(value.clone()).with_source_span(source_span.clone()),
                     inferred_type,
                 )?;
@@ -317,6 +334,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::flags(flags.clone()).with_source_span(source_span.clone()),
                     inferred_type,
                 )?;
@@ -331,6 +349,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::identifier_with_variable_id(variable_id.clone(), type_annotation.clone())
                         .with_source_span(source_span.clone()),
                     inferred_type,
@@ -346,6 +365,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_inferred_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::expr_block(vec![]).with_source_span(source_span.clone()),
                     inferred_type,
                 );
@@ -362,6 +382,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::not(expr.as_ref().clone())
                         .with_source_span(source_span.clone())
                         .with_source_span(source_span.clone()),
@@ -377,6 +398,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     expr.unwrap().with_source_span(source_span.clone()),
                     inferred_type,
                 )?;
@@ -391,6 +413,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::throw(message).with_source_span(source_span.clone()),
                     inferred_type,
                 )?;
@@ -405,6 +428,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::get_tag(expr.as_ref().clone()).with_source_span(source_span.clone()),
                     inferred_type,
                 )?;
@@ -422,6 +446,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::plus(lhs.as_ref().clone(), rhs.as_ref().clone())
                         .with_source_span(source_span.clone()),
                     inferred_type,
@@ -438,6 +463,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::minus(lhs.as_ref().clone(), rhs.as_ref().clone())
                         .with_source_span(source_span.clone()),
                     inferred_type,
@@ -454,6 +480,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::minus(lhs.as_ref().clone(), rhs.as_ref().clone())
                         .with_source_span(source_span.clone()),
                     inferred_type,
@@ -470,6 +497,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
                 ..
             } => {
                 let unified_type = unify_inferred_type(
+                    &mut original_expr,
                     Expr::multiply(lhs.as_ref().clone(), rhs.as_ref().clone())
                         .with_source_span(source_span.clone()),
                     inferred_type,
@@ -493,6 +521,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
 }
 
 fn unify_inferred_type(
+    original_expr: &mut Expr,
     expr: Expr,
     inferred_type: &InferredType,
 ) -> Result<InferredType, TypeUnificationError> {
@@ -504,20 +533,58 @@ fn unify_inferred_type(
             UnificationFailureInternal::TypeMisMatch {
                 expected,
                 found,
-                additional_error_detail,
-            } => Err(TypeUnificationError::type_mismatch_error(
-                expr,
-                None,
-                expected,
-                found,
-                additional_error_detail,
-            )),
+            } => {
+                let found_origin = found.critical_origin();
+                let found_source_span = found_origin.source_span();
+                let found_expr = found_source_span.as_ref().and_then(|span| {
+                    original_expr.lookup(span)
+                });
+
+                let expected_origin = expected.critical_origin();
+                let additional_message = match expected_origin {
+                    TypeOrigin::PatternMatch(span) => {
+                        format!("expected {} based on pattern match branch at line {} column {}", expected.printable(), span.start_line(), span.start_column())
+                    }
+                    TypeOrigin::Default => "".to_string(),
+                    TypeOrigin::NoOrigin => "".to_string(),
+                    TypeOrigin::Declared(source_span) => {
+                        format!("{} declared at line {} column {}", expected.printable(), source_span.start_line(), source_span.start_column())
+                    }
+                    TypeOrigin::Multiple(_) => "".to_string()
+                };
+
+                match found_expr {
+                    Some(found_expr) => {
+                        dbg!(expr);
+                        Err(TypeUnificationError::type_mismatch_error(
+                            found_expr,
+                            None,
+                            expected,
+                            found,
+                            vec![additional_message],
+                        ))
+                    },
+
+                    None => {
+                        let ambiguity_message = format!(
+                            "conflicting types {}, {}",
+                            found.printable(),
+                            expected.printable()
+                        );
+                        Err(TypeUnificationError::unresolved_types_error(
+                            expr,
+                            None,
+                            vec![ambiguity_message],
+                        ))
+                    }
+                }
+            },
             UnificationFailureInternal::ConflictingTypes {
                 conflicting_types,
                 additional_error_detail,
             } => {
                 let mut additional_messages = vec![format!(
-                    "conflicting types inferred: {}",
+                    "conflicting types: {}",
                     conflicting_types
                         .iter()
                         .map(|t| t.printable())

@@ -2,7 +2,7 @@ use crate::rib_source_span::SourceSpan;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Eq, PartialOrd, Ord)]
 pub enum TypeOrigin {
     Default,
     NoOrigin,
@@ -12,8 +12,60 @@ pub enum TypeOrigin {
 }
 
 impl TypeOrigin {
+    pub fn source_span(&self) -> Option<SourceSpan> {
+        let mut stack = vec![self];
+
+        while let Some(origin) = stack.pop() {
+            match origin {
+                TypeOrigin::PatternMatch(span) => return Some(span.clone()),
+                TypeOrigin::Declared(span) => return Some(span.clone()),
+                TypeOrigin::Multiple(origins) => {
+                    stack.extend(origins.iter());
+                }
+                TypeOrigin::Default | TypeOrigin::NoOrigin => {
+                }
+            }
+        }
+
+        None
+    }
+
     pub fn is_none(&self) -> bool {
         matches!(self, TypeOrigin::NoOrigin)
+    }
+
+    pub fn immediate_critical_origin(&self) -> TypeOrigin {
+        let mut queue = vec![self];
+
+        let mut best: Option<TypeOrigin> = None;
+
+        while let Some(current) = queue.pop() {
+            match current {
+                TypeOrigin::PatternMatch(span) => {
+                    return TypeOrigin::PatternMatch(span.clone());
+                }
+                TypeOrigin::Declared(span) => {
+                    if best.is_none() || matches!(best, Some(TypeOrigin::Default) | Some(TypeOrigin::NoOrigin)) {
+                        best = Some(TypeOrigin::Declared(span.clone()));
+                    }
+                }
+                TypeOrigin::Default => {
+                    if best.is_none() || matches!(best, Some(TypeOrigin::NoOrigin)) {
+                        best = Some(TypeOrigin::Default);
+                    }
+                }
+                TypeOrigin::NoOrigin => {
+                    if best.is_none() {
+                        best = Some(TypeOrigin::NoOrigin);
+                    }
+                }
+                TypeOrigin::Multiple(origins) => {
+                    queue.extend(origins.iter());
+                }
+            }
+        }
+
+        best.unwrap_or(TypeOrigin::NoOrigin)
     }
 
     pub fn is_default(&self) -> bool {
@@ -57,17 +109,17 @@ impl TypeOrigin {
     }
 }
 
-impl Debug for TypeOrigin {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TypeOrigin::Default => write!(f, "Default"),
-            TypeOrigin::NoOrigin => write!(f, "NoOrigin"),
-            TypeOrigin::Declared(_) => write!(f, "Declared"),
-            TypeOrigin::Multiple(_) => write!(f, "Multiple<Origin>"),
-            TypeOrigin::PatternMatch(_) => write!(f, "PatternMatch"),
-        }
-    }
-}
+// impl Debug for TypeOrigin {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         match self {
+//             TypeOrigin::Default => write!(f, "Default"),
+//             TypeOrigin::NoOrigin => write!(f, "NoOrigin"),
+//             TypeOrigin::Declared(_) => write!(f, "Declared"),
+//             TypeOrigin::Multiple(_) => write!(f, "Multiple<Origin>"),
+//             TypeOrigin::PatternMatch(_) => write!(f, "PatternMatch"),
+//         }
+//     }
+// }
 
 impl Hash for TypeOrigin {
     fn hash<H: Hasher>(&self, state: &mut H) {

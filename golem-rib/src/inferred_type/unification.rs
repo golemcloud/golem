@@ -2,6 +2,7 @@ use crate::inferred_type::{flatten_all_of_list, TypeOrigin};
 use crate::{InferredType, TypeInternal};
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
+use crate::rib_source_span::SourceSpan;
 
 #[derive(Clone, Debug)]
 pub struct Unified(InferredType);
@@ -133,7 +134,6 @@ pub enum UnificationFailureInternal {
     TypeMisMatch {
         expected: InferredType,
         found: InferredType,
-        additional_error_detail: Vec<String>,
     },
 
     ConflictingTypes {
@@ -150,18 +150,12 @@ impl Display for UnificationFailureInternal {
             UnificationFailureInternal::TypeMisMatch {
                 expected,
                 found,
-                additional_error_detail,
             } => {
-                let additional_error_details = additional_error_detail
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>();
                 write!(
                     f,
-                    "type mismatch: expected {}, found {}. {}",
+                    "type mismatch: expected {}, found {}",
                     expected.printable(),
                     found.printable(),
-                    additional_error_details.join(", ")
                 )
             }
             UnificationFailureInternal::ConflictingTypes {
@@ -194,12 +188,10 @@ impl UnificationFailureInternal {
     pub fn type_mismatch(
         expected: InferredType,
         found: InferredType,
-        additional_error_detail: Vec<String>,
     ) -> Self {
         UnificationFailureInternal::TypeMisMatch {
             expected,
             found,
-            additional_error_detail,
         }
     }
 
@@ -484,43 +476,16 @@ pub fn unify_both_inferred_types(
             if inferred_type_left == inferred_type_right {
                 Ok(left_inferred_type.clone())
             } else {
-                Err(conflict_error(&left_inferred_type, &right_inferred_type))
+                Err(UnificationFailureInternal::type_mismatch(
+                    right_inferred_type.clone(),
+                    left_inferred_type.clone(),
+                ))
             }
         }
     }
 }
 
-// We assume left is original and right is expected
-fn conflict_error(left: &InferredType, right: &InferredType) -> UnificationFailureInternal {
-    let origin_of_expected = &right.origin_root();
 
-    match origin_of_expected {
-        TypeOrigin::PatternMatch(source_span) => UnificationFailureInternal::type_mismatch(
-            right.clone(),
-            left.clone(),
-            vec![format!(
-                "expected {} based on pattern match branch at line {} column {}",
-                right.printable(),
-                source_span.start_line(),
-                source_span.start_column()
-            )],
-        ),
-        TypeOrigin::Declared(source_span) => UnificationFailureInternal::type_mismatch(
-            right.clone(),
-            left.clone(),
-            vec![format!(
-                "expected {} based on declaration at line {} column {}",
-                right.printable(),
-                source_span.start_line(),
-                source_span.start_column()
-            )],
-        ),
-
-        _ => {
-            UnificationFailureInternal::conflicting_types(vec![left.clone(), right.clone()], vec![])
-        }
-    }
-}
 
 pub(crate) fn validate_unified_type(
     inferred_type: &InferredType,

@@ -45,6 +45,44 @@ impl InferredType {
         self.origin.clone()
     }
 
+    pub fn critical_origin(&self) -> TypeOrigin {
+        self.origin.immediate_critical_origin()
+    }
+
+    pub fn source_span(&self) -> Option<SourceSpan> {
+        let origin = self.origin();
+
+        match origin {
+            TypeOrigin::Default => None,
+            TypeOrigin::NoOrigin => None,
+            TypeOrigin::Declared(source_span) => Some(source_span),
+            TypeOrigin::Multiple(origins) => {
+                let mut source_spans = vec![];
+                // multiple is always assumed to be flattened
+                for origin in origins {
+                    match origin {
+                        TypeOrigin::Declared(source_span) => {
+                            source_spans.push(source_span.clone());
+                        }
+                        TypeOrigin::NoOrigin => {}
+                        TypeOrigin::Default => {}
+                        TypeOrigin::Multiple(_) => {}
+                        TypeOrigin::PatternMatch(source_span) => {
+                            source_spans.push(source_span.clone());
+                        }
+                    }
+                }
+                if source_spans.is_empty() {
+                    None
+                } else {
+                    Some(source_spans[0].clone())
+                }
+            }
+
+            TypeOrigin::PatternMatch(source_span) => Some(source_span),
+        }
+    }
+
     pub fn origin_root(&self) -> TypeOrigin {
         self.origin.root()
     }
