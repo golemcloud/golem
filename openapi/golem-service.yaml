@@ -3413,7 +3413,7 @@ paths:
     post:
       tags:
       - Component
-      summary: Updates the priority or parameters of a plugin installation
+      summary: Applies a batch of changes to the installed plugins of a component
       operationId: bath_update_installed_plugins
       parameters:
       - in: path
