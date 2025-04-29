@@ -531,7 +531,7 @@ fn unify_inferred_type(
         Ok(unified_type) => Ok(unified_type),
         Err(e) => match e {
             UnificationFailureInternal::TypeMisMatch { expected, found } => {
-                let found_origin = found.critical_origin();
+                let found_origin = found.origin();
                 let found_source_span = found_origin.source_span();
                 let found_expr = found_source_span
                     .as_ref()
@@ -557,20 +557,18 @@ fn unify_inferred_type(
                             source_span.start_column()
                         )
                     }
+                    TypeOrigin::OriginatedAt(_) => "".to_string(),
                     TypeOrigin::Multiple(_) => "".to_string(),
                 };
 
                 match found_expr {
-                    Some(found_expr) => {
-                        dbg!(expr);
-                        Err(TypeUnificationError::type_mismatch_error(
-                            found_expr,
-                            None,
-                            expected,
-                            found,
-                            vec![additional_message],
-                        ))
-                    }
+                    Some(found_expr) => Err(TypeUnificationError::type_mismatch_error(
+                        found_expr,
+                        None,
+                        expected,
+                        found,
+                        vec![additional_message],
+                    )),
 
                     None => {
                         let ambiguity_message = format!(

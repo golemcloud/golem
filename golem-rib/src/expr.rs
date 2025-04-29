@@ -1565,44 +1565,197 @@ impl Expr {
 
     pub fn with_source_span_mut(&mut self, new_source_span: SourceSpan) {
         match self {
-            Expr::Identifier { source_span, .. }
-            | Expr::Let { source_span, .. }
-            | Expr::SelectField { source_span, .. }
-            | Expr::SelectIndex { source_span, .. }
-            | Expr::Sequence { source_span, .. }
-            | Expr::Record { source_span, .. }
-            | Expr::Tuple { source_span, .. }
-            | Expr::Literal { source_span, .. }
-            | Expr::Number { source_span, .. }
-            | Expr::Flags { source_span, .. }
-            | Expr::Boolean { source_span, .. }
-            | Expr::Concat { source_span, .. }
-            | Expr::ExprBlock { source_span, .. }
-            | Expr::Not { source_span, .. }
-            | Expr::GreaterThan { source_span, .. }
-            | Expr::GreaterThanOrEqualTo { source_span, .. }
-            | Expr::LessThanOrEqualTo { source_span, .. }
-            | Expr::EqualTo { source_span, .. }
-            | Expr::LessThan { source_span, .. }
-            | Expr::Plus { source_span, .. }
-            | Expr::Minus { source_span, .. }
-            | Expr::Divide { source_span, .. }
-            | Expr::Multiply { source_span, .. }
-            | Expr::Cond { source_span, .. }
-            | Expr::PatternMatch { source_span, .. }
-            | Expr::Option { source_span, .. }
-            | Expr::Result { source_span, .. }
-            | Expr::Unwrap { source_span, .. }
-            | Expr::Throw { source_span, .. }
-            | Expr::And { source_span, .. }
-            | Expr::Or { source_span, .. }
-            | Expr::GetTag { source_span, .. }
-            | Expr::Range { source_span, .. }
-            | Expr::ListComprehension { source_span, .. }
-            | Expr::ListReduce { source_span, .. }
-            | Expr::InvokeMethodLazy { source_span, .. }
-            | Expr::Length { source_span, .. }
-            | Expr::Call { source_span, .. } => {
+            Expr::Identifier {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Let {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::SelectField {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::SelectIndex {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Sequence {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Record {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Tuple {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Literal {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Number {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Flags {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Boolean {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Concat {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::ExprBlock {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Not {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::GreaterThan {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::GreaterThanOrEqualTo {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::LessThanOrEqualTo {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::EqualTo {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::LessThan {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Plus {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Minus {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Divide {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Multiply {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Cond {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::PatternMatch {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Option {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Result {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Unwrap {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Throw {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::And {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Or {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::GetTag {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Range {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::ListComprehension {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::ListReduce {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::InvokeMethodLazy {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Length {
+                source_span,
+                inferred_type,
+                ..
+            }
+            | Expr::Call {
+                source_span,
+                inferred_type,
+                ..
+            } => {
+                *inferred_type = inferred_type.originated_at(&new_source_span);
                 *source_span = new_source_span;
             }
         }

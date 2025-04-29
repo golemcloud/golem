@@ -4,6 +4,13 @@ use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug, Eq, PartialOrd, Ord)]
 pub enum TypeOrigin {
+    // the first OriginatedAt (if it's TypeOrigin::Multiple) at
+    // this level is the source span of the expression to which this
+    // type origin is attached
+    OriginatedAt(SourceSpan),
+    // If an expression has an inferred type that was originated by default
+    // this becomes the first origin. So to see if an expression's inferred type
+    // was because it was `Default` then this is the first origin
     Default,
     NoOrigin,
     Declared(SourceSpan),
@@ -12,11 +19,15 @@ pub enum TypeOrigin {
 }
 
 impl TypeOrigin {
+    // Since OriginatedAt is usually tagged against every expression
+    // in the beginning itself, this is actually always Some(span), where
+    // the span is the original span of the expression this type origin is attached to;
     pub fn source_span(&self) -> Option<SourceSpan> {
         let mut stack = vec![self];
 
         while let Some(origin) = stack.pop() {
             match origin {
+                TypeOrigin::OriginatedAt(span) => return Some(span.clone()),
                 TypeOrigin::PatternMatch(span) => return Some(span.clone()),
                 TypeOrigin::Declared(span) => return Some(span.clone()),
                 TypeOrigin::Multiple(origins) => {
@@ -45,14 +56,29 @@ impl TypeOrigin {
                 }
                 TypeOrigin::Declared(span) => {
                     if best.is_none()
-                        || matches!(best, Some(TypeOrigin::Default) | Some(TypeOrigin::NoOrigin))
+                        || matches!(
+                            best,
+                            Some(TypeOrigin::Default)
+                                | Some(TypeOrigin::NoOrigin)
+                                | Some(TypeOrigin::OriginatedAt(_))
+                        )
                     {
                         best = Some(TypeOrigin::Declared(span.clone()));
                     }
                 }
                 TypeOrigin::Default => {
-                    if best.is_none() || matches!(best, Some(TypeOrigin::NoOrigin)) {
+                    if best.is_none()
+                        || matches!(
+                            best,
+                            Some(TypeOrigin::NoOrigin) | Some(TypeOrigin::OriginatedAt(_))
+                        )
+                    {
                         best = Some(TypeOrigin::Default);
+                    }
+                }
+                TypeOrigin::OriginatedAt(source_span) => {
+                    if best.is_none() {
+                        best = Some(TypeOrigin::OriginatedAt(source_span.clone()));
                     }
                 }
                 TypeOrigin::NoOrigin => {
@@ -72,25 +98,15 @@ impl TypeOrigin {
     pub fn is_default(&self) -> bool {
         match self {
             TypeOrigin::Default => true,
+            TypeOrigin::OriginatedAt(_) => false,
             TypeOrigin::NoOrigin => false,
             TypeOrigin::Declared(_) => false,
             TypeOrigin::Multiple(origins) => {
+                // if the origin was originated as part of "Default", then it will exist in the very beginning
                 origins.first().is_some_and(|origin| origin.is_default())
             }
 
             TypeOrigin::PatternMatch(_) => false,
-        }
-    }
-
-    pub fn root(&self) -> TypeOrigin {
-        match self {
-            TypeOrigin::Default => TypeOrigin::Default,
-            TypeOrigin::NoOrigin => TypeOrigin::NoOrigin,
-            TypeOrigin::Declared(_) => self.clone(),
-            TypeOrigin::Multiple(origins) => {
-                origins.first().map_or(self.clone(), |origin| origin.root())
-            }
-            TypeOrigin::PatternMatch(_) => self.clone(),
         }
     }
 
@@ -110,18 +126,6 @@ impl TypeOrigin {
     }
 }
 
-// impl Debug for TypeOrigin {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         match self {
-//             TypeOrigin::Default => write!(f, "Default"),
-//             TypeOrigin::NoOrigin => write!(f, "NoOrigin"),
-//             TypeOrigin::Declared(_) => write!(f, "Declared"),
-//             TypeOrigin::Multiple(_) => write!(f, "Multiple<Origin>"),
-//             TypeOrigin::PatternMatch(_) => write!(f, "PatternMatch"),
-//         }
-//     }
-// }
-
 impl Hash for TypeOrigin {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
@@ -137,6 +141,10 @@ impl Hash for TypeOrigin {
             }
             TypeOrigin::PatternMatch(span) => {
                 4.hash(state);
+                span.hash(state);
+            }
+            TypeOrigin::OriginatedAt(span) => {
+                5.hash(state);
                 span.hash(state);
             }
         }

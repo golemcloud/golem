@@ -41,6 +41,10 @@ pub struct InferredType {
 }
 
 impl InferredType {
+    pub fn originated_at(&self, source_span: &SourceSpan) -> InferredType {
+        self.add_origin(TypeOrigin::OriginatedAt(source_span.clone()))
+    }
+
     pub fn origin(&self) -> TypeOrigin {
         self.origin.clone()
     }
@@ -61,6 +65,9 @@ impl InferredType {
                 // multiple is always assumed to be flattened
                 for origin in origins {
                     match origin {
+                        TypeOrigin::OriginatedAt(source_span) => {
+                            source_spans.push(source_span.clone());
+                        }
                         TypeOrigin::Declared(source_span) => {
                             source_spans.push(source_span.clone());
                         }
@@ -78,13 +85,9 @@ impl InferredType {
                     Some(source_spans[0].clone())
                 }
             }
-
+            TypeOrigin::OriginatedAt(source_span) => Some(source_span),
             TypeOrigin::PatternMatch(source_span) => Some(source_span),
         }
-    }
-
-    pub fn origin_root(&self) -> TypeOrigin {
-        self.origin.root()
     }
 
     pub fn as_number(&self) -> Result<InferredNumber, String> {
