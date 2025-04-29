@@ -20,7 +20,7 @@ pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
     let mut seen = HashSet::new();
 
     for typ in types {
-        match typ.inner.as_ref() {
+        match typ.internal_type() {
             TypeInternal::AllOf(all_of) => {
                 let flattened = flatten_all_of_list(all_of);
                 for t in flattened {

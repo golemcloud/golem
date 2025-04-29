@@ -43,7 +43,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
         {
             let inferred_type = lhs.inferred_type();
 
-            match inferred_type.inner.as_ref() {
+            match inferred_type.internal_type() {
                 TypeInternal::Instance { instance_type } => {
                     let type_parameter = generic_type_parameter
                         .as_ref()

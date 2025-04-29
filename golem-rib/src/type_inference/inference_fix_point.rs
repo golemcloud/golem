@@ -46,7 +46,7 @@ fn compare_expr_types(left: &mut Expr, right: &mut Expr) -> bool {
 }
 
 fn compare_inferred_types(left: &InferredType, right: &InferredType) -> bool {
-    compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), true)
+    compare_inferred_types_internal(left.internal_type(), right.internal_type(), true)
 }
 
 fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bool: bool) -> bool {
@@ -56,16 +56,16 @@ fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bo
             left.iter().all(|left| {
                 right.iter().any(|right| {
                     compare_inferred_types_internal(
-                        left.inner.as_ref(),
-                        right.inner.as_ref(),
+                        left.internal_type(),
+                        right.internal_type(),
                         false,
                     )
                 })
             }) && right.iter().all(|right| {
                 left.iter().any(|left| {
                     compare_inferred_types_internal(
-                        left.inner.as_ref(),
-                        right.inner.as_ref(),
+                        left.internal_type(),
+                        right.internal_type(),
                         false,
                     )
                 })
@@ -76,11 +76,11 @@ fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bo
         (TypeInternal::AllOf(left), inferred_type) => {
             if bool {
                 left.iter().all(|left| {
-                    compare_inferred_types_internal(left.inner.as_ref(), inferred_type, true)
+                    compare_inferred_types_internal(left.internal_type(), inferred_type, true)
                 })
             } else {
                 left.iter().any(|left| {
-                    compare_inferred_types_internal(left.inner.as_ref(), inferred_type, true)
+                    compare_inferred_types_internal(left.internal_type(), inferred_type, true)
                 })
             }
         }
@@ -89,11 +89,11 @@ fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bo
         (inferred_type, TypeInternal::AllOf(right)) => {
             if bool {
                 right.iter().all(|left| {
-                    compare_inferred_types_internal(left.inner.as_ref(), inferred_type, true)
+                    compare_inferred_types_internal(left.internal_type(), inferred_type, true)
                 })
             } else {
                 right.iter().any(|left| {
-                    compare_inferred_types_internal(left.inner.as_ref(), inferred_type, true)
+                    compare_inferred_types_internal(left.internal_type(), inferred_type, true)
                 })
             }
         }
@@ -106,8 +106,8 @@ fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bo
                     .map(|(_, value)| value)
                 {
                     compare_inferred_types_internal(
-                        value.inner.as_ref(),
-                        right_value.inner.as_ref(),
+                        value.internal_type(),
+                        right_value.internal_type(),
                         true,
                     )
                 } else {
@@ -120,8 +120,8 @@ fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bo
                     .map(|(_, value)| value)
                 {
                     compare_inferred_types_internal(
-                        value.inner.as_ref(),
-                        left_value.inner.as_ref(),
+                        value.internal_type(),
+                        left_value.internal_type(),
                         true,
                     )
                 } else {
@@ -132,16 +132,16 @@ fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bo
 
         (TypeInternal::Tuple(left), TypeInternal::Tuple(right)) => {
             left.iter().zip(right.iter()).all(|(left, right)| {
-                compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), true)
+                compare_inferred_types_internal(left.internal_type(), right.internal_type(), true)
             })
         }
 
         (TypeInternal::List(left), TypeInternal::List(right)) => {
-            compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), true)
+            compare_inferred_types_internal(left.internal_type(), right.internal_type(), true)
         }
 
         (TypeInternal::Option(left), TypeInternal::Option(right)) => {
-            compare_inferred_types_internal(left.inner.as_ref(), right.inner.as_ref(), true)
+            compare_inferred_types_internal(left.internal_type(), right.internal_type(), true)
         }
 
         (
@@ -156,8 +156,8 @@ fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bo
         ) => {
             let ok = match (left_ok, right_ok) {
                 (Some(left_ok), Some(right_ok)) => compare_inferred_types_internal(
-                    left_ok.inner.as_ref(),
-                    right_ok.inner.as_ref(),
+                    left_ok.internal_type(),
+                    right_ok.internal_type(),
                     true,
                 ),
                 (None, None) => true,
@@ -166,8 +166,8 @@ fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bo
 
             let error = match (left_error, right_error) {
                 (Some(left_error), Some(right_error)) => compare_inferred_types_internal(
-                    left_error.inner.as_ref(),
-                    right_error.inner.as_ref(),
+                    left_error.internal_type(),
+                    right_error.internal_type(),
                     true,
                 ),
                 (None, None) => true,

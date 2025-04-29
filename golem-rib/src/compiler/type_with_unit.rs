@@ -63,7 +63,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
     type Error = String;
 
     fn try_from(inferred_type: &InferredType) -> Result<Self, Self::Error> {
-        match inferred_type.inner.as_ref() {
+        match inferred_type.internal_type() {
             TypeInternal::Instance { .. } => {
                 Err("Cannot convert Instance type to AnalysedType".to_string())
             }

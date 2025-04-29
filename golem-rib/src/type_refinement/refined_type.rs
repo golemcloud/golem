@@ -63,7 +63,7 @@ impl HeterogeneousCollectionType {
             .0
             .iter()
             .zip(other.0.iter())
-            .map(|(a, b)| match a.inner.as_ref() {
+            .map(|(a, b)| match a.internal_type() {
                 TypeInternal::AllOf(types) => {
                     let mut all_ofs = types.clone();
                     all_ofs.push(b.clone());

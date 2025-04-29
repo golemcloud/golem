@@ -42,7 +42,7 @@ pub fn bind_instance_types(expr: &mut Expr) {
                 variable_id, expr, ..
             } => {
                 if let TypeInternal::Instance { instance_type } =
-                    expr.inferred_type().inner.as_ref()
+                    expr.inferred_type().internal_type()
                 {
                     instance_variables.insert(variable_id.clone(), instance_type.clone());
                 }

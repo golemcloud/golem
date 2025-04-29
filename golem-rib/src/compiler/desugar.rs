@@ -278,7 +278,7 @@ mod internal {
         pred_expr_inferred_type: InferredType,
         tag: Option<Expr>,
     ) -> Option<IfThenBranch> {
-        match pred_expr_inferred_type.inner.as_ref() {
+        match pred_expr_inferred_type.internal_type() {
             TypeInternal::Record(field_and_types) => {
                 // Resolution body is a list of expressions which grows (maybe with some let bindings)
                 // as we recursively iterate over the bind patterns
@@ -343,7 +343,7 @@ mod internal {
         pred_expr_inferred_type: InferredType,
         tag: Option<Expr>,
     ) -> Option<IfThenBranch> {
-        match pred_expr_inferred_type.inner.as_ref() {
+        match pred_expr_inferred_type.internal_type() {
             TypeInternal::Variant(variant) => {
                 let arg_pattern_opt = bind_patterns.first();
 

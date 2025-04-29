@@ -493,7 +493,7 @@ pub fn unify_both_inferred_types(
 pub(crate) fn validate_unified_type(
     inferred_type: &InferredType,
 ) -> Result<Unified, UnificationFailureInternal> {
-    match inferred_type.inner.as_ref() {
+    match inferred_type.internal_type() {
         TypeInternal::Bool => Ok(Unified(InferredType::bool())),
         TypeInternal::S8 => Ok(Unified(InferredType::s8())),
         TypeInternal::U8 => Ok(Unified(InferredType::u8())),

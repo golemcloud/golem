@@ -265,7 +265,7 @@ impl GetTypeHint for AnalysedType {
 
 impl GetTypeHint for InferredType {
     fn get_type_hint(&self) -> TypeHint {
-        match self.inner.as_ref() {
+        match self.internal_type() {
             TypeInternal::Bool => TypeHint::Boolean,
             TypeInternal::S8
             | TypeInternal::U8
