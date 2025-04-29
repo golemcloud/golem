@@ -500,6 +500,86 @@ pub mod golem {
                     }
                 }
             }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Parses a UUID from a string
+            pub fn parse_uuid(uuid: &str) -> Result<Uuid, _rt::String> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 24]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 24]);
+                    let vec0 = uuid;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                    extern "C" {
+                        #[link_name = "parse-uuid"]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0.cast_mut(), len0, ptr1);
+                    let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                    match l2 {
+                        0 => {
+                            let e = {
+                                let l3 = *ptr1.add(8).cast::<i64>();
+                                let l4 = *ptr1.add(16).cast::<i64>();
+                                Uuid {
+                                    high_bits: l3 as u64,
+                                    low_bits: l4 as u64,
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l5 = *ptr1.add(8).cast::<*mut u8>();
+                                let l6 = *ptr1.add(12).cast::<usize>();
+                                let len7 = l6;
+                                let bytes7 = _rt::Vec::from_raw_parts(
+                                    l5.cast(),
+                                    len7,
+                                    len7,
+                                );
+                                _rt::string_lift(bytes7)
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Converts a UUID to a string
+            pub fn uuid_to_string(uuid: Uuid) -> _rt::String {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let Uuid { high_bits: high_bits0, low_bits: low_bits0 } = uuid;
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:rpc/types@0.2.0")]
+                    extern "C" {
+                        #[link_name = "uuid-to-string"]
+                        fn wit_import(_: i64, _: i64, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i64, _: i64, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(_rt::as_i64(high_bits0), _rt::as_i64(low_bits0), ptr1);
+                    let l2 = *ptr1.add(0).cast::<*mut u8>();
+                    let l3 = *ptr1.add(4).cast::<usize>();
+                    let len4 = l3;
+                    let bytes4 = _rt::Vec::from_raw_parts(l2.cast(), len4, len4);
+                    _rt::string_lift(bytes4)
+                }
+            }
             impl WasmRpc {
                 #[allow(unused_unsafe, clippy::all)]
                 pub fn new(worker_id: &WorkerId) -> Self {
@@ -4683,6 +4763,20 @@ mod _rt {
     pub use alloc_crate::vec::Vec;
     pub use alloc_crate::alloc;
     pub use alloc_crate::string::String;
+    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
+        if cfg!(debug_assertions) {
+            String::from_utf8(bytes).unwrap()
+        } else {
+            String::from_utf8_unchecked(bytes)
+        }
+    }
+    pub unsafe fn invalid_enum_discriminant<T>() -> T {
+        if cfg!(debug_assertions) {
+            panic!("invalid enum discriminant")
+        } else {
+            core::hint::unreachable_unchecked()
+        }
+    }
     pub fn as_i64<T: AsI64>(t: T) -> i64 {
         t.as_i64()
     }
@@ -4799,13 +4893,6 @@ mod _rt {
             self as f64
         }
     }
-    pub unsafe fn invalid_enum_discriminant<T>() -> T {
-        if cfg!(debug_assertions) {
-            panic!("invalid enum discriminant")
-        } else {
-            core::hint::unreachable_unchecked()
-        }
-    }
     pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
         if size == 0 {
             return;
@@ -4820,27 +4907,20 @@ mod _rt {
             core::char::from_u32_unchecked(val)
         }
     }
-    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
-        if cfg!(debug_assertions) {
-            String::from_utf8(bytes).unwrap()
-        } else {
-            String::from_utf8_unchecked(bytes)
-        }
-    }
     extern crate alloc as alloc_crate;
 }
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:rpc:wasm-rpc:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2450] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x93\x12\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2513] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xd2\x12\x01A\x02\x01\
 A\x08\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01\
 @\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/\
 wall-clock@0.2.0\x05\0\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04sel\
 f\x01\0\x7f\x04\0\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\
 \0\x16[method]pollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\
 \0\x04poll\x01\x06\x03\0\x12wasi:io/poll@0.2.0\x05\x01\x02\x03\0\0\x08datetime\x02\
-\x03\0\x01\x08pollable\x01BS\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\
+\x03\0\x01\x08pollable\x01BX\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\
 \x02\x01\x03\x04\0\x08pollable\x03\0\x02\x01r\x02\x09high-bitsw\x08low-bitsw\x04\
 \0\x04uuid\x03\0\x04\x01r\x01\x04uuid\x05\x04\0\x0ccomponent-id\x03\0\x06\x01r\x02\
 \x0ccomponent-id\x07\x0bworker-names\x04\0\x09worker-id\x03\0\x08\x01z\x04\0\x0a\
@@ -4878,11 +4958,12 @@ ion-params4\x01\0\x04\0$[method]wasm-rpc.schedule-invocation\x01;\x01i/\x01@\x04
 method]wasm-rpc.schedule-cancelable-invocation\x01=\x01h.\x01i\x03\x01@\x01\x04s\
 elf>\0?\x04\0&[method]future-invoke-result.subscribe\x01@\x01k5\x01@\x01\x04self\
 >\0\xc1\0\x04\0\x20[method]future-invoke-result.get\x01B\x01h/\x01@\x01\x04self\xc3\
-\0\x01\0\x04\0![method]cancellation-token.cancel\x01D\x01@\x01\x03vnt*\0(\x04\0\x0d\
-extract-value\x01E\x01@\x01\x03vnt*\0\x1d\x04\0\x0cextract-type\x01F\x03\0\x15go\
-lem:rpc/types@0.2.0\x05\x04\x04\0\x12golem:rpc/wasm-rpc\x04\0\x0b\x0e\x01\0\x08w\
-asm-rpc\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.22\
-0.0\x10wit-bindgen-rust\x060.36.0";
+\0\x01\0\x04\0![method]cancellation-token.cancel\x01D\x01j\x01\x05\x01s\x01@\x01\
+\x04uuids\0\xc5\0\x04\0\x0aparse-uuid\x01F\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid\
+-to-string\x01G\x01@\x01\x03vnt*\0(\x04\0\x0dextract-value\x01H\x01@\x01\x03vnt*\
+\0\x1d\x04\0\x0cextract-type\x01I\x03\0\x15golem:rpc/types@0.2.0\x05\x04\x04\0\x12\
+golem:rpc/wasm-rpc\x04\0\x0b\x0e\x01\0\x08wasm-rpc\x03\0\0\0G\x09producers\x01\x0c\
+processed-by\x02\x0dwit-component\x070.220.0\x10wit-bindgen-rust\x060.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {
