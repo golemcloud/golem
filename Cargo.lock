@@ -5209,6 +5209,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "llm-openrouter"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.11.18",
+ "serde",
+ "serde_json",
+ "test-utils",
+ "wit-bindgen",
+ "wit-bindgen-rt 0.41.0",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

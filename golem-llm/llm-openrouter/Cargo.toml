@@ -1,0 +1,27 @@
+[package]
+name = "llm-openrouter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+reqwest = { git = "https://github.com/golemcloud/reqwest", branch = "update-jun-2024", features = ["blocking", "json"] }
+serde = { workspace = true }
+serde_json ={ workspace = true }
+wit-bindgen-rt = { version = "0.41.0", features = ["bitflags"] }
+wit-bindgen = "0.41.0"
+
+[dev-dependencies]
+test-utils = { path = "../test-utils" }
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+codegen-units = 1
+opt-level = "s"
+debug = false
+strip = true
+lto = true
+
+[package.metadata.component]
+package = "golem:llm"
