@@ -14,12 +14,16 @@
 
 use crate::call_type::{CallType, InstanceCreationType};
 use crate::generic_type_parameter::GenericTypeParameter;
+use crate::inferred_type::TypeOrigin;
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{from_string, text, type_checker, type_inference, DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType, ParsedFunctionName, VariableId};
+use crate::{
+    from_string, text, type_checker, type_inference, DynamicParsedFunctionName, ExprVisitor,
+    GlobalVariableTypeSpec, InferredType, ParsedFunctionName, VariableId,
+};
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
 use combine::stream::position;
@@ -34,7 +38,6 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
-use crate::inferred_type::TypeOrigin;
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Expr {
@@ -862,8 +865,7 @@ impl Expr {
     pub fn literal(value: impl AsRef<str>) -> Self {
         Expr::Literal {
             value: value.as_ref().to_string(),
-            inferred_type: InferredType::string()
-                .override_origin(TypeOrigin::Default),
+            inferred_type: InferredType::string().override_origin(TypeOrigin::Default),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -3030,21 +3032,20 @@ mod protobuf {
 }
 
 fn find_expr(expr: &mut Expr, source_span: &SourceSpan) -> Option<Expr> {
-     let mut expr = expr.clone();
+    let mut expr = expr.clone();
 
-     let mut visitor = ExprVisitor::bottom_up(&mut expr);
+    let mut visitor = ExprVisitor::bottom_up(&mut expr);
 
-      while let Some(current) = visitor.pop_back() {
-          let span = current.source_span();
+    while let Some(current) = visitor.pop_back() {
+        let span = current.source_span();
 
-          if source_span.is_equal(&span) {
-              return Some(current.clone())
-          }
-      }
+        if source_span.is_equal(&span) {
+            return Some(current.clone());
+        }
+    }
 
     None
 }
-
 
 #[cfg(test)]
 mod tests {

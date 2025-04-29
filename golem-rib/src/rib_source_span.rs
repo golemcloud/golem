@@ -19,8 +19,10 @@ impl SourceSpan {
     }
 
     pub fn is_equal(&self, other: &SourceSpan) -> bool {
-        self.start_line() == other.start_line() && self.start_column() == other.start_column() &&
-        self.end_line() == other.end_line() && self.end_column() == other.end_column()
+        self.start_line() == other.start_line()
+            && self.start_column() == other.start_column()
+            && self.end_line() == other.end_line()
+            && self.end_column() == other.end_column()
     }
 
     pub fn start_column(&self) -> i32 {

@@ -1,8 +1,8 @@
 use crate::inferred_type::{flatten_all_of_list, TypeOrigin};
+use crate::rib_source_span::SourceSpan;
 use crate::{InferredType, TypeInternal};
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
-use crate::rib_source_span::SourceSpan;
 
 #[derive(Clone, Debug)]
 pub struct Unified(InferredType);
@@ -147,10 +147,7 @@ pub enum UnificationFailureInternal {
 impl Display for UnificationFailureInternal {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            UnificationFailureInternal::TypeMisMatch {
-                expected,
-                found,
-            } => {
+            UnificationFailureInternal::TypeMisMatch { expected, found } => {
                 write!(
                     f,
                     "type mismatch: expected {}, found {}",
@@ -185,14 +182,8 @@ impl Display for UnificationFailureInternal {
 }
 
 impl UnificationFailureInternal {
-    pub fn type_mismatch(
-        expected: InferredType,
-        found: InferredType,
-    ) -> Self {
-        UnificationFailureInternal::TypeMisMatch {
-            expected,
-            found,
-        }
+    pub fn type_mismatch(expected: InferredType, found: InferredType) -> Self {
+        UnificationFailureInternal::TypeMisMatch { expected, found }
     }
 
     pub fn conflicting_types(
@@ -247,6 +238,7 @@ pub fn unify_both_inferred_types(
     ) {
         (TypeInternal::Record(a_fields), TypeInternal::Record(b_fields)) => {
             let mut fields: Vec<(String, InferredType)> = vec![];
+
             for (a_name, a_type) in a_fields {
                 if let Some((_, b_type)) = b_fields.iter().find(|(b_name, _)| b_name == a_name) {
                     fields.push((a_name.clone(), unify_both_inferred_types(a_type, b_type)?));
@@ -484,8 +476,6 @@ pub fn unify_both_inferred_types(
         }
     }
 }
-
-
 
 pub(crate) fn validate_unified_type(
     inferred_type: &InferredType,

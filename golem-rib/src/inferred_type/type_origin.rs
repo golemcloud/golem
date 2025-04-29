@@ -22,8 +22,7 @@ impl TypeOrigin {
                 TypeOrigin::Multiple(origins) => {
                     stack.extend(origins.iter());
                 }
-                TypeOrigin::Default | TypeOrigin::NoOrigin => {
-                }
+                TypeOrigin::Default | TypeOrigin::NoOrigin => {}
             }
         }
 
@@ -45,7 +44,9 @@ impl TypeOrigin {
                     return TypeOrigin::PatternMatch(span.clone());
                 }
                 TypeOrigin::Declared(span) => {
-                    if best.is_none() || matches!(best, Some(TypeOrigin::Default) | Some(TypeOrigin::NoOrigin)) {
+                    if best.is_none()
+                        || matches!(best, Some(TypeOrigin::Default) | Some(TypeOrigin::NoOrigin))
+                    {
                         best = Some(TypeOrigin::Declared(span.clone()));
                     }
                 }

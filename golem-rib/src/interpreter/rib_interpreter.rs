@@ -3885,7 +3885,7 @@ mod tests {
         let expr = r#"
                 let worker = instance("my-worker");
                 let cart = worker.cart[golem:it]("bar");
-                let result = cart.add-item({product-id: "mac", name: "macbook", quantity: 1:u32, price: 1:f32});
+                let result = cart.add-item({product-id: "mac", name: "macbook", price: 1:f32, quantity: 1:u32});
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -3930,7 +3930,7 @@ mod tests {
         let expr = r#"
                 let worker = instance("my-worker");
                 let cart = worker.cart[golem:it]("bar");
-                cart.add-items({product-id: "mac", name: "macbook", quantity: 1:u32, price: 1:f32});
+                cart.add-items({product-id: "mac", name: "macbook", price: 1:f32, quantity: 1:u32});
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -3940,7 +3940,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert_eq!(compiled, "error in the following rib found at line 4, column 17\n`cart.add-items({product-id: \"mac\", name: \"macbook\", quantity: 1: u32, price: 1: f32})`\ncause: invalid function call `add-items`\nfunction 'add-items' not found\n".to_string());
+        assert_eq!(compiled, "error in the following rib found at line 4, column 17\n`cart.add-items({product-id: \"mac\", name: \"macbook\", price: 1: f32, quantity: 1: u32})`\ncause: invalid function call `add-items`\nfunction 'add-items' not found\n".to_string());
     }
 
     #[test]
@@ -3948,7 +3948,7 @@ mod tests {
         let expr = r#"
                 let worker = instance("my-worker");
                 let cart = worker.carts[golem:it]("bar");
-                cart.add-item({product-id: "mac", name: "macbook", quantity: 1:u32, price: 1:f32});
+                cart.add-item({product-id: "mac", name: "macbook", price: 1:f32, quantity: 1:u32});
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -3970,7 +3970,7 @@ mod tests {
         let expr = r#"
                 let worker = instance();
                 let cart = worker.cart[golem:it]("bar");
-                cart.add-item({product-id: "mac", name: "macbook", quantity: 1, price: 1});
+                cart.add-item({product-id: "mac", name: "macbook", price: 1, quantity: 1});
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();

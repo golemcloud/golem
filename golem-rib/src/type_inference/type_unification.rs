@@ -530,27 +530,34 @@ fn unify_inferred_type(
     match unification_result {
         Ok(unified_type) => Ok(unified_type),
         Err(e) => match e {
-            UnificationFailureInternal::TypeMisMatch {
-                expected,
-                found,
-            } => {
+            UnificationFailureInternal::TypeMisMatch { expected, found } => {
                 let found_origin = found.critical_origin();
                 let found_source_span = found_origin.source_span();
-                let found_expr = found_source_span.as_ref().and_then(|span| {
-                    original_expr.lookup(span)
-                });
+                let found_expr = found_source_span
+                    .as_ref()
+                    .and_then(|span| original_expr.lookup(span));
 
                 let expected_origin = expected.critical_origin();
                 let additional_message = match expected_origin {
                     TypeOrigin::PatternMatch(span) => {
-                        format!("expected {} based on pattern match branch at line {} column {}", expected.printable(), span.start_line(), span.start_column())
+                        format!(
+                            "expected {} based on pattern match branch at line {} column {}",
+                            expected.printable(),
+                            span.start_line(),
+                            span.start_column()
+                        )
                     }
                     TypeOrigin::Default => "".to_string(),
                     TypeOrigin::NoOrigin => "".to_string(),
                     TypeOrigin::Declared(source_span) => {
-                        format!("{} declared at line {} column {}", expected.printable(), source_span.start_line(), source_span.start_column())
+                        format!(
+                            "{} declared at line {} column {}",
+                            expected.printable(),
+                            source_span.start_line(),
+                            source_span.start_column()
+                        )
                     }
-                    TypeOrigin::Multiple(_) => "".to_string()
+                    TypeOrigin::Multiple(_) => "".to_string(),
                 };
 
                 match found_expr {
@@ -563,7 +570,7 @@ fn unify_inferred_type(
                             found,
                             vec![additional_message],
                         ))
-                    },
+                    }
 
                     None => {
                         let ambiguity_message = format!(
@@ -578,7 +585,7 @@ fn unify_inferred_type(
                         ))
                     }
                 }
-            },
+            }
             UnificationFailureInternal::ConflictingTypes {
                 conflicting_types,
                 additional_error_detail,

@@ -104,7 +104,7 @@ mod type_check_tests {
             let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 4, column 18
+            error in the following rib found at line 4, column 24
             `{foo: x}`
             cause: type mismatch. expected string, found u64
             expected string based on pattern match branch at line 5 column 21
