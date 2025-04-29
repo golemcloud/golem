@@ -3277,7 +3277,7 @@ dependencies = [
  "bytes 1.10.1",
  "cargo_metadata",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.0",
  "prost",
  "prost-types",
  "test-r",
@@ -3296,7 +3296,7 @@ dependencies = [
  "golem-common",
  "golem-openapi-client-generator",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.0",
  "http 1.3.1",
  "reqwest 0.12.14",
  "serde",
@@ -3328,7 +3328,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-rib",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.0",
  "http 1.3.1",
  "humantime-serde",
  "iso8601-timestamp",
@@ -3490,7 +3490,7 @@ dependencies = [
  "combine",
  "golem-api-grpc",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.0",
  "poem-openapi",
  "poem-openapi-derive",
  "semver",
@@ -3509,7 +3509,7 @@ dependencies = [
  "dirs",
  "golem-rib",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.0",
  "prometheus",
  "rustyline",
  "serde_json",
@@ -3518,6 +3518,32 @@ dependencies = [
  "tonic",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "golem-rust"
+version = "1.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1171f76afa8aa378232bf836ff2fc6a3d08e7e9c18dcaf8738c4c3c2b90be2ae"
+dependencies = [
+ "golem-rust-macro",
+ "golem-wasm-rpc 1.2.2-dev.12",
+ "serde",
+ "serde_json",
+ "uuid",
+ "wit-bindgen 0.40.0",
+]
+
+[[package]]
+name = "golem-rust-macro"
+version = "1.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87d4e1030c126db76ca1dc98c1e01536abc09754680c9140080694500fcde8b6"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.100",
 ]
 
 [[package]]
@@ -3543,7 +3569,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.0",
  "hex",
  "http 1.3.1",
  "http-body 1.0.1",
@@ -3626,7 +3652,7 @@ dependencies = [
  "golem-rib",
  "golem-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.0",
  "itertools 0.14.0",
  "k8s-openapi",
  "kill_tree",
@@ -3710,6 +3736,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-wasm-rpc"
+version = "1.2.2-dev.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d724a93d58c24a20c0e808ca41f341e10ed8a5db1fac03b2f86c9668b1ab7f5"
+dependencies = [
+ "cargo_metadata",
+ "chrono",
+ "git-version",
+ "uuid",
+ "wit-bindgen-rt 0.40.0",
+]
+
+[[package]]
 name = "golem-worker-executor"
 version = "0.0.0"
 dependencies = [
@@ -3717,7 +3756,7 @@ dependencies = [
  "async-trait",
  "golem-common",
  "golem-service-base",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.0",
  "golem-worker-executor-base",
  "prometheus",
  "test-r",
@@ -3764,7 +3803,7 @@ dependencies = [
  "golem-service-base",
  "golem-test-framework",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.0",
  "hex",
  "http 1.3.1",
  "http-body 1.0.1",
@@ -3820,7 +3859,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.0",
  "golem-worker-service-base",
  "http 1.3.1",
  "include_dir",
@@ -3866,7 +3905,7 @@ dependencies = [
  "golem-rib",
  "golem-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.0",
  "http 1.3.1",
  "http-body-util",
  "hyper 1.6.0",
@@ -4698,7 +4737,7 @@ dependencies = [
  "golem-rib-repl",
  "golem-test-framework",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.0",
  "rand 0.9.0",
  "reqwest 0.12.14",
  "serde",
@@ -5176,11 +5215,12 @@ checksum = "23fb14cb19457329c82206317a5663005a4d404783dc74f4252769b0d5f42856"
 name = "llm-anthropic"
 version = "0.1.0"
 dependencies = [
+ "golem-rust",
  "reqwest 0.11.18",
  "serde",
  "serde_json",
  "test-utils",
- "wit-bindgen",
+ "wit-bindgen 0.41.0",
  "wit-bindgen-rt 0.41.0",
 ]
 
@@ -5188,11 +5228,12 @@ dependencies = [
 name = "llm-grok"
 version = "0.1.0"
 dependencies = [
+ "golem-rust",
  "reqwest 0.11.18",
  "serde",
  "serde_json",
  "test-utils",
- "wit-bindgen",
+ "wit-bindgen 0.41.0",
  "wit-bindgen-rt 0.41.0",
 ]
 
@@ -5200,11 +5241,12 @@ dependencies = [
 name = "llm-openai"
 version = "0.1.0"
 dependencies = [
+ "golem-rust",
  "reqwest 0.11.18",
  "serde",
  "serde_json",
  "test-utils",
- "wit-bindgen",
+ "wit-bindgen 0.41.0",
  "wit-bindgen-rt 0.41.0",
 ]
 
@@ -5212,11 +5254,12 @@ dependencies = [
 name = "llm-openrouter"
 version = "0.1.0"
 dependencies = [
+ "golem-rust",
  "reqwest 0.11.18",
  "serde",
  "serde_json",
  "test-utils",
- "wit-bindgen",
+ "wit-bindgen 0.41.0",
  "wit-bindgen-rt 0.41.0",
 ]
 
@@ -10350,12 +10393,33 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen"
+version = "0.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e7091ed6c9abfa4e0a2ef3b39d0539da992d841fcf32c255f64fb98764ffee5"
+dependencies = [
+ "wit-bindgen-rt 0.40.0",
+ "wit-bindgen-rust-macro 0.40.0",
+]
+
+[[package]]
+name = "wit-bindgen"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10fb6648689b3929d56bbc7eb1acf70c9a42a29eb5358c67c10f54dbd5d695de"
 dependencies = [
  "wit-bindgen-rt 0.41.0",
- "wit-bindgen-rust-macro",
+ "wit-bindgen-rust-macro 0.41.0",
+]
+
+[[package]]
+name = "wit-bindgen-core"
+version = "0.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "398c650cec1278cfb72e214ba26ef3440ab726e66401bd39c04f465ee3979e6b"
+dependencies = [
+ "anyhow",
+ "heck",
+ "wit-parser 0.227.1",
 ]
 
 [[package]]
@@ -10394,6 +10458,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68faed92ae696b93ea9a7b67ba6c37bf09d72c6d9a70fa824a743c3020212f11"
 dependencies = [
  "bitflags 2.9.0",
+ "futures",
+ "once_cell",
 ]
 
 [[package]]
@@ -10409,6 +10475,22 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-rust"
+version = "0.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83903c8dcd8084a8a67ae08190122cf0e25dc37bdc239070a00f47e22d3f0aae"
+dependencies = [
+ "anyhow",
+ "heck",
+ "indexmap 2.8.0",
+ "prettyplease",
+ "syn 2.0.100",
+ "wasm-metadata 0.227.1",
+ "wit-bindgen-core 0.40.0",
+ "wit-component",
+]
+
+[[package]]
+name = "wit-bindgen-rust"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d0809dc5ba19e2e98661bf32fc0addc5a3ca5bf3a6a7083aa6ba484085ff3ce"
@@ -10419,8 +10501,23 @@ dependencies = [
  "prettyplease",
  "syn 2.0.100",
  "wasm-metadata 0.227.1",
- "wit-bindgen-core",
+ "wit-bindgen-core 0.41.0",
  "wit-component",
+]
+
+[[package]]
+name = "wit-bindgen-rust-macro"
+version = "0.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7bf7f20495bcc7dc9f24c5fbcac9e919ca5ebdb7a1b1841d74447d3c8dd0c60"
+dependencies = [
+ "anyhow",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.100",
+ "wit-bindgen-core 0.40.0",
+ "wit-bindgen-rust 0.40.0",
 ]
 
 [[package]]
@@ -10434,8 +10531,8 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.100",
- "wit-bindgen-core",
- "wit-bindgen-rust",
+ "wit-bindgen-core 0.41.0",
+ "wit-bindgen-rust 0.41.0",
 ]
 
 [[package]]

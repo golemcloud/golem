@@ -6,6 +6,8 @@ wit_bindgen::generate!({
 mod api;
 mod types;
 
+use golem_rust::use_persistence_level;
+
 use crate::exports::golem::llm::llm;
 
 struct Component;
@@ -24,6 +26,7 @@ impl llm::Guest for Component {
         })?;
         let openai = api::OpenAI::new(api_key);
 
+        let _guard = use_persistence_level(golem_rust::PersistenceLevel::PersistRemoteSideEffects);
         openai.generate_completions(messages, vec![], config)
     }
 
@@ -39,6 +42,7 @@ impl llm::Guest for Component {
         })?;
         let openai = api::OpenAI::new(api_key);
 
+        let _guard = use_persistence_level(golem_rust::PersistenceLevel::PersistRemoteSideEffects);
         openai.generate_completions(messages, tool_results, config)
     }
 
@@ -53,6 +57,7 @@ impl llm::Guest for Component {
         })?;
         let openai = api::OpenAI::new(api_key);
 
+        let _guard = use_persistence_level(golem_rust::PersistenceLevel::PersistRemoteSideEffects);
         openai.stream_completions(messages, config).map(llm::ChatStream::new)
     }
 }
