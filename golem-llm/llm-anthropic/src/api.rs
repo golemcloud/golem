@@ -163,16 +163,16 @@ fn generate_request_body(
         .map(|result| match result {
             llm::ToolResult::Success(result) => {
                 serde_json::json!({
-                    "role": "tool",
+                    "type": "tool_result",
+                    "tool_use_id": result.id,
                     "content": result.result_json,
-                    "tool_call_id": result.id,
                 })
             }
             llm::ToolResult::Error(result) => {
                 serde_json::json!({
-                    "role": "tool",
+                    "type": "tool_result",
+                    "tool_use_id": result.id,
                     "content": result.error_message,
-                    "tool_call_id": result.id,
                 })
             }
         })
