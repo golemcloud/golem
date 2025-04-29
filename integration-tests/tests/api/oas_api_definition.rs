@@ -16,12 +16,9 @@ use crate::Tracing;
 use assert2::assert;
 
 use golem_api_grpc::proto::golem::apidefinition::v1::{
-    create_api_definition_request,
-    CreateApiDefinitionRequest,
+    create_api_definition_request, CreateApiDefinitionRequest,
 };
-use golem_api_grpc::proto::golem::apidefinition::{
-    api_definition, static_binding,
-};
+use golem_api_grpc::proto::golem::apidefinition::{api_definition, static_binding};
 
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
@@ -41,7 +38,8 @@ async fn create_and_get_openapi_definition(deps: &EnvBasedTestDependencies) {
 
     let unique_component_name = component_name.0;
 
-    let openapi_yaml = format!(r#"
+    let openapi_yaml = format!(
+        r#"
 openapi: 3.0.0
 info:
   title: {unique_component_name}
@@ -90,7 +88,9 @@ paths:
           }}
 x-golem-api-definition-id: shopping-cart
 x-golem-api-definition-version: 0.0.1
-"#, unique_component_name = unique_component_name);
+"#,
+        unique_component_name = unique_component_name
+    );
 
     let result = deps
         .worker_service()
@@ -101,7 +101,11 @@ x-golem-api-definition-version: 0.0.1
         })
         .await;
 
-    assert!(result.is_ok(), "Failed to create API definition: {:?}", result.as_ref().err());
+    assert!(
+        result.is_ok(),
+        "Failed to create API definition: {:?}",
+        result.as_ref().err()
+    );
 
     let response = result.unwrap();
     let definition = response.definition.unwrap();
@@ -142,12 +146,21 @@ x-golem-api-definition-version: 0.0.1
             let static_binding_wrapper = options_binding.static_binding.as_ref().unwrap();
             let static_binding_value = static_binding_wrapper.static_binding.as_ref().unwrap();
 
-            assert!(matches!(static_binding_value, static_binding::StaticBinding::HttpCorsPreflight(_)));
-            
+            assert!(matches!(
+                static_binding_value,
+                static_binding::StaticBinding::HttpCorsPreflight(_)
+            ));
+
             if let static_binding::StaticBinding::HttpCorsPreflight(cors) = static_binding_value {
                 assert_eq!(cors.allow_origin.as_deref(), Some("*"));
-                assert_eq!(cors.allow_methods.as_deref(), Some("GET, POST, PUT, DELETE, OPTIONS"));
-                assert_eq!(cors.allow_headers.as_deref(), Some("Content-Type, Authorization"));
+                assert_eq!(
+                    cors.allow_methods.as_deref(),
+                    Some("GET, POST, PUT, DELETE, OPTIONS")
+                );
+                assert_eq!(
+                    cors.allow_headers.as_deref(),
+                    Some("Content-Type, Authorization")
+                );
             }
         }
     }
