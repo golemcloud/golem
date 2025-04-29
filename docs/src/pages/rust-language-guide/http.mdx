@@ -2,7 +2,7 @@
 
 Golem implements the [WASI HTTP](https://github.com/WebAssembly/wasi-http) interfaces so any library built on this specification can be used from Golem components to communicate with external services.
 
-Currently there is only one such Rust library available, a fork of the popular `reqwest` library provided by the Golem team: https://github.com/golemcloud/reqwest/tree/update-jun-2024
+Currently there is only one such Rust library available, a fork of the popular `reqwest` library provided by the Golem team: https://github.com/golemcloud/reqwest/tree/update-april-2025
 
 ### Adding as a dependency
 
@@ -10,7 +10,7 @@ To use it, add the following dependency to your component's `Cargo.toml`:
 
 ```toml
 [dependencies]
-reqwest = { git = "https://github.com/golemcloud/reqwest", branch = "update-jun-2024", features = ["json"] }
+reqwest = { git = "https://github.com/golemcloud/reqwest", branch = "update-april-2025", features = ["json"] }
 ```
 
 Optionally add `serde` and `serde_json` to take advantage of `reqwest`'s JSON support:
