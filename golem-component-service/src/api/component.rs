@@ -694,7 +694,7 @@ impl ComponentApi {
         Ok(Json(Empty {}))
     }
 
-    /// Updates the priority or parameters of a plugin installation
+    /// Applies a batch of changes to the installed plugins of a component
     #[oai(
         path = "/:component_id/versions/latest/plugins/installs/batch",
         method = "post",
