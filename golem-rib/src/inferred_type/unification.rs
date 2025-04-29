@@ -1,5 +1,4 @@
-use crate::inferred_type::{flatten_all_of_list, TypeOrigin};
-use crate::rib_source_span::SourceSpan;
+use crate::inferred_type::flatten_all_of_list;
 use crate::{InferredType, TypeInternal};
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
