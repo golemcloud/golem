@@ -17,14 +17,14 @@ impl llm::Guest for Component {
         messages: Vec<llm::Message>,
         config: llm::Config,
     ) -> Result<llm::ChatEvent, llm::Error> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| llm::Error {
+        let api_key = std::env::var("XAI_API_KEY").map_err(|_| llm::Error {
             code: llm::ErrorCode::InvalidRequest,
-            message: "ANTHROPIC_API_KEY is missing".to_owned(),
+            message: "XAI_API_KEY is missing".to_owned(),
             provider_error_json: None,
         })?;
-        let anthropic = api::Anthropic::new(api_key);
+        let grok = api::Grok::new(api_key);
 
-        anthropic.generate_completions(messages, vec![], config)
+        grok.generate_completions(messages, vec![], config)
     }
 
     fn continue_inference(
@@ -32,28 +32,28 @@ impl llm::Guest for Component {
         tool_results: Vec<llm::ToolResult>,
         config: llm::Config,
     ) -> Result<llm::ChatEvent, llm::Error> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| llm::Error {
+        let api_key = std::env::var("XAI_API_KEY").map_err(|_| llm::Error {
             code: llm::ErrorCode::InvalidRequest,
-            message: "ANTHROPIC_API_KEY is missing".to_owned(),
+            message: "XAI_API_KEY is missing".to_owned(),
             provider_error_json: None,
         })?;
-        let anthropic = api::Anthropic::new(api_key);
+        let grok = api::Grok::new(api_key);
 
-        anthropic.generate_completions(messages, tool_results, config)
+        grok.generate_completions(messages, tool_results, config)
     }
 
     fn stream_chat(
         messages: Vec<llm::Message>,
         config: llm::Config,
     ) -> Result<llm::ChatStream, llm::Error> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| llm::Error {
+        let api_key = std::env::var("XAI_API_KEY").map_err(|_| llm::Error {
             code: llm::ErrorCode::InvalidRequest,
-            message: "ANTHROPIC_API_KEY is missing".to_owned(),
+            message: "XAI_API_KEY is missing".to_owned(),
             provider_error_json: None,
         })?;
-        let anthropic = api::Anthropic::new(api_key);
+        let grok = api::Grok::new(api_key);
 
-        anthropic.stream_completions(messages, config).map(llm::ChatStream::new)
+        grok.stream_completions(messages, config).map(llm::ChatStream::new)
     }
 }
 

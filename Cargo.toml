@@ -22,7 +22,7 @@ members = [
     "wasm-rpc",
     "golem-llm/llm-openai",
     "golem-llm/llm-anthropic",
-    "golem-llm/test-utils",
+    "golem-llm/test-utils", "golem-llm/llm-grok",
 ]
 
 exclude = [

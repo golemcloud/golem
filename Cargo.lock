@@ -5185,6 +5185,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "llm-grok"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.11.18",
+ "serde",
+ "serde_json",
+ "test-utils",
+ "wit-bindgen",
+ "wit-bindgen-rt 0.41.0",
+]
+
+[[package]]
 name = "llm-openai"
 version = "0.1.0"
 dependencies = [

@@ -1,12 +1,15 @@
 [package]
-name = "llm-openai"
+name = "llm-grok"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-reqwest = { git = "https://github.com/golemcloud/reqwest", branch = "update-jun-2024", features = ["blocking", "json"] }
+reqwest = { git = "https://github.com/golemcloud/reqwest", branch = "update-jun-2024", features = [
+    "blocking",
+    "json",
+] }
 serde = { workspace = true }
-serde_json ={ workspace = true }
+serde_json = { workspace = true }
 wit-bindgen-rt = { version = "0.41.0", features = ["bitflags"] }
 wit-bindgen = "0.41.0"
 

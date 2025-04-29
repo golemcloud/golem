@@ -274,13 +274,13 @@ mod tests {
         };
     }
 
-    fn configure_mock_openai_server() -> http::Server {
+    fn configure_mock_anthropic_server() -> http::Server {
         http::Server::start()
     }
 
     #[test]
     fn test_generate_completions_unauthorized_api_key() {
-        let server = configure_mock_openai_server();
+        let server = configure_mock_anthropic_server();
 
         let unauthorized_mock = server.mock(|when, then| {
             when.method(http::Method::POST)
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_generate_completions_authorized_api_key() {
-        let server = configure_mock_openai_server();
+        let server = configure_mock_anthropic_server();
 
         let authorized_mock = server
             .mock(|when, then| {
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_generate_completions_function_calling() {
-        let server = configure_mock_openai_server();
+        let server = configure_mock_anthropic_server();
 
         let function_calling_mock = server
             .mock(|when, then| {
@@ -507,7 +507,7 @@ mod tests {
 
     #[test]
     fn test_stream_completions_unauthorized_api_key() {
-        let server = configure_mock_openai_server();
+        let server = configure_mock_anthropic_server();
 
         let unauthorized_mock = server
             .mock(|when, then| {

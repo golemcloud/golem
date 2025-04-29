@@ -4,11 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+reqwest = { git = "https://github.com/golemcloud/reqwest", branch = "update-jun-2024", features = [
+    "blocking",
+    "json",
+] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 wit-bindgen-rt = { version = "0.41.0", features = ["bitflags"] }
 wit-bindgen = "0.41.0"
-reqwest = { git = "https://github.com/golemcloud/reqwest", branch = "update-jun-2024", features = ["blocking", "json"] }
-serde = { version = "1.0.203", features = ["derive"] }
-serde_json = "1.0.117"
 
 [dev-dependencies]
 test-utils = { path = "../test-utils" }
