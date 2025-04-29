@@ -50,6 +50,7 @@ mod inferred_expr;
 mod instance_type_binding;
 mod rib_input_type;
 mod rib_output_type;
+mod set_origin;
 mod type_annotation_binding;
 mod type_hint;
 mod type_pull_up;

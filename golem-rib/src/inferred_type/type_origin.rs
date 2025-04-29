@@ -1,4 +1,19 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::rib_source_span::SourceSpan;
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
@@ -19,6 +34,36 @@ pub enum TypeOrigin {
 }
 
 impl TypeOrigin {
+    pub fn eq(&self, other: &TypeOrigin) -> bool {
+        match (self, other) {
+            (TypeOrigin::NoOrigin, TypeOrigin::NoOrigin) => true,
+            (TypeOrigin::Default, TypeOrigin::Default) => true,
+            (TypeOrigin::Declared(source_span1), TypeOrigin::Declared(source_span2)) => {
+                source_span1.is_equal(source_span2)
+            }
+            (TypeOrigin::PatternMatch(source_span1), TypeOrigin::PatternMatch(source_span2)) => {
+                source_span1.is_equal(source_span2)
+            }
+            (TypeOrigin::Multiple(origins1), TypeOrigin::Multiple(origins2)) => {
+                if origins1.len() != origins2.len() {
+                    false
+                } else {
+                    for (origin1, origin2) in origins1.iter().zip(origins2.iter()) {
+                        if !origin1.eq(origin2) {
+                            return false;
+                        }
+                    }
+                    true
+                }
+            }
+            (TypeOrigin::OriginatedAt(source_span1), TypeOrigin::OriginatedAt(source_span2)) => {
+                source_span1.is_equal(source_span2)
+            }
+
+            _ => false,
+        }
+    }
+
     // Since OriginatedAt is usually tagged against every expression
     // in the beginning itself, this is actually always Some(span), where
     // the span is the original span of the expression this type origin is attached to;
@@ -45,11 +90,12 @@ impl TypeOrigin {
     }
 
     pub fn immediate_critical_origin(&self) -> TypeOrigin {
-        let mut queue = vec![self];
+        let mut queue = VecDeque::new();
+        queue.push_back(self);
 
         let mut best: Option<TypeOrigin> = None;
 
-        while let Some(current) = queue.pop() {
+        while let Some(current) = queue.pop_front() {
             match current {
                 TypeOrigin::PatternMatch(span) => {
                     return TypeOrigin::PatternMatch(span.clone());
@@ -112,16 +158,76 @@ impl TypeOrigin {
 
     pub fn add_origin(&self, new_origin: TypeOrigin) -> TypeOrigin {
         match self {
-            TypeOrigin::NoOrigin => new_origin,
-            TypeOrigin::Multiple(origins) => {
-                let mut new_origins = origins.clone();
-                if !origins.contains(&new_origin) {
-                    new_origins.push(new_origin);
+            TypeOrigin::NoOrigin => match new_origin {
+                TypeOrigin::Multiple(origins) => TypeOrigin::Multiple(origins),
+                _ => new_origin,
+            },
+
+            TypeOrigin::Multiple(existing_origins) => {
+                let mut updated_origins = existing_origins.clone();
+
+                match &new_origin {
+                    TypeOrigin::Multiple(new_origins) => {
+                        for new_origin in new_origins {
+                            let mut contains = false;
+
+                            for existing_origin in existing_origins.iter() {
+                                if existing_origin.eq(&new_origin) {
+                                    contains = true;
+                                }
+                            }
+
+                            if !contains {
+                                updated_origins.push(new_origin.clone());
+                            }
+                        }
+                    }
+                    _ => {
+                        let mut contains = false;
+
+                        for updated_origin in existing_origins.iter() {
+                            if updated_origin.eq(&new_origin) {
+                                contains = true;
+                            }
+                        }
+
+                        if !contains {
+                            updated_origins.push(new_origin.clone());
+                        }
+                    }
+                }
+                TypeOrigin::Multiple(updated_origins)
+            }
+
+            any_other_origin => match new_origin {
+                TypeOrigin::Multiple(origins) => {
+                    let mut updated = vec![any_other_origin.clone()];
+
+                    for origin in origins {
+                        if !any_other_origin.eq(&origin) {
+                            return self.clone();
+                        } else {
+                            updated.push(origin.clone());
+                        }
+                    }
+
+                    if updated.len() == 1 {
+                        return updated.pop().unwrap().clone();
+                    }
+
+                    TypeOrigin::Multiple(updated)
                 }
 
-                TypeOrigin::Multiple(new_origins)
-            }
-            _ => TypeOrigin::Multiple(vec![self.clone(), new_origin]),
+                new_origin => {
+                    if new_origin.eq(any_other_origin) {
+                        self.clone()
+                    } else {
+                        let mut updated = vec![any_other_origin.clone()];
+                        updated.push(new_origin);
+                        TypeOrigin::Multiple(updated)
+                    }
+                }
+            },
         }
     }
 }
@@ -155,5 +261,80 @@ impl Hash for TypeOrigin {
 impl PartialEq for TypeOrigin {
     fn eq(&self, _other: &Self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::inferred_type::TypeOrigin;
+    use crate::rib_source_span::{SourcePosition, SourceSpan};
+    use test_r::test;
+
+    #[test]
+    fn test_origin_add_1() {
+        let existing_origin = TypeOrigin::NoOrigin;
+        let result = existing_origin.add_origin(TypeOrigin::Default);
+
+        assert_eq!(result, TypeOrigin::Default);
+    }
+
+    #[test]
+    fn test_origin_add_2() {
+        let existing_origin = TypeOrigin::Default;
+
+        let result = existing_origin.add_origin(TypeOrigin::Default);
+
+        assert!(result.eq(&TypeOrigin::Default));
+    }
+
+    #[test]
+    fn test_origin_add_3() {
+        let existing_origin = TypeOrigin::Default;
+
+        let result = existing_origin.add_origin(TypeOrigin::OriginatedAt(SourceSpan::default()));
+
+        let expected = TypeOrigin::Multiple(vec![
+            TypeOrigin::Default,
+            TypeOrigin::OriginatedAt(SourceSpan::default()),
+        ]);
+
+        assert!(result.eq(&expected));
+    }
+
+    #[test]
+    fn test_origin_add_4() {
+        let type_origin1 = TypeOrigin::Multiple(vec![
+            TypeOrigin::Default,
+            TypeOrigin::OriginatedAt(SourceSpan::new(
+                SourcePosition::new(2, 37),
+                SourcePosition::new(2, 38),
+            )),
+            TypeOrigin::OriginatedAt(SourceSpan::new(
+                SourcePosition::new(2, 37),
+                SourcePosition::new(2, 38),
+            )),
+        ]);
+
+        let type_origin2 = TypeOrigin::Declared(SourceSpan::new(
+            SourcePosition::new(2, 11),
+            SourcePosition::new(2, 39),
+        ));
+
+        let result = type_origin1.add_origin(type_origin2.clone());
+
+        let expected = TypeOrigin::Multiple(vec![
+            TypeOrigin::Default,
+            TypeOrigin::OriginatedAt(SourceSpan::new(
+                SourcePosition::new(2, 37),
+                SourcePosition::new(2, 38),
+            )),
+            TypeOrigin::OriginatedAt(SourceSpan::new(
+                SourcePosition::new(2, 37),
+                SourcePosition::new(2, 38),
+            )),
+            type_origin2,
+        ]);
+
+        assert!(result.eq(&expected));
     }
 }

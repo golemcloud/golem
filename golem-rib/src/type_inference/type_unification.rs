@@ -531,13 +531,14 @@ fn unify_inferred_type(
         Ok(unified_type) => Ok(unified_type),
         Err(e) => match e {
             UnificationFailureInternal::TypeMisMatch { expected, found } => {
-                let found_origin = found.origin();
+                let found_origin = found.critical_origin();
                 let found_source_span = found_origin.source_span();
                 let found_expr = found_source_span
                     .as_ref()
                     .and_then(|span| original_expr.lookup(span));
 
                 let expected_origin = expected.critical_origin();
+
                 let additional_message = match expected_origin {
                     TypeOrigin::PatternMatch(span) => {
                         format!(

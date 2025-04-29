@@ -94,6 +94,12 @@ pub struct SourcePosition {
     pub column: i32,
 }
 
+impl SourcePosition {
+    pub fn new(line: i32, column: i32) -> SourcePosition {
+        SourcePosition { line, column }
+    }
+}
+
 impl Display for SourcePosition {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "Line: {}, Column: {}", self.line, self.column)

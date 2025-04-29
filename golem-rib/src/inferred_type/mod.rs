@@ -579,12 +579,12 @@ impl InferredType {
         } else {
             let mut unique_all_of_types: Vec<InferredType> = unique_types.into_iter().collect();
             unique_all_of_types.sort();
-            let origin = TypeOrigin::Multiple(
-                unique_all_of_types
-                    .iter()
-                    .map(|x| x.origin.clone())
-                    .collect(),
-            );
+
+            let mut origin = TypeOrigin::NoOrigin;
+
+            for typ in unique_all_of_types.iter() {
+                origin = origin.add_origin(typ.origin.clone());
+            }
 
             Some(InferredType {
                 inner: Box::new(TypeInternal::AllOf(unique_all_of_types)),
