@@ -172,7 +172,7 @@ impl TypeOrigin {
                             let mut contains = false;
 
                             for existing_origin in existing_origins.iter() {
-                                if existing_origin.eq(&new_origin) {
+                                if existing_origin.eq(new_origin) {
                                     contains = true;
                                 }
                             }
