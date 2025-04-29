@@ -12,119 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Expr;
+use crate::{Expr, InferredType};
 use std::collections::VecDeque;
 
 pub fn bind_type_annotations(expr: &mut Expr) {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
-    while let Some(expr) = queue.pop_back() {
+    while let Some(expr) = queue.pop_front() {
         match expr {
             Expr::Let {
                 type_annotation,
-                expr,
+                expr: rhs,
+                source_span,
                 ..
             } => {
-                if let Some(type_name) = type_annotation {
-                    expr.with_inferred_type_mut(type_name.clone().into());
+                if let Some(type_annotation) = type_annotation {
+                    let new_inferred_type =
+                        InferredType::from(&*type_annotation).declared_at(source_span.clone());
+
+                    rhs.with_inferred_type_mut(new_inferred_type)
                 }
-                queue.push_back(expr);
+
+                queue.push_back(rhs);
             }
 
-            Expr::Number {
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
+            expr => {
+                let source_span = expr.source_span();
+                let type_annotation = expr.type_annotation();
+
+                if let Some(type_annotation) = type_annotation {
+                    let new_inferred_type =
+                        InferredType::from(type_annotation).declared_at(source_span);
+
+                    expr.with_inferred_type_mut(new_inferred_type);
                 }
+
+                expr.visit_expr_nodes_lazy(&mut queue)
             }
-
-            Expr::SelectField {
-                expr,
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
-                }
-                queue.push_back(expr);
-            }
-
-            Expr::SelectIndex {
-                expr,
-                index,
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
-                }
-                queue.push_back(expr);
-                queue.push_back(index);
-            }
-
-            Expr::Identifier {
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
-                }
-            }
-
-            Expr::Option {
-                expr,
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
-                }
-
-                if let Some(expr) = expr {
-                    queue.push_back(expr);
-                }
-            }
-
-            Expr::Result {
-                expr,
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
-                }
-
-                match expr {
-                    Ok(expr) => queue.push_back(expr),
-                    Err(expr) => queue.push_back(expr),
-                }
-            }
-
-            Expr::Sequence {
-                exprs,
-                type_annotation,
-                inferred_type,
-                ..
-            } => {
-                if let Some(type_name) = type_annotation {
-                    *inferred_type = type_name.clone().into();
-                }
-
-                for expr in exprs {
-                    queue.push_back(expr);
-                }
-            }
-
-            _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
     }
 }
@@ -136,7 +61,7 @@ mod type_binding_tests {
 
     use super::*;
     use crate::parser::type_name::TypeName;
-    use crate::{ArmPattern, InferredType, MatchArm, VariableId};
+    use crate::{ArmPattern, MatchArm, VariableId};
 
     #[test]
     fn test_bind_type_in_let() {
@@ -150,7 +75,7 @@ mod type_binding_tests {
 
         let expected = Expr::let_binding(
             "x",
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::u64()),
             Some(TypeName::U64),
         );
 
@@ -170,10 +95,10 @@ mod type_binding_tests {
         let expected = Expr::option(Some(Expr::number_inferred(
             BigDecimal::from(1),
             None,
-            InferredType::number(),
+            InferredType::s32(),
         )))
         .with_type_annotation(TypeName::Option(Box::new(TypeName::U64)))
-        .with_inferred_type(InferredType::Option(Box::new(InferredType::U64)));
+        .with_inferred_type(InferredType::option(InferredType::u64()));
 
         assert_eq!(expr, expected);
     }
@@ -190,16 +115,16 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::ok(
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number_inferred(BigDecimal::from(1), None, InferredType::s32()),
             Some(TypeName::Result {
                 ok: Some(Box::new(TypeName::U64)),
                 error: Some(Box::new(TypeName::Str)),
             }),
         )
-        .with_inferred_type(InferredType::Result {
-            ok: Some(Box::new(InferredType::U64)),
-            error: Some(Box::new(InferredType::Str)),
-        });
+        .with_inferred_type(InferredType::result(
+            Some(InferredType::u64()),
+            Some(InferredType::string()),
+        ));
 
         assert_eq!(expr, expected);
     }
@@ -216,16 +141,13 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::ok(
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number(BigDecimal::from(1)),
             Some(TypeName::Result {
                 ok: Some(Box::new(TypeName::U64)),
                 error: None,
             }),
         )
-        .with_inferred_type(InferredType::Result {
-            ok: Some(Box::new(InferredType::U64)),
-            error: None,
-        });
+        .with_inferred_type(InferredType::result(Some(InferredType::u64()), None));
 
         assert_eq!(expr, expected);
     }
@@ -242,16 +164,13 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::err(
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number(BigDecimal::from(1)),
             Some(TypeName::Result {
                 ok: None,
                 error: Some(Box::new(TypeName::U64)),
             }),
         )
-        .with_inferred_type(InferredType::Result {
-            ok: None,
-            error: Some(Box::new(InferredType::U64)),
-        });
+        .with_inferred_type(InferredType::result(None, Some(InferredType::u64())));
 
         assert_eq!(expr, expected);
     }
@@ -267,16 +186,13 @@ mod type_binding_tests {
         expr.bind_type_annotations();
 
         let expected = Expr::ok(
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number(BigDecimal::from(1)),
             Some(TypeName::Result {
                 ok: None,
                 error: None,
             }),
         )
-        .with_inferred_type(InferredType::Result {
-            ok: None,
-            error: None,
-        });
+        .with_inferred_type(InferredType::result(None, None));
 
         assert_eq!(expr, expected);
     }
@@ -300,7 +216,7 @@ mod type_binding_tests {
             "baz",
             Some(TypeName::U32),
         )
-        .with_inferred_type(InferredType::U32);
+        .with_inferred_type(InferredType::u32());
 
         assert_eq!(expr, expected);
     }
@@ -325,10 +241,10 @@ mod type_binding_tests {
                 "baz",
                 None,
             ),
-            Expr::number_inferred(BigDecimal::from(1), None, InferredType::number()),
+            Expr::number(BigDecimal::from(1)),
         )
         .with_type_annotation(TypeName::U32)
-        .with_inferred_type(InferredType::U32);
+        .with_inferred_type(InferredType::u32());
 
         assert_eq!(expr, expected);
     }
@@ -345,7 +261,11 @@ mod type_binding_tests {
 
         let expected = Expr::let_binding_with_variable_id(
             VariableId::global("x".to_string()),
-            Expr::number_inferred(BigDecimal::from(1), Some(TypeName::U64), InferredType::U64),
+            Expr::number_inferred(
+                BigDecimal::from(1),
+                Some(TypeName::U64),
+                InferredType::u64(),
+            ),
             Some(TypeName::U64),
         );
 
@@ -370,12 +290,12 @@ mod type_binding_tests {
             Expr::expr_block(vec![
                 Expr::let_binding_with_variable_id(
                     VariableId::global("y".to_string()),
-                    Expr::number_inferred(BigDecimal::from(1), None, InferredType::U64),
+                    Expr::number_inferred(BigDecimal::from(1), None, InferredType::u64()),
                     Some(TypeName::U64),
                 ),
                 Expr::identifier_with_variable_id(VariableId::global("y".to_string()), None),
             ])
-            .with_inferred_type(InferredType::Unknown),
+            .with_inferred_type(InferredType::unknown()),
             None,
         );
 
@@ -404,7 +324,7 @@ mod type_binding_tests {
                 arm_resolution_expr: Box::new(Expr::number_inferred(
                     BigDecimal::from(2),
                     Some(TypeName::U64),
-                    InferredType::U64,
+                    InferredType::u64(),
                 )),
             }],
         );
@@ -427,8 +347,16 @@ mod type_binding_tests {
 
         let expected = Expr::cond(
             Expr::identifier_with_variable_id(VariableId::global("x".to_string()), None),
-            Expr::number_inferred(BigDecimal::from(1), Some(TypeName::U64), InferredType::U64),
-            Expr::number_inferred(BigDecimal::from(2), Some(TypeName::U64), InferredType::U64),
+            Expr::number_inferred(
+                BigDecimal::from(1),
+                Some(TypeName::U64),
+                InferredType::u64(),
+            ),
+            Expr::number_inferred(
+                BigDecimal::from(2),
+                Some(TypeName::U64),
+                InferredType::u64(),
+            ),
         );
 
         assert_eq!(expr, expected);

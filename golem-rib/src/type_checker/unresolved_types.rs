@@ -74,7 +74,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     queue.push_back(QueuedExpr::new(arg, outer_expr));
                 }
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -86,7 +86,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 ..
             } => {
                 queue.push_back(QueuedExpr::new(expr, outer_expr));
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent).at_field(field.clone()));
                 }
             }
@@ -100,7 +100,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 queue.push_back(QueuedExpr::new(expr, outer_expr));
                 queue.push_back(QueuedExpr::new(index, outer_expr));
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -112,7 +112,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 internal::unresolved_types_in_list(exprs, outer_expr)?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -129,7 +129,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     outer_expr,
                 )?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -137,30 +137,30 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 internal::unresolved_types_in_tuple(exprs, outer_expr)?;
             }
             Expr::Literal { inferred_type, .. } => {
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
             Expr::Number { inferred_type, .. } => {
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
 
             Expr::Flags { inferred_type, .. } => {
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
             Expr::Identifier { inferred_type, .. } => {
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent).with_help_message(
                         format!("make sure `{}` is a valid identifier", expr).as_str(),
                     ));
                 }
             }
             Expr::Boolean { inferred_type, .. } => {
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -171,7 +171,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 internal::unresolved_type_for_concat(exprs, outer_expr)?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -187,7 +187,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 queue.push_back(QueuedExpr::new(expr, outer_expr));
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -199,7 +199,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 internal::unresolved_type_for_binary_op(lhs, rhs, outer_expr)?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -211,7 +211,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 internal::unresolved_type_for_binary_op(lhs, rhs, outer_expr)?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -223,7 +223,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 internal::unresolved_type_for_binary_op(lhs, rhs, outer_expr)?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -235,7 +235,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 internal::unresolved_type_for_binary_op(lhs, rhs, outer_expr)?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -247,7 +247,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 internal::unresolved_type_for_binary_op(lhs, rhs, outer_expr)?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -259,7 +259,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 internal::unresolved_type_for_binary_op(lhs, rhs, outer_expr)?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -271,14 +271,14 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 internal::unresolved_type_for_binary_op(lhs, rhs, outer_expr)?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
             outer_expr @ Expr::GreaterThanOrEqualTo { lhs, rhs, .. } => {
                 internal::unresolved_type_for_binary_op(lhs, rhs, outer_expr)?;
 
-                if outer_expr.inferred_type().un_resolved() {
+                if outer_expr.inferred_type().is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -290,7 +290,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 internal::unresolved_type_for_binary_op(lhs, rhs, outer_expr)?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -302,14 +302,14 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 internal::unresolved_type_for_binary_op(lhs, rhs, outer_expr)?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
             outer_expr @ Expr::LessThan { lhs, rhs, .. } => {
                 internal::unresolved_type_for_binary_op(lhs, rhs, outer_expr)?;
 
-                if outer_expr.inferred_type().un_resolved() {
+                if outer_expr.inferred_type().is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -322,7 +322,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 internal::unresolved_type_for_if_condition(cond, lhs, rhs, outer_expr)?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -342,7 +342,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     queue.push_back(QueuedExpr::new(expr, outer_expr));
                 }
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -410,7 +410,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     },
                 };
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent)
                         .with_additional_error_detail(additional_message));
                 }
@@ -430,7 +430,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     outer_expr,
                 )?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -442,7 +442,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 queue.push_back(QueuedExpr::new(expr, outer_expr));
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -461,7 +461,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     outer_expr,
                 )?;
 
-                if inferred_type.un_resolved() {
+                if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr, parent));
                 }
             }
@@ -508,7 +508,7 @@ mod internal {
     ) -> Result<(), UnResolvedTypesError> {
         for (index, field_expr) in expr_fields.iter().enumerate() {
             let field_type = field_expr.inferred_type();
-            if field_type.is_unknown() || field_type.is_one_of() {
+            if field_type.is_unknown() {
                 return Err(
                     UnResolvedTypesError::from(field_expr, Some(original_expr.clone()))
                         .at_index(index),
@@ -528,7 +528,7 @@ mod internal {
     ) -> Result<(), UnResolvedTypesError> {
         let left_type = left.inferred_type();
         let right_type = right.inferred_type();
-        if left_type.un_resolved() {
+        if left_type.is_unknown() {
             return Err(UnResolvedTypesError::from(
                 left,
                 Some(original_expr.clone()),
@@ -537,7 +537,7 @@ mod internal {
             check_unresolved_types(left)?;
         }
 
-        if right_type.un_resolved() {
+        if right_type.is_unknown() {
             return Err(UnResolvedTypesError::from(
                 right,
                 Some(original_expr.clone()),
@@ -555,7 +555,7 @@ mod internal {
         original_expr: &Expr,
     ) -> Result<(), UnResolvedTypesError> {
         let iterable_type = iterable_expr.inferred_type();
-        if iterable_type.un_resolved() {
+        if iterable_type.is_unknown() {
             return Err(UnResolvedTypesError::from(
                 iterable_expr,
                 Some(original_expr.clone()),
@@ -565,7 +565,7 @@ mod internal {
         }
 
         let yield_expr_type = yield_expr.inferred_type();
-        if yield_expr_type.un_resolved() {
+        if yield_expr_type.is_unknown() {
             return Err(UnResolvedTypesError::from(
                 yield_expr,
                 Some(original_expr.clone()),
@@ -584,7 +584,7 @@ mod internal {
         outer_expr: &Expr,
     ) -> Result<(), UnResolvedTypesError> {
         let iterable_type = iterable_expr.inferred_type();
-        if iterable_type.un_resolved() {
+        if iterable_type.is_unknown() {
             return Err(UnResolvedTypesError::from(
                 iterable_expr,
                 Some(outer_expr.clone()),
@@ -594,7 +594,7 @@ mod internal {
         }
 
         let yield_expr_type = yield_expr.inferred_type();
-        if yield_expr_type.un_resolved() {
+        if yield_expr_type.is_unknown() {
             return Err(UnResolvedTypesError::from(
                 yield_expr,
                 Some(outer_expr.clone()),
@@ -604,7 +604,7 @@ mod internal {
         }
 
         let init_value_expr_type = init_value_expr.inferred_type();
-        if init_value_expr_type.un_resolved() {
+        if init_value_expr_type.is_unknown() {
             return Err(UnResolvedTypesError::from(
                 init_value_expr,
                 Some(outer_expr.clone()),
@@ -625,13 +625,13 @@ mod internal {
         let cond_type = cond.inferred_type();
         let if_type = if_expr.inferred_type();
         let else_type = else_expr.inferred_type();
-        if cond_type.un_resolved() {
+        if cond_type.is_unknown() {
             return Err(UnResolvedTypesError::from(cond, Some(outer_expr.clone())));
         } else {
             check_unresolved_types(cond)?;
         }
 
-        if if_type.un_resolved() {
+        if if_type.is_unknown() {
             return Err(UnResolvedTypesError::from(
                 if_expr,
                 Some(outer_expr.clone()),
@@ -640,7 +640,7 @@ mod internal {
             check_unresolved_types(if_expr)?;
         }
 
-        if else_type.un_resolved() {
+        if else_type.is_unknown() {
             return Err(UnResolvedTypesError::from(
                 if_expr,
                 Some(outer_expr.clone()),
@@ -658,7 +658,7 @@ mod internal {
         outer_expr: &Expr,
     ) -> Result<(), UnResolvedTypesError> {
         let cond_type = cond.inferred_type();
-        if cond_type.is_unknown() || cond_type.is_one_of() {
+        if cond_type.is_unknown() {
             return Err(UnResolvedTypesError::from(cond, Some(outer_expr.clone())));
         } else {
             check_unresolved_types(cond)?;
@@ -675,7 +675,7 @@ mod internal {
 
             for expr in exprs {
                 let expr_type = expr.inferred_type();
-                if expr_type.is_unknown() || expr_type.is_one_of() {
+                if expr_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(&expr, Some(outer_expr.clone())));
                 } else {
                     check_unresolved_types(&expr)?;
@@ -685,7 +685,7 @@ mod internal {
             let expr = match_arm.clone().arm_resolution_expr;
 
             let expr_type = expr.inferred_type();
-            if expr_type.un_resolved() {
+            if expr_type.is_unknown() {
                 return Err(UnResolvedTypesError::from(
                     expr.deref(),
                     Some(outer_expr.clone()),
@@ -723,7 +723,7 @@ mod internal {
     ) -> Result<(), UnResolvedTypesError> {
         for (index, field_expr) in expr_fields.iter().enumerate() {
             let field_type = field_expr.inferred_type();
-            if field_type.is_unknown() || field_type.is_one_of() {
+            if field_type.is_unknown() {
                 return Err(
                     UnResolvedTypesError::from(field_expr, Some(parent.clone())).at_index(index)
                 );

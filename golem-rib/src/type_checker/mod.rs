@@ -14,7 +14,6 @@
 
 pub(crate) use check_instance_returns::*;
 pub(crate) use exhaustive_pattern_match::*;
-pub(crate) use invalid_expr::*;
 pub(crate) use invalid_math_expr::*;
 pub(crate) use missing_fields::*;
 pub use path::*;
@@ -23,7 +22,6 @@ pub(crate) use unresolved_types::*;
 
 mod check_instance_returns;
 mod exhaustive_pattern_match;
-mod invalid_expr;
 mod invalid_math_expr;
 mod invalid_worker_name;
 mod missing_fields;
@@ -34,7 +32,6 @@ mod unresolved_types;
 
 use crate::rib_type_error::RibTypeError;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
-use crate::type_checker::invalid_expr::check_invalid_expr;
 use crate::type_checker::invalid_math_expr::check_invalid_math_expr;
 use crate::type_checker::invalid_worker_name::check_invalid_worker_name;
 use crate::type_checker::type_check_in_function_calls::check_type_error_in_function_calls;
@@ -47,7 +44,6 @@ pub fn type_check(
     check_type_error_in_function_calls(expr, function_type_registry)?;
     check_unresolved_types(expr)?;
     check_invalid_worker_name(expr)?;
-    check_invalid_expr(expr)?;
     check_invalid_program_return(expr)?;
     check_invalid_math_expr(expr)?;
     check_exhaustive_pattern_match(expr, function_type_registry)?;
@@ -65,7 +61,7 @@ mod type_check_tests {
         use crate::{compile, Expr};
 
         #[test]
-        async fn test_inference_pattern_match_invalid() {
+        async fn test_inference_pattern_match_invalid_0() {
             let expr = r#"
           let x: option<u64> = some(1);
           match x {
@@ -81,14 +77,94 @@ mod type_check_tests {
             let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 4, column 18
+            error in the following rib found at line 4, column 24
             `x`
-            cause: cannot determine the type
-            invalid identifier, conflicting types inferred. u64, string
-            help: try specifying the expected type explicitly
-            help: if the issue persists, please review the script for potential type inconsistencies
+            cause: type mismatch. expected string, found u64
+            expected string based on pattern match branch at line 5 column 21
             "#;
 
+            //assert!(false);
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_inference_pattern_match_invalid_1() {
+            let expr = r#"
+          let x: option<u64> = some(1);
+          match x {
+            some(x) => {foo: x},
+            none => {foo: "bar"}
+          }
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = internal::get_metadata_with_record_input_params();
+
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 4, column 24
+            `{foo: x}`
+            cause: type mismatch. expected string, found u64
+            expected string based on pattern match branch at line 5 column 21
+            "#;
+
+            //assert!(false);
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_inference_pattern_match_invalid_2() {
+            let expr = r#"
+          let x: option<u64> = some(1);
+          match x {
+            some(x) => ok(1),
+            none    => ok("none")
+          }
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = internal::get_metadata_with_record_input_params();
+
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 4, column 24
+            `ok(1)`
+            cause: type mismatch. expected string, found s32
+            expected string based on pattern match branch at line 5 column 24
+            "#;
+
+            //assert!(false);
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_inference_pattern_match_invalid_3() {
+            let expr = r#"
+          let x: option<u64> = some(1);
+          match x {
+            some(x) => ok("none"),
+            none    => ok(1)
+          }
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = internal::get_metadata_with_record_input_params();
+
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 5, column 24
+            `ok(1)`
+            cause: type mismatch. expected string, found s32
+            expected string based on pattern match branch at line 4 column 24
+            "#;
+
+            //assert!(false);
             assert_eq!(error_msg, strip_spaces(expected));
         }
 

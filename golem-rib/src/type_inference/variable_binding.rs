@@ -475,7 +475,7 @@ mod name_binding_tests {
         let second_expr = expectations::expected_match(3); // 3 because first block has 2 arms
 
         let block = Expr::expr_block(vec![first_expr, second_expr])
-            .with_inferred_type(InferredType::Unknown);
+            .with_inferred_type(InferredType::unknown());
 
         assert_eq!(expr, block);
     }
@@ -506,7 +506,7 @@ mod name_binding_tests {
         pub(crate) fn expected_match(index: usize) -> Expr {
             Expr::pattern_match(
                 Expr::option(Some(Expr::identifier_global("x", None)))
-                    .with_inferred_type(InferredType::Option(Box::new(InferredType::Unknown))),
+                    .with_inferred_type(InferredType::option(InferredType::unknown())),
                 vec![
                     MatchArm {
                         arm_pattern: ArmPattern::constructor(
@@ -572,15 +572,13 @@ mod name_binding_tests {
                         VariableId::Global("x".to_string()),
                         None,
                     )))
-                    .with_inferred_type(InferredType::Option(Box::new(InferredType::Unknown))),
+                    .with_inferred_type(InferredType::option(InferredType::unknown())),
                     None,
                 )
-                .with_inferred_type(InferredType::Result {
-                    ok: Some(Box::new(InferredType::Option(Box::new(
-                        InferredType::Unknown,
-                    )))),
-                    error: Some(Box::new(InferredType::Unknown)),
-                }),
+                .with_inferred_type(InferredType::result(
+                    Some(InferredType::option(InferredType::unknown())),
+                    Some(InferredType::unknown()),
+                )),
                 vec![
                     MatchArm {
                         arm_pattern: ArmPattern::constructor(

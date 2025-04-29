@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{GetTypeHint, InferredType};
+use crate::{GetTypeHint, InferredType, TypeInternal};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record, tuple};
 use golem_wasm_ast::analysis::{
@@ -63,16 +63,14 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
     type Error = String;
 
     fn try_from(inferred_type: &InferredType) -> Result<Self, Self::Error> {
-        match inferred_type {
-            InferredType::Instance { .. } => {
+        match inferred_type.internal_type() {
+            TypeInternal::Instance { .. } => {
                 Err("Cannot convert Instance type to AnalysedType".to_string())
             }
-            InferredType::Range { from, to } => {
-                let from: AnalysedType = AnalysedType::try_from(from.as_ref())?;
-                let to: Option<AnalysedType> = to
-                    .as_ref()
-                    .map(|t| AnalysedType::try_from(t.as_ref()))
-                    .transpose()?;
+            TypeInternal::Range { from, to } => {
+                let from: AnalysedType = AnalysedType::try_from(from)?;
+                let to: Option<AnalysedType> =
+                    to.as_ref().map(AnalysedType::try_from).transpose()?;
                 let analysed_type = match (from, to) {
                     (from_type, Some(to_type)) => record(vec![
                         field("from", option(from_type)),
@@ -87,51 +85,51 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                 };
                 Ok(AnalysedTypeWithUnit::analysed_type(analysed_type))
             }
-            InferredType::Bool => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::Bool(
+            TypeInternal::Bool => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::Bool(
                 TypeBool,
             ))),
-            InferredType::S8 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::S8(
+            TypeInternal::S8 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::S8(
                 TypeS8,
             ))),
-            InferredType::U8 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::U8(
+            TypeInternal::U8 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::U8(
                 TypeU8,
             ))),
-            InferredType::S16 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::S16(
+            TypeInternal::S16 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::S16(
                 TypeS16,
             ))),
-            InferredType::U16 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::U16(
+            TypeInternal::U16 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::U16(
                 TypeU16,
             ))),
-            InferredType::S32 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::S32(
+            TypeInternal::S32 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::S32(
                 TypeS32,
             ))),
-            InferredType::U32 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::U32(
+            TypeInternal::U32 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::U32(
                 TypeU32,
             ))),
-            InferredType::S64 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::S64(
+            TypeInternal::S64 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::S64(
                 TypeS64,
             ))),
-            InferredType::U64 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::U64(
+            TypeInternal::U64 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::U64(
                 TypeU64,
             ))),
-            InferredType::F32 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::F32(
+            TypeInternal::F32 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::F32(
                 TypeF32,
             ))),
-            InferredType::F64 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::F64(
+            TypeInternal::F64 => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::F64(
                 TypeF64,
             ))),
-            InferredType::Chr => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::Chr(
+            TypeInternal::Chr => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::Chr(
                 TypeChr,
             ))),
-            InferredType::Str => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::Str(
+            TypeInternal::Str => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::Str(
                 TypeStr,
             ))),
-            InferredType::List(inferred_type) => Ok(AnalysedTypeWithUnit::analysed_type(
+            TypeInternal::List(inferred_type) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::List(TypeList {
-                    inner: Box::new(inferred_type.as_ref().try_into()?),
+                    inner: Box::new(inferred_type.try_into()?),
                 }),
             )),
-            InferredType::Tuple(tuple) => Ok(AnalysedTypeWithUnit::analysed_type(
+            TypeInternal::Tuple(tuple) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::Tuple(TypeTuple {
                     items: tuple
                         .iter()
@@ -139,7 +137,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                         .collect::<Result<Vec<AnalysedType>, String>>()?,
                 }),
             )),
-            InferredType::Record(record) => Ok(AnalysedTypeWithUnit::analysed_type(
+            TypeInternal::Record(record) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::Record(TypeRecord {
                     fields: record
                         .iter()
@@ -152,33 +150,29 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                         .collect::<Result<Vec<NameTypePair>, String>>()?,
                 }),
             )),
-            InferredType::Flags(flags) => Ok(AnalysedTypeWithUnit::analysed_type(
+            TypeInternal::Flags(flags) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::Flags(TypeFlags {
                     names: flags.clone(),
                 }),
             )),
-            InferredType::Enum(enums) => Ok(AnalysedTypeWithUnit::analysed_type(
+            TypeInternal::Enum(enums) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::Enum(TypeEnum {
                     cases: enums.clone(),
                 }),
             )),
-            InferredType::Option(option) => Ok(AnalysedTypeWithUnit::analysed_type(
+            TypeInternal::Option(option) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::Option(TypeOption {
-                    inner: Box::new(option.as_ref().try_into()?),
+                    inner: Box::new(option.try_into()?),
                 }),
             )),
-            InferredType::Result { ok, error } => Ok(AnalysedTypeWithUnit::analysed_type(
+            TypeInternal::Result { ok, error } => Ok(AnalysedTypeWithUnit::analysed_type(
                 // In the case of result, there are instances users give just 1 value with zero function calls, we need to be flexible here
                 AnalysedType::Result(TypeResult {
-                    ok: ok
-                        .as_ref()
-                        .and_then(|t| t.as_ref().try_into().ok().map(Box::new)),
-                    err: error
-                        .as_ref()
-                        .and_then(|t| t.as_ref().try_into().ok().map(Box::new)),
+                    ok: ok.as_ref().and_then(|t| t.try_into().ok().map(Box::new)),
+                    err: error.as_ref().and_then(|t| t.try_into().ok().map(Box::new)),
                 }),
             )),
-            InferredType::Variant(variant) => Ok(AnalysedTypeWithUnit::analysed_type(
+            TypeInternal::Variant(variant) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::Variant(TypeVariant {
                     cases: variant
                         .iter()
@@ -191,7 +185,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                         .collect::<Result<Vec<NameOptionTypePair>, String>>()?,
                 }),
             )),
-            InferredType::Resource {
+            TypeInternal::Resource {
                 resource_id,
                 resource_mode,
             } => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::Handle(
@@ -205,8 +199,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                 },
             ))),
 
-            InferredType::OneOf(_) => Err("ambiguous types".to_string()),
-            InferredType::AllOf(types) => Err(format!(
+            TypeInternal::AllOf(types) => Err(format!(
                 "ambiguous types {}",
                 types
                     .iter()
@@ -214,10 +207,10 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                     .collect::<Vec<_>>()
                     .join(", ")
             )),
-            InferredType::Unknown => Err("failed to infer type".to_string()),
+            TypeInternal::Unknown => Err("failed to infer type".to_string()),
             // We don't expect to have a sequence type in the inferred type.as
             // This implies Rib will not support multiple types from worker-function results
-            InferredType::Sequence(vec) => {
+            TypeInternal::Sequence(vec) => {
                 if vec.is_empty() {
                     Ok(AnalysedTypeWithUnit::unit())
                 } else if vec.len() == 1 {

@@ -68,7 +68,7 @@ mod internal {
             CallType::InstanceCreation(instance) => match instance {
                 InstanceCreationType::Worker { .. } => {
                     for arg in args.iter_mut() {
-                        arg.add_infer_type_mut(InferredType::Str);
+                        arg.add_infer_type_mut(InferredType::string());
                     }
 
                     Ok(())
@@ -237,7 +237,7 @@ mod internal {
                         tag_argument_types(original_expr, function_name, args, &parameter_types)?;
 
                         if let Some(function_result_type) = function_result_inferred_type {
-                            *function_result_type = InferredType::from_variant_cases(variant_type);
+                            *function_result_type = InferredType::from_type_variant(variant_type);
                         }
 
                         Ok(())
@@ -270,7 +270,7 @@ mod internal {
                                 if return_types.len() == 1 {
                                     return_types.first().unwrap().into()
                                 } else {
-                                    InferredType::Sequence(
+                                    InferredType::sequence(
                                         return_types.iter().map(|t| t.into()).collect(),
                                     )
                                 }
@@ -436,13 +436,13 @@ mod function_parameters_inference_tests {
             },
             None,
             None,
-            vec![Expr::identifier_global("x", None).with_inferred_type(InferredType::U64)],
+            vec![Expr::identifier_global("x", None).with_inferred_type(InferredType::u64())],
         )
-        .with_inferred_type(InferredType::Sequence(vec![]));
+        .with_inferred_type(InferredType::sequence(vec![]));
 
         let expected = Expr::ExprBlock {
             exprs: vec![let_binding, call_expr],
-            inferred_type: InferredType::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         };

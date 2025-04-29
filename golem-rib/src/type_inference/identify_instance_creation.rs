@@ -38,6 +38,7 @@ mod internal {
     use crate::type_registry::FunctionTypeRegistry;
     use crate::{
         CustomError, Expr, ExprVisitor, FunctionCallError, InferredType, ParsedFunctionReference,
+        TypeInternal, TypeOrigin,
     };
 
     pub(crate) fn search_for_invalid_instance_declarations(
@@ -126,7 +127,7 @@ mod internal {
                                 call_type: call_type.clone(),
                                 generic_type_parameter: None,
                                 args: args.clone(),
-                                inferred_type: InferredType::Unknown,
+                                inferred_type: InferredType::unknown(),
                                 source_span: source_span.clone(),
                                 type_annotation: type_annotation.clone(),
                             },
@@ -134,9 +135,12 @@ mod internal {
                         ))
                     })?;
 
-                    *inferred_type = InferredType::Instance {
-                        instance_type: Box::new(new_instance_type),
-                    }
+                    *inferred_type = InferredType::new(
+                        TypeInternal::Instance {
+                            instance_type: Box::new(new_instance_type),
+                        },
+                        TypeOrigin::NoOrigin,
+                    );
                 }
             }
         }

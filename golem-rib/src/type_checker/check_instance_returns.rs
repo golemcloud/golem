@@ -13,19 +13,19 @@
 // limitations under the License.
 
 use crate::instance_type::InstanceType;
-use crate::{Expr, InferredType};
+use crate::{Expr, TypeInternal};
 
 // Note that this takes an entire rib program and not any invalid expression
 pub fn check_invalid_program_return(rib_program: &Expr) -> Result<(), InvalidProgramReturn> {
     let inferred_type = rib_program.inferred_type();
 
-    if let InferredType::Instance { instance_type, .. } = inferred_type {
+    if let TypeInternal::Instance { instance_type, .. } = inferred_type.internal_type() {
         let expr = match rib_program {
             Expr::ExprBlock { exprs, .. } if !exprs.is_empty() => exprs.last().unwrap(),
             expr => expr,
         };
 
-        return match *instance_type {
+        return match instance_type.as_ref() {
             InstanceType::Resource { .. } => Err(InvalidProgramReturn {
                 return_expr: expr.clone(),
                 message: "program is invalid as it returns a resource constructor".to_string(),

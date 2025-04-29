@@ -20,8 +20,7 @@ mod refined_type;
 mod type_extraction;
 
 use crate::type_refinement::precise_types::*;
-use crate::InferredType;
-use std::ops::Deref;
+use crate::{InferredType, TypeInternal};
 
 /// # Example:
 ///
@@ -75,7 +74,7 @@ pub trait TypeRefinement {
 impl TypeRefinement for RecordType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let InferredType::Record(record_type) = inferred_type {
+            if let TypeInternal::Record(record_type) = inferred_type.internal_type() {
                 Some(RecordType(record_type.clone()))
             } else {
                 None
@@ -87,8 +86,8 @@ impl TypeRefinement for RecordType {
 impl TypeRefinement for OptionalType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let InferredType::Option(optional_type) = inferred_type {
-                Some(OptionalType(optional_type.deref().clone()))
+            if let TypeInternal::Option(optional_type) = inferred_type.internal_type() {
+                Some(OptionalType(optional_type.clone()))
             } else {
                 None
             }
@@ -99,8 +98,8 @@ impl TypeRefinement for OptionalType {
 impl TypeRefinement for OkType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let InferredType::Result { ok, .. } = inferred_type {
-                Some(OkType(ok.clone().as_deref().cloned()))
+            if let TypeInternal::Result { ok, .. } = inferred_type.internal_type() {
+                Some(OkType(ok.clone()))
             } else {
                 None
             }
@@ -111,8 +110,8 @@ impl TypeRefinement for OkType {
 impl TypeRefinement for ErrType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let InferredType::Result { error, .. } = inferred_type {
-                Some(ErrType(error.clone().as_deref().cloned()))
+            if let TypeInternal::Result { error, .. } = inferred_type.internal_type() {
+                Some(ErrType(error.clone()))
             } else {
                 None
             }
@@ -123,8 +122,8 @@ impl TypeRefinement for ErrType {
 impl TypeRefinement for ListType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let InferredType::List(inferred_type) = inferred_type {
-                Some(ListType(inferred_type.deref().clone()))
+            if let TypeInternal::List(inferred_type) = inferred_type.internal_type() {
+                Some(ListType(inferred_type.clone()))
             } else {
                 None
             }
@@ -138,11 +137,8 @@ impl TypeRefinement for RangeType {
         Self: Sized,
     {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let InferredType::Range { from, to } = inferred_type {
-                Some(RangeType(
-                    from.deref().clone(),
-                    to.as_ref().map(|t| t.deref().clone()),
-                ))
+            if let TypeInternal::Range { from, to } = inferred_type.internal_type() {
+                Some(RangeType(from.clone(), to.clone()))
             } else {
                 None
             }
@@ -153,7 +149,7 @@ impl TypeRefinement for RangeType {
 impl TypeRefinement for TupleType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let InferredType::Tuple(tuple_type) = inferred_type {
+            if let TypeInternal::Tuple(tuple_type) = inferred_type.internal_type() {
                 Some(TupleType(tuple_type.clone()))
             } else {
                 None
@@ -165,7 +161,7 @@ impl TypeRefinement for TupleType {
 impl TypeRefinement for StringType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let InferredType::Str = inferred_type {
+            if let TypeInternal::Str = inferred_type.internal_type() {
                 Some(StringType)
             } else {
                 None
@@ -176,17 +172,20 @@ impl TypeRefinement for StringType {
 
 impl TypeRefinement for NumberType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
-        internal::refine_inferred_type(inferred_type, &|inferred_type| match inferred_type {
-            InferredType::S8 => Some(NumberType),
-            InferredType::S16 => Some(NumberType),
-            InferredType::S32 => Some(NumberType),
-            InferredType::S64 => Some(NumberType),
-            InferredType::U8 => Some(NumberType),
-            InferredType::U16 => Some(NumberType),
-            InferredType::U32 => Some(NumberType),
-            InferredType::U64 => Some(NumberType),
-            InferredType::F32 => Some(NumberType),
-            InferredType::F64 => Some(NumberType),
+        internal::refine_inferred_type(inferred_type, &|inferred_type| match inferred_type
+            .inner
+            .as_ref()
+        {
+            TypeInternal::S8 => Some(NumberType),
+            TypeInternal::S16 => Some(NumberType),
+            TypeInternal::S32 => Some(NumberType),
+            TypeInternal::S64 => Some(NumberType),
+            TypeInternal::U8 => Some(NumberType),
+            TypeInternal::U16 => Some(NumberType),
+            TypeInternal::U32 => Some(NumberType),
+            TypeInternal::U64 => Some(NumberType),
+            TypeInternal::F32 => Some(NumberType),
+            TypeInternal::F64 => Some(NumberType),
             _ => None,
         })
     }
@@ -195,7 +194,7 @@ impl TypeRefinement for NumberType {
 impl TypeRefinement for BoolType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let InferredType::Bool = inferred_type {
+            if let TypeInternal::Bool = inferred_type.internal_type() {
                 Some(BoolType)
             } else {
                 None
@@ -207,7 +206,7 @@ impl TypeRefinement for BoolType {
 impl TypeRefinement for CharType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let InferredType::Chr = inferred_type {
+            if let TypeInternal::Chr = inferred_type.internal_type() {
                 Some(CharType)
             } else {
                 None
@@ -219,7 +218,7 @@ impl TypeRefinement for CharType {
 impl TypeRefinement for FlagsType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let InferredType::Flags(flags) = inferred_type {
+            if let TypeInternal::Flags(flags) = inferred_type.internal_type() {
                 Some(FlagsType(flags.clone()))
             } else {
                 None
@@ -231,7 +230,7 @@ impl TypeRefinement for FlagsType {
 impl TypeRefinement for EnumType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let InferredType::Enum(enums) = inferred_type {
+            if let TypeInternal::Enum(enums) = inferred_type.internal_type() {
                 Some(EnumType(enums.clone()))
             } else {
                 None
@@ -243,7 +242,7 @@ impl TypeRefinement for EnumType {
 impl TypeRefinement for VariantType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            if let InferredType::Variant(variant_type) = inferred_type {
+            if let TypeInternal::Variant(variant_type) = inferred_type.internal_type() {
                 Some(VariantType(variant_type.clone()))
             } else {
                 None
@@ -254,7 +253,7 @@ impl TypeRefinement for VariantType {
 
 mod internal {
     use crate::type_refinement::RefinedType;
-    use crate::InferredType;
+    use crate::{InferredType, TypeInternal};
 
     pub(crate) fn refine_inferred_type<F, A>(
         inferred_type: &InferredType,
@@ -263,21 +262,8 @@ mod internal {
     where
         F: Fn(&InferredType) -> Option<A>,
     {
-        match inferred_type {
-            InferredType::OneOf(types) => {
-                let mut refined_one_of = vec![];
-
-                for typ in types {
-                    if let Some(refined) = refine_inferred_type(typ, select) {
-                        refined_one_of.push(refined);
-                    } else {
-                        return None;
-                    }
-                }
-
-                Some(RefinedType::OneOf(refined_one_of))
-            }
-            InferredType::AllOf(types) => {
+        match inferred_type.internal_type() {
+            TypeInternal::AllOf(types) => {
                 let mut refined_all_of = vec![];
 
                 for typ in types {
@@ -305,14 +291,14 @@ mod type_refinement_tests {
 
     #[test]
     fn test_type_refinement_option() {
-        let inferred_type = InferredType::Option(Box::new(InferredType::U64));
+        let inferred_type = InferredType::option(InferredType::u64());
 
         let refined_type = OptionalType::refine(&inferred_type).unwrap();
 
-        let expected_refine_type = RefinedType::Value(OptionalType(InferredType::U64));
+        let expected_refine_type = RefinedType::Value(OptionalType(InferredType::u64()));
 
         let inner_type = refined_type.inner_type();
-        let expected_inner_type = InferredType::U64;
+        let expected_inner_type = InferredType::u64();
 
         assert_eq!(refined_type, expected_refine_type);
         assert_eq!(inner_type, expected_inner_type);
@@ -320,26 +306,30 @@ mod type_refinement_tests {
 
     #[test]
     fn test_type_refinement_option_all_of() {
-        let inferred_type = InferredType::AllOf(vec![
-            InferredType::Option(Box::new(InferredType::U64)),
-            InferredType::Option(Box::new(InferredType::U32)),
-            InferredType::Option(Box::new(InferredType::Str)),
-        ]);
+        let types = vec![
+            InferredType::option(InferredType::u64()),
+            InferredType::option(InferredType::u32()),
+            InferredType::option(InferredType::string()),
+        ];
+
+        let inferred_type = InferredType::all_of(types).unwrap();
 
         let refined_type = OptionalType::refine(&inferred_type).unwrap();
 
         let expected_refine_type = RefinedType::AllOf(vec![
-            RefinedType::Value(OptionalType(InferredType::U64)),
-            RefinedType::Value(OptionalType(InferredType::U32)),
-            RefinedType::Value(OptionalType(InferredType::Str)),
+            RefinedType::Value(OptionalType(InferredType::u32())),
+            RefinedType::Value(OptionalType(InferredType::u64())),
+            RefinedType::Value(OptionalType(InferredType::string())),
         ]);
 
         let inner_type = refined_type.inner_type();
-        let expected_inner_type = InferredType::AllOf(vec![
-            InferredType::U32,
-            InferredType::U64,
-            InferredType::Str,
-        ]);
+        let expected_inner_types = vec![
+            InferredType::u64(),
+            InferredType::u32(),
+            InferredType::string(),
+        ];
+
+        let expected_inner_type = InferredType::all_of(expected_inner_types).unwrap();
 
         assert_eq!(refined_type, expected_refine_type);
         assert_eq!(inner_type, expected_inner_type);
@@ -347,188 +337,31 @@ mod type_refinement_tests {
 
     #[test]
     fn test_type_refinement_option_nested_all_of() {
-        let inferred_type = InferredType::AllOf(vec![
-            InferredType::Option(Box::new(InferredType::U64)),
-            InferredType::AllOf(vec![
-                InferredType::Option(Box::new(InferredType::U32)),
-                InferredType::Option(Box::new(InferredType::Str)),
-            ]),
-        ]);
+        let inferred_type = InferredType::all_of(vec![
+            InferredType::option(InferredType::u64()),
+            InferredType::all_of(vec![
+                InferredType::option(InferredType::u32()),
+                InferredType::option(InferredType::string()),
+            ])
+            .unwrap(),
+        ])
+        .unwrap();
 
         let refined_type = OptionalType::refine(&inferred_type).unwrap();
 
         let expected_refine_type = RefinedType::AllOf(vec![
-            RefinedType::Value(OptionalType(InferredType::U64)),
-            RefinedType::AllOf(vec![
-                RefinedType::Value(OptionalType(InferredType::U32)),
-                RefinedType::Value(OptionalType(InferredType::Str)),
-            ]),
+            RefinedType::Value(OptionalType(InferredType::u32())),
+            RefinedType::Value(OptionalType(InferredType::u64())),
+            RefinedType::Value(OptionalType(InferredType::string())),
         ]);
 
         let inner_type = refined_type.inner_type();
-        let expected_inner_type = InferredType::AllOf(vec![
-            InferredType::U32,
-            InferredType::U64,
-            InferredType::Str,
-        ]);
-
-        assert_eq!(refined_type, expected_refine_type);
-        assert_eq!(inner_type, expected_inner_type);
-    }
-
-    #[test]
-    fn test_type_refinement_option_one_of() {
-        let inferred_type = InferredType::OneOf(vec![
-            InferredType::Option(Box::new(InferredType::U64)),
-            InferredType::Option(Box::new(InferredType::U32)),
-            InferredType::Option(Box::new(InferredType::Str)),
-        ]);
-
-        let refined_type = OptionalType::refine(&inferred_type).unwrap();
-
-        let expected_refine_type = RefinedType::OneOf(vec![
-            RefinedType::Value(OptionalType(InferredType::U64)),
-            RefinedType::Value(OptionalType(InferredType::U32)),
-            RefinedType::Value(OptionalType(InferredType::Str)),
-        ]);
-
-        let inner_type = refined_type.inner_type();
-        let expected_inner_type = InferredType::OneOf(vec![
-            InferredType::U32,
-            InferredType::U64,
-            InferredType::Str,
-        ]);
-
-        assert_eq!(refined_type, expected_refine_type);
-        assert_eq!(inner_type, expected_inner_type);
-    }
-
-    #[test]
-    fn test_type_refinement_option_nested_one_of() {
-        let inferred_type = InferredType::OneOf(vec![
-            InferredType::Option(Box::new(InferredType::U64)),
-            InferredType::OneOf(vec![
-                InferredType::Option(Box::new(InferredType::U32)),
-                InferredType::Option(Box::new(InferredType::Str)),
-            ]),
-        ]);
-
-        let refined_type = OptionalType::refine(&inferred_type).unwrap();
-
-        let expected_refine_type = RefinedType::OneOf(vec![
-            RefinedType::Value(OptionalType(InferredType::U64)),
-            RefinedType::OneOf(vec![
-                RefinedType::Value(OptionalType(InferredType::U32)),
-                RefinedType::Value(OptionalType(InferredType::Str)),
-            ]),
-        ]);
-
-        let inner_type = refined_type.inner_type();
-        let expected_inner_type = InferredType::OneOf(vec![
-            InferredType::U32,
-            InferredType::U64,
-            InferredType::Str,
-        ]);
-
-        assert_eq!(refined_type, expected_refine_type);
-        assert_eq!(inner_type, expected_inner_type);
-    }
-
-    #[test]
-    fn test_type_refinement_option_mixed_one_of() {
-        let inferred_type = InferredType::OneOf(vec![
-            InferredType::Option(Box::new(InferredType::U64)),
-            InferredType::AllOf(vec![
-                InferredType::Option(Box::new(InferredType::U32)),
-                InferredType::Option(Box::new(InferredType::Str)),
-            ]),
-        ]);
-
-        let refined_type = OptionalType::refine(&inferred_type).unwrap();
-
-        let expected_refine_type = RefinedType::OneOf(vec![
-            RefinedType::Value(OptionalType(InferredType::U64)),
-            RefinedType::AllOf(vec![
-                RefinedType::Value(OptionalType(InferredType::U32)),
-                RefinedType::Value(OptionalType(InferredType::Str)),
-            ]),
-        ]);
-
-        let inner_type = refined_type.inner_type();
-        let expected_inner_type = InferredType::OneOf(vec![
-            InferredType::U64,
-            InferredType::AllOf(vec![InferredType::U32, InferredType::Str]),
-        ]);
-
-        assert_eq!(refined_type, expected_refine_type);
-        assert_eq!(inner_type, expected_inner_type);
-    }
-
-    #[test]
-    fn test_type_refinement_option_mixed_all_of() {
-        let inferred_type = InferredType::AllOf(vec![
-            InferredType::Option(Box::new(InferredType::U64)),
-            InferredType::OneOf(vec![
-                InferredType::Option(Box::new(InferredType::U32)),
-                InferredType::Option(Box::new(InferredType::Str)),
-            ]),
-        ]);
-
-        let refined_type = OptionalType::refine(&inferred_type).unwrap();
-
-        let expected_refine_type = RefinedType::AllOf(vec![
-            RefinedType::Value(OptionalType(InferredType::U64)),
-            RefinedType::OneOf(vec![
-                RefinedType::Value(OptionalType(InferredType::U32)),
-                RefinedType::Value(OptionalType(InferredType::Str)),
-            ]),
-        ]);
-
-        let inner_type = refined_type.inner_type();
-        let expected_inner_type = InferredType::AllOf(vec![
-            InferredType::U64,
-            InferredType::OneOf(vec![InferredType::U32, InferredType::Str]),
-        ]);
-
-        assert_eq!(refined_type, expected_refine_type);
-        assert_eq!(inner_type, expected_inner_type);
-    }
-
-    // AllOf()
-    #[test]
-    fn test_type_refinement_option_mixed_nested() {
-        let inferred_type = InferredType::AllOf(vec![
-            InferredType::Option(Box::new(InferredType::U64)),
-            InferredType::OneOf(vec![
-                InferredType::Option(Box::new(InferredType::U32)),
-                InferredType::AllOf(vec![
-                    InferredType::Option(Box::new(InferredType::Str)),
-                    InferredType::Option(Box::new(InferredType::Bool)),
-                ]),
-            ]),
-        ]);
-
-        let refined_type = OptionalType::refine(&inferred_type).unwrap();
-
-        let expected_refine_type = RefinedType::AllOf(vec![
-            RefinedType::Value(OptionalType(InferredType::U64)),
-            RefinedType::OneOf(vec![
-                RefinedType::Value(OptionalType(InferredType::U32)),
-                RefinedType::AllOf(vec![
-                    RefinedType::Value(OptionalType(InferredType::Str)),
-                    RefinedType::Value(OptionalType(InferredType::Bool)),
-                ]),
-            ]),
-        ]);
-
-        let inner_type = refined_type.inner_type();
-        let expected_inner_type = InferredType::AllOf(vec![
-            InferredType::U64,
-            InferredType::OneOf(vec![
-                InferredType::U32,
-                InferredType::AllOf(vec![InferredType::Bool, InferredType::Str]),
-            ]),
-        ]);
+        let expected_inner_type = InferredType::all_of(vec![
+            InferredType::u64(),
+            InferredType::u32(),
+            InferredType::string(),
+        ])
+        .unwrap();
 
         assert_eq!(refined_type, expected_refine_type);
         assert_eq!(inner_type, expected_inner_type);

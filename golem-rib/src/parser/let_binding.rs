@@ -351,7 +351,7 @@ mod tests {
             Ok(Expr::let_binding(
                 "foo",
                 Expr::sequence(vec![], None)
-                    .with_inferred_type(InferredType::List(Box::new(InferredType::Unknown))),
+                    .with_inferred_type(InferredType::list(InferredType::unknown())),
                 Some(TypeName::List(Box::new(TypeName::U8)))
             ))
         );

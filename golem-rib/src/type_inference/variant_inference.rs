@@ -54,7 +54,7 @@ mod internal {
                         .with_inferred_type(inferred_type.clone());
                     }
                 }
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
+                _ => expr.visit_expr_nodes_lazy(&mut queue),
             }
         }
     }
@@ -84,7 +84,7 @@ mod internal {
                         .with_inferred_type(inferred_type.clone());
                     }
                 }
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
+                _ => expr.visit_expr_nodes_lazy(&mut queue),
             }
         }
     }
@@ -112,7 +112,7 @@ mod internal {
                         {
                             no_arg_variants.push(variable_id.name());
                             *inferred_type =
-                                inferred_type.merge(InferredType::from_variant_cases(type_variant));
+                                inferred_type.merge(InferredType::from_type_variant(type_variant));
                         }
                     }
                 }
@@ -127,7 +127,7 @@ mod internal {
                     if let Some(RegistryValue::Variant { variant_type, .. }) =
                         function_type_registry.types.get(&key)
                     {
-                        let variant_inferred_type = InferredType::from_variant_cases(variant_type);
+                        let variant_inferred_type = InferredType::from_type_variant(variant_type);
                         *inferred_type = inferred_type.merge(variant_inferred_type);
 
                         variant_with_args.push(function_name.to_string());
@@ -138,7 +138,7 @@ mod internal {
                     }
                 }
 
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
+                _ => expr.visit_expr_nodes_lazy(&mut queue),
             }
         }
 
