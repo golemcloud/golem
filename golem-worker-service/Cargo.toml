@@ -25,7 +25,6 @@ golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = 
     "host",
 ] }
 golem-worker-service-base = { path = "../golem-worker-service-base", version = "=0.0.0" }
-golem-rib = { path = "../golem-rib", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
