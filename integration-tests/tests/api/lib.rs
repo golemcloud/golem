@@ -26,14 +26,12 @@ mod api_deployment;
 mod api_security;
 mod component;
 mod invocation_context;
-mod oas_api_definition;
 mod plugins;
 mod worker;
 
 tag_suite!(api_security, http_only);
 tag_suite!(api_deployment, http_only);
 tag_suite!(invocation_context, http_only);
-tag_suite!(oas_api_definition, http_only);
 
 pub struct Tracing;
 
