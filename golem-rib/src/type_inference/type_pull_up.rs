@@ -331,10 +331,8 @@ pub fn handle_pattern_match(current_match_arms: &[MatchArm], inferred_type: &mut
     let mut arm_resolution_inferred_types = vec![];
 
     for arm in current_match_arms {
-        let source_span = arm.arm_resolution_expr.source_span();
         let arm_inferred_type = arm.arm_resolution_expr.inferred_type();
-        arm_resolution_inferred_types
-            .push(arm_inferred_type.add_origin(TypeOrigin::PatternMatch(source_span)));
+        arm_resolution_inferred_types.push(arm_inferred_type);
     }
 
     let new_inferred_type = InferredType::all_of(arm_resolution_inferred_types);

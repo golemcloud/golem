@@ -63,11 +63,11 @@ mod type_check_tests {
         #[test]
         async fn test_inference_pattern_match_invalid_0() {
             let expr = r#"
-          let x: option<u64> = some(1);
-          match x {
-            some(x) => x,
-            none => "none"
+          match 1 {
+            1 =>  {  foo : "bar"  },
+            2 =>  {  foo : 1  }
           }
+
         "#;
 
             let expr = Expr::from_text(expr).unwrap();

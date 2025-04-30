@@ -17,16 +17,13 @@ use std::collections::HashSet;
 
 pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
     let mut all_of_types = vec![];
-    let mut seen = HashSet::new();
 
     for typ in types {
         match typ.internal_type() {
             TypeInternal::AllOf(all_of) => {
                 let flattened = flatten_all_of_list(all_of);
                 for t in flattened {
-                    if seen.insert(t.clone()) {
-                        all_of_types.push(t);
-                    }
+                    all_of_types.push(t);
                 }
             }
             _ => {

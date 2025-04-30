@@ -530,61 +530,15 @@ fn unify_inferred_type(
     match unification_result {
         Ok(unified_type) => Ok(unified_type),
         Err(e) => match e {
-            UnificationFailureInternal::TypeMisMatch { expected, found } => {
-                let found_origin = found.critical_origin();
-                let found_source_span = found_origin.source_span();
-                let found_expr = found_source_span
-                    .as_ref()
-                    .and_then(|span| original_expr.lookup(span));
-
-                let expected_origin = expected.critical_origin();
-
-                let additional_message = match expected_origin {
-                    TypeOrigin::PatternMatch(span) => {
-                        format!(
-                            "expected {} based on pattern match branch at line {} column {}",
-                            expected.printable(),
-                            span.start_line(),
-                            span.start_column()
-                        )
-                    }
-                    TypeOrigin::Default => "".to_string(),
-                    TypeOrigin::NoOrigin => "".to_string(),
-                    TypeOrigin::Declared(source_span) => {
-                        format!(
-                            "{} declared at line {} column {}",
-                            expected.printable(),
-                            source_span.start_line(),
-                            source_span.start_column()
-                        )
-                    }
-                    TypeOrigin::OriginatedAt(_) => "".to_string(),
-                    TypeOrigin::Multiple(_) => "".to_string(),
-                };
-
-                match found_expr {
-                    Some(found_expr) => Err(TypeUnificationError::type_mismatch_error(
-                        found_expr,
-                        None,
-                        expected,
-                        found,
-                        vec![additional_message],
-                    )),
-
-                    None => {
-                        let ambiguity_message = format!(
-                            "conflicting types {}, {}",
-                            found.printable(),
-                            expected.printable()
-                        );
-                        Err(TypeUnificationError::unresolved_types_error(
-                            expr,
-                            None,
-                            vec![ambiguity_message],
-                        ))
-                    }
-                }
+            UnificationFailureInternal::TypeMisMatch { left, right } => {
+                Err(get_type_unification_error_from_mismatch(
+                    original_expr,
+                    &expr,
+                    left,
+                    right,
+                ))
             }
+
             UnificationFailureInternal::ConflictingTypes {
                 conflicting_types,
                 additional_error_detail,
@@ -606,6 +560,7 @@ fn unify_inferred_type(
                     additional_messages,
                 ))
             }
+
             UnificationFailureInternal::UnknownType => {
                 Err(TypeUnificationError::unresolved_types_error(
                     expr,
@@ -614,5 +569,74 @@ fn unify_inferred_type(
                 ))
             }
         },
+    }
+}
+
+fn get_type_unification_error_from_mismatch(
+    rib: &Expr,
+    expr_unified: &Expr,
+    left: InferredType,
+    right: InferredType,
+) -> TypeUnificationError {
+    let left_expr = left
+        .source_span()
+        .and_then(|span| rib.lookup(&span).map(|expr| (span, expr)));
+
+    let right_expr = right
+        .source_span()
+        .and_then(|span| rib.lookup(&span).map(|expr| (span, expr)));
+
+    match (left_expr, right_expr) {
+        // We make the right expected
+        (Some((_, left_expr)), Some((right_span, right_expr))) => {
+            let error_detail = format!(
+                "expected type {} based on `{}` found at `{}`",
+                right.printable(),
+                right_expr,
+                right_span
+            );
+            TypeUnificationError::type_mismatch_error(
+                left_expr,
+                None,
+                right,
+                left,
+                vec![error_detail],
+            )
+        }
+
+        // Only the info on left is available
+        (Some((_, left_expr)), None) => TypeUnificationError::type_mismatch_error(
+            left_expr,
+            None,
+            right,
+            left,
+            vec![],
+        ),
+
+        // we have access to only the expression on the right
+        // and we tag it as the wrong type
+        (None, Some((_, right_expr))) => {
+            TypeUnificationError::type_mismatch_error(
+                right_expr,
+                None,
+                left,
+                right,
+                vec![],
+            )
+        }
+
+        (None, None) => {
+            let additional_messages = vec![format!(
+                "conflicting types: {}, {}",
+                left.printable(),
+                right.printable()
+            )];
+
+            TypeUnificationError::unresolved_types_error(
+                expr_unified.clone(),
+                None,
+                additional_messages,
+            )
+        }
     }
 }
