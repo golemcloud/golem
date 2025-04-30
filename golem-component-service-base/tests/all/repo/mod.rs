@@ -29,7 +29,7 @@ use golem_common::repo::plugin_installation::ComponentPluginInstallationRow;
 use golem_common::repo::RowMeta;
 use golem_component_service_base::model::Component;
 use golem_component_service_base::repo::component::{
-    record_metadata_serde, ComponentRecord, ComponentRepo,
+    record_metadata_serde, ComponentRecord, ComponentRepo, PluginInstallationRepoAction,
 };
 use golem_component_service_base::repo::plugin::PluginRepo;
 use golem_component_service_base::service::component::{ComponentByNameAndVersion, VersionType};
@@ -897,7 +897,15 @@ async fn test_default_component_plugin_installation(
     )
     .unwrap();
 
-    component_repo.install_plugin(&installation1_row).await?;
+    component_repo
+        .apply_plugin_installation_changes(
+            &plugin_owner_row,
+            &component_id.0,
+            &[PluginInstallationRepoAction::Install {
+                record: installation1_row,
+            }],
+        )
+        .await?;
 
     let installation2 = PluginInstallation {
         id: PluginInstallationId::new_v4(),
@@ -912,7 +920,15 @@ async fn test_default_component_plugin_installation(
     )
     .unwrap();
 
-    component_repo.install_plugin(&installation2_row).await?;
+    component_repo
+        .apply_plugin_installation_changes(
+            &plugin_owner_row,
+            &component_id.0,
+            &[PluginInstallationRepoAction::Install {
+                record: installation2_row,
+            }],
+        )
+        .await?;
 
     let installations2 = component_repo
         .get_installed_plugins(&plugin_owner_row, &component_id.0, 2)
@@ -927,13 +943,16 @@ async fn test_default_component_plugin_installation(
         .installation_id;
     let new_params: HashMap<String, String> =
         HashMap::from_iter(vec![("param2".to_string(), "value2".to_string())]);
+
     component_repo
-        .update_plugin_installation(
+        .apply_plugin_installation_changes(
             &plugin_owner_row,
             &component_id.0,
-            &latest_installation2_id,
-            600,
-            serde_json::to_vec(&new_params).unwrap(),
+            &[PluginInstallationRepoAction::Update {
+                plugin_installation_id: latest_installation2_id,
+                new_priority: 600,
+                new_parameters: serde_json::to_vec(&new_params).unwrap(),
+            }],
         )
         .await?;
 
@@ -946,8 +965,15 @@ async fn test_default_component_plugin_installation(
         .find(|installation| installation.priority == 1000)
         .unwrap()
         .installation_id;
+
     component_repo
-        .uninstall_plugin(&plugin_owner_row, &component_id.0, &latest_installation1_id)
+        .apply_plugin_installation_changes(
+            &plugin_owner_row,
+            &component_id.0,
+            &[PluginInstallationRepoAction::Uninstall {
+                plugin_installation_id: latest_installation1_id,
+            }],
+        )
         .await?;
 
     let installations4 = component_repo

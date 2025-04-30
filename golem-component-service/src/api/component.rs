@@ -26,7 +26,8 @@ use golem_common::recorded_http_api_request;
 use golem_component_service_base::api::dto;
 use golem_component_service_base::api::mapper::ApiMapper;
 use golem_component_service_base::model::{
-    ComponentSearch, DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
+    BatchPluginInstallationUpdates, ComponentSearch, DynamicLinking,
+    InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use golem_component_service_base::service::component::ComponentService;
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
@@ -690,6 +691,44 @@ impl ComponentApi {
             )
             .await?;
 
+        Ok(Json(Empty {}))
+    }
+
+    /// Applies a batch of changes to the installed plugins of a component
+    #[oai(
+        path = "/:component_id/versions/latest/plugins/installs/batch",
+        method = "post",
+        operation_id = "bath_update_installed_plugins"
+    )]
+    async fn bath_update_installed_plugins(
+        &self,
+        component_id: Path<ComponentId>,
+        updates: Json<BatchPluginInstallationUpdates>,
+    ) -> Result<Json<Empty>> {
+        let record = recorded_http_api_request!(
+            "batch_update_installed_plugins",
+            component_id = component_id.0.to_string(),
+        );
+
+        let response = self
+            .batch_update_installed_plugins_internal(component_id.0, updates.0)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn batch_update_installed_plugins_internal(
+        &self,
+        component_id: ComponentId,
+        updates: BatchPluginInstallationUpdates,
+    ) -> Result<Json<Empty>> {
+        self.component_service
+            .batch_update_plugin_installations_for_component(
+                &DefaultComponentOwner,
+                &component_id,
+                &updates.actions,
+            )
+            .await?;
         Ok(Json(Empty {}))
     }
 

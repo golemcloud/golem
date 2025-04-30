@@ -14,7 +14,9 @@
 
 use crate::model::{Component, ComponentConstraints};
 use crate::model::{ComponentSearchParameters, InitialComponentFilesArchiveAndPermissions};
-use crate::repo::component::{record_metadata_serde, ComponentRecord, FileRecord};
+use crate::repo::component::{
+    record_metadata_serde, ComponentRecord, FileRecord, PluginInstallationRepoAction,
+};
 use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_object_store::ComponentObjectStore;
@@ -34,8 +36,9 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::plugin::{
     AppPluginDefinition, ComponentPluginInstallationTarget, LibraryPluginDefinition,
-    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate, PluginScope,
-    PluginTypeSpecificDefinition,
+    PluginInstallation, PluginInstallationAction, PluginInstallationCreation,
+    PluginInstallationUpdate, PluginInstallationUpdateWithId, PluginScope,
+    PluginTypeSpecificDefinition, PluginUninstallation,
 };
 use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{
@@ -458,6 +461,13 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
     ) -> Result<(), PluginError>;
+
+    async fn batch_update_plugin_installations_for_component(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        actions: &[PluginInstallationAction],
+    ) -> Result<Vec<Option<PluginInstallation>>, PluginError>;
 }
 
 pub struct ComponentByNameAndVersion {
@@ -1646,66 +1656,14 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         component_id: &ComponentId,
         installation: PluginInstallationCreation,
     ) -> Result<PluginInstallation, PluginError> {
-        let namespace = owner.to_string();
-        let owner_row: Owner::Row = owner.clone().into();
-        let plugin_owner_row = owner_row.into();
-
-        let latest = self
-            .component_repo
-            .get_latest_version(&namespace, &component_id.0)
-            .await?;
-
-        let latest = latest.ok_or(PluginError::ComponentNotFound {
-            component_id: component_id.clone(),
-        })?;
-
-        let plugin_definition = self
-            .plugin_service
-            .get(
-                &Owner::PluginOwner::from(owner.clone()),
-                &installation.name,
-                &installation.version,
+        let result = self
+            .batch_update_plugin_installations_for_component(
+                owner,
+                component_id,
+                &[PluginInstallationAction::Install(installation)],
             )
-            .await?
-            .ok_or(PluginError::PluginNotFound {
-                plugin_name: installation.name.clone(),
-                plugin_version: installation.version.clone(),
-            })?;
-
-        let record = PluginInstallationRecord {
-            installation_id: PluginId::new_v4().0,
-            plugin_id: plugin_definition.id.0,
-            priority: installation.priority,
-            parameters: serde_json::to_vec(&installation.parameters).map_err(|e| {
-                PluginError::conversion_error("plugin installation parameters", e.to_string())
-            })?,
-            target: ComponentPluginInstallationTarget {
-                component_id: component_id.clone(),
-                component_version: latest.version as u64,
-            }
-            .into(),
-            owner: plugin_owner_row,
-        };
-
-        let new_component_version = self.component_repo.install_plugin(&record).await?;
-
-        let installation = PluginInstallation::try_from(record)
-            .map_err(|e| PluginError::conversion_error("plugin record", e))?;
-
-        let new_versioned_component_id = VersionedComponentId {
-            component_id: component_id.clone(),
-            version: new_component_version,
-        };
-        let mut new_component: Component<Owner> = latest
-            .try_into()
-            .map_err(|err| ComponentError::conversion_error("component", err))?;
-        new_component.versioned_component_id = new_versioned_component_id;
-        new_component.transformed_object_store_key = None;
-        new_component.installed_plugins.push(installation.clone());
-
-        self.retransform(&namespace, new_component).await?;
-
-        Ok(installation)
+            .await?;
+        Ok(result.into_iter().next().unwrap().unwrap())
     }
 
     async fn update_plugin_installation_for_component(
@@ -1715,6 +1673,46 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         component_id: &ComponentId,
         update: PluginInstallationUpdate,
     ) -> Result<(), PluginError> {
+        let _ = self
+            .batch_update_plugin_installations_for_component(
+                owner,
+                component_id,
+                &[PluginInstallationAction::Update(
+                    PluginInstallationUpdateWithId {
+                        installation_id: installation_id.clone(),
+                        priority: update.priority,
+                        parameters: update.parameters,
+                    },
+                )],
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        installation_id: &PluginInstallationId,
+        component_id: &ComponentId,
+    ) -> Result<(), PluginError> {
+        let _ = self
+            .batch_update_plugin_installations_for_component(
+                owner,
+                component_id,
+                &[PluginInstallationAction::Uninstall(PluginUninstallation {
+                    installation_id: installation_id.clone(),
+                })],
+            )
+            .await;
+        Ok(())
+    }
+
+    async fn batch_update_plugin_installations_for_component(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        actions: &[PluginInstallationAction],
+    ) -> Result<Vec<Option<PluginInstallation>>, PluginError> {
         let namespace: String = owner.to_string();
         let owner_record: Owner::Row = owner.clone().into();
         let plugin_owner_record = owner_record.into();
@@ -1725,19 +1723,80 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             .await?;
 
         if let Some(latest) = latest {
+            let mut result = Vec::new();
+            let mut repo_actions = Vec::new();
+
+            for action in actions {
+                match action {
+                    PluginInstallationAction::Install(installation) => {
+                        let plugin_definition = self
+                            .plugin_service
+                            .get(
+                                &Owner::PluginOwner::from(owner.clone()),
+                                &installation.name,
+                                &installation.version,
+                            )
+                            .await?
+                            .ok_or(PluginError::PluginNotFound {
+                                plugin_name: installation.name.clone(),
+                                plugin_version: installation.version.clone(),
+                            })?;
+
+                        let record = PluginInstallationRecord {
+                            installation_id: PluginId::new_v4().0,
+                            plugin_id: plugin_definition.id.0,
+                            priority: installation.priority,
+                            parameters: serde_json::to_vec(&installation.parameters).map_err(
+                                |e| {
+                                    PluginError::conversion_error(
+                                        "plugin installation parameters",
+                                        e.to_string(),
+                                    )
+                                },
+                            )?,
+                            target: ComponentPluginInstallationTarget {
+                                component_id: component_id.clone(),
+                                component_version: latest.version as u64,
+                            }
+                            .into(),
+                            owner: plugin_owner_record.clone(),
+                        };
+                        let installation = PluginInstallation::try_from(record.clone())
+                            .map_err(|e| PluginError::conversion_error("plugin record", e))?;
+
+                        result.push(Some(installation));
+                        repo_actions.push(PluginInstallationRepoAction::Install { record });
+                    }
+                    PluginInstallationAction::Update(update) => {
+                        result.push(None);
+                        repo_actions.push(PluginInstallationRepoAction::Update {
+                            plugin_installation_id: update.installation_id.0,
+                            new_priority: update.priority,
+                            new_parameters: serde_json::to_vec(&update.parameters).map_err(
+                                |e| {
+                                    PluginError::conversion_error(
+                                        "plugin installation parameters",
+                                        e.to_string(),
+                                    )
+                                },
+                            )?,
+                        })
+                    }
+                    PluginInstallationAction::Uninstall(uninstallation) => {
+                        result.push(None);
+                        repo_actions.push(PluginInstallationRepoAction::Uninstall {
+                            plugin_installation_id: uninstallation.installation_id.0,
+                        })
+                    }
+                }
+            }
+
             let new_component_version = self
                 .component_repo
-                .update_plugin_installation(
+                .apply_plugin_installation_changes(
                     &plugin_owner_record,
                     &component_id.0,
-                    &installation_id.0,
-                    update.priority,
-                    serde_json::to_vec(&update.parameters).map_err(|e| {
-                        PluginError::conversion_error(
-                            "plugin installation parameters",
-                            e.to_string(),
-                        )
-                    })?,
+                    &repo_actions,
                 )
                 .await?;
 
@@ -1751,60 +1810,31 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             new_component.versioned_component_id = new_versioned_component_id;
             new_component.transformed_object_store_key = None;
 
-            for installation in &mut new_component.installed_plugins {
-                if &installation.id == installation_id {
-                    installation.priority = update.priority;
-                    installation.parameters = update.parameters.clone();
+            for (idx, action) in actions.iter().enumerate() {
+                match action {
+                    PluginInstallationAction::Install(_) => {
+                        let installation = result[idx].as_ref().unwrap();
+                        new_component.installed_plugins.push(installation.clone());
+                    }
+                    PluginInstallationAction::Update(update) => {
+                        for installation in &mut new_component.installed_plugins {
+                            if installation.id == update.installation_id {
+                                installation.priority = update.priority;
+                                installation.parameters = update.parameters.clone();
+                            }
+                        }
+                    }
+                    PluginInstallationAction::Uninstall(uninstallation) => {
+                        new_component
+                            .installed_plugins
+                            .retain(|i| i.id != uninstallation.installation_id);
+                    }
                 }
             }
 
             self.retransform(&namespace, new_component).await?;
 
-            Ok(())
-        } else {
-            Err(PluginError::ComponentNotFound {
-                component_id: component_id.clone(),
-            })
-        }
-    }
-
-    async fn delete_plugin_installation_for_component(
-        &self,
-        owner: &Owner,
-        installation_id: &PluginInstallationId,
-        component_id: &ComponentId,
-    ) -> Result<(), PluginError> {
-        let namespace: String = owner.to_string();
-        let owner_record: Owner::Row = owner.clone().into();
-        let plugin_owner_record = owner_record.into();
-
-        let latest = self
-            .component_repo
-            .get_latest_version(&owner.to_string(), &component_id.0)
-            .await?;
-
-        if let Some(latest) = latest {
-            let new_component_version = self
-                .component_repo
-                .uninstall_plugin(&plugin_owner_record, &component_id.0, &installation_id.0)
-                .await?;
-
-            let new_versioned_component_id = VersionedComponentId {
-                component_id: component_id.clone(),
-                version: new_component_version,
-            };
-            let mut new_component: Component<Owner> = latest
-                .try_into()
-                .map_err(|err| ComponentError::conversion_error("component", err))?;
-            new_component.versioned_component_id = new_versioned_component_id;
-            new_component.transformed_object_store_key = None;
-            new_component
-                .installed_plugins
-                .retain(|i| &i.id != installation_id);
-
-            self.retransform(&namespace, new_component).await?;
-
-            Ok(())
+            Ok(result)
         } else {
             Err(PluginError::ComponentNotFound {
                 component_id: component_id.clone(),
@@ -2147,6 +2177,19 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         lock.as_ref()
             .unwrap()
             .delete_plugin_installation_for_component(owner, installation_id, component_id)
+            .await
+    }
+
+    async fn batch_update_plugin_installations_for_component(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        actions: &[PluginInstallationAction],
+    ) -> Result<Vec<Option<PluginInstallation>>, PluginError> {
+        let lock = self.0.read().await;
+        lock.as_ref()
+            .unwrap()
+            .batch_update_plugin_installations_for_component(owner, component_id, actions)
             .await
     }
 }
