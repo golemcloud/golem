@@ -20,11 +20,13 @@ use golem_common::model::component_constraint::{
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
-use golem_common::model::plugin::PluginInstallation;
+use golem_common::model::plugin::{PluginInstallation, PluginInstallationAction};
 use golem_common::model::InitialComponentFile;
 use golem_common::model::{ComponentFilePathWithPermissions, ComponentId, ComponentType};
 use golem_service_base::model::ComponentName;
+use poem_openapi_derive::Object;
 use rib::WorkerFunctionsInRib;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::SystemTime;
@@ -185,4 +187,9 @@ impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
 pub struct InitialComponentFilesArchiveAndPermissions {
     pub archive: NamedTempFile,
     pub files: Vec<ComponentFilePathWithPermissions>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+pub struct BatchPluginInstallationUpdates {
+    pub actions: Vec<PluginInstallationAction>,
 }
