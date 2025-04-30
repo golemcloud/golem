@@ -27,6 +27,8 @@ struct RouteTableView {
     pub path: String,
     #[table(title = "Component Name")]
     pub component_name: ComponentName,
+    #[table(title = "Binding Type")]
+    pub binding_type: String,
 }
 
 impl From<&RouteResponseData> for RouteTableView {
@@ -41,6 +43,10 @@ impl From<&RouteResponseData> for RouteTableView {
                 .map(|component| component.name)
                 .unwrap_or("<NA>".to_string())
                 .into(),
+            binding_type: match &value.binding.binding_type {
+                Some(binding_type) => binding_type.to_string(),
+                None => "<NA>".to_string(),
+            },
         }
     }
 }
