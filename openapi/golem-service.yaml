@@ -3409,6 +3409,71 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/components/{component_id}/versions/latest/plugins/installs/batch:
+    post:
+      tags:
+      - Component
+      summary: Applies a batch of changes to the installed plugins of a component
+      operationId: bath_update_installed_plugins
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/BatchPluginInstallationUpdates'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/components/{component_id}/versions/{version}/file-contents/{file_key}:
     get:
       tags:
@@ -7171,6 +7236,15 @@ components:
       - functions
     AppPluginDefinition:
       type: object
+    BatchPluginInstallationUpdates:
+      type: object
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationAction'
+      required:
+      - actions
     Component:
       type: object
       properties:
@@ -7508,6 +7582,54 @@ components:
       - pluginRegistered
       - priority
       - parameters
+    PluginInstallationAction:
+      discriminator:
+        propertyName: type
+        mapping:
+          Install: '#/components/schemas/PluginInstallationAction_PluginInstallationCreation'
+          Update: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdateWithId'
+          Uninstall: '#/components/schemas/PluginInstallationAction_PluginUninstallation'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationCreation'
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdateWithId'
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginUninstallation'
+    PluginInstallationAction_PluginInstallationCreation:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Install
+            type: string
+            enum:
+            - Install
+        required:
+        - type
+      - $ref: '#/components/schemas/PluginInstallationCreation'
+    PluginInstallationAction_PluginInstallationUpdateWithId:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Update
+            type: string
+            enum:
+            - Update
+        required:
+        - type
+      - $ref: '#/components/schemas/PluginInstallationUpdateWithId'
+    PluginInstallationAction_PluginUninstallation:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Uninstall
+            type: string
+            enum:
+            - Uninstall
+        required:
+        - type
+      - $ref: '#/components/schemas/PluginUninstallation'
     PluginInstallationCreation:
       type: object
       properties:
@@ -7539,6 +7661,23 @@ components:
           additionalProperties:
             type: string
       required:
+      - priority
+      - parameters
+    PluginInstallationUpdateWithId:
+      type: object
+      properties:
+        installationId:
+          type: string
+          format: uuid
+        priority:
+          type: integer
+          format: int32
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - installationId
       - priority
       - parameters
     PluginTypeSpecificCreation:
@@ -7637,6 +7776,14 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/OplogProcessorDefinition'
+    PluginUninstallation:
+      type: object
+      properties:
+        installationId:
+          type: string
+          format: uuid
+      required:
+      - installationId
     ProducerField:
       type: object
       properties:
