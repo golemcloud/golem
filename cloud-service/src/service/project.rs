@@ -6,8 +6,10 @@ use crate::service::project_auth::{ProjectAuthorisationError, ProjectAuthorisati
 use async_trait::async_trait;
 use cloud_common::clients::plugin::{PluginError, PluginServiceClient};
 use cloud_common::model::{Role, TokenSecret};
+use cloud_common::repo::CloudPluginOwnerRow;
 use golem_common::model::plugin::{
-    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+    PluginInstallation, PluginInstallationAction, PluginInstallationCreation,
+    PluginInstallationUpdate, PluginInstallationUpdateWithId, PluginUninstallation,
 };
 use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{PluginId, ProjectId};
@@ -156,6 +158,7 @@ pub trait ProjectService {
         installation_id: &PluginInstallationId,
         update: PluginInstallationUpdate,
         auth: &AccountAuthorisation,
+        token: &TokenSecret,
     ) -> Result<(), ProjectError>;
 
     async fn delete_plugin_installation_for_project(
@@ -163,7 +166,16 @@ pub trait ProjectService {
         installation_id: &PluginInstallationId,
         project_id: &ProjectId,
         auth: &AccountAuthorisation,
+        token: &TokenSecret,
     ) -> Result<(), ProjectError>;
+
+    async fn batch_update_plugin_installations_for_project(
+        &self,
+        project_id: &ProjectId,
+        actions: &[PluginInstallationAction],
+        auth: &AccountAuthorisation,
+        token: &TokenSecret,
+    ) -> Result<Vec<Option<PluginInstallation>>, ProjectError>;
 }
 
 pub struct ProjectServiceDefault {
@@ -369,38 +381,15 @@ impl ProjectService for ProjectServiceDefault {
         auth: &AccountAuthorisation,
         token: &TokenSecret,
     ) -> Result<PluginInstallation, ProjectError> {
-        is_authorised(&Role::UpdateProject, auth)?;
-        let owner_record = auth.as_plugin_owner().into();
-
-        let plugin_definition = self
-            .plugin_service
-            .get(&installation.name, &installation.version, token)
-            .await?
-            .ok_or(ProjectError::PluginNotFound {
-                plugin_name: installation.name.clone(),
-                plugin_version: installation.version.clone(),
-            })?;
-
-        let record = PluginInstallationRecord {
-            installation_id: PluginId::new_v4().0,
-            plugin_id: plugin_definition.id.0,
-            priority: installation.priority,
-            parameters: serde_json::to_vec(&installation.parameters).map_err(|e| {
-                ProjectError::conversion_error("plugin installation parameters", e.to_string())
-            })?,
-            target: ProjectPluginInstallationTarget {
-                project_id: project_id.clone(),
-            }
-            .into(),
-            owner: owner_record,
-        };
-
-        self.project_repo.install_plugin(&record).await?;
-
-        let installation = PluginInstallation::try_from(record)
-            .map_err(|e| ProjectError::conversion_error("plugin record", e))?;
-
-        Ok(installation)
+        let result = self
+            .batch_update_plugin_installations_for_project(
+                project_id,
+                &[PluginInstallationAction::Install(installation)],
+                auth,
+                token,
+            )
+            .await?;
+        Ok(result.into_iter().next().unwrap().unwrap())
     }
 
     async fn update_plugin_installation_for_project(
@@ -409,22 +398,22 @@ impl ProjectService for ProjectServiceDefault {
         installation_id: &PluginInstallationId,
         update: PluginInstallationUpdate,
         auth: &AccountAuthorisation,
+        token: &TokenSecret,
     ) -> Result<(), ProjectError> {
-        is_authorised(&Role::UpdateProject, auth)?;
-        let owner_record = auth.as_plugin_owner().into();
-
-        self.project_repo
-            .update_plugin_installation(
-                &owner_record,
-                &project_id.0,
-                &installation_id.0,
-                update.priority,
-                serde_json::to_vec(&update.parameters).map_err(|e| {
-                    ProjectError::conversion_error("plugin installation parameters", e.to_string())
-                })?,
+        let _ = self
+            .batch_update_plugin_installations_for_project(
+                project_id,
+                &[PluginInstallationAction::Update(
+                    PluginInstallationUpdateWithId {
+                        installation_id: installation_id.clone(),
+                        priority: update.priority,
+                        parameters: update.parameters,
+                    },
+                )],
+                auth,
+                token,
             )
             .await?;
-
         Ok(())
     }
 
@@ -433,15 +422,98 @@ impl ProjectService for ProjectServiceDefault {
         installation_id: &PluginInstallationId,
         project_id: &ProjectId,
         auth: &AccountAuthorisation,
+        token: &TokenSecret,
     ) -> Result<(), ProjectError> {
-        is_authorised(&Role::UpdateProject, auth)?;
-        let owner_record = auth.as_plugin_owner().into();
-
-        self.project_repo
-            .uninstall_plugin(&owner_record, &project_id.0, &installation_id.0)
+        let _ = self
+            .batch_update_plugin_installations_for_project(
+                project_id,
+                &[PluginInstallationAction::Uninstall(PluginUninstallation {
+                    installation_id: installation_id.clone(),
+                })],
+                auth,
+                token,
+            )
             .await?;
-
         Ok(())
+    }
+
+    async fn batch_update_plugin_installations_for_project(
+        &self,
+        project_id: &ProjectId,
+        actions: &[PluginInstallationAction],
+        auth: &AccountAuthorisation,
+        token: &TokenSecret,
+    ) -> Result<Vec<Option<PluginInstallation>>, ProjectError> {
+        is_authorised(&Role::UpdateProject, auth)?;
+        let owner_record: CloudPluginOwnerRow = auth.as_plugin_owner().into();
+
+        let mut result = Vec::new();
+        for action in actions {
+            match action {
+                PluginInstallationAction::Install(installation) => {
+                    let plugin_definition = self
+                        .plugin_service
+                        .get(&installation.name, &installation.version, token)
+                        .await?
+                        .ok_or(ProjectError::PluginNotFound {
+                            plugin_name: installation.name.clone(),
+                            plugin_version: installation.version.clone(),
+                        })?;
+
+                    let record = PluginInstallationRecord {
+                        installation_id: PluginId::new_v4().0,
+                        plugin_id: plugin_definition.id.0,
+                        priority: installation.priority,
+                        parameters: serde_json::to_vec(&installation.parameters).map_err(|e| {
+                            ProjectError::conversion_error(
+                                "plugin installation parameters",
+                                e.to_string(),
+                            )
+                        })?,
+                        target: ProjectPluginInstallationTarget {
+                            project_id: project_id.clone(),
+                        }
+                        .into(),
+                        owner: owner_record.clone(),
+                    };
+
+                    self.project_repo.install_plugin(&record).await?;
+
+                    let installation = PluginInstallation::try_from(record)
+                        .map_err(|e| ProjectError::conversion_error("plugin record", e))?;
+                    result.push(Some(installation));
+                }
+                PluginInstallationAction::Update(update) => {
+                    self.project_repo
+                        .update_plugin_installation(
+                            &owner_record,
+                            &project_id.0,
+                            &update.installation_id.0,
+                            update.priority,
+                            serde_json::to_vec(&update.parameters).map_err(|e| {
+                                ProjectError::conversion_error(
+                                    "plugin installation parameters",
+                                    e.to_string(),
+                                )
+                            })?,
+                        )
+                        .await?;
+                    result.push(None);
+                }
+                PluginInstallationAction::Uninstall(uninstallation) => {
+                    self.project_repo
+                        .uninstall_plugin(
+                            &owner_record,
+                            &project_id.0,
+                            &uninstallation.installation_id.0,
+                        )
+                        .await?;
+                    result.push(None);
+                }
+            }
+        }
+
+        Ok(result)
     }
 }
 

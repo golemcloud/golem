@@ -12,6 +12,7 @@ use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallation
 use golem_common::model::{Empty, PluginInstallationId, ProjectId};
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::api::dto;
+use golem_component_service_base::model::BatchPluginInstallationUpdates;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -377,9 +378,16 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> LimitedApiResult<Json<Empty>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let token = token.secret();
 
         self.project_service
-            .update_plugin_installation_for_project(&project_id, &installation_id, update, &auth)
+            .update_plugin_installation_for_project(
+                &project_id,
+                &installation_id,
+                update,
+                &auth,
+                &token,
+            )
             .await
             .map_err(|e| e.into())
             .map(|_| Json(Empty {}))
@@ -418,11 +426,56 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> LimitedApiResult<Json<Empty>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let token = token.secret();
 
         self.project_service
-            .delete_plugin_installation_for_project(&installation_id, &project_id, &auth)
+            .delete_plugin_installation_for_project(&installation_id, &project_id, &auth, &token)
             .await
             .map_err(|e| e.into())
             .map(|_| Json(Empty {}))
+    }
+
+    /// Applies a batch of changes to the installed plugins of a component
+    #[oai(
+        path = "/:project_id/latest/plugins/installs/batch",
+        method = "post",
+        operation_id = "bath_update_installed_plugins_of_project"
+    )]
+    async fn bath_update_installed_plugins(
+        &self,
+        project_id: Path<ProjectId>,
+        updates: Json<BatchPluginInstallationUpdates>,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Empty>> {
+        let record = recorded_http_api_request!(
+            "batch_update_installed_plugins",
+            project_id = project_id.0.to_string(),
+        );
+
+        let response = self
+            .batch_update_installed_plugins_internal(project_id.0, updates.0, token)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn batch_update_installed_plugins_internal(
+        &self,
+        project_id: ProjectId,
+        updates: BatchPluginInstallationUpdates,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Empty>> {
+        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let token = token.secret();
+
+        self.project_service
+            .batch_update_plugin_installations_for_project(
+                &project_id,
+                &updates.actions,
+                &auth,
+                &token,
+            )
+            .await?;
+        Ok(Json(Empty {}))
     }
 }

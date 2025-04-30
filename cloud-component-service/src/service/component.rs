@@ -13,7 +13,8 @@ use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::{
-    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+    PluginInstallation, PluginInstallationAction, PluginInstallationCreation,
+    PluginInstallationUpdate,
 };
 use golem_common::model::{ComponentId, ComponentType, ComponentVersion, PluginInstallationId};
 use golem_common::model::{InitialComponentFile, ProjectId};
@@ -486,6 +487,20 @@ impl CloudComponentService {
             .await?;
         self.base_component_service
             .delete_plugin_installation_for_component(&owner, installation_id, component_id)
+            .await
+    }
+
+    pub async fn batch_update_plugin_installations_for_component(
+        &self,
+        auth: &CloudAuthCtx,
+        component_id: &ComponentId,
+        actions: &[PluginInstallationAction],
+    ) -> Result<Vec<Option<PluginInstallation>>, PluginError> {
+        let owner = self
+            .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
+            .await?;
+        self.base_component_service
+            .batch_update_plugin_installations_for_component(&owner, component_id, actions)
             .await
     }
 

@@ -97,6 +97,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_client::model::PluginTypeSpecificCreation",
             ),
             //("ProjectAction", "cloud_common::model::ProjectAction"),
+            (
+                "PluginInstallationAction",
+                "golem_client::model::PluginInstallationAction",
+            ),
             ("PromiseId", "golem_common::model::PromiseId"),
             ("RibInputTypeInfo", "golem_client::model::RibInputTypeInfo"),
             (

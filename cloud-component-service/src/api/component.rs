@@ -15,7 +15,8 @@ use golem_common::recorded_http_api_request;
 use golem_component_service_base::api::dto;
 use golem_component_service_base::api::mapper::ApiMapper;
 use golem_component_service_base::model::{
-    DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
+    BatchPluginInstallationUpdates, DynamicLinking, InitialComponentFilesArchiveAndPermissions,
+    UpdatePayload,
 };
 use golem_service_base::model::ComponentName;
 use golem_service_base::poem::TempFileUpload;
@@ -627,6 +628,44 @@ impl ComponentApi {
             .map(|_| Json(Empty {}));
 
         record.result(response)
+    }
+
+    /// Applies a batch of changes to the installed plugins of a component
+    #[oai(
+        path = "/:component_id/versions/latest/plugins/installs/batch",
+        method = "post",
+        operation_id = "bath_update_installed_plugins"
+    )]
+    async fn bath_update_installed_plugins(
+        &self,
+        component_id: Path<ComponentId>,
+        updates: Json<BatchPluginInstallationUpdates>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Empty>> {
+        let auth = CloudAuthCtx::new(token.secret());
+
+        let record = recorded_http_api_request!(
+            "batch_update_installed_plugins",
+            component_id = component_id.0.to_string(),
+        );
+
+        let response = self
+            .batch_update_installed_plugins_internal(component_id.0, updates.0, auth)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn batch_update_installed_plugins_internal(
+        &self,
+        component_id: ComponentId,
+        updates: BatchPluginInstallationUpdates,
+        auth: CloudAuthCtx,
+    ) -> Result<Json<Empty>> {
+        self.component_service
+            .batch_update_plugin_installations_for_component(&auth, &component_id, &updates.actions)
+            .await?;
+        Ok(Json(Empty {}))
     }
 
     /// Download file in a Component
