@@ -59,6 +59,7 @@ use tokio::fs::File;
 
 pub mod ifs;
 pub mod plugin;
+pub mod plugin_installation;
 
 pub struct ComponentCommandHandler {
     ctx: Arc<Context>,
@@ -596,6 +597,8 @@ impl ComponentCommandHandler {
         };
         let build_profile = self.ctx.build_profile().cloned();
 
+        let plugin_installation_handler = self.ctx.plugin_installation_handler();
+
         let components = {
             log_action("Deploying", "components");
             let _indent = LogIndent::new();
@@ -610,10 +613,18 @@ impl ComponentCommandHandler {
                     .is_deployable()
                 {
                     drop(app_ctx);
-                    components.push(
-                        self.deploy_component(build_profile.as_ref(), project, component_name)
-                            .await?,
-                    );
+
+                    let component = self
+                        .deploy_component(build_profile.as_ref(), project, component_name)
+                        .await?;
+                    let component = plugin_installation_handler
+                        .apply_plugin_installation_changes(
+                            component_name,
+                            build_profile.as_ref(),
+                            component,
+                        )
+                        .await?;
+                    components.push(component);
                 }
             }
 

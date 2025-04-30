@@ -153,6 +153,7 @@ impl<C: Serialize> Template<C> for app_raw::ComponentProperties {
             clean: self.clean.render(env, ctx)?,
             component_type: self.component_type,
             files: self.files.clone(),
+            plugins: self.plugins.clone(),
         })
     }
 }

@@ -19,6 +19,7 @@ use crate::config::{
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_warn_action, LogColorize};
+use crate::model::app::AppComponentName;
 use crate::model::text::fmt::log_warn;
 use crate::model::{ComponentName, Format, WorkerName};
 use anyhow::{anyhow, bail};
@@ -90,6 +91,20 @@ impl InteractiveHandler {
                 account.name.log_color_highlight(),
                 account.email.log_color_highlight()
             ),
+        )
+    }
+
+    pub fn confirm_plugin_installation_changes(
+        &self,
+        component: &AppComponentName,
+        rendered_steps: &[String],
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!("The following changes will be applied to the installed plugins of component {}:\n{}",
+                component.to_string().log_color_highlight(),
+                rendered_steps.iter().map(|s| format!(" - {}", s)).collect::<Vec<_>>().join("\n")
+            )
         )
     }
 

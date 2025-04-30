@@ -115,6 +115,8 @@ pub struct ComponentProperties {
     pub component_type: Option<AppComponentType>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<InitialComponentFile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<PluginInstallation>,
 }
 
 impl ComponentProperties {
@@ -153,6 +155,10 @@ impl ComponentProperties {
             vec.push("files");
         }
 
+        if !self.plugins.is_empty() {
+            vec.push("plugins");
+        }
+
         vec
     }
 }
@@ -179,4 +185,13 @@ pub struct Dependency {
     #[serde(rename = "type")]
     pub type_: String,
     pub target: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginInstallation {
+    pub name: String,
+    pub version: String,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub parameters: HashMap<String, String>,
 }

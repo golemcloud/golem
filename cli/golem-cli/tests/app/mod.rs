@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod plugins;
+
 use crate::test_r_get_dep_tracing;
 use crate::Tracing;
 use assert2::{assert, check};
@@ -21,6 +23,7 @@ use golem_cli::model::invoke_result_view::InvokeResultView;
 use golem_templates::model::GuestLanguage;
 use indoc::indoc;
 use itertools::Itertools;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
@@ -38,10 +41,14 @@ mod cmd {
     pub static NEW: &str = "new";
     pub static WORKER: &str = "worker";
     pub static INVOKE: &str = "invoke";
+    pub static PLUGIN: &str = "plugin";
+    pub static REGISTER: &str = "register";
+    pub static GET: &str = "get";
 }
 
 mod flag {
     pub static FORCE_BUILD: &str = "--force-build";
+    pub static YES: &str = "--yes";
 }
 
 mod pattern {
@@ -512,11 +519,27 @@ impl Output {
     }
 
     fn stdout_contains<S: AsRef<str>>(&self, text: S) -> bool {
-        self.stdout.iter().any(|line| line.contains(text.as_ref()))
+        self.stdout
+            .iter()
+            .map(strip_ansi_escapes::strip_str)
+            .any(|line| line.contains(text.as_ref()))
+    }
+
+    fn stdout_contains_row_with_cells(&self, expected_cells: &[&str]) -> bool {
+        self.stdout
+            .iter()
+            .map(strip_ansi_escapes::strip_str)
+            .any(|line| {
+                let cells = line.split('|').map(str::trim).collect::<HashSet<_>>();
+                expected_cells.iter().all(|cell| cells.contains(cell))
+            })
     }
 
     fn stderr_contains<S: AsRef<str>>(&self, text: S) -> bool {
-        self.stderr.iter().any(|line| line.contains(text.as_ref()))
+        self.stderr
+            .iter()
+            .map(strip_ansi_escapes::strip_str)
+            .any(|line| line.contains(text.as_ref()))
     }
 
     fn stderr_count_lines_containing<S: AsRef<str>>(&self, text: S) -> usize {
@@ -659,6 +682,7 @@ impl TestContext {
                 .args([
                     "server",
                     "run",
+                    "-vvv",
                     "--config-dir",
                     self.config_dir.path().to_str().unwrap(),
                     "--data-dir",

@@ -115,6 +115,7 @@ wit-parser = { workspace = true }
 [dev-dependencies]
 
 # External deps
+axum = { workspace = true }
 log = { workspace = true }
 reqwest = { workspace = true }
 serde_json_path = { workspace = true }

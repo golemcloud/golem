@@ -680,6 +680,7 @@ pub struct ComponentProperties {
     pub clean: Vec<String>,
     pub component_type: AppComponentType,
     pub files: Vec<InitialComponentFile>,
+    pub plugins: Vec<PluginInstallation>,
 }
 
 impl ComponentProperties {
@@ -689,6 +690,7 @@ impl ComponentProperties {
         raw: app_raw::ComponentProperties,
     ) -> Option<Self> {
         let files = InitialComponentFile::from_raw_vec(validation, source, raw.files)?;
+        let plugins = PluginInstallation::from_raw_vec(validation, source, raw.plugins)?;
 
         Some(Self {
             source_wit: raw.source_wit.unwrap_or_default(),
@@ -700,6 +702,7 @@ impl ComponentProperties {
             clean: raw.clean,
             component_type: raw.component_type.unwrap_or_default(),
             files,
+            plugins,
         })
     }
 
@@ -766,6 +769,18 @@ impl ComponentProperties {
             match InitialComponentFile::from_raw_vec(validation, source, overrides.files) {
                 Some(files) => {
                     self.files.extend(files);
+                }
+                None => {
+                    any_errors = true;
+                }
+            }
+        }
+
+        if !overrides.plugins.is_empty() {
+            any_overrides = true;
+            match PluginInstallation::from_raw_vec(validation, source, overrides.plugins) {
+                Some(plugins) => {
+                    self.plugins.extend(plugins);
                 }
                 None => {
                     any_errors = true;
@@ -882,6 +897,42 @@ impl InitialComponentFileSource {
 
     pub fn into_url(self) -> Url {
         self.0
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginInstallation {
+    pub name: String,
+    pub version: String,
+    pub parameters: HashMap<String, String>,
+}
+
+impl PluginInstallation {
+    pub fn from_raw(
+        _validation: &mut ValidationBuilder,
+        _source: &Path,
+        file: app_raw::PluginInstallation,
+    ) -> Option<PluginInstallation> {
+        Some(PluginInstallation {
+            name: file.name,
+            version: file.version,
+            parameters: file.parameters,
+        })
+    }
+
+    pub fn from_raw_vec(
+        validation: &mut ValidationBuilder,
+        source: &Path,
+        files: Vec<app_raw::PluginInstallation>,
+    ) -> Option<Vec<Self>> {
+        let source_count = files.len();
+
+        let files = files
+            .into_iter()
+            .filter_map(|file| PluginInstallation::from_raw(validation, source, file))
+            .collect::<Vec<_>>();
+
+        (files.len() == source_count).then_some(files)
     }
 }
 

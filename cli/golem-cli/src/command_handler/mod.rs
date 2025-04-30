@@ -35,6 +35,7 @@ use crate::command_handler::cloud::project::CloudProjectCommandHandler;
 use crate::command_handler::cloud::token::CloudTokenCommandHandler;
 use crate::command_handler::cloud::CloudCommandHandler;
 use crate::command_handler::component::plugin::ComponentPluginCommandHandler;
+use crate::command_handler::component::plugin_installation::PluginInstallationHandler;
 use crate::command_handler::component::ComponentCommandHandler;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::command_handler::log::LogHandler;
@@ -333,6 +334,7 @@ pub trait Handlers {
     fn error_handler(&self) -> ErrorHandler;
     fn interactive_handler(&self) -> InteractiveHandler;
     fn log_handler(&self) -> LogHandler;
+    fn plugin_installation_handler(&self) -> PluginInstallationHandler;
     fn plugin_handler(&self) -> PluginCommandHandler;
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler;
     fn profile_handler(&self) -> ProfileCommandHandler;
@@ -419,6 +421,10 @@ impl Handlers for Arc<Context> {
 
     fn log_handler(&self) -> LogHandler {
         LogHandler::new(self.clone())
+    }
+
+    fn plugin_installation_handler(&self) -> PluginInstallationHandler {
+        PluginInstallationHandler::new(self.clone())
     }
 
     fn plugin_handler(&self) -> PluginCommandHandler {
