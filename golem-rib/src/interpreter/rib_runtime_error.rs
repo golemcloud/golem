@@ -51,6 +51,16 @@ pub enum CastFrom {
     FromCustom(String),
 }
 
+impl Display for CastFrom {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CastFrom::FromValue(value) => write!(f, "{:?}", value),
+            CastFrom::FromType(typ) => write!(f, "{}", typ),
+            CastFrom::FromCustom(custom) => write!(f, "{}", custom),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum InvalidItem {
     RuntimeValue(Value),
@@ -190,7 +200,7 @@ impl Display for RibRuntimeError {
             }
             RibRuntimeError::ThrownError(message) => write!(f, "Thrown error: {}", message),
             RibRuntimeError::CastError { from, to } => {
-                write!(f, "cast error from {:?} to {:?}", from, to)
+                write!(f, "cast error from {} to {}", from, to)
             }
             RibRuntimeError::TypeMismatch { expected, found } => {
                 write!(

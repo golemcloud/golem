@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::InferredType;
+use crate::{InferredType, TypeInternal};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt;
 use std::ops::Deref;
@@ -265,44 +265,44 @@ impl GetTypeHint for AnalysedType {
 
 impl GetTypeHint for InferredType {
     fn get_type_hint(&self) -> TypeHint {
-        match self {
-            InferredType::Bool => TypeHint::Boolean,
-            InferredType::S8
-            | InferredType::U8
-            | InferredType::S16
-            | InferredType::U16
-            | InferredType::S32
-            | InferredType::U32
-            | InferredType::S64
-            | InferredType::U64
-            | InferredType::F32
-            | InferredType::F64 => TypeHint::Number,
-            InferredType::Chr => TypeHint::Char,
-            InferredType::Str => TypeHint::Str,
-            InferredType::List(inferred_type) => {
+        match self.internal_type() {
+            TypeInternal::Bool => TypeHint::Boolean,
+            TypeInternal::S8
+            | TypeInternal::U8
+            | TypeInternal::S16
+            | TypeInternal::U16
+            | TypeInternal::S32
+            | TypeInternal::U32
+            | TypeInternal::S64
+            | TypeInternal::U64
+            | TypeInternal::F32
+            | TypeInternal::F64 => TypeHint::Number,
+            TypeInternal::Chr => TypeHint::Char,
+            TypeInternal::Str => TypeHint::Str,
+            TypeInternal::List(inferred_type) => {
                 TypeHint::List(Some(Box::new(inferred_type.get_type_hint())))
             }
-            InferredType::Tuple(tuple) => {
+            TypeInternal::Tuple(tuple) => {
                 TypeHint::Tuple(Some(tuple.iter().map(GetTypeHint::get_type_hint).collect()))
             }
-            InferredType::Record(record) => TypeHint::Record(Some(
+            TypeInternal::Record(record) => TypeHint::Record(Some(
                 record
                     .iter()
                     .map(|(name, tpe)| (name.to_string(), tpe.get_type_hint()))
                     .collect(),
             )),
-            InferredType::Flags(flags) => {
+            TypeInternal::Flags(flags) => {
                 TypeHint::Flag(Some(flags.iter().map(|x| x.to_string()).collect()))
             }
-            InferredType::Enum(enums) => {
+            TypeInternal::Enum(enums) => {
                 TypeHint::Enum(Some(enums.iter().map(|s| s.to_string()).collect()))
             }
-            InferredType::Option(inner) => TypeHint::Option(Some(Box::new(inner.get_type_hint()))),
-            InferredType::Result { ok, error } => TypeHint::Result {
+            TypeInternal::Option(inner) => TypeHint::Option(Some(Box::new(inner.get_type_hint()))),
+            TypeInternal::Result { ok, error } => TypeHint::Result {
                 ok: ok.as_ref().map(|tpe| Box::new(tpe.get_type_hint())),
                 err: error.as_ref().map(|tpe| Box::new(tpe.get_type_hint())),
             },
-            InferredType::Variant(variants) => TypeHint::Variant(Some(
+            TypeInternal::Variant(variants) => TypeHint::Variant(Some(
                 variants
                     .iter()
                     .map(|(name, tpe)| {
@@ -313,14 +313,12 @@ impl GetTypeHint for InferredType {
                     })
                     .collect(),
             )),
-            InferredType::Resource { .. } => TypeHint::Resource,
-            InferredType::OneOf(possibilities) | InferredType::AllOf(possibilities) => {
-                get_type_kind(possibilities)
-            }
-            InferredType::Unknown | InferredType::Sequence(_) | InferredType::Instance { .. } => {
+            TypeInternal::Resource { .. } => TypeHint::Resource,
+            TypeInternal::AllOf(possibilities) => get_type_kind(possibilities),
+            TypeInternal::Unknown | TypeInternal::Sequence(_) | TypeInternal::Instance { .. } => {
                 TypeHint::Unknown
             }
-            InferredType::Range { .. } => TypeHint::Range,
+            TypeInternal::Range { .. } => TypeHint::Range,
         }
     }
 }

@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor, InferredType, UnResolvedTypesError};
+use crate::inferred_type::{TypeOrigin, UnificationFailureInternal};
+use crate::{Expr, ExprVisitor, InferredType, TypeUnificationError};
 
-pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
+pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
+    let mut original_expr = expr.clone();
+
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(expr) = visitor.pop_front() {
@@ -25,19 +28,13 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::number(number.value.clone()).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        return Err(UnResolvedTypesError::from(
-                            &Expr::number(number.value.clone())
-                                .with_source_span(source_span.clone()),
-                            None,
-                        )
-                        .with_additional_error_detail(format!("invalid number, {}", e)));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Record {
@@ -46,23 +43,18 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let exprs = exprs
+                    .iter()
+                    .map(|(a, b)| (a.clone(), b.as_ref().clone()))
+                    .collect();
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let exprs = exprs
-                            .iter()
-                            .map(|(a, b)| (a.clone(), b.as_ref().clone()))
-                            .collect();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::record(exprs).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                        return Err(UnResolvedTypesError::from(
-                            &Expr::record(exprs).with_source_span(source_span.clone()),
-                            None,
-                        )
-                        .with_additional_error_detail(format!("invalid record, {}", e)));
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::Tuple {
                 inferred_type,
@@ -70,18 +62,13 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::tuple(exprs.clone()).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        return Err(UnResolvedTypesError::from(
-                            &Expr::tuple(exprs.clone()).with_source_span(source_span.clone()),
-                            None,
-                        )
-                        .with_additional_error_detail(format!("invalid tuple, {}", e)))
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Range {
@@ -90,23 +77,18 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 type_annotation,
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::Range {
+                        range: range.clone(),
+                        source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
+                        inferred_type: inferred_type.clone(),
+                    },
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        return Err(UnResolvedTypesError::from(
-                            &Expr::Range {
-                                range: range.clone(),
-                                source_span: source_span.clone(),
-                                type_annotation: type_annotation.clone(),
-                                inferred_type: inferred_type.clone(),
-                            },
-                            None,
-                        )
-                        .with_additional_error_detail(format!("invalid range, {}", e)))
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Sequence {
@@ -116,19 +98,14 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::sequence(exprs.clone(), type_annotation.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        return Err(UnResolvedTypesError::from(
-                            &Expr::sequence(exprs.clone(), type_annotation.clone())
-                                .with_source_span(source_span.clone()),
-                            None,
-                        )
-                        .with_additional_error_detail(format!("invalid sequence, {}", e)));
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::Option {
                 inferred_type,
@@ -137,20 +114,15 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 type_annotation,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::option(expr.as_deref().cloned())
+                        .with_type_annotation_opt(type_annotation.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        return Err(UnResolvedTypesError::from(
-                            &Expr::option(expr.as_deref().cloned())
-                                .with_type_annotation_opt(type_annotation.clone())
-                                .with_source_span(source_span.clone()),
-                            None,
-                        )
-                        .with_additional_error_detail(format!("invalid option, {}", e)));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Result {
@@ -160,19 +132,14 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::ok(expr.as_ref().clone(), type_annotation.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        return Err(UnResolvedTypesError::from(
-                            &Expr::ok(expr.as_ref().clone(), type_annotation.clone())
-                                .with_source_span(source_span.clone()),
-                            None,
-                        )
-                        .with_additional_error_detail(format!("invalid result-ok, {}", e)));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Result {
@@ -182,19 +149,14 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::err(expr.as_ref().clone(), type_annotation.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        return Err(UnResolvedTypesError::from(
-                            &Expr::err(expr.as_ref().clone(), type_annotation.clone())
-                                .with_source_span(source_span.clone()),
-                            None,
-                        )
-                        .with_additional_error_detail(format!("invalid result-err, {}", e)));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Cond {
@@ -202,29 +164,19 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 cond,
                 lhs,
                 rhs,
-                source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::cond(
+                        cond.as_ref().clone(),
+                        lhs.as_ref().clone(),
+                        rhs.as_ref().clone(),
+                    ),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        return Err(UnResolvedTypesError::from(
-                            &Expr::cond(
-                                cond.as_ref().clone(),
-                                lhs.as_ref().clone(),
-                                rhs.as_ref().clone(),
-                            )
-                            .with_source_span(source_span.clone()),
-                            None,
-                        )
-                        .with_additional_error_detail(format!(
-                            "invalid if-else condition, {}",
-                            e
-                        )));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Length {
@@ -233,19 +185,13 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::length(expr.as_ref().clone()).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        return Err(UnResolvedTypesError::from(
-                            &Expr::length(expr.as_ref().clone())
-                                .with_source_span(source_span.clone()),
-                            None,
-                        )
-                        .with_additional_error_detail(format!("invalid length function, {}", e)));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::ListComprehension {
@@ -256,26 +202,18 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::list_comprehension(
+                        iterated_variable.clone(),
+                        iterable_expr.as_ref().clone(),
+                        yield_expr.as_ref().clone(),
+                    )
+                    .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        return Err(UnResolvedTypesError::from(
-                            &Expr::list_comprehension(
-                                iterated_variable.clone(),
-                                iterable_expr.as_ref().clone(),
-                                yield_expr.as_ref().clone(),
-                            )
-                            .with_source_span(source_span.clone()),
-                            None,
-                        )
-                        .with_additional_error_detail(format!(
-                            "invalid list comprehension, {}",
-                            e
-                        )));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::ListReduce {
@@ -288,25 +226,20 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::list_reduce(
+                        reduce_variable.clone(),
+                        iterated_variable.clone(),
+                        iterable_expr.as_ref().clone(),
+                        yield_expr.as_ref().clone(),
+                        init_value_expr.as_ref().clone(),
+                    )
+                    .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        return Err(UnResolvedTypesError::from(
-                            &Expr::list_reduce(
-                                reduce_variable.clone(),
-                                iterated_variable.clone(),
-                                iterable_expr.as_ref().clone(),
-                                yield_expr.as_ref().clone(),
-                                init_value_expr.as_ref().clone(),
-                            )
-                            .with_source_span(source_span.clone()),
-                            None,
-                        )
-                        .with_additional_error_detail(format!("invalid list aggregation, {}", e)));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::PatternMatch {
@@ -316,21 +249,14 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::pattern_match(predicate.as_ref().clone(), match_arms.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => {
-                        *inferred_type = unified_type;
-                    }
-                    Err(e) => {
-                        return Err(UnResolvedTypesError::from(
-                            &Expr::pattern_match(predicate.as_ref().clone(), match_arms.clone())
-                                .with_source_span(source_span.clone()),
-                            None,
-                        )
-                        .with_additional_error_detail(format!("invalid pattern match, {}", e)));
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::Call {
                 call_type,
@@ -340,27 +266,18 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 type_annotation,
                 generic_type_parameter,
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let expr = Expr::Call {
+                    call_type: call_type.clone(),
+                    args: args.clone(),
+                    inferred_type: InferredType::unknown(),
+                    source_span: source_span.clone(),
+                    generic_type_parameter: generic_type_parameter.clone(),
+                    type_annotation: type_annotation.clone(),
+                };
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr = Expr::Call {
-                            call_type: call_type.clone(),
-                            args: args.clone(),
-                            inferred_type: InferredType::Unknown,
-                            source_span: source_span.clone(),
-                            generic_type_parameter: generic_type_parameter.clone(),
-                            type_annotation: type_annotation.clone(),
-                        };
+                let unified_type = unify_inferred_type(&mut original_expr, expr, inferred_type)?;
 
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!(
-                                "invalid function call, {}",
-                                e
-                            )));
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::SelectField {
                 inferred_type,
@@ -369,24 +286,13 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 type_annotation,
             } => {
-                let unified_inferred_type = inferred_type.unify();
-
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr = Expr::select_field(
-                            expr.as_ref().clone(),
-                            field,
-                            type_annotation.clone(),
-                        )
+                let expr =
+                    Expr::select_field(expr.as_ref().clone(), field, type_annotation.clone())
                         .with_source_span(source_span.clone());
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!(
-                                "invalid field selection, {}",
-                                e
-                            )));
-                    }
-                }
+
+                let unified_type = unify_inferred_type(&mut original_expr, expr, inferred_type)?;
+
+                *inferred_type = unified_type;
             }
 
             Expr::SelectIndex {
@@ -396,21 +302,14 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::select_index(expr.as_ref().clone(), index.as_ref().clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr =
-                            Expr::select_index(expr.as_ref().clone(), index.as_ref().clone())
-                                .with_source_span(source_span.clone());
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!(
-                                "invalid dynamic field selection, {}",
-                                e
-                            )));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Let { .. } => {}
@@ -420,17 +319,13 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::literal(value.clone()).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr =
-                            Expr::literal(value.clone()).with_source_span(source_span.clone());
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!("invalid literal, {}", e)));
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::Flags {
                 inferred_type,
@@ -438,16 +333,13 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::flags(flags.clone()).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr = Expr::flags(flags.clone()).with_source_span(source_span.clone());
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!("invalid flags, {}", e)));
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::Identifier {
                 inferred_type,
@@ -456,25 +348,27 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 type_annotation,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::identifier_with_variable_id(variable_id.clone(), type_annotation.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr = Expr::identifier_with_variable_id(
-                            variable_id.clone(),
-                            type_annotation.clone(),
-                        )
-                        .with_source_span(source_span.clone());
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!("invalid identifier, {}", e)));
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::Boolean { .. } => {}
             Expr::Concat { .. } => {}
-            Expr::ExprBlock { inferred_type, .. } => {
-                let unified_inferred_type = inferred_type.unify();
+            Expr::ExprBlock {
+                inferred_type,
+                source_span,
+                ..
+            } => {
+                let unified_inferred_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::expr_block(vec![]).with_source_span(source_span.clone()),
+                    inferred_type,
+                );
 
                 if let Ok(unified_type) = unified_inferred_type {
                     *inferred_type = unified_type
@@ -487,21 +381,15 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::not(expr.as_ref().clone())
+                        .with_source_span(source_span.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr =
-                            Expr::not(expr.as_ref().clone()).with_source_span(source_span.clone());
-
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!(
-                                "invalid NOT expression, {}",
-                                e
-                            )));
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::Unwrap {
                 inferred_type,
@@ -509,20 +397,13 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    expr.unwrap().with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr = expr.unwrap().with_source_span(source_span.clone());
-
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!(
-                                "cannot determine the type, {}",
-                                e
-                            )));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Throw {
@@ -531,20 +412,13 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::throw(message).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr = Expr::throw(message).with_source_span(source_span.clone());
-
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!(
-                                "cannot determine the type, {}",
-                                e
-                            )));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::GetTag {
@@ -553,20 +427,13 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::get_tag(expr.as_ref().clone()).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr = Expr::get_tag(expr.as_ref().clone())
-                            .with_source_span(source_span.clone());
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!(
-                                "cannot determine the type, {}",
-                                e
-                            )));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::GreaterThan { .. } => {}
@@ -578,20 +445,14 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::plus(lhs.as_ref().clone(), rhs.as_ref().clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr = Expr::plus(lhs.as_ref().clone(), rhs.as_ref().clone())
-                            .with_source_span(source_span.clone());
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!(
-                                "invalid plus expression, {}",
-                                e
-                            )));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Minus {
@@ -601,20 +462,14 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::minus(lhs.as_ref().clone(), rhs.as_ref().clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr = Expr::minus(lhs.as_ref().clone(), rhs.as_ref().clone())
-                            .with_source_span(source_span.clone());
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!(
-                                "invalid plus expression, {}",
-                                e
-                            )));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Divide {
@@ -624,20 +479,14 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::minus(lhs.as_ref().clone(), rhs.as_ref().clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr = Expr::divide(lhs.as_ref().clone(), rhs.as_ref().clone())
-                            .with_source_span(source_span.clone());
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!(
-                                "invalid plus expression, {}",
-                                e
-                            )));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Multiply {
@@ -647,20 +496,14 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
                 source_span,
                 ..
             } => {
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::multiply(lhs.as_ref().clone(), rhs.as_ref().clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        let expr = Expr::multiply(lhs.as_ref().clone(), rhs.as_ref().clone())
-                            .with_source_span(source_span.clone());
-                        return Err(UnResolvedTypesError::from(&expr, None)
-                            .with_additional_error_detail(format!(
-                                "invalid plus expression, {}",
-                                e
-                            )));
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::And { .. } => {}
@@ -675,4 +518,101 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), UnResolvedTypesError> {
     }
 
     Ok(())
+}
+
+fn unify_inferred_type(
+    original_expr: &mut Expr,
+    expr: Expr,
+    inferred_type: &InferredType,
+) -> Result<InferredType, TypeUnificationError> {
+    let unification_result = inferred_type.unify();
+
+    match unification_result {
+        Ok(unified_type) => Ok(unified_type),
+        Err(e) => match e {
+            UnificationFailureInternal::TypeMisMatch { expected, found } => {
+                let found_origin = found.critical_origin();
+                let found_source_span = found_origin.source_span();
+                let found_expr = found_source_span
+                    .as_ref()
+                    .and_then(|span| original_expr.lookup(span));
+
+                let expected_origin = expected.critical_origin();
+
+                let additional_message = match expected_origin {
+                    TypeOrigin::PatternMatch(span) => {
+                        format!(
+                            "expected {} based on pattern match branch at line {} column {}",
+                            expected.printable(),
+                            span.start_line(),
+                            span.start_column()
+                        )
+                    }
+                    TypeOrigin::Default => "".to_string(),
+                    TypeOrigin::NoOrigin => "".to_string(),
+                    TypeOrigin::Declared(source_span) => {
+                        format!(
+                            "{} declared at line {} column {}",
+                            expected.printable(),
+                            source_span.start_line(),
+                            source_span.start_column()
+                        )
+                    }
+                    TypeOrigin::OriginatedAt(_) => "".to_string(),
+                    TypeOrigin::Multiple(_) => "".to_string(),
+                };
+
+                match found_expr {
+                    Some(found_expr) => Err(TypeUnificationError::type_mismatch_error(
+                        found_expr,
+                        None,
+                        expected,
+                        found,
+                        vec![additional_message],
+                    )),
+
+                    None => {
+                        let ambiguity_message = format!(
+                            "conflicting types {}, {}",
+                            found.printable(),
+                            expected.printable()
+                        );
+                        Err(TypeUnificationError::unresolved_types_error(
+                            expr,
+                            None,
+                            vec![ambiguity_message],
+                        ))
+                    }
+                }
+            }
+            UnificationFailureInternal::ConflictingTypes {
+                conflicting_types,
+                additional_error_detail,
+            } => {
+                let mut additional_messages = vec![format!(
+                    "conflicting types: {}",
+                    conflicting_types
+                        .iter()
+                        .map(|t| t.printable())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )];
+
+                additional_messages.extend(additional_error_detail);
+
+                Err(TypeUnificationError::unresolved_types_error(
+                    expr,
+                    None,
+                    additional_messages,
+                ))
+            }
+            UnificationFailureInternal::UnknownType => {
+                Err(TypeUnificationError::unresolved_types_error(
+                    expr,
+                    None,
+                    vec!["cannot determine the type".to_string()],
+                ))
+            }
+        },
+    }
 }

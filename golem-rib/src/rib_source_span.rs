@@ -14,8 +14,23 @@ impl SourceSpan {
         self.start.line
     }
 
+    pub fn end_line(&self) -> i32 {
+        self.end.line
+    }
+
+    pub fn is_equal(&self, other: &SourceSpan) -> bool {
+        self.start_line() == other.start_line()
+            && self.start_column() == other.start_column()
+            && self.end_line() == other.end_line()
+            && self.end_column() == other.end_column()
+    }
+
     pub fn start_column(&self) -> i32 {
         self.start.column
+    }
+
+    pub fn end_column(&self) -> i32 {
+        self.end.column
     }
 
     pub fn new(start: SourcePosition, end: SourcePosition) -> SourceSpan {
@@ -59,7 +74,11 @@ impl Ord for SourceSpan {
 
 impl Debug for SourceSpan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "<SourceSpan>")
+        write!(
+            f,
+            "SourceSpan {{ start: {}, end: {} }}",
+            self.start, self.end
+        )
     }
 }
 
@@ -73,6 +92,12 @@ impl Display for SourceSpan {
 pub struct SourcePosition {
     pub line: i32,
     pub column: i32,
+}
+
+impl SourcePosition {
+    pub fn new(line: i32, column: i32) -> SourcePosition {
+        SourcePosition { line, column }
+    }
 }
 
 impl Display for SourcePosition {

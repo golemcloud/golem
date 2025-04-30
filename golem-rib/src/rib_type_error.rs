@@ -1,10 +1,10 @@
 use crate::type_checker::{
-    ExhaustivePatternMatchError, InvalidExpr, InvalidMathExprError, InvalidProgramReturn,
+    ExhaustivePatternMatchError, InvalidMathExprError, InvalidProgramReturn,
 };
 use crate::{
     ActualType, AmbiguousTypeError, CustomError, ExpectedType, Expr, FunctionCallError,
     InvalidPatternMatchError, InvalidWorkerName, MultipleUnResolvedTypesError, TypeMismatchError,
-    TypeName, UnResolvedTypesError,
+    TypeName, TypeUnificationError, UnResolvedTypesError,
 };
 use std::fmt;
 use std::fmt::{Debug, Display};
@@ -90,6 +90,15 @@ impl From<UnResolvedTypesError> for RibTypeError {
     }
 }
 
+impl From<TypeUnificationError> for RibTypeError {
+    fn from(value: TypeUnificationError) -> Self {
+        match value {
+            TypeUnificationError::TypeMismatchError { error } => error.into(),
+            TypeUnificationError::UnresolvedTypesError { error } => error.into(),
+        }
+    }
+}
+
 impl From<TypeMismatchError> for RibTypeError {
     fn from(value: TypeMismatchError) -> Self {
         let expected = match value.expected_type {
@@ -97,6 +106,9 @@ impl From<TypeMismatchError> for RibTypeError {
                 .map(|x| format!("expected {}", x))
                 .ok(),
             ExpectedType::Hint(kind) => Some(format!("expected {}", kind)),
+            ExpectedType::InferredType(type_name) => {
+                Some(format!("expected {}", type_name.printable()))
+            }
         };
 
         let actual = match value.actual_type {
@@ -107,7 +119,7 @@ impl From<TypeMismatchError> for RibTypeError {
         };
 
         let cause_suffix = match (expected, actual) {
-            (Some(expected), Some(actual)) => format!("{}. {}", expected, actual),
+            (Some(expected), Some(actual)) => format!("{}, {}", expected, actual),
             (Some(expected), None) => expected.to_string(),
             _ => "".to_string(),
         };
@@ -237,25 +249,6 @@ impl From<FunctionCallError> for RibTypeError {
                 additional_error_details: vec![],
                 help_messages: vec![],
             },
-        }
-    }
-}
-
-impl From<InvalidExpr> for RibTypeError {
-    fn from(value: InvalidExpr) -> Self {
-        let expr_inferred_type = value.found.printable();
-
-        let cause = format!(
-            "expected to be of the type `{}`, but inferred as `{}`",
-            value.expected_type, expr_inferred_type
-        );
-
-        RibTypeError {
-            cause,
-            expr: value.expr,
-            immediate_parent: None,
-            additional_error_details: vec![value.message],
-            help_messages: vec![],
         }
     }
 }

@@ -424,7 +424,6 @@ mod internal {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-
     use crate::RegistryKey;
     use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
 

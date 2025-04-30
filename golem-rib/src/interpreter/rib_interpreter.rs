@@ -1697,8 +1697,8 @@ mod tests {
     #[test]
     async fn test_interpreter_variable_scope_0() {
         let rib_expr = r#"
-               let x: u64 = 1;
-               let y = x + 2u64;
+               let x = 1;
+               let y = x + 2;
                y
             "#;
 
@@ -1710,13 +1710,13 @@ mod tests {
 
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(result.get_val().unwrap(), 3u64.into_value_and_type());
+        assert_eq!(result.get_val().unwrap(), 3i32.into_value_and_type());
     }
 
     #[test]
     async fn test_interpreter_variable_scope_1() {
         let rib_expr = r#"
-               let x: u64 = 1;
+               let x = 1;
                let z = {foo : x};
                let x = x + 2u64;
                { bar: x, baz: z }
@@ -1743,10 +1743,10 @@ mod tests {
     #[test]
     async fn test_interpreter_variable_scope_2() {
         let rib_expr = r#"
-               let x: u64 = 1;
+               let x = 1;
                let x = x;
 
-               let result1 = match some(x + 1:u64) {
+               let result1 = match some(x + 1) {
                   some(x) => x,
                   none => x
                };
@@ -1779,11 +1779,11 @@ mod tests {
     #[test]
     async fn test_interpreter_variable_scope_3() {
         let rib_expr = r#"
-               let x: u64 = 1;
+               let x = 1;
                let x = x;
 
-               let result1 = match some(x + 1:u64) {
-                  some(x) => match some(x + 1:u64) {
+               let result1 = match some(x + 1) {
+                  some(x) => match some(x + 1) {
                      some(x) => x,
                      none => x
                   },
@@ -1794,7 +1794,7 @@ mod tests {
 
                let result2 = match z {
                   some(x) => x,
-                  none => match some(x + 1:u64) {
+                  none => match some(x + 1) {
                      some(x) => x,
                      none => x
                   }
@@ -1833,12 +1833,12 @@ mod tests {
             GlobalVariableTypeSpec::new(
                 "request",
                 Path::from_elems(vec!["path"]),
-                InferredType::Str,
+                InferredType::string(),
             ),
             GlobalVariableTypeSpec::new(
                 "request",
                 Path::from_elems(vec!["headers"]),
-                InferredType::Str,
+                InferredType::string(),
             ),
         ];
 
@@ -1900,12 +1900,12 @@ mod tests {
             GlobalVariableTypeSpec::new(
                 "request",
                 Path::from_elems(vec!["path"]),
-                InferredType::Str,
+                InferredType::string(),
             ),
             GlobalVariableTypeSpec::new(
                 "request",
                 Path::from_elems(vec!["headers"]),
-                InferredType::Str,
+                InferredType::string(),
             ),
         ];
 
@@ -2406,10 +2406,10 @@ mod tests {
         let mut interpreter = Interpreter::default();
 
         let expr = r#"
-           let x: u64 = 1;
+           let x = 1;
 
            match x {
-                1 => ok(1: u64),
+                1 => ok(1),
                 2 => err("none")
            }
         "#;
@@ -2419,8 +2419,8 @@ mod tests {
         let rib_result = interpreter.run(compiled.byte_code).await.unwrap();
 
         let expected = ValueAndType::new(
-            Value::Result(Ok(Some(Box::new(Value::U64(1))))),
-            result(u64(), str()),
+            Value::Result(Ok(Some(Box::new(Value::S32(1))))),
+            result(s32(), str()),
         );
 
         assert_eq!(rib_result.get_val().unwrap(), expected);
@@ -2431,7 +2431,7 @@ mod tests {
         let mut interpreter = Interpreter::default();
 
         let expr = r#"
-           let x = some({foo: 1:u64});
+           let x = some({foo: 1});
 
            match x {
                some(x) => ok(x.foo),
@@ -2444,8 +2444,8 @@ mod tests {
         let rib_result = interpreter.run(compiled.byte_code).await.unwrap();
 
         let expected = ValueAndType::new(
-            Value::Result(Ok(Some(Box::new(Value::U64(1))))),
-            result(u64(), str()),
+            Value::Result(Ok(Some(Box::new(Value::S32(1))))),
+            result(s32(), str()),
         );
 
         assert_eq!(rib_result.get_val().unwrap(), expected);
@@ -2527,7 +2527,6 @@ mod tests {
         );
 
         let expr = r#"
-
            let input = { request : { path : { user : "jak" } }, y : "baz" };
            let result = my-worker-function(input);
            match result {
@@ -2541,7 +2540,7 @@ mod tests {
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         let expected = test_utils::get_value_and_type(
-            &record(vec![field("body", u64()), field("status", u64())]),
+            &record(vec![field("body", u64()), field("status", s32())]),
             r#"{body: 1, status: 200}"#,
         );
 
@@ -3181,7 +3180,7 @@ mod tests {
     #[test]
     async fn test_interpreter_range_returns_5() {
         let expr = r#"
-              let y = 1:u64 + 10: u64;
+              let y = 1 + 10;
               1..y
               "#;
 
@@ -3193,10 +3192,10 @@ mod tests {
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         let expected = ValueAndType::new(
-            Value::Record(vec![Value::U64(1), Value::U64(11), Value::Bool(false)]),
+            Value::Record(vec![Value::U64(1), Value::S32(11), Value::Bool(false)]),
             record(vec![
                 field("from", option(u64())),
-                field("to", option(u64())),
+                field("to", option(s32())),
                 field("inclusive", bool()),
             ]),
         );
@@ -3270,7 +3269,7 @@ mod tests {
         // infinite computation will respond with an error - than a stack overflow
         // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
         let expr = r#"
-              let range = 1:u64..;
+              let range = 1..;
               for i in range {
                 yield i;
               }
@@ -3291,8 +3290,8 @@ mod tests {
         // infinite computation will respond with an error - than a stack overflow
         // Note that, `list[1..]` is allowed while `for i in 1.. { yield i; }` is not
         let expr = r#"
-                let initial: u8 = 1;
-                let final: u8 = 5;
+                let initial = 1;
+                let final = 5;
                 let x = initial..final;
 
                 reduce z, a in x from 0u8 {
@@ -3525,6 +3524,44 @@ mod tests {
                  worker-name: some("my-worker"),
                  function-name: "amazon:shopping-cart/api1.{foo}",
                  args0: "bar"
+              }
+            "#,
+        );
+
+        assert_eq!(result.get_val().unwrap(), expected_val);
+    }
+
+    #[test]
+    async fn test_interpreter_durable_worker_1_1() {
+        let expr = r#"
+                let x = 1;
+                let y = 2;
+                instance("my-worker").foo-number(x, y)
+            "#;
+        let expr = Expr::from_text(expr).unwrap();
+        let component_metadata = test_utils::get_metadata();
+
+        let compiled = compiler::compile(expr, &component_metadata).unwrap();
+
+        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+
+        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+        let analysed_type = record(vec![
+            field("worker-name", option(str())),
+            field("function-name", str()),
+            field("args0", u64()),
+            field("args1", s32()),
+        ]);
+
+        let expected_val = get_value_and_type(
+            &analysed_type,
+            r#"
+              {
+                 worker-name: some("my-worker"),
+                 function-name: "amazon:shopping-cart/api1.{foo-number}",
+                 args0: 1,
+                 args1: 2
               }
             "#,
         );
@@ -3848,7 +3885,7 @@ mod tests {
         let expr = r#"
                 let worker = instance("my-worker");
                 let cart = worker.cart[golem:it]("bar");
-                let result = cart.add-item({product-id: "mac", name: "macbook", quantity: 1:u32, price: 1:f32});
+                let result = cart.add-item({product-id: "mac", name: "macbook", price: 1:f32, quantity: 1:u32});
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -3893,7 +3930,7 @@ mod tests {
         let expr = r#"
                 let worker = instance("my-worker");
                 let cart = worker.cart[golem:it]("bar");
-                cart.add-items({product-id: "mac", name: "macbook", quantity: 1:u32, price: 1:f32});
+                cart.add-items({product-id: "mac", name: "macbook", price: 1:f32, quantity: 1:u32});
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -3903,7 +3940,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert_eq!(compiled, "error in the following rib found at line 4, column 17\n`cart.add-items({product-id: \"mac\", name: \"macbook\", quantity: 1: u32, price: 1: f32})`\ncause: invalid function call `add-items`\nfunction 'add-items' not found\n".to_string());
+        assert_eq!(compiled, "error in the following rib found at line 4, column 17\n`cart.add-items({product-id: \"mac\", name: \"macbook\", price: 1: f32, quantity: 1: u32})`\ncause: invalid function call `add-items`\nfunction 'add-items' not found\n".to_string());
     }
 
     #[test]
@@ -3911,7 +3948,7 @@ mod tests {
         let expr = r#"
                 let worker = instance("my-worker");
                 let cart = worker.carts[golem:it]("bar");
-                cart.add-item({product-id: "mac", name: "macbook", quantity: 1:u32, price: 1:f32});
+                cart.add-item({product-id: "mac", name: "macbook", price: 1:f32, quantity: 1:u32});
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -3933,7 +3970,7 @@ mod tests {
         let expr = r#"
                 let worker = instance();
                 let cart = worker.cart[golem:it]("bar");
-                cart.add-item({product-id: "mac", name: "macbook", quantity: 1, price: 1});
+                cart.add-item({product-id: "mac", name: "macbook", price: 1, quantity: 1});
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -4331,8 +4368,8 @@ mod tests {
     async fn test_interpreter_durable_worker_with_resource_18() {
         let expr = r#"
 
-            let initial = 1: u64;
-            let final = 5: u64;
+            let initial = 1;
+            let final = 5;
             let range = initial..final;
             let worker = instance("my-worker");
             let cart = worker.cart[golem:it]("bar");
@@ -4387,8 +4424,8 @@ mod tests {
     async fn test_interpreter_durable_worker_with_resource_19() {
         let expr = r#"
 
-            let initial = 1: u64;
-            let final = 5: u64;
+            let initial = 1;
+            let final = 5;
             let range = initial..final;
 
             for i in range {
@@ -4447,8 +4484,8 @@ mod tests {
         };
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
-            case, f32, field, handle, list, option, r#enum, record, result, str, tuple, u32, u64,
-            unit_case, variant,
+            case, f32, field, handle, list, option, r#enum, record, result, s32, str, tuple, u32,
+            u64, unit_case, variant,
         };
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
@@ -4585,6 +4622,24 @@ mod tests {
                 }],
             };
 
+            let analysed_function_in_api1_number = AnalysedFunction {
+                name: "foo-number".to_string(),
+                parameters: vec![
+                    AnalysedFunctionParameter {
+                        name: "arg1".to_string(),
+                        typ: u64(),
+                    },
+                    AnalysedFunctionParameter {
+                        name: "arg2".to_string(),
+                        typ: s32(),
+                    },
+                ],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: s32(),
+                }],
+            };
+
             // Exist in both amazon:shopping-cart/api1 and amazon:shopping-cart/api2
             let analysed_function_in_api1_and_api2 = AnalysedFunction {
                 name: "bar".to_string(),
@@ -4628,6 +4683,7 @@ mod tests {
                 name: "amazon:shopping-cart/api1".to_string(),
                 functions: vec![
                     analysed_function_in_api1,
+                    analysed_function_in_api1_number,
                     analysed_function_in_api1_and_api2.clone(),
                     analysed_function_in_wasi_and_api1.clone(),
                 ],
