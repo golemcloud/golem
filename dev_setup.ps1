@@ -1,8 +1,8 @@
 # Ensure the script runs as Administrator
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
-    Write-Output "Please run this script as Administrator!"
-    exit 1
-}
+# if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+#     Write-Output "Please run this script as Administrator!"
+#     exit 1
+# }
 
 # Create development directory for storing downloads (without changing location)
 New-Item -ItemType Directory -Path C:\dev -Force
@@ -29,7 +29,7 @@ $arch = if ([System.Environment]::Is64BitOperatingSystem) { "win64" } else { "wi
 Write-Output "Detected architecture: $arch"
 
 # Install Visual Studio Build Tools using Winget (installs only the installer)
-$installerUrl = "https://c2rsetup.officeapps.live.com/c2r/downloadVS.aspx?sku=community&channel=Release&version=VS2022"
+$installerUrl = "https://c2rsetup.officeapps.live.com/c2r/downloadVS.aspx?sku=community&channel=Release&version=VS2022&source=VSLandingPage&cid=2030:e15d0df7dd674811904a95b6a09e9426"
 $installerPath = "C:\dev\vs_community.exe"
 
 # Download the installer
@@ -72,12 +72,18 @@ if (Test-Path $ngPath) { Remove-Item -Path $ngPath -Recurse -Force }
 Rename-Item -Path "C:\dev\$ngVersion" -NewName "nginx"
 
 Write-Output "Nginx installation complete."
-# TODO:ADD Redis & Lnav
 
-# Install CMake using winget
-Write-Output "Installing CMake..."
-winget install -e --id Kitware.CMake --silent --accept-package-agreements
-Write-Output "CMake installation complete."
+# Install Redis for windows
+Write-Output "Installing redis for windows...."
+$url = "https://github.com/redis-windows/redis-windows/releases/download/7.4.3/Redis-7.4.3-Windows-x64-msys2.zip"
+$zip = "$env:TEMP\redis.zip"; $dest = "C:\dev"
+Invoke-WebRequest $url -OutFile $zip
+$temp = "$env:TEMP\_unzip"; Expand-Archive $zip -DestinationPath $temp -Force
+Move-Item "$temp\*" $dest -Force
+Remove-Item $temp -Recurse -Force
+
+Write-Output "Redis installeton complete."
+
 
 # Install Protobuf manually (since it's not available via winget)
 Write-Output "Downloading Protobuf..."
@@ -88,9 +94,13 @@ $protobufExtractPath = "C:\dev\protobuf"
 Invoke-WebRequest -Uri $protobufUrl -OutFile $protobufZipPath
 Expand-Archive -Path $protobufZipPath -DestinationPath $protobufExtractPath -Force
 
+Remove-Item -Path $protobufZipPath
+Write-Output "Protobuf installation complete."
+
+
 # Update environment variables
 $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
-$newPaths = @("$protobufExtractPath\bin", "C:\Users\$env:USERNAME\.cargo\bin", "$ngPath", "C:\Program Files\CMake\bin")
+$newPaths = @("$protobufExtractPath\bin", "C:\Users\$env:USERNAME\.cargo\bin", "$ngPath","C:\dev\Redis-7.4.3-Windows-x64-msys2" )
 
 foreach ($newPath in $newPaths) {
     if ($userPath -notlike "*$newPath*") {
@@ -98,7 +108,8 @@ foreach ($newPath in $newPaths) {
     }
 }
 
-Remove-Item -Path $protobufZipPath
-Write-Output "Protobuf installation complete."
+
+
+
 
 Write-Output "All installations are complete!"
