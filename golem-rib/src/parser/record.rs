@@ -17,7 +17,7 @@ use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::rib_source_span::{GetSourcePosition, SourceSpan};
 use combine::parser::char::digit;
-use combine::{attempt, between, many1, not_followed_by, parser, parser::char::{char as char_, letter, spaces}, position, sep_by1, ParseError, Parser, Stream};
+use combine::{attempt, between, many, many1, not_followed_by, parser, parser::char::{char as char_, letter, spaces}, position, sep_by1, ParseError, Parser, Stream};
 
 parser! {
     pub fn record[Input]()(Input) -> Expr
@@ -41,8 +41,8 @@ where
 {
 
     (
-        attempt(char_('{').skip(spaces().silent())),
-        sep_by1(field().skip(spaces().silent()), char_(',').skip(spaces().silent())),
+        char_('{').skip(spaces().silent()),
+        attempt(sep_by1(field().skip(spaces().silent()), char_(',').skip(spaces().silent()))),
         char_('}').skip(spaces().silent()),
     )
         .map(|(_, fields, _): (_, Vec<Field>, _)| {
@@ -63,8 +63,13 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    many1(letter().or(char_('_').or(char_('-')).or(digit())))
-        .map(|s: Vec<char>| s.into_iter().collect())
+    letter()
+        .and(many(letter().or(digit()).or(char_('_')).or(char_('-'))))
+        .map(|(first, rest): (char, Vec<char>)| {
+            let mut chars = vec![first];
+            chars.extend(rest);
+            chars.into_iter().collect::<String>()
+        })
 }
 
 struct Field {
@@ -239,7 +244,9 @@ mod tests {
         let input = r#"{ "foo": "bar" }"#;
         let result = record().easy_parse(position::Stream::new(input));
 
+        dbg!(result);
         let result = Expr::from_text(input);
+        dbg!(result);
         assert!(false);
     }
 }
