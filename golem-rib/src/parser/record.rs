@@ -18,7 +18,7 @@ use crate::parser::errors::RibParseError;
 use crate::rib_source_span::{GetSourcePosition, SourceSpan};
 use combine::parser::char::digit;
 use combine::{
-    between, many1, parser,
+    between, many, parser,
     parser::char::{char as char_, letter, spaces},
     position, sep_by1, ParseError, Parser, Stream,
 };
@@ -43,21 +43,46 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces().with(
-        between(
-            char_('{').skip(spaces()),
-            char_('}').skip(spaces()),
-            sep_by1(field().skip(spaces()), char_(',').skip(spaces())),
-        )
-        .map(|fields: Vec<Field>| {
-            Expr::record(
+    between(
+        char_('{').skip(spaces().silent()),
+        char_('}').skip(spaces().silent()),
+        sep_by1(
+            field().skip(spaces().silent()),
+            char_(',').skip(spaces().silent()),
+        ),
+    )
+    .and_then(|fields: Vec<Field>| {
+        let duplicate_keys = find_duplicate_keys(&fields);
+
+        if !duplicate_keys.is_empty() {
+            Err(RibParseError::Message(format!(
+                "duplicate keys found in record: {}",
+                duplicate_keys.join(", ")
+            )))
+        } else {
+            Ok(Expr::record(
                 fields
                     .iter()
                     .map(|f| (f.key.clone(), f.value.clone()))
                     .collect::<Vec<_>>(),
-            )
-        }),
-    )
+            ))
+        }
+    })
+}
+
+fn find_duplicate_keys(fields: &[Field]) -> Vec<String> {
+    let mut keys = std::collections::HashMap::new();
+    let mut duplicates = vec![];
+
+    for field in fields {
+        if keys.contains_key(&field.key) {
+            duplicates.push(field.key.clone());
+        } else {
+            keys.insert(field.key.clone(), true);
+        }
+    }
+
+    duplicates
 }
 
 fn field_key<Input>() -> impl Parser<Input, Output = String>
@@ -68,8 +93,13 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    many1(letter().or(char_('_').or(char_('-')).or(digit())))
-        .map(|s: Vec<char>| s.into_iter().collect())
+    letter()
+        .and(many(letter().or(digit()).or(char_('_')).or(char_('-'))))
+        .map(|(first, rest): (char, Vec<char>)| {
+            let mut chars = vec![first];
+            chars.extend(rest);
+            chars.into_iter().collect::<String>()
+        })
 }
 
 struct Field {
@@ -86,8 +116,8 @@ where
     Input::Position: GetSourcePosition,
 {
     (
-        field_key().skip(spaces()),
-        char_(':').skip(spaces()),
+        field_key().skip(spaces().silent()),
+        char_(':').skip(spaces().silent()),
         position(),
         rib_expr(),
         position(),
@@ -232,6 +262,37 @@ mod tests {
                 "err".to_string(),
                 Expr::identifier_global("bar", None)
             )]))
+        );
+    }
+
+    #[test]
+    fn test_record_nested() {
+        let expr = r#"
+      {
+         headers: { ContentType: "json", userid: "foo" },
+         body: "foo",
+         status: status
+       }
+        "#;
+
+        let result = Expr::from_text(expr);
+
+        assert_eq!(
+            result,
+            Ok(Expr::record(vec![
+                (
+                    "headers".to_string(),
+                    Expr::record(vec![
+                        ("ContentType".to_string(), Expr::literal("json")),
+                        ("userid".to_string(), Expr::literal("foo"))
+                    ])
+                ),
+                ("body".to_string(), Expr::literal("foo")),
+                (
+                    "status".to_string(),
+                    Expr::identifier_global("status", None)
+                )
+            ]))
         );
     }
 }
