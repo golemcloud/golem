@@ -17,11 +17,7 @@ use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::rib_source_span::{GetSourcePosition, SourceSpan};
 use combine::parser::char::digit;
-use combine::{
-    between, many1, parser,
-    parser::char::{char as char_, letter, spaces},
-    position, sep_by1, ParseError, Parser, Stream,
-};
+use combine::{attempt, between, many1, not_followed_by, parser, parser::char::{char as char_, letter, spaces}, position, sep_by1, ParseError, Parser, Stream};
 
 parser! {
     pub fn record[Input]()(Input) -> Expr
@@ -43,21 +39,20 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces().with(
-        between(
-            char_('{').skip(spaces()),
-            char_('}').skip(spaces()),
-            sep_by1(field().skip(spaces()), char_(',').skip(spaces())),
-        )
-        .map(|fields: Vec<Field>| {
+
+    (
+        attempt(char_('{').skip(spaces().silent())),
+        sep_by1(field().skip(spaces().silent()), char_(',').skip(spaces().silent())),
+        char_('}').skip(spaces().silent()),
+    )
+        .map(|(_, fields, _): (_, Vec<Field>, _)| {
             Expr::record(
                 fields
                     .iter()
                     .map(|f| (f.key.clone(), f.value.clone()))
                     .collect::<Vec<_>>(),
             )
-        }),
-    )
+        })
 }
 
 fn field_key<Input>() -> impl Parser<Input, Output = String>
@@ -86,8 +81,8 @@ where
     Input::Position: GetSourcePosition,
 {
     (
-        field_key().skip(spaces()),
-        char_(':').skip(spaces()),
+        field_key().skip(spaces().silent()),
+        char_(':').skip(spaces().silent()),
         position(),
         rib_expr(),
         position(),
@@ -106,8 +101,12 @@ where
         })
 }
 
+
+
 #[cfg(test)]
 mod tests {
+    use combine::EasyParser;
+    use combine::stream::position;
     use test_r::test;
 
     use super::*;
@@ -233,5 +232,17 @@ mod tests {
                 Expr::identifier_global("bar", None)
             )]))
         );
+    }
+
+    #[test]
+    fn test_record_with_keys_in_double_quotes() {
+        let input = r#"{ "foo": "bar" }"#;
+        let result = record().easy_parse(position::Stream::new(input));
+
+        dbg!(&result);
+
+        let result = Expr::from_text(input);
+        dbg!(&result);
+        assert!(false);
     }
 }

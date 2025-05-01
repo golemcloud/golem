@@ -118,8 +118,8 @@ where
                 pattern_match(),
                 let_binding(),
                 conditional(),
-                attempt(flag_or_record()),
-                multi_line_block(),
+                attempt(multi_line_block()),
+                flag_or_record(),
                 tuple(),
                 boolean_literal(),
                 literal(),
@@ -169,7 +169,7 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    choice((attempt(flag()), attempt(record())))
+    choice((attempt(flag()), record()))
 }
 
 // A rib rest always a start with a proper delimiter (ex: ., [, etc)
@@ -548,6 +548,7 @@ fn combine_with_range_info(
         },
     }
 }
+
 
 #[cfg(test)]
 mod tests {
