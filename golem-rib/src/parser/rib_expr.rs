@@ -118,8 +118,8 @@ where
                 pattern_match(),
                 let_binding(),
                 conditional(),
+                attempt(multi_line_block()),
                 flag_or_record(),
-                multi_line_block(),
                 tuple(),
                 boolean_literal(),
                 literal(),
@@ -548,7 +548,6 @@ fn combine_with_range_info(
         },
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -126,7 +126,7 @@ mod invalid_syntax_tests {
     }
 
     #[test]
-    fn invalid_record_in_rib_program() {
+    fn invalid_record_in_rib_program_1() {
         let input = r#"
           let x = 1;
           let y = 2;
@@ -143,6 +143,53 @@ mod invalid_syntax_tests {
         .join("\n");
 
         assert_eq!(result, Err(expected_error));
+    }
+
+    #[test]
+    fn invalid_record_in_rib_program_2() {
+        let input = r#"{ "foo": "bar" }"#;
+        let error = Expr::from_text(input).unwrap_err();
+        assert_eq!(
+            error,
+            "Parse error at line: 1, column: 3\nUnexpected `\"`\nExpected letter\n"
+        );
+    }
+
+    #[test]
+    fn invalid_record_in_rib_program_3() {
+        let input = r#"{ foo: bar, bar: a  bc }"#;
+        let error = Expr::from_text(input).unwrap_err();
+        assert_eq!(
+            error,
+            "Parse error at line: 1, column: 21\nUnexpected `b`\nExpected `,` or `}`\n"
+        );
+    }
+
+    #[test]
+    fn invalid_record_in_rib_program_4() {
+        let input = r#"{ foo: bar, bar: abc"#;
+        let error = Expr::from_text(input).unwrap_err();
+        assert_eq!(
+            error,
+            "Parse error at line: 1, column: 21\nUnexpected end of input\nExpected `,` or `}`\n"
+        );
+    }
+
+    #[test]
+    fn invalid_record_in_rib_program_5() {
+        let input = r#"{ foo: bar, {bar}: abc}"#;
+        let error = Expr::from_text(input).unwrap_err();
+
+        // TODO; avoid superfluous unexpected token warnings.
+        // Source location of error, the  unexpected  token of`{` and the expected `letter` is correct.
+        // However, it also says `unexpected f`
+        // and that can be due to parser trying other possibilities after consuming the first `{`.
+        // Given most of the unexpected and expected tokens are correct along with source location, this test case is valid
+        // and is kept to avoid regressions
+        assert_eq!(
+            error,
+            "Parse error at line: 1, column: 13\nUnexpected `{`\nUnexpected `f`\nExpected letter\n"
+        );
     }
 
     #[test]

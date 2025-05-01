@@ -17,7 +17,11 @@ use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::rib_source_span::{GetSourcePosition, SourceSpan};
 use combine::parser::char::digit;
-use combine::{attempt, between, many, many1, not_followed_by, parser, parser::char::{char as char_, letter, spaces}, position, sep_by1, ParseError, Parser, Stream};
+use combine::{
+    attempt, many, parser,
+    parser::char::{char as char_, letter, spaces},
+    position, sep_by1, ParseError, Parser, Stream,
+};
 
 parser! {
     pub fn record[Input]()(Input) -> Expr
@@ -39,10 +43,12 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-
     (
         char_('{').skip(spaces().silent()),
-        attempt(sep_by1(field().skip(spaces().silent()), char_(',').skip(spaces().silent()))),
+        attempt(sep_by1(
+            field().skip(spaces().silent()),
+            char_(',').skip(spaces().silent()),
+        )),
         char_('}').skip(spaces().silent()),
     )
         .map(|(_, fields, _): (_, Vec<Field>, _)| {
@@ -106,12 +112,8 @@ where
         })
 }
 
-
-
 #[cfg(test)]
 mod tests {
-    use combine::EasyParser;
-    use combine::stream::position;
     use test_r::test;
 
     use super::*;
@@ -240,13 +242,29 @@ mod tests {
     }
 
     #[test]
-    fn test_record_with_keys_in_double_quotes() {
+    fn test_invalid_record_1() {
         let input = r#"{ "foo": "bar" }"#;
-        let result = record().easy_parse(position::Stream::new(input));
+        let error = Expr::from_text(input).unwrap_err();
+        assert_eq!(
+            error,
+            "Parse error at line: 1, column: 3\nUnexpected `\"`\nExpected letter\n"
+        );
+    }
 
-        dbg!(result);
-        let result = Expr::from_text(input);
-        dbg!(result);
-        assert!(false);
+    #[test]
+    fn test_invalid_record_2() {
+        let input = r#"{ foo: bar, bar: a  bc }"#;
+        let error = Expr::from_text(input).unwrap_err();
+        assert_eq!(
+            error,
+            "Parse error at line: 1, column: 21\nUnexpected `b`\nExpected `,` or `}`\n"
+        );
+    }
+
+    #[test]
+    fn test_invalid_record_3() {
+        let input = r#"{ foo: bar, "bar": abc }"#;
+        let error = Expr::from_text(input).unwrap_err();
+        assert_eq!(error, "Parse error at line: 1, column: 13\nUnexpected `\"`\nUnexpected `f`\nExpected letter\n");
     }
 }
