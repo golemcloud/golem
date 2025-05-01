@@ -200,9 +200,7 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
                                 r#"
                                 let status: u64 = 200;
                                 {
-                                    headers: {
-                                        {ContentType: "json", userid: "foo"}
-                                   },
+                                    headers: {ContentType: "json", userid: "foo"},
                                    body: "foo",
                                    status: status
                                 }
