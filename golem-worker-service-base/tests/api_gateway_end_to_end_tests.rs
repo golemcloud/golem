@@ -444,11 +444,11 @@ async fn test_api_def_with_invalid_query_and_path_lookup() {
       response
     "#;
 
-    let api_specification: HttpApiDefinition =
+    let api_specification1: HttpApiDefinition =
         get_api_def_with_worker_binding("/foo/bar", None, response_mapping).await;
 
-    let result = CompiledHttpApiDefinition::from_http_api_definition(
-        &api_specification,
+    let result1 = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification1,
         &internal::get_component_metadata(),
         &DefaultNamespace::default(),
     )
@@ -463,7 +463,20 @@ async fn test_api_def_with_invalid_query_and_path_lookup() {
         }
     );
 
-    assert_eq!(result, expected)
+    assert_eq!(&result1, &expected);
+
+    let api_specification2 =
+        get_api_def_with_worker_binding("/foo/{user  -  id}?{cou ntry}", None, response_mapping)
+            .await;
+
+    let result2 = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification2,
+        &internal::get_component_metadata(),
+        &DefaultNamespace::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(&result2, &expected)
 }
 
 #[test]
