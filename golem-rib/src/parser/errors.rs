@@ -180,15 +180,9 @@ mod invalid_syntax_tests {
         let input = r#"{ foo: bar, {bar}: abc}"#;
         let error = Expr::from_text(input).unwrap_err();
 
-        // TODO; avoid superfluous unexpected token warnings.
-        // Source location of error, the  unexpected  token of`{` and the expected `letter` is correct.
-        // However, it also says `unexpected f`
-        // and that can be due to parser trying other possibilities after consuming the first `{`.
-        // Given most of the unexpected and expected tokens are correct along with source location, this test case is valid
-        // and is kept to avoid regressions
         assert_eq!(
             error,
-            "Parse error at line: 1, column: 13\nUnexpected `{`\nUnexpected `f`\nExpected letter\n"
+            "Parse error at line: 1, column: 13\nUnexpected `{`\nExpected letter\n"
         );
     }
 
