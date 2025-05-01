@@ -239,10 +239,7 @@ mod tests {
         let input = r#"{ "foo": "bar" }"#;
         let result = record().easy_parse(position::Stream::new(input));
 
-        dbg!(&result);
-
         let result = Expr::from_text(input);
-        dbg!(&result);
         assert!(false);
     }
 }
