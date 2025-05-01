@@ -21,15 +21,13 @@ use crate::service::component::ComponentError;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
-use golem_common::model::component::ComponentOwner;
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::plugin::{
     AppPluginDefinition, LibraryPluginDefinition, OplogProcessorDefinition, PluginDefinition,
     PluginOwner, PluginScope, PluginTypeSpecificDefinition, PluginWasmFileKey,
 };
-use golem_common::model::ComponentId;
-use golem_common::model::HasAccountId;
+use golem_common::model::{ComponentId, PluginId};
 use golem_common::SafeDisplay;
-use golem_service_base::model::VersionedComponentId;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_wasm_ast::analysis::AnalysedExport;
@@ -167,8 +165,9 @@ pub trait PluginService<Owner: PluginOwner, Scope: PluginScope>: Debug + Send + 
     /// Registers a new plugin
     async fn create_plugin(
         &self,
-        plugin: PluginDefinitionCreation<Owner, Scope>,
-    ) -> Result<(), PluginError>;
+        owner: &Owner,
+        plugin: PluginDefinitionCreation<Scope>,
+    ) -> Result<PluginDefinition<Owner, Scope>, PluginError>;
 
     /// Gets a registered plugin belonging to a given `owner`, identified by its `name` and `version`
     async fn get(
@@ -176,6 +175,13 @@ pub trait PluginService<Owner: PluginOwner, Scope: PluginScope>: Debug + Send + 
         owner: &Owner,
         name: &str,
         version: &str,
+    ) -> Result<Option<PluginDefinition<Owner, Scope>>, PluginError>;
+
+    /// Get a plugin by id for a given owner. Returns the plugin even if it was unregistered / deleted.
+    async fn get_by_id(
+        &self,
+        owner: &Owner,
+        id: &PluginId,
     ) -> Result<Option<PluginDefinition<Owner, Scope>>, PluginError>;
 
     /// Deletes a registered plugin belonging to a given `owner`, identified by its `name` and `version`
@@ -332,31 +338,31 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner::PluginOwner
 
     async fn create_plugin(
         &self,
-        plugin: PluginDefinitionCreation<Owner::PluginOwner, Scope>,
-    ) -> Result<(), PluginError> {
+        owner: &Owner::PluginOwner,
+        plugin: PluginDefinitionCreation<Scope>,
+    ) -> Result<PluginDefinition<Owner::PluginOwner, Scope>, PluginError> {
         let type_specific_definition = match &plugin.specs {
             PluginTypeSpecificCreation::OplogProcessor(inner) => {
-                self.check_oplog_processor_plugin(&plugin.owner, inner)
-                    .await?;
+                self.check_oplog_processor_plugin(owner, inner).await?;
                 PluginTypeSpecificDefinition::OplogProcessor(inner.clone())
             }
             PluginTypeSpecificCreation::ComponentTransformer(inner) => {
                 PluginTypeSpecificDefinition::ComponentTransformer(inner.clone())
             }
             PluginTypeSpecificCreation::App(inner) => {
-                let blob_storage_key = self.store_plugin_wasm(&inner.data, &plugin.owner).await?;
+                let blob_storage_key = self.store_plugin_wasm(&inner.data, owner).await?;
                 PluginTypeSpecificDefinition::App(AppPluginDefinition { blob_storage_key })
             }
             PluginTypeSpecificCreation::Library(inner) => {
-                let blob_storage_key = self.store_plugin_wasm(&inner.data, &plugin.owner).await?;
+                let blob_storage_key = self.store_plugin_wasm(&inner.data, owner).await?;
                 PluginTypeSpecificDefinition::Library(LibraryPluginDefinition { blob_storage_key })
             }
         };
 
-        let definition = plugin.into_definition(type_specific_definition);
-        let record: PluginRecord<Owner::PluginOwner, Scope> = definition.into();
-        self.plugin_repo.create(&record).await?;
-        Ok(())
+        let definition =
+            plugin.into_definition(PluginId::new_v4(), owner.clone(), type_specific_definition);
+        self.plugin_repo.create(&definition.clone().into()).await?;
+        Ok(definition)
     }
 
     async fn get(
@@ -367,6 +373,19 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner::PluginOwner
     ) -> Result<Option<PluginDefinition<Owner::PluginOwner, Scope>>, PluginError> {
         let owner_record: <Owner::PluginOwner as PluginOwner>::Row = owner.clone().into();
         let record = self.plugin_repo.get(&owner_record, name, version).await?;
+        record
+            .map(PluginDefinition::try_from)
+            .transpose()
+            .map_err(|e| PluginError::conversion_error("plugin", e))
+    }
+
+    async fn get_by_id(
+        &self,
+        owner: &Owner::PluginOwner,
+        id: &PluginId,
+    ) -> Result<Option<PluginDefinition<Owner::PluginOwner, Scope>>, PluginError> {
+        let owner_record: <Owner::PluginOwner as PluginOwner>::Row = owner.clone().into();
+        let record = self.plugin_repo.get_by_id(&owner_record, &id.0).await?;
         record
             .map(PluginDefinition::try_from)
             .transpose()

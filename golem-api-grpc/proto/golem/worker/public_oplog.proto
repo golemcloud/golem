@@ -46,6 +46,7 @@ message OplogEntry {
     StartSpanParameters StartSpan = 30;
     FinishSpanParameters FinishSpan = 31;
     SetSpanAttributeParameters SetSpanAttribute = 32;
+    ChangePersistenceLevelParameters ChangePersistenceLevel = 33;
   }
 }
 
@@ -66,6 +67,7 @@ message PluginInstallationDescription {
   string plugin_name = 2;
   string plugin_version = 3;
   map<string, string> parameters = 4;
+  bool registered = 5;
 }
 
 message CreateParameters {
@@ -258,6 +260,11 @@ message SetSpanAttributeParameters {
   AttributeValue value = 4;
 }
 
+message ChangePersistenceLevelParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  PersistenceLevel persistence_level = 3;
+}
+
 enum OplogLogLevel {
   OPLOG_STDOUT = 0;
   OPLOG_STDERR = 1;
@@ -279,4 +286,10 @@ message LogParameters {
 message OplogEntryWithIndex {
   uint64 oplog_index = 1;
   OplogEntry entry = 2;
+}
+
+enum PersistenceLevel {
+    PERSIST_NOTHING = 0;
+    PERSIST_REMOTE_SIDE_EFFECTS = 1;
+    SMART = 2;
 }

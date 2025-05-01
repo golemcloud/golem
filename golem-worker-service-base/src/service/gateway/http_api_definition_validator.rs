@@ -18,8 +18,9 @@ use crate::gateway_execution::router::{Router, RouterPattern};
 use crate::service::gateway::api_definition_validator::{
     ApiDefinitionValidatorService, ValidationErrors,
 };
+use golem_common::model::component::VersionedComponentId;
 use golem_common::SafeDisplay;
-use golem_service_base::model::{Component, VersionedComponentId};
+use golem_service_base::model::Component;
 use poem_openapi::Object;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,8 @@ use std::fmt::{Display, Formatter};
 
 // Http Api Definition Validator
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct RouteValidationError {
     pub method: MethodPattern,
     pub path: String,
@@ -125,8 +128,8 @@ mod tests {
     use crate::gateway_api_definition::http::{MethodPattern, Route};
     use crate::gateway_binding::{GatewayBinding, ResponseMapping};
     use crate::service::gateway::http_api_definition_validator::unique_routes;
+    use golem_common::model::component::VersionedComponentId;
     use golem_common::model::ComponentId;
-    use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
 
     #[test]

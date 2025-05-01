@@ -79,13 +79,10 @@ jobs:
         run: cargo make --profile ci unit-tests
       - name: Check formatting and clippy rules
         run: cargo make --profile ci check
-      - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v4
-        if: always()
-        with:
-          report_paths: "**/target/report-*.xml"
-          detailed_summary: true
-          include_passed: true
+      - name: Check openapi is up to date
+        run: cargo make --profile ci check-openapi
+      - name: Check configs are up to date
+        run: cargo make --profile ci check-configs
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
         if: always()
@@ -463,7 +460,7 @@ jobs:
           prefix-key: v2-rust
           shared-key: release
           cache-all-crates: true
-          safe-if: true
+          save-if: true
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3

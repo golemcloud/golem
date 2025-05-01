@@ -406,15 +406,49 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         new_persistence_level: golem_api_1_x::host::PersistenceLevel,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "set_oplog_persistence_level");
-        // commit all pending entries and change persistence level
-        if self.state.is_live() {
-            self.state.oplog.commit(CommitLevel::DurableOnly).await;
+
+        let new_persistence_level = new_persistence_level.into();
+        if self.state.persistence_level != new_persistence_level {
+            // commit all pending entries and change persistence level
+            if self.state.is_live() {
+                self.state
+                    .oplog
+                    .add(OplogEntry::change_persistence_level(new_persistence_level))
+                    .await;
+                self.state.oplog.commit(CommitLevel::DurableOnly).await;
+            } else {
+                let oplog_index_before = self.state.current_oplog_index().await;
+                let (_, _) =
+                    get_oplog_entry!(self.state.replay_state, OplogEntry::ChangePersistenceLevel)?;
+                let oplog_index_after = self.state.current_oplog_index().await;
+                if self.state.replay_state.is_live()
+                    && oplog_index_after > oplog_index_before.next()
+                {
+                    // get_oplog_entry jumped to live mode because the persist-nothing zone was not closed.
+                    // If the retried transactional block succeeds, and later we replay it, we need to skip the first
+                    // attempt and only replay the second.
+                    // Se we add a Jump entry to the oplog that registers a deleted region.
+                    let deleted_region = OplogRegion {
+                        start: oplog_index_before.next(), // need to keep the BeginAtomicRegion entry
+                        end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
+                    };
+                    self.state
+                        .replay_state
+                        .add_skipped_region(deleted_region.clone())
+                        .await;
+                    self.state
+                        .oplog
+                        .add_and_commit(OplogEntry::jump(deleted_region))
+                        .await;
+                }
+            }
+
+            self.state.persistence_level = new_persistence_level;
+            debug!(
+                "Worker's oplog persistence level is set to {:?}",
+                self.state.persistence_level
+            );
         }
-        self.state.persistence_level = new_persistence_level.into();
-        debug!(
-            "Worker's oplog persistence level is set to {:?}",
-            self.state.persistence_level
-        );
         Ok(())
     }
 
@@ -448,7 +482,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         //       because the derived key depends on the oplog index.
         let (hi, lo) = if durability.is_live() {
             let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
-            let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be a uuid
+            let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be an uuid
             let result: Result<(u64, u64), anyhow::Error> = Ok(uuid.as_u64_pair());
             durability.persist(self, (), result).await
         } else {

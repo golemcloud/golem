@@ -28,6 +28,8 @@ pub struct HealthcheckResponse {}
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
 )]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct VersionInfo {
     pub version: String,
 }

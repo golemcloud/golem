@@ -19,13 +19,13 @@ use axum::routing::post;
 use axum::Router;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
 use golem_common::model::plugin::{
-    AppPluginDefinition, ComponentTransformerDefinition, DefaultPluginOwner, DefaultPluginScope,
-    LibraryPluginDefinition, OplogProcessorDefinition, PluginDefinition,
-    PluginTypeSpecificDefinition,
+    AppPluginDefinition, ComponentTransformerDefinition, DefaultPluginScope,
+    LibraryPluginDefinition, OplogProcessorDefinition, PluginTypeSpecificDefinition,
 };
 use golem_common::model::{Empty, ScanCursor};
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::model::PluginDefinitionCreation;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use reqwest::StatusCode;
@@ -102,7 +102,7 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies, _tracing: &Trac
 
     let component_id = deps.component("logging").unique().store().await;
 
-    deps.create_plugin(PluginDefinition {
+    deps.create_plugin(PluginDefinitionCreation {
         name: "component-transformer-1".to_string(),
         version: "v1".to_string(),
         description: "A test".to_string(),
@@ -115,7 +115,6 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies, _tracing: &Trac
             transform_url: format!("http://localhost:{port}/transform"),
         }),
         scope: DefaultPluginScope::Global(Empty {}),
-        owner: DefaultPluginOwner,
     })
     .await;
 
@@ -224,7 +223,7 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Trac
         .store()
         .await;
 
-    deps.create_plugin(PluginDefinition {
+    deps.create_plugin(PluginDefinitionCreation {
         name: "component-transformer-2".to_string(),
         version: "v1".to_string(),
         description: "A test".to_string(),
@@ -237,7 +236,6 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Trac
             transform_url: format!("http://localhost:{port}/transform"),
         }),
         scope: DefaultPluginScope::Global(Empty {}),
-        owner: DefaultPluginOwner,
     })
     .await;
 
@@ -294,7 +292,7 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies, _tracing:
 
     let component_id = deps.component("logging").unique().store().await;
 
-    deps.create_plugin(PluginDefinition {
+    deps.create_plugin(PluginDefinitionCreation {
         name: "component-transformer-failed".to_string(),
         version: "v1".to_string(),
         description: "A test".to_string(),
@@ -307,7 +305,6 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies, _tracing:
             transform_url: format!("http://localhost:{port}/transform"),
         }),
         scope: DefaultPluginScope::Global(Empty {}),
-        owner: DefaultPluginOwner,
     })
     .await;
 
@@ -335,7 +332,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let plugin_component_id = deps.component("oplog-processor").unique().store().await;
     let component_id = deps.component("shopping-cart").unique().store().await;
 
-    deps.create_plugin(PluginDefinition {
+    deps.create_plugin(PluginDefinitionCreation {
         name: "oplog-processor-1".to_string(),
         version: "v1".to_string(),
         description: "A test".to_string(),
@@ -346,7 +343,6 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
             component_version: 0,
         }),
         scope: DefaultPluginScope::Global(Empty {}),
-        owner: DefaultPluginOwner,
     })
     .await;
 
@@ -495,7 +491,7 @@ async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let plugin_wasm_key = deps.add_plugin_wasm("app_and_library_library").await;
 
-    deps.create_plugin(PluginDefinition {
+    deps.create_plugin(PluginDefinitionCreation {
         name: "library-plugin-1".to_string(),
         version: "v1".to_string(),
         description: "A test".to_string(),
@@ -505,7 +501,6 @@ async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
             blob_storage_key: plugin_wasm_key,
         }),
         scope: DefaultPluginScope::Global(Empty {}),
-        owner: DefaultPluginOwner,
     })
     .await;
 
@@ -536,7 +531,7 @@ async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let plugin_wasm_key = deps.add_plugin_wasm("app_and_library_app").await;
 
-    deps.create_plugin(PluginDefinition {
+    deps.create_plugin(PluginDefinitionCreation {
         name: "app-plugin-1".to_string(),
         version: "v1".to_string(),
         description: "A test".to_string(),
@@ -546,13 +541,94 @@ async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
             blob_storage_key: plugin_wasm_key,
         }),
         scope: DefaultPluginScope::Global(Empty {}),
-        owner: DefaultPluginOwner,
     })
     .await;
 
     let _installation_id = deps
         .install_plugin_to_component(&component_id, "app-plugin-1", "v1", 0, HashMap::new())
         .await;
+
+    let worker = deps.start_worker(&component_id, "worker1").await;
+
+    let response = deps
+        .invoke_and_await(
+            &worker,
+            "it:app-and-library-app/app-api.{app-function}",
+            vec![],
+        )
+        .await;
+
+    assert_eq!(response, Ok(vec![Value::U64(2)]))
+}
+
+/// Test that a plugin can be recreated after deleting it
+#[test]
+async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.component("app_and_library_app").unique().store().await;
+
+    let plugin_wasm_key = deps.add_plugin_wasm("app_and_library_library").await;
+
+    let plugin_definition = PluginDefinitionCreation {
+        name: "library-plugin-2".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+            blob_storage_key: plugin_wasm_key,
+        }),
+        scope: DefaultPluginScope::Global(Empty {}),
+    };
+
+    deps.create_plugin(plugin_definition.clone()).await;
+
+    deps.delete_plugin("library-plugin-2", "v1").await;
+
+    deps.create_plugin(plugin_definition.clone()).await;
+
+    let _installation_id = deps
+        .install_plugin_to_component(&component_id, "library-plugin-2", "v1", 0, HashMap::new())
+        .await;
+
+    let worker = deps.start_worker(&component_id, "worker1").await;
+
+    let response = deps
+        .invoke_and_await(
+            &worker,
+            "it:app-and-library-app/app-api.{app-function}",
+            vec![],
+        )
+        .await;
+
+    assert_eq!(response, Ok(vec![Value::U64(2)]))
+}
+
+/// Test that a component can be invoked after a plugin is unregistered that it depends on
+#[test]
+async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.component("app_and_library_app").unique().store().await;
+
+    let plugin_wasm_key = deps.add_plugin_wasm("app_and_library_library").await;
+
+    let plugin_definition = PluginDefinitionCreation {
+        name: "library-plugin-3".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+            blob_storage_key: plugin_wasm_key,
+        }),
+        scope: DefaultPluginScope::Global(Empty {}),
+    };
+
+    deps.create_plugin(plugin_definition.clone()).await;
+
+    let _installation_id = deps
+        .install_plugin_to_component(&component_id, "library-plugin-3", "v1", 0, HashMap::new())
+        .await;
+
+    deps.delete_plugin("library-plugin-3", "v1").await;
 
     let worker = deps.start_worker(&component_id, "worker1").await;
 

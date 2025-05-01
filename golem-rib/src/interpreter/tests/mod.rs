@@ -2045,7 +2045,8 @@ mod comprehensive_test {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::interpreter::tests::comprehensive_test::{mock_data, test_utils};
         use crate::{
-            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke, RibInput,
+            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke,
+            RibFunctionInvokeResult, RibInput,
         };
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::tuple;
@@ -2244,7 +2245,12 @@ mod comprehensive_test {
                 functions_and_result,
             });
 
-            Interpreter::new(&RibInput::new(interpreter_env_input), dynamic_worker_invoke)
+            Interpreter::new(
+                RibInput::new(interpreter_env_input),
+                dynamic_worker_invoke,
+                None,
+                None,
+            )
         }
 
         struct DynamicRibFunctionInvoke {
@@ -2258,7 +2264,7 @@ mod comprehensive_test {
                 _worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
                 _args: EvaluatedFnArgs,
-            ) -> Result<ValueAndType, String> {
+            ) -> RibFunctionInvokeResult {
                 let function_name = FunctionName(function_name.0);
                 let value = self
                     .functions_and_result
@@ -2272,7 +2278,6 @@ mod comprehensive_test {
                         tuple(vec![value.typ]),
                     ))
                 } else {
-                    // Representing Unit
                     Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])))
                 }
             }

@@ -2305,6 +2305,81 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/api/deployments/{site}/{id}/{version}:
+    delete:
+      tags:
+      - ApiDeployment
+      summary: Undeploy a single API definition from a site
+      description: Removes a specific API definition (by id and version) from a site without deleting the entire deployment.
+      operationId: undeploy_api
+      parameters:
+      - in: path
+        name: site
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/api/security/{security_scheme_identifier}:
     get:
       tags:
@@ -3002,6 +3077,62 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/components/search:
+    post:
+      tags:
+      - Component
+      operationId: search_components
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ComponentSearch'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Component'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /v1/components/{component_id}/versions/{version}/plugins/installs:
     get:
       tags:
@@ -3235,6 +3366,71 @@ paths:
           format: uuid
         explode: true
         style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/components/{component_id}/versions/latest/plugins/installs/batch:
+    post:
+      tags:
+      - Component
+      summary: Applies a batch of changes to the installed plugins of a component
+      operationId: bath_update_installed_plugins
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/BatchPluginInstallationUpdates'
+        required: true
       responses:
         '200':
           description: ''
@@ -4204,11 +4400,11 @@ components:
         timestamp:
           type: string
           format: date-time
-        idempotency_key:
+        idempotencyKey:
           type: string
       required:
       - timestamp
-      - idempotency_key
+      - idempotencyKey
     CancelInvocationResponse:
       type: object
       properties:
@@ -4216,17 +4412,28 @@ components:
           type: boolean
       required:
       - canceled
+    ChangePersistenceLevelParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        persistenceLevel:
+          $ref: '#/components/schemas/PersistenceLevel'
+      required:
+      - timestamp
+      - persistenceLevel
     ChangeRetryPolicyParameters:
       type: object
       properties:
         timestamp:
           type: string
           format: date-time
-        new_policy:
+        newPolicy:
           $ref: '#/components/schemas/PublicRetryConfig'
       required:
       - timestamp
-      - new_policy
+      - newPolicy
     CompleteParameters:
       type: object
       properties:
@@ -4252,9 +4459,9 @@ components:
         timestamp:
           type: string
           format: date-time
-        worker_id:
+        workerId:
           $ref: '#/components/schemas/WorkerId'
-        component_version:
+        componentVersion:
           type: integer
           format: uint64
         args:
@@ -4265,30 +4472,30 @@ components:
           type: object
           additionalProperties:
             type: string
-        account_id:
+        accountId:
           type: string
         parent:
           $ref: '#/components/schemas/WorkerId'
-        component_size:
+        componentSize:
           type: integer
           format: uint64
-        initial_total_linear_memory_size:
+        initialTotalLinearMemorySize:
           type: integer
           format: uint64
-        initial_active_plugins:
+        initialActivePlugins:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
       required:
       - timestamp
-      - worker_id
-      - component_version
+      - workerId
+      - componentVersion
       - args
       - env
-      - account_id
-      - component_size
-      - initial_total_linear_memory_size
-      - initial_active_plugins
+      - accountId
+      - componentSize
+      - initialTotalLinearMemorySize
+      - initialActivePlugins
     DeactivatePluginParameters:
       type: object
       properties:
@@ -4313,17 +4520,17 @@ components:
         id:
           type: integer
           format: uint64
-        resource_name:
+        resourceName:
           type: string
-        resource_params:
+        resourceParams:
           type: array
           items:
             $ref: '#/components/schemas/ValueAndType'
       required:
       - timestamp
       - id
-      - resource_name
-      - resource_params
+      - resourceName
+      - resourceParams
     Empty:
       type: object
     EndRegionParameters:
@@ -4332,12 +4539,12 @@ components:
         timestamp:
           type: string
           format: date-time
-        begin_index:
+        beginIndex:
           type: integer
           format: uint64
       required:
       - timestamp
-      - begin_index
+      - beginIndex
     ErrorBody:
       type: object
       properties:
@@ -4373,34 +4580,34 @@ components:
           format: date-time
         response:
           $ref: '#/components/schemas/ValueAndType'
-        consumed_fuel:
+        consumedFuel:
           type: integer
           format: int64
       required:
       - timestamp
       - response
-      - consumed_fuel
+      - consumedFuel
     ExportedFunctionInvokedParameters:
       type: object
       properties:
         timestamp:
           type: string
           format: date-time
-        function_name:
+        functionName:
           type: string
         request:
           type: array
           items:
             $ref: '#/components/schemas/ValueAndType'
-        idempotency_key:
+        idempotencyKey:
           type: string
-        trace_id:
+        traceId:
           type: string
-        trace_states:
+        traceStates:
           type: array
           items:
             type: string
-        invocation_context:
+        invocationContext:
           type: array
           items:
             type: array
@@ -4408,41 +4615,41 @@ components:
               $ref: '#/components/schemas/PublicSpanData'
       required:
       - timestamp
-      - function_name
+      - functionName
       - request
-      - idempotency_key
-      - trace_id
-      - trace_states
-      - invocation_context
+      - idempotencyKey
+      - traceId
+      - traceStates
+      - invocationContext
     ExportedFunctionParameters:
       type: object
       properties:
-        idempotency_key:
+        idempotencyKey:
           type: string
-        full_function_name:
+        fullFunctionName:
           type: string
-        function_input:
+        functionInput:
           type: array
           items:
             $ref: '#/components/schemas/ValueAndType'
-        trace_id:
+        traceId:
           type: string
-        trace_states:
+        traceStates:
           type: array
           items:
             type: string
-        invocation_context:
+        invocationContext:
           type: array
           items:
             type: array
             items:
               $ref: '#/components/schemas/PublicSpanData'
       required:
-      - idempotency_key
-      - full_function_name
-      - trace_id
-      - trace_states
-      - invocation_context
+      - idempotencyKey
+      - fullFunctionName
+      - traceId
+      - traceStates
+      - invocationContext
     FailedUpdate:
       type: object
       properties:
@@ -4463,14 +4670,14 @@ components:
         timestamp:
           type: string
           format: date-time
-        target_version:
+        targetVersion:
           type: integer
           format: uint64
         details:
           type: string
       required:
       - timestamp
-      - target_version
+      - targetVersion
     FilterComparator:
       type: string
       enum:
@@ -4486,11 +4693,11 @@ components:
         timestamp:
           type: string
           format: date-time
-        span_id:
+        spanId:
           type: string
       required:
       - timestamp
-      - span_id
+      - spanId
     FlatComponentFileSystemNode:
       type: object
       properties:
@@ -4544,19 +4751,6 @@ components:
           type: string
         invocationContext:
           type: string
-        allowOrigin:
-          type: string
-        allowMethods:
-          type: string
-        allowHeaders:
-          type: string
-        exposeHeaders:
-          type: string
-        maxAge:
-          type: integer
-          format: uint64
-        allowCredentials:
-          type: boolean
     GatewayBindingResponseData:
       type: object
       properties:
@@ -4565,6 +4759,8 @@ components:
         workerName:
           type: string
         idempotencyKey:
+          type: string
+        invocationContext:
           type: string
         response:
           type: string
@@ -5246,20 +5442,20 @@ components:
         timestamp:
           type: string
           format: date-time
-        function_name:
+        functionName:
           type: string
         request:
           $ref: '#/components/schemas/ValueAndType'
         response:
           $ref: '#/components/schemas/ValueAndType'
-        wrapped_function_type:
+        wrappedFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
       required:
       - timestamp
-      - function_name
+      - functionName
       - request
       - response
-      - wrapped_function_type
+      - wrappedFunctionType
     IndexedWorkerMetadata:
       type: object
       properties:
@@ -5335,11 +5531,11 @@ components:
     ManualUpdateParameters:
       type: object
       properties:
-        target_version:
+        targetVersion:
           type: integer
           format: uint64
       required:
-      - target_version
+      - targetVersion
     MethodPattern:
       type: string
       enum:
@@ -5374,15 +5570,15 @@ components:
     OplogCursor:
       type: object
       properties:
-        next_oplog_index:
+        nextOplogIndex:
           type: integer
           format: uint64
-        current_component_version:
+        currentComponentVersion:
           type: integer
           format: uint64
       required:
-      - next_oplog_index
-      - current_component_version
+      - nextOplogIndex
+      - currentComponentVersion
     OplogRegion:
       type: object
       properties:
@@ -5433,24 +5629,33 @@ components:
       required:
       - timestamp
       - invocation
+    PersistenceLevel:
+      type: string
+      enum:
+      - PersistNothing
+      - PersistRemoteSideEffects
+      - Smart
     PluginInstallationDescription:
       type: object
       properties:
-        installation_id:
+        installationId:
           type: string
           format: uuid
-        plugin_name:
+        pluginName:
           type: string
-        plugin_version:
+        pluginVersion:
           type: string
+        registered:
+          type: boolean
         parameters:
           type: object
           additionalProperties:
             type: string
       required:
-      - installation_id
-      - plugin_name
-      - plugin_version
+      - installationId
+      - pluginName
+      - pluginVersion
+      - registered
       - parameters
     PromiseId:
       type: object
@@ -5533,21 +5738,21 @@ components:
     PublicExternalSpanData:
       type: object
       properties:
-        span_id:
+        spanId:
           type: string
       required:
-      - span_id
+      - spanId
     PublicLocalSpanData:
       type: object
       properties:
-        span_id:
+        spanId:
           type: string
         start:
           type: string
           format: date-time
-        parent_id:
+        parentId:
           type: string
-        linked_context:
+        linkedContext:
           type: integer
           format: uint64
         attributes:
@@ -5557,7 +5762,7 @@ components:
         inherited:
           type: boolean
       required:
-      - span_id
+      - spanId
       - start
       - attributes
       - inherited
@@ -5606,6 +5811,7 @@ components:
           StartSpan: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
           FinishSpan: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
           SetSpanAttribute: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
+          ChangePersistenceLevel: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
@@ -5640,6 +5846,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
     PublicOplogEntryWithIndex:
       type: object
       properties:
@@ -5675,6 +5882,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/CancelInvocationParameters'
+    PublicOplogEntry_ChangePersistenceLevelParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ChangePersistenceLevel
+            type: string
+            enum:
+            - ChangePersistenceLevel
+        required:
+        - type
+      - $ref: '#/components/schemas/ChangePersistenceLevelParameters'
     PublicOplogEntry_ChangeRetryPolicyParameters:
       allOf:
       - type: object
@@ -5942,25 +6161,25 @@ components:
     PublicRetryConfig:
       type: object
       properties:
-        max_attempts:
+        maxAttempts:
           type: integer
           format: uint32
-        min_delay:
+        minDelay:
           type: string
           format: duration
-        max_delay:
+        maxDelay:
           type: string
           format: duration
         multiplier:
           type: number
           format: double
-        max_jitter_factor:
+        maxJitterFactor:
           type: number
           format: double
       required:
-      - max_attempts
-      - min_delay
-      - max_delay
+      - maxAttempts
+      - minDelay
+      - maxDelay
       - multiplier
     PublicSpanData:
       discriminator:
@@ -6113,11 +6332,11 @@ components:
         timestamp:
           type: string
           format: date-time
-        dropped_region:
+        droppedRegion:
           $ref: '#/components/schemas/OplogRegion'
       required:
       - timestamp
-      - dropped_region
+      - droppedRegion
     RevertToOplogIndex:
       type: object
       properties:
@@ -6174,10 +6393,10 @@ components:
     RibOutputTypeInfo:
       type: object
       properties:
-        analysed_type:
+        analysedType:
           $ref: '#/components/schemas/AnalysedType'
       required:
-      - analysed_type
+      - analysedType
     RouteRequestData:
       type: object
       properties:
@@ -6187,8 +6406,6 @@ components:
           type: string
         binding:
           $ref: '#/components/schemas/GatewayBindingData'
-        cors:
-          $ref: '#/components/schemas/HttpCors'
         security:
           type: string
       required:
@@ -6252,7 +6469,7 @@ components:
         timestamp:
           type: string
           format: date-time
-        span_id:
+        spanId:
           type: string
         key:
           type: string
@@ -6260,7 +6477,7 @@ components:
           $ref: '#/components/schemas/PublicAttributeValue'
       required:
       - timestamp
-      - span_id
+      - spanId
       - key
       - value
     ShardId:
@@ -6287,11 +6504,11 @@ components:
         timestamp:
           type: string
           format: date-time
-        span_id:
+        spanId:
           type: string
-        parent_id:
+        parentId:
           type: string
-        linked_context:
+        linkedContext:
           type: string
         attributes:
           type: object
@@ -6299,7 +6516,7 @@ components:
             $ref: '#/components/schemas/PublicAttributeValue'
       required:
       - timestamp
-      - span_id
+      - spanId
       - attributes
     StringAttributeValue:
       type: object
@@ -7019,6 +7236,15 @@ components:
       - functions
     AppPluginDefinition:
       type: object
+    BatchPluginInstallationUpdates:
+      type: object
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationAction'
+      required:
+      - actions
     Component:
       type: object
       properties:
@@ -7049,6 +7275,8 @@ components:
       - componentName
       - componentSize
       - metadata
+      - createdAt
+      - componentType
       - files
       - installedPlugins
     ComponentFilePathWithPermissions:
@@ -7086,6 +7314,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
+        binaryWit:
+          type: string
+          format: bytes
+        rootPackageName:
+          type: string
+        rootPackageVersion:
+          type: string
         dynamicLinking:
           type: object
           additionalProperties:
@@ -7094,6 +7329,7 @@ components:
       - exports
       - producers
       - memories
+      - binaryWit
       - dynamicLinking
     ComponentPluginScope:
       type: object
@@ -7103,6 +7339,25 @@ components:
           format: uuid
       required:
       - componentId
+    ComponentSearch:
+      type: object
+      properties:
+        components:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComponentSearchParameters'
+      required:
+      - components
+    ComponentSearchParameters:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: integer
+          format: uint64
+      required:
+      - name
     ComponentTransformerDefinition:
       type: object
       properties:
@@ -7359,10 +7614,13 @@ components:
         id:
           type: string
           format: uuid
-        name:
+        pluginName:
           type: string
-        version:
+        pluginVersion:
           type: string
+        pluginRegistered:
+          description: Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
+          type: boolean
         priority:
           type: integer
           format: int32
@@ -7372,10 +7630,59 @@ components:
             type: string
       required:
       - id
-      - name
-      - version
+      - pluginName
+      - pluginVersion
+      - pluginRegistered
       - priority
       - parameters
+    PluginInstallationAction:
+      discriminator:
+        propertyName: type
+        mapping:
+          Install: '#/components/schemas/PluginInstallationAction_PluginInstallationCreation'
+          Update: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdateWithId'
+          Uninstall: '#/components/schemas/PluginInstallationAction_PluginUninstallation'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationCreation'
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdateWithId'
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginUninstallation'
+    PluginInstallationAction_PluginInstallationCreation:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Install
+            type: string
+            enum:
+            - Install
+        required:
+        - type
+      - $ref: '#/components/schemas/PluginInstallationCreation'
+    PluginInstallationAction_PluginInstallationUpdateWithId:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Update
+            type: string
+            enum:
+            - Update
+        required:
+        - type
+      - $ref: '#/components/schemas/PluginInstallationUpdateWithId'
+    PluginInstallationAction_PluginUninstallation:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Uninstall
+            type: string
+            enum:
+            - Uninstall
+        required:
+        - type
+      - $ref: '#/components/schemas/PluginUninstallation'
     PluginInstallationCreation:
       type: object
       properties:
@@ -7407,6 +7714,23 @@ components:
           additionalProperties:
             type: string
       required:
+      - priority
+      - parameters
+    PluginInstallationUpdateWithId:
+      type: object
+      properties:
+        installationId:
+          type: string
+          format: uuid
+        priority:
+          type: integer
+          format: int32
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - installationId
       - priority
       - parameters
     PluginTypeSpecificCreation:
@@ -7505,6 +7829,14 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/OplogProcessorDefinition'
+    PluginUninstallation:
+      type: object
+      properties:
+        installationId:
+          type: string
+          format: uuid
+      required:
+      - installationId
     ProducerField:
       type: object
       properties:

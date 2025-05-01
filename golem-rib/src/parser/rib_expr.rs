@@ -30,7 +30,6 @@ use crate::parser::identifier::identifier;
 use crate::parser::integer::integer;
 use crate::parser::let_binding::let_binding;
 use crate::parser::literal::literal;
-use crate::parser::multi_line_code_block::multi_line_block;
 use crate::parser::not::not;
 use crate::parser::optional::option;
 use crate::parser::pattern_match::pattern_match;
@@ -41,6 +40,7 @@ use crate::rib_source_span::{GetSourcePosition, SourceSpan};
 
 use crate::parser::list_aggregation::list_aggregation;
 use crate::parser::list_comprehension::list_comprehension;
+use crate::parser::multi_line_code_block::multi_line_block;
 use crate::parser::record::record;
 use crate::parser::result::result;
 use crate::parser::type_name::type_name;
@@ -118,8 +118,8 @@ where
                 pattern_match(),
                 let_binding(),
                 conditional(),
-                attempt(flag_or_record()),
-                multi_line_block(),
+                attempt(multi_line_block()),
+                flag_or_record(),
                 tuple(),
                 boolean_literal(),
                 literal(),
@@ -169,7 +169,7 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    choice((attempt(flag()), attempt(record())))
+    choice((attempt(flag()), record()))
 }
 
 // A rib rest always a start with a proper delimiter (ex: ., [, etc)
@@ -570,12 +570,12 @@ mod tests {
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
-                    InferredType::number()
+                    InferredType::s32()
                 ),
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
-                    InferredType::number()
+                    InferredType::s32()
                 )
             )
         );
@@ -604,12 +604,12 @@ mod tests {
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(1).unwrap(),
                     None,
-                    InferredType::number()
+                    InferredType::s32()
                 ),
                 Expr::number_inferred(
                     bigdecimal::BigDecimal::from_u64(2).unwrap(),
                     None,
-                    InferredType::number()
+                    InferredType::s32()
                 )
             )
         );
@@ -631,7 +631,7 @@ mod tests {
             Expr::range_from(Expr::number_inferred(
                 bigdecimal::BigDecimal::from_u64(1).unwrap(),
                 None,
-                InferredType::number()
+                InferredType::s32()
             ))
         );
     }
@@ -649,13 +649,9 @@ mod tests {
                 Expr::range_from(Expr::number_inferred(
                     BigDecimal::from_u64(1).unwrap(),
                     None,
-                    InferredType::number()
+                    InferredType::s32()
                 )),
-                Expr::number_inferred(
-                    BigDecimal::from_u64(2).unwrap(),
-                    None,
-                    InferredType::number()
-                )
+                Expr::number_inferred(BigDecimal::from_u64(2).unwrap(), None, InferredType::s32())
             )
         );
     }

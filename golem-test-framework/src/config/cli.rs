@@ -112,7 +112,7 @@ pub struct CliParams {
     #[arg(long, default_value = "false")]
     pub primary_only: bool,
 
-    #[arg(long, default_value = "GolemClientProtocol::Grpc")]
+    #[arg(long, default_value = "grpc")]
     pub golem_client_protocol: GolemClientProtocol,
 }
 
@@ -1162,7 +1162,7 @@ impl TestDependencies for CliTestDependencies {
         &self.component_directory
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
         self.component_service.clone()
     }
 

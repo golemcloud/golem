@@ -62,9 +62,16 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "InitialComponentFile",
                 "golem_common::model::InitialComponentFile",
             ),
+            ("ErrorBody", "golem_common::model::error::ErrorBody"),
+            ("ErrorsBody", "golem_common::model::error::ErrorsBody"),
+            ("GolemError", "golem_common::model::error::GolemError"),
             (
                 "ValueAndOptionalType",
                 "golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson",
+            ),
+            (
+                "PluginInstallationAction",
+                "golem_common::model::plugin::PluginInstallationAction",
             ),
             ("PromiseId", "golem_common::model::PromiseId"),
             ("ShardId", "golem_common::model::ShardId"),

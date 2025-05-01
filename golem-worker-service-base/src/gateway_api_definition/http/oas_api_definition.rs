@@ -43,8 +43,6 @@ impl OpenApiHttpApiDefinition {
             GOLEM_API_DEFINITION_VERSION,
         )?);
 
-        let security = get_global_security(open_api);
-
         let routes = get_routes(&open_api.paths, conversion_context).await?;
 
         Ok(HttpApiDefinitionRequest {
@@ -52,7 +50,6 @@ impl OpenApiHttpApiDefinition {
             version: api_definition_version,
             routes,
             draft: true,
-            security,
         })
     }
 }
@@ -127,18 +124,18 @@ mod internal {
 
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
 
-    use crate::service::gateway::BoxConversionContext;
-    use golem_common::model::GatewayBindingType;
-    use openapiv3::{OpenAPI, Operation, Paths, ReferenceOr};
-    use rib::Expr;
-    use serde_json::Value;
-
     use crate::gateway_binding::{
         GatewayBinding, HttpHandlerBinding, ResponseMapping, StaticBinding, WorkerBinding,
     };
     use crate::gateway_middleware::{CorsPreflightExpr, HttpCors};
     use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeReference};
-    use golem_service_base::model::{ComponentName, VersionedComponentId};
+    use crate::service::gateway::BoxConversionContext;
+    use golem_common::model::component::VersionedComponentId;
+    use golem_common::model::GatewayBindingType;
+    use golem_service_base::model::ComponentName;
+    use openapiv3::{OpenAPI, Operation, Paths, ReferenceOr};
+    use rib::Expr;
+    use serde_json::Value;
 
     pub(super) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(super) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
@@ -148,24 +145,6 @@ mod internal {
 
     pub(super) const GOLEM_API_GATEWAY_BINDING: &str = "x-golem-api-gateway-binding";
 
-    pub(super) fn get_global_security(open_api: &OpenAPI) -> Option<Vec<SecuritySchemeReference>> {
-        open_api.security.as_ref().and_then(|requirements| {
-            let global_security: Vec<_> = requirements
-                .iter()
-                .flat_map(|x| {
-                    x.keys().map(|key| SecuritySchemeReference {
-                        security_scheme_identifier: SecuritySchemeIdentifier::new(key.clone()),
-                    })
-                })
-                .collect();
-
-            if global_security.is_empty() {
-                Some(global_security)
-            } else {
-                None
-            }
-        })
-    }
     pub(super) fn get_root_extension_str(
         open_api: &OpenAPI,
         key_name: &str,
@@ -267,7 +246,6 @@ mod internal {
                             path: path_pattern.clone(),
                             binding: GatewayBinding::static_binding(binding),
                             security,
-                            cors: None
                         })
                     }
 
@@ -279,7 +257,6 @@ mod internal {
                             method,
                             binding: GatewayBinding::Default(binding),
                             security,
-                            cors: None
                         })
                     }
                     (GatewayBindingType::FileServer, _) => {
@@ -290,7 +267,6 @@ mod internal {
                             method,
                             binding: GatewayBinding::Default(binding),
                             security,
-                            cors: None
                         })
                     }
                     (GatewayBindingType::HttpHandler, _) => {
@@ -301,7 +277,6 @@ mod internal {
                             method,
                             binding: GatewayBinding::HttpHandler(binding),
                             security,
-                            cors: None
                         })
                     }
                     (GatewayBindingType::CorsPreflight, method) => {
@@ -319,7 +294,6 @@ mod internal {
                         method,
                         binding: GatewayBinding::static_binding(binding),
                         security,
-                        cors: None,
                     })
                 } else {
                     Err(format!(
@@ -506,7 +480,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use golem_common::model::ComponentId;
-    use golem_service_base::model::{ComponentName, VersionedComponentId};
+    use golem_service_base::model::ComponentName;
     use test_r::test;
 
     use super::*;
@@ -515,6 +489,7 @@ mod tests {
     use crate::gateway_middleware::HttpCors;
     use crate::service::gateway::{ComponentView, ConversionContext};
     use async_trait::async_trait;
+    use golem_common::model::component::VersionedComponentId;
     use openapiv3::Operation;
     use serde_json::json;
     use uuid::uuid;
@@ -627,7 +602,6 @@ mod tests {
                 HttpCors::default(),
             )),
             security: None,
-            cors: None,
         }
     }
 
@@ -639,7 +613,6 @@ mod tests {
             method: MethodPattern::Options,
             binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(cors_preflight)),
             security: None,
-            cors: None,
         }
     }
 

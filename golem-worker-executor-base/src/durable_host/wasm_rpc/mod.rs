@@ -23,7 +23,6 @@ use crate::durable_host::wasm_rpc::serialized::{
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, OplogEntryVersion};
 use crate::error::GolemError;
 use crate::get_oplog_entry;
-use crate::model::PersistenceLevel;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError};
@@ -33,7 +32,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::exports::function_by_name;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
-use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScheduledAction, TargetWorkerId,
     WorkerId,
@@ -713,8 +712,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         };
 
         let handle = this.rep();
-        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
-        {
+        if self.state.is_live() || self.state.snapshotting_mode.is_some() {
             let stack = self
                 .state
                 .invocation_context
@@ -845,7 +843,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 }
             };
 
-            if self.state.persistence_level != PersistenceLevel::PersistNothing {
+            if self.state.snapshotting_mode.is_none() {
                 self.state
                     .oplog
                     .add_imported_function_invoked(
@@ -888,6 +886,11 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 Ok(None) => Ok(None),
                 Err(err) => Err(err),
             }
+        } else if self.state.persistence_level == PersistenceLevel::PersistNothing {
+            Err(
+                GolemError::runtime("Trying to replay an RPC call in a PersistNothing block")
+                    .into(),
+            )
         } else {
             let (_, oplog_entry) =
                 get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked)

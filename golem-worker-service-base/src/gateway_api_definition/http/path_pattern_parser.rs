@@ -44,7 +44,7 @@ fn path_parser(input: &str) -> IResult<&str, Vec<PathPattern>> {
     let final_segment_parser = alt((path_var_parser, literal_parser, catch_all_path_var_parser));
 
     let (input, (_, mut patterns, final_pattern)) = tuple((
-        slash_parser,
+        opt(slash_parser),
         many0(terminated(middle_segment_parser, slash_parser)),
         opt(final_segment_parser),
     ))(input)?;
@@ -56,9 +56,9 @@ fn path_parser(input: &str) -> IResult<&str, Vec<PathPattern>> {
     let indexed_patterns = patterns
         .into_iter()
         .map(|pattern| match pattern {
-            ParsedPattern::Literal(literal) => PathPattern::literal(literal),
-            ParsedPattern::Var(var) => PathPattern::var(var),
-            ParsedPattern::CatchAllVar(var) => PathPattern::catch_all_var(var),
+            ParsedPattern::Literal(literal) => PathPattern::literal(literal.trim()),
+            ParsedPattern::Var(var) => PathPattern::var(var.trim()),
+            ParsedPattern::CatchAllVar(var) => PathPattern::catch_all_var(var.trim()),
         })
         .collect();
 
@@ -71,7 +71,7 @@ fn query_parser(input: &str) -> IResult<&str, Vec<QueryInfo>> {
 
 fn query_param_parser(input: &str) -> IResult<&str, QueryInfo> {
     map(place_holder_parser::parse_place_holder, |x| QueryInfo {
-        key_name: x.to_string(),
+        key_name: x.trim().to_string(),
     })(input)
 }
 
@@ -125,13 +125,13 @@ fn literal_parser(input: &str) -> IResult<&str, ParsedPattern<'_>> {
 #[cfg(test)]
 mod tests {
     use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern;
-    use crate::gateway_api_definition::http::{AllPathPatterns, PathPattern, QueryInfo};
+    use crate::gateway_api_definition::http::{
+        AllPathPatterns, LiteralInfo, PathPattern, QueryInfo,
+    };
     use test_r::test;
 
     #[test]
     fn test_parse() {
-        use crate::gateway_api_definition::http::LiteralInfo;
-
         let result = parse_path_pattern("/api/{id}/test/{name}/test2?{query1}&{query2}");
         assert_eq!(
             AllPathPatterns {
@@ -208,6 +208,47 @@ mod tests {
                 query_params: vec![QueryInfo {
                     key_name: "query".to_string()
                 },]
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_empty() {
+        assert_eq!(
+            parse_path_pattern("").unwrap().1,
+            AllPathPatterns {
+                path_patterns: vec![],
+                query_params: vec![]
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_empty_with_query_params() {
+        assert_eq!(
+            parse_path_pattern("?{query}").unwrap().1,
+            AllPathPatterns {
+                path_patterns: vec![],
+                query_params: vec![QueryInfo {
+                    key_name: "query".to_string()
+                },]
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_no_slash_with_path() {
+        let result = parse_path_pattern("api/{id}/foo/{+others}").unwrap().1;
+        assert_eq!(
+            result,
+            AllPathPatterns {
+                path_patterns: vec![
+                    PathPattern::Literal(LiteralInfo("api".to_string())),
+                    PathPattern::var("id"),
+                    PathPattern::Literal(LiteralInfo("foo".to_string())),
+                    PathPattern::catch_all_var("others"),
+                ],
+                query_params: vec![]
             },
         );
     }

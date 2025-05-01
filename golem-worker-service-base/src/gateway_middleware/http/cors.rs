@@ -12,12 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::gateway_execution::request::RichRequest;
+use crate::gateway_middleware::CorsError;
 use bigdecimal::BigDecimal;
 use http::header::*;
+use http::Method;
 use poem_openapi::Object;
 use rib::{Expr, GetLiteralValue, RibInput, TypeName};
 use serde::{Deserialize, Serialize};
 
+// Make sure to store CORS headers as Vec<HeaderValue> and not as String
+// avoiding computation in the hot path
+// Other strings don't hurt as it is only done for pre-flight request, which gets cached in browsers,
+// however, good to change when we can break the backward
+// compatibility.
+// Tracked under: https://github.com/golemcloud/golem/issues/1512
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
@@ -43,6 +52,12 @@ impl Default for HttpCors {
     }
 }
 
+enum OriginStatus {
+    AllowedExact,
+    AllowedWildcard,
+    NotAllowed,
+}
+
 impl HttpCors {
     pub fn new(
         allow_origin: &str,
@@ -59,6 +74,129 @@ impl HttpCors {
             expose_headers: expose_headers.map(|x| x.to_string()),
             allow_credentials,
             max_age,
+        }
+    }
+
+    fn check_origin(&self, origin: &HeaderValue) -> OriginStatus {
+        let origin_str = match origin.to_str() {
+            Ok(s) => s,
+            Err(_) => return OriginStatus::NotAllowed,
+        };
+
+        if Self::split_origin(&self.allow_origin).any(|o| o == origin_str) {
+            return OriginStatus::AllowedExact;
+        }
+
+        if Self::split_origin(&self.allow_origin)
+            .any(|pattern| pattern.contains('*') && Self::wildcard_match(pattern, origin_str))
+        {
+            return OriginStatus::AllowedWildcard;
+        }
+
+        OriginStatus::NotAllowed
+    }
+
+    fn wildcard_match(pattern: &str, text: &str) -> bool {
+        if !pattern.contains('*') {
+            return pattern == text;
+        }
+
+        let parts: Vec<&str> = pattern.split('*').collect();
+        if parts.len() == 2 {
+            text.starts_with(parts[0]) && text.ends_with(parts[1])
+        } else {
+            false
+        }
+    }
+
+    fn split_origin(input: &str) -> impl Iterator<Item = &str> {
+        input.split(',').map(|s| s.trim()).filter(|s| !s.is_empty())
+    }
+
+    fn check_headers_allowed<'a>(
+        &self,
+        req: &'a RichRequest,
+    ) -> Result<Option<&'a HeaderValue>, CorsError> {
+        let request_headers = req.headers().get(ACCESS_CONTROL_REQUEST_HEADERS);
+
+        if let Some(headers_value) = request_headers {
+            let allow_list: Vec<_> = Self::split_origin(&self.allow_headers).collect();
+            if allow_list.is_empty() {
+                return Ok(Some(headers_value));
+            }
+
+            let header_str = headers_value
+                .to_str()
+                .map_err(|_| CorsError::HeadersNotAllowed)?;
+
+            let all_allowed = Self::split_origin(header_str).all(|h| {
+                allow_list
+                    .iter()
+                    .any(|&allowed| allowed.eq_ignore_ascii_case(h))
+            });
+
+            if !all_allowed {
+                return Err(CorsError::HeadersNotAllowed);
+            }
+
+            Ok(Some(headers_value))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn apply_cors(&self, request: &RichRequest) -> Result<(), CorsError> {
+        let origin = match request.headers().get(ORIGIN) {
+            Some(origin) => origin.clone(),
+            None => return Ok(()),
+        };
+
+        if let OriginStatus::NotAllowed = self.check_origin(&origin) {
+            return Err(CorsError::OriginNotAllowed);
+        }
+
+        if request.underlying.method() == Method::OPTIONS {
+            let allow_method = request
+                .headers()
+                .get(ACCESS_CONTROL_REQUEST_METHOD)
+                .and_then(|val| val.to_str().ok())
+                .and_then(|m| m.parse::<Method>().ok());
+
+            if let Some(method) = allow_method {
+                if !self.allow_methods.trim().is_empty()
+                    && !Self::split_origin(&self.allow_methods)
+                        .any(|m| m.eq_ignore_ascii_case(method.as_str()))
+                {
+                    return Err(CorsError::MethodNotAllowed);
+                }
+            } else {
+                return Err(CorsError::MethodNotAllowed);
+            }
+
+            self.check_headers_allowed(request)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn add_header_in_response(&self, response: &mut poem::Response) {
+        response.headers_mut().insert(
+            ACCESS_CONTROL_ALLOW_ORIGIN,
+            self.get_allow_origin().clone().parse().unwrap(),
+        );
+
+        if let Some(allow_credentials) = &self.get_allow_credentials() {
+            response.headers_mut().insert(
+                ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                allow_credentials.to_string().clone().parse().unwrap(),
+            );
+        }
+
+        if let Some(expose_headers) = &self.get_expose_headers() {
+            response.headers_mut().insert(
+                ACCESS_CONTROL_EXPOSE_HEADERS,
+                expose_headers.clone().parse().unwrap(),
+            );
         }
     }
 
@@ -127,7 +265,7 @@ impl HttpCors {
             .map_err(|err| format!("Rib compilation for cors-preflight response. {}", err))?;
 
         let rib_input = RibInput::default();
-        let evaluate_rib = rib::interpret_pure(&compiled_expr.byte_code, &rib_input);
+        let evaluate_rib = rib::interpret_pure(compiled_expr.byte_code, rib_input);
 
         let result = futures::executor::block_on(evaluate_rib).map_err(|err| {
             format!(

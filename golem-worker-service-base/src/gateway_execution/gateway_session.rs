@@ -19,7 +19,7 @@ use bytes::Bytes;
 use fred::interfaces::RedisResult;
 use golem_common::redis::RedisPool;
 use golem_common::SafeDisplay;
-use golem_service_base::storage::sqlite::SqlitePool;
+use golem_service_base::db::sqlite::SqlitePool;
 use sqlx::Row;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -277,6 +277,7 @@ impl SqliteGatewaySession {
 
     async fn init(&self) -> Result<(), String> {
         self.pool
+            .with_rw("gateway_session", "init")
             .execute(sqlx::query(
                 r#"
                   CREATE TABLE IF NOT EXISTS gateway_session (
@@ -288,7 +289,8 @@ impl SqliteGatewaySession {
                   );
                 "#,
             ))
-            .await?;
+            .await
+            .map_err(|err| err.to_safe_string())?;
 
         info!("Initialized gateway session SQLite table");
 
@@ -318,10 +320,11 @@ impl SqliteGatewaySession {
         let query =
             sqlx::query("DELETE FROM gateway_session WHERE expiry_time < ?;").bind(current_time);
 
-        pool.with("gateway_session", "cleanup_expired")
+        pool.with_rw("gateway_session", "cleanup_expired")
             .execute(query)
             .await
             .map(|_| ())
+            .map_err(|err| err.to_safe_string())
     }
 
     pub fn current_time() -> i64 {
@@ -344,6 +347,7 @@ impl GatewaySession for SqliteGatewaySession {
 
         let result = self
             .pool
+            .with_rw("gateway_session", "insert")
             .execute(
                 sqlx::query(
                     r#"
@@ -379,7 +383,7 @@ impl GatewaySession for SqliteGatewaySession {
 
         let result = self
             .pool
-            .with("gateway_sesssion", "get")
+            .with_ro("gateway_sesssion", "get")
             .fetch_optional(query)
             .await
             .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;

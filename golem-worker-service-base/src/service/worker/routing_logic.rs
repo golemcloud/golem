@@ -27,12 +27,12 @@ use tracing::{debug, error, info, trace, warn, Instrument};
 use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
+use golem_common::model::error::{GolemError, GolemErrorInvalidShardId, GolemErrorUnknown};
 use golem_common::model::RetryConfig;
 use golem_common::model::{Pod, ShardId, TargetWorkerId, WorkerId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
 use golem_common::SafeDisplay;
-use golem_service_base::model::{GolemError, GolemErrorInvalidShardId, GolemErrorUnknown};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableError};
 
 use crate::service::worker::WorkerServiceError;

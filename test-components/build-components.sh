@@ -4,7 +4,7 @@ IFS=$'\n\t'
 
 rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service"
 "option-service" "flags-service" "http-client-2" "stdio-cc" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
-"update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "rust-echo" "golem-rust-tests" "durability-overhead" "logging" "oplog-processor" "rdbms-service" "component-resolve")
+"update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v3-sdk" "update-test-v4" "rust-echo" "golem-rust-tests" "durability-overhead" "logging" "oplog-processor" "rdbms-service" "component-resolve")
 zig_test_components=("zig-3")
 tinygo_test_components=("tinygo-wasi" "tinygo-wasi-http")
 grain_test_components=("grain-1")
@@ -170,18 +170,13 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "tinygo" ]; then
     fi
 
     if [ "$rebuild" = true ]; then
-      rm *.wasm
-      rm -rf tinygo_wasi
+      rm -f *.wasm
+      rm -rf binding
     fi
-    wit-bindgen tiny-go --out-dir binding --rename-package binding ./wit
-    tinygo build -target=wasi -tags=purego -o main.wasm main.go
+    wit-bindgen-go generate --out binding --world $subdir ./wit
 
-    echo "Turning the module into a WebAssembly Component..."
     target="../$subdir.wasm"
-    target_wat="../$subdir.wat"
-    wasm-tools component embed ./wit main.wasm --output main.embed.wasm
-    wasm-tools component new main.embed.wasm -o "$target" --adapt ../../../golem-wit/adapters/tier1/wasi_snapshot_preview1.wasm
-    wasm-tools print "$target" >"$target_wat"
+    tinygo build -target=wasip2 -wit-package wit -wit-world $subdir -tags=purego -o $target main.go
 
     popd || exit
   done

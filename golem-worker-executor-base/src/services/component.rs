@@ -50,11 +50,11 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
 use prost::Message;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::task::spawn_blocking;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
@@ -63,8 +63,7 @@ use crate::{DefaultGolemTypes, GolemTypes};
 
 use super::additional_config::{ComponentCacheConfig, ComponentServiceConfig};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct ComponentMetadataPoly<ComponentOwner> {
     pub version: ComponentVersion,
     pub size: u64,
@@ -74,8 +73,6 @@ pub struct ComponentMetadataPoly<ComponentOwner> {
     pub files: Vec<InitialComponentFile>,
     pub plugin_installations: Vec<PluginInstallation>,
     pub component_owner: ComponentOwner,
-
-    #[serde(default)]
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
 }
 
@@ -337,21 +334,19 @@ impl ComponentService<DefaultGolemTypes> for ComponentServiceGrpc {
                             .await?;
 
                             let start = Instant::now();
-                            let component_id_clone2 = component_id_clone.clone();
-
-                            let span = tracing::Span::current();
-
-                            let component = spawn_blocking(move || {
-                                let _enter = span.enter();
-
-                                Component::from_binary(&engine, &bytes).map_err(|e| {
-                                    GolemError::ComponentParseFailed {
-                                        component_id: component_id_clone2,
-                                        component_version,
-                                        reason: format!("{}", e),
-                                    }
-                                })
+                            let component = spawn_blocking({
+                                let component_id = component_id.clone();
+                                move || {
+                                    Component::from_binary(&engine, &bytes).map_err(|e| {
+                                        GolemError::ComponentParseFailed {
+                                            component_id,
+                                            component_version,
+                                            reason: format!("{}", e),
+                                        }
+                                    })
+                                }
                             })
+                            .instrument(tracing::Span::current())
                             .await
                             .map_err(|join_err| GolemError::unknown(join_err.to_string()))??;
                             let end = Instant::now();
@@ -906,14 +901,21 @@ impl ComponentServiceLocalFileSystem {
                             let bytes = tokio::fs::read(path).await?;
 
                             let start = Instant::now();
-                            let component =
-                                Component::from_binary(&engine, &bytes).map_err(|e| {
-                                    GolemError::ComponentParseFailed {
-                                        component_id: component_id.clone(),
-                                        component_version,
-                                        reason: format!("{}", e),
-                                    }
-                                })?;
+                            let component = spawn_blocking({
+                                let component_id = component_id.clone();
+                                move || {
+                                    Component::from_binary(&engine, &bytes).map_err(|e| {
+                                        GolemError::ComponentParseFailed {
+                                            component_id: component_id.clone(),
+                                            component_version,
+                                            reason: format!("{}", e),
+                                        }
+                                    })
+                                }
+                            })
+                            .instrument(tracing::Span::current())
+                            .await
+                            .map_err(|join_err| GolemError::unknown(join_err.to_string()))??;
                             let end = Instant::now();
 
                             let compilation_time = end.duration_since(start);

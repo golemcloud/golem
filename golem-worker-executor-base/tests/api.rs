@@ -2918,6 +2918,46 @@ async fn invoke_with_non_existing_function(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
+async fn invoke_with_wrong_parameters(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor.component("option-service").store().await;
+    let worker_id = executor
+        .start_worker(&component_id, "invoke_with_non_existing_function")
+        .await;
+
+    // First we invoke an existing function with wrong parameters
+    let failure = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{echo}", vec![])
+        .await;
+
+    // Then we invoke an existing function, to prove the worker should not be in failed state
+    let success = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{echo}",
+            vec![Some("Hello").into_value_and_type()],
+        )
+        .await;
+
+    check!(failure.is_err());
+    check!(
+        success
+            == Ok(vec![Value::Option(Some(Box::new(Value::String(
+                "Hello".to_string()
+            ))))])
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120_000)]
 async fn stderr_returned_for_failed_component(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -3342,8 +3382,8 @@ async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
               deps: &WorkerExecutorTestDependencies,
               tracing: &Tracing| async {
             scheduled_invocation_test(
-                "scheduled_invocation_server",
-                "scheduled_invocation_client",
+                "it_scheduled_invocation_server",
+                "it_scheduled_invocation_client",
                 last_unique_id,
                 deps,
                 tracing,
@@ -3362,8 +3402,8 @@ async fn gen_scheduled_invocation_tests(r: &mut DynamicTestRegistration) {
               deps: &WorkerExecutorTestDependencies,
               tracing: &Tracing| async {
             scheduled_invocation_test(
-                "scheduled_invocation_stubless_server",
-                "scheduled_invocation_stubless_client",
+                "it_scheduled_invocation_server_stubless",
+                "it_scheduled_invocation_client_stubless",
                 last_unique_id,
                 deps,
                 tracing,

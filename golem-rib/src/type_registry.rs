@@ -14,8 +14,8 @@
 
 use crate::call_type::CallType;
 use crate::DynamicParsedFunctionName;
-use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
+use golem_wasm_ast::analysis::{AnalysedType, TypeEnum};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
@@ -51,6 +51,18 @@ impl FunctionTypeRegistry {
         }
 
         variants
+    }
+
+    pub fn get_enums(&self) -> Vec<TypeEnum> {
+        let mut enums = vec![];
+
+        for registry_value in self.types.values() {
+            if let RegistryValue::Value(AnalysedType::Enum(type_enum)) = registry_value {
+                enums.push(type_enum.clone())
+            }
+        }
+
+        enums
     }
 
     pub fn get(&self, key: &CallType) -> Option<&RegistryValue> {
@@ -412,7 +424,6 @@ mod internal {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-
     use crate::RegistryKey;
     use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
 

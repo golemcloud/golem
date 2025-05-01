@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::type_inference::kind::{GetTypeKind, TypeKind};
+use crate::type_inference::type_hint::{GetTypeHint, TypeHint};
 use crate::{Expr, InferredType, Path, PathElem};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt;
@@ -21,7 +21,7 @@ use std::fmt::Display;
 #[derive(Debug, Clone)]
 pub struct AmbiguousTypeError {
     pub expr: Expr,
-    pub ambiguous_types: Vec<TypeKind>, // At this point, the max resolution is only until a kind
+    pub ambiguous_types: Vec<String>,
     pub additional_error_details: Vec<String>,
 }
 
@@ -29,12 +29,15 @@ impl AmbiguousTypeError {
     pub fn new(
         inferred_expr: &InferredType,
         expr: &Expr,
-        expected: &TypeKind,
+        expected: &TypeHint,
     ) -> AmbiguousTypeError {
-        let actual_kind = inferred_expr.get_type_kind();
+        let actual_kind = inferred_expr.get_type_hint();
         match actual_kind {
-            TypeKind::Ambiguous { possibilities } => {
-                let possibilities = possibilities.into_iter().collect::<Vec<_>>();
+            TypeHint::Ambiguous { possibilities } => {
+                let possibilities = possibilities
+                    .into_iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>();
 
                 AmbiguousTypeError {
                     expr: expr.clone(),
@@ -42,9 +45,9 @@ impl AmbiguousTypeError {
                     additional_error_details: vec![],
                 }
             }
-            actual_kind => AmbiguousTypeError {
+            _ => AmbiguousTypeError {
                 expr: expr.clone(),
-                ambiguous_types: vec![expected.clone(), actual_kind],
+                ambiguous_types: vec![expected.to_string(), inferred_expr.printable()],
                 additional_error_details: vec![],
             },
         }
@@ -102,6 +105,9 @@ impl InvalidPatternMatchError {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct UnificationError {}
+
 #[derive(Clone, Debug)]
 pub struct TypeMismatchError {
     pub expr_with_wrong_type: Expr,
@@ -115,17 +121,24 @@ pub struct TypeMismatchError {
 #[derive(Clone, Debug)]
 pub enum ExpectedType {
     AnalysedType(AnalysedType),
-    Kind(TypeKind),
+    Hint(TypeHint),
+    InferredType(InferredType),
 }
 
 // If the actual type is not fully known but only a hint through TypeKind
 #[derive(Clone, Debug)]
 pub enum ActualType {
     Inferred(InferredType),
-    Kind(TypeKind),
+    Hint(TypeHint),
 }
 
 impl TypeMismatchError {
+    pub fn with_parent_expr(&self, expr: &Expr) -> TypeMismatchError {
+        let mut mismatch_error: TypeMismatchError = self.clone();
+        mismatch_error.parent_expr = Some(expr.clone());
+        mismatch_error
+    }
+
     pub fn updated_expected_type(&self, expected_type: &AnalysedType) -> TypeMismatchError {
         let mut mismatch_error: TypeMismatchError = self.clone();
         mismatch_error.expected_type = ExpectedType::AnalysedType(expected_type.clone());
@@ -160,22 +173,65 @@ impl TypeMismatchError {
         expr: &Expr,
         parent_expr: Option<&Expr>,
         expected_type: AnalysedType,
-        actual_type: &TypeKind,
+        actual_type: &TypeHint,
     ) -> Self {
         TypeMismatchError {
             expr_with_wrong_type: expr.clone(),
             parent_expr: parent_expr.cloned(),
             expected_type: ExpectedType::AnalysedType(expected_type),
-            actual_type: ActualType::Kind(actual_type.clone()),
+            actual_type: ActualType::Hint(actual_type.clone()),
             field_path: Path::default(),
             additional_error_detail: Vec::new(),
         }
     }
 }
 
+// A type unification can fail either due to a type mismatch or due to unresolved types
+pub enum TypeUnificationError {
+    TypeMismatchError { error: TypeMismatchError },
+
+    UnresolvedTypesError { error: UnResolvedTypesError },
+}
+
+impl TypeUnificationError {
+    pub fn unresolved_types_error(
+        expr: Expr,
+        parent_expr: Option<Expr>,
+        additional_messages: Vec<String>,
+    ) -> TypeUnificationError {
+        TypeUnificationError::UnresolvedTypesError {
+            error: UnResolvedTypesError {
+                unresolved_expr: expr,
+                parent_expr,
+                additional_messages,
+                help_messages: vec![],
+                path: Default::default(),
+            },
+        }
+    }
+    pub fn type_mismatch_error(
+        expr: Expr,
+        parent_expr: Option<Expr>,
+        expected_type: InferredType,
+        actual_type: InferredType,
+        additional_error_detail: Vec<String>,
+    ) -> TypeUnificationError {
+        TypeUnificationError::TypeMismatchError {
+            error: TypeMismatchError {
+                expr_with_wrong_type: expr,
+                parent_expr,
+                expected_type: ExpectedType::InferredType(expected_type),
+                actual_type: ActualType::Inferred(actual_type),
+                field_path: Path::default(),
+                additional_error_detail,
+            },
+        }
+    }
+}
+
 pub struct MultipleUnResolvedTypesError(pub Vec<UnResolvedTypesError>);
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct UnResolvedTypesError {
     pub unresolved_expr: Expr,
     pub parent_expr: Option<Expr>,
@@ -199,10 +255,9 @@ impl UnResolvedTypesError {
 
     pub fn with_default_help_messages(&self) -> Self {
         self.with_help_message(
-            "consider specifying the type explicitly. Examples: `1: u64`, `person.age: u8`",
-        )
-        .with_help_message(
-            "or specify the type in let binding. Example: let numbers: list<u8> = [1, 2, 3]",
+            "try specifying the expected type explicitly",
+        ).with_help_message(
+            "if the issue persists, please review the script for potential type inconsistencies"
         )
     }
 
@@ -272,6 +327,7 @@ impl Display for UnResolvedTypesError {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum FunctionCallError {
     InvalidFunctionCall {
         function_name: String,
@@ -302,7 +358,6 @@ pub enum FunctionCallError {
 
     InvalidGenericTypeParameter {
         generic_type_parameter: String,
-        expr: Expr,
         message: String,
     },
 
@@ -312,6 +367,29 @@ pub enum FunctionCallError {
         expected: usize,
         provided: usize,
     },
+}
+
+impl FunctionCallError {
+    pub fn invalid_function_call(
+        function_name: &str,
+        expr: &Expr,
+        message: impl AsRef<str>,
+    ) -> FunctionCallError {
+        FunctionCallError::InvalidFunctionCall {
+            function_name: function_name.to_string(),
+            expr: expr.clone(),
+            message: message.as_ref().to_string(),
+        }
+    }
+    pub fn invalid_generic_type_parameter(
+        generic_type_parameter: &str,
+        message: impl AsRef<str>,
+    ) -> FunctionCallError {
+        FunctionCallError::InvalidGenericTypeParameter {
+            generic_type_parameter: generic_type_parameter.to_string(),
+            message: message.as_ref().to_string(),
+        }
+    }
 }
 
 pub struct InvalidWorkerName {

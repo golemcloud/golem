@@ -15,25 +15,30 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
-use crate::model::PersistenceLevel;
 use crate::preview2::golem::durability::durability;
+use crate::preview2::golem::durability::durability::{
+    PersistedTypedDurableFunctionInvocation, Pollable,
+};
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
-use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex};
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex, PersistenceLevel};
 use golem_common::model::Timestamp;
-use golem_common::serialization::{serialize, try_deserialize};
+use golem_common::serialization::{deserialize, serialize, try_deserialize};
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use tracing::error;
+use wasmtime::component::Resource;
+use wasmtime_wasi::{dynamic_subscribe, DynamicSubscribe, Subscribe};
 
 #[derive(Debug)]
 pub struct DurableExecutionState {
     pub is_live: bool,
     pub persistence_level: PersistenceLevel,
+    pub snapshotting_mode: Option<PersistenceLevel>,
 }
 
 #[derive(Debug)]
@@ -44,6 +49,13 @@ pub struct PersistedDurableFunctionInvocation {
     response: Vec<u8>,
     function_type: DurableFunctionType,
     oplog_entry_version: OplogEntryVersion,
+}
+
+impl PersistedDurableFunctionInvocation {
+    pub fn response_as_value_and_type(&self) -> Result<ValueAndType, GolemError> {
+        deserialize(&self.response)
+            .map_err(|err| GolemError::runtime(format!("Failed to deserialize payload: {err}")))
+    }
 }
 
 #[async_trait]
@@ -156,6 +168,54 @@ impl From<PersistedDurableFunctionInvocation> for durability::PersistedDurableFu
 }
 
 #[async_trait]
+impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCtx<Ctx> {
+    async fn new(&mut self) -> anyhow::Result<Resource<LazyInitializedPollableEntry>> {
+        DurabilityHost::observe_function_call(self, "durability::lazy_initialized_pollable", "new");
+        let lazy_pollable = self.table().push(LazyInitializedPollableEntry::Empty)?;
+        Ok(lazy_pollable)
+    }
+
+    async fn set(
+        &mut self,
+        self_: Resource<LazyInitializedPollableEntry>,
+        pollable: Resource<Pollable>,
+    ) -> anyhow::Result<()> {
+        DurabilityHost::observe_function_call(self, "durability::lazy_initialized_pollable", "set");
+        let entry = self.table().get_mut(&self_)?;
+        *entry = LazyInitializedPollableEntry::Subscribed { pollable };
+        Ok(())
+    }
+
+    async fn subscribe(
+        &mut self,
+        self_: Resource<LazyInitializedPollableEntry>,
+    ) -> anyhow::Result<Resource<Pollable>> {
+        DurabilityHost::observe_function_call(
+            self,
+            "durability::lazy_initialized_pollable",
+            "subscribe",
+        );
+
+        dynamic_subscribe(self.table(), self_, None)
+    }
+
+    async fn drop(&mut self, rep: Resource<LazyInitializedPollableEntry>) -> anyhow::Result<()> {
+        DurabilityHost::observe_function_call(
+            self,
+            "durability::lazy_initialized_pollable",
+            "drop",
+        );
+
+        let entry = self.table().delete(rep)?;
+        if let LazyInitializedPollableEntry::Subscribed { pollable } = entry {
+            let _ = self.table().delete(pollable)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[async_trait]
 impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
     async fn observe_function_call(
         &mut self,
@@ -248,6 +308,21 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         let invocation = DurabilityHost::read_persisted_durable_function_invocation(self).await?;
         Ok(invocation.into())
     }
+
+    async fn read_persisted_typed_durable_function_invocation(
+        &mut self,
+    ) -> anyhow::Result<PersistedTypedDurableFunctionInvocation> {
+        let invocation = DurabilityHost::read_persisted_durable_function_invocation(self).await?;
+        let response = invocation.response_as_value_and_type()?;
+        let untyped: durability::PersistedDurableFunctionInvocation = invocation.into();
+        Ok(PersistedTypedDurableFunctionInvocation {
+            timestamp: untyped.timestamp,
+            function_name: untyped.function_name,
+            response: response.into(),
+            function_type: untyped.function_type,
+            entry_version: untyped.entry_version,
+        })
+    }
 }
 
 #[async_trait]
@@ -283,6 +358,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         DurableExecutionState {
             is_live: self.state.is_live(),
             persistence_level: self.state.persistence_level,
+            snapshotting_mode: self.state.snapshotting_mode,
         }
     }
 
@@ -318,7 +394,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
 
         self.state
             .oplog
-            .add_imported_function_invoked(function_name, &request, &response, function_type)
+            .add_raw_imported_function_invoked(function_name, &request, &response, function_type)
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to serialize and store durable function invocation: {err}")
@@ -328,51 +404,57 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     async fn read_persisted_durable_function_invocation(
         &mut self,
     ) -> Result<PersistedDurableFunctionInvocation, GolemError> {
-        let (_, oplog_entry) = crate::get_oplog_entry!(
-            self.state.replay_state,
-            OplogEntry::ImportedFunctionInvoked,
-            OplogEntry::ImportedFunctionInvokedV1
-        )?;
+        if self.state.persistence_level == PersistenceLevel::PersistNothing {
+            Err(GolemError::runtime(
+                "Trying to replay an durable invocation in a PersistNothing block",
+            ))
+        } else {
+            let (_, oplog_entry) = crate::get_oplog_entry!(
+                self.state.replay_state,
+                OplogEntry::ImportedFunctionInvoked,
+                OplogEntry::ImportedFunctionInvokedV1
+            )?;
 
-        let bytes = self
-            .state
-            .oplog
-            .get_raw_payload_of_entry(&oplog_entry)
-            .await
-            .map_err(|err| {
-                GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
-            })?
-            .unwrap();
+            let bytes = self
+                .state
+                .oplog
+                .get_raw_payload_of_entry(&oplog_entry)
+                .await
+                .map_err(|err| {
+                    GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
+                })?
+                .unwrap();
 
-        match oplog_entry {
-            OplogEntry::ImportedFunctionInvoked {
-                timestamp,
-                function_name,
-                wrapped_function_type,
-                ..
-            } => Ok(PersistedDurableFunctionInvocation {
-                timestamp,
-                function_name,
-                response: bytes.to_vec(),
-                function_type: wrapped_function_type,
-                oplog_entry_version: OplogEntryVersion::V2,
-            }),
-            OplogEntry::ImportedFunctionInvokedV1 {
-                timestamp,
-                function_name,
-                wrapped_function_type,
-                ..
-            } => Ok(PersistedDurableFunctionInvocation {
-                timestamp,
-                function_name,
-                response: bytes.to_vec(),
-                function_type: wrapped_function_type,
-                oplog_entry_version: OplogEntryVersion::V1,
-            }),
-            _ => Err(GolemError::unexpected_oplog_entry(
-                "ImportedFunctionInvoked",
-                format!("{:?}", oplog_entry),
-            )),
+            match oplog_entry {
+                OplogEntry::ImportedFunctionInvoked {
+                    timestamp,
+                    function_name,
+                    wrapped_function_type,
+                    ..
+                } => Ok(PersistedDurableFunctionInvocation {
+                    timestamp,
+                    function_name,
+                    response: bytes.to_vec(),
+                    function_type: wrapped_function_type,
+                    oplog_entry_version: OplogEntryVersion::V2,
+                }),
+                OplogEntry::ImportedFunctionInvokedV1 {
+                    timestamp,
+                    function_name,
+                    wrapped_function_type,
+                    ..
+                } => Ok(PersistedDurableFunctionInvocation {
+                    timestamp,
+                    function_name,
+                    response: bytes.to_vec(),
+                    function_type: wrapped_function_type,
+                    oplog_entry_version: OplogEntryVersion::V1,
+                }),
+                _ => Err(GolemError::unexpected_oplog_entry(
+                    "ImportedFunctionInvoked",
+                    format!("{:?}", oplog_entry),
+                )),
+            }
         }
     }
 }
@@ -418,7 +500,6 @@ impl<SOk, SErr> Durability<SOk, SErr> {
 
     pub fn is_live(&self) -> bool {
         self.durable_execution_state.is_live
-            || self.durable_execution_state.persistence_level == PersistenceLevel::PersistNothing
     }
 
     pub async fn persist<SIn, Ok, Err>(
@@ -460,8 +541,8 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         SOk: Debug + Encode + Send + Sync,
         SErr: Debug + Encode + Send + Sync,
     {
-        let function_name = self.function_name();
-        if self.durable_execution_state.persistence_level != PersistenceLevel::PersistNothing {
+        if self.durable_execution_state.snapshotting_mode.is_none() {
+            let function_name = self.function_name();
             let serialized_input = serialize(&input).unwrap_or_else(|err| {
                 panic!("failed to serialize input ({input:?}) for persisting durable function invocation: {err}")
             }).to_vec();
@@ -493,8 +574,8 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         SOk: Debug + IntoValue + Send + Sync,
         SErr: Debug + IntoValue + Send + Sync,
     {
-        let function_name = self.function_name();
-        if self.durable_execution_state.persistence_level != PersistenceLevel::PersistNothing {
+        if self.durable_execution_state.snapshotting_mode.is_none() {
+            let function_name = self.function_name();
             let input_value = input.into_value_and_type();
             let result_value = result.into_value_and_type();
 
@@ -580,6 +661,35 @@ impl<SOk, SErr> Durability<SOk, SErr> {
             ))
         } else {
             Ok(())
+        }
+    }
+}
+
+pub enum LazyInitializedPollableEntry {
+    Empty,
+    Subscribed { pollable: Resource<Pollable> },
+}
+
+#[async_trait]
+impl Subscribe for LazyInitializedPollableEntry {
+    async fn ready(&mut self) {
+        match self {
+            LazyInitializedPollableEntry::Empty => {
+                // Empty pollable is always ready
+            }
+            LazyInitializedPollableEntry::Subscribed { .. } => {
+                unreachable!("The dynamic pollable override should prevent this from being called")
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl DynamicSubscribe for LazyInitializedPollableEntry {
+    fn override_index(&self) -> Option<u32> {
+        match self {
+            LazyInitializedPollableEntry::Empty => None,
+            LazyInitializedPollableEntry::Subscribed { pollable } => Some(pollable.rep()),
         }
     }
 }

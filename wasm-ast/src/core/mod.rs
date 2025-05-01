@@ -1533,15 +1533,11 @@ where
     #[cfg(feature = "metadata")]
     pub fn get_metadata(&self) -> Option<metadata::Metadata> {
         let mut producers = None;
-        let mut registry_metadata = None;
         let mut name = None;
 
         for custom in self.customs() {
             if custom.name() == "producers" {
                 producers = wasm_metadata::Producers::from_bytes(custom.data(), 0).ok();
-            } else if custom.name() == "registry-metadata" {
-                registry_metadata =
-                    wasm_metadata::RegistryMetadata::from_bytes(custom.data(), 0).ok();
             } else if custom.name() == "name" {
                 name = wasm_metadata::ModuleNames::from_bytes(custom.data(), 0)
                     .ok()
@@ -1549,11 +1545,10 @@ where
             }
         }
 
-        if producers.is_some() || registry_metadata.is_some() || name.is_some() {
+        if producers.is_some() || name.is_some() {
             Some(metadata::Metadata {
                 name,
                 producers: producers.map(|p| p.into()),
-                registry_metadata,
             })
         } else {
             None

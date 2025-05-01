@@ -12,503 +12,363 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::call_type::CallType;
-use crate::{ArmPattern, Expr, MultipleUnResolvedTypesError, UnResolvedTypesError};
+use crate::inferred_type::{TypeOrigin, UnificationFailureInternal};
+use crate::{Expr, ExprVisitor, InferredType, TypeUnificationError};
 
-pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> {
-    let mut queue = vec![];
-    queue.push(expr);
-    let mut errors: Vec<UnResolvedTypesError> = vec![];
+pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
+    let mut original_expr = expr.clone();
 
-    while let Some(expr) = queue.pop() {
-        let expr_copied = expr.clone();
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
+    while let Some(expr) = visitor.pop_front() {
         match expr {
-            Expr::Number { inferred_type, .. } => {
-                let unified_inferred_type = inferred_type.unify();
+            Expr::Number {
+                inferred_type,
+                number,
+                source_span,
+                ..
+            } => {
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::number(number.value.clone()).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of number: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Record {
-                exprs,
                 inferred_type,
+                exprs,
+                source_span,
                 ..
             } => {
-                queue.extend(exprs.iter_mut().map(|(_, expr)| &mut **expr));
+                let exprs = exprs
+                    .iter()
+                    .map(|(a, b)| (a.clone(), b.as_ref().clone()))
+                    .collect();
 
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::record(exprs).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of record: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::Tuple {
-                exprs,
                 inferred_type,
+                exprs,
+                source_span,
                 ..
             } => {
-                queue.extend(exprs.iter_mut());
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::tuple(exprs.clone()).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                let unified_inferred_type = inferred_type.unify();
-
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of tuple: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Range {
-                range,
                 inferred_type,
-                ..
+                range,
+                source_span,
+                type_annotation,
             } => {
-                for expr in range.get_exprs_mut() {
-                    queue.push(expr);
-                }
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::Range {
+                        range: range.clone(),
+                        source_span: source_span.clone(),
+                        type_annotation: type_annotation.clone(),
+                        inferred_type: inferred_type.clone(),
+                    },
+                    inferred_type,
+                )?;
 
-                let unified_inferred_type = inferred_type.unify();
-
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of range: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Sequence {
                 exprs,
                 inferred_type,
+                type_annotation,
+                source_span,
                 ..
             } => {
-                queue.extend(exprs.iter_mut());
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::sequence(exprs.clone(), type_annotation.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of sequence: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::Option {
-                expr: Some(expr),
                 inferred_type,
+                expr,
+                source_span,
+                type_annotation,
                 ..
             } => {
-                queue.push(expr);
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::option(expr.as_deref().cloned())
+                        .with_type_annotation_opt(type_annotation.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of option: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
-            }
-
-            Expr::Option { inferred_type, .. } => {
-                let unified_inferred_type = inferred_type.unify();
-
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of option: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Result {
                 expr: Ok(expr),
                 inferred_type,
+                type_annotation,
+                source_span,
                 ..
             } => {
-                queue.push(expr);
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::ok(expr.as_ref().clone(), type_annotation.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of result-ok: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
+
             Expr::Result {
                 expr: Err(expr),
                 inferred_type,
+                type_annotation,
+                source_span,
                 ..
             } => {
-                queue.push(expr);
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::err(expr.as_ref().clone(), type_annotation.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                let unified_inferred_type = inferred_type.unify();
-
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of result-err: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
+
             Expr::Cond {
+                inferred_type,
                 cond,
                 lhs,
                 rhs,
-                inferred_type,
                 ..
             } => {
-                queue.push(cond);
-                queue.push(lhs);
-                queue.push(rhs);
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::cond(
+                        cond.as_ref().clone(),
+                        lhs.as_ref().clone(),
+                        rhs.as_ref().clone(),
+                    ),
+                    inferred_type,
+                )?;
 
-                let unified_inferred_type = inferred_type.unify();
-
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of if-else condition: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::Length {
-                expr,
                 inferred_type,
+                expr,
+                source_span,
                 ..
             } => {
-                queue.push(expr);
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::length(expr.as_ref().clone()).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                let unified_inferred_type = inferred_type.unify();
-
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of length function: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::ListComprehension {
+                iterated_variable,
                 iterable_expr,
                 yield_expr,
                 inferred_type,
+                source_span,
                 ..
             } => {
-                queue.push(iterable_expr);
-                queue.push(yield_expr);
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::list_comprehension(
+                        iterated_variable.clone(),
+                        iterable_expr.as_ref().clone(),
+                        yield_expr.as_ref().clone(),
+                    )
+                    .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                let unified_inferred_type = inferred_type.unify();
-
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of list comprehension: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::ListReduce {
-                iterable_expr,
-                init_value_expr,
-                yield_expr,
                 inferred_type,
+                reduce_variable,
+                iterated_variable,
+                iterable_expr,
+                yield_expr,
+                init_value_expr,
+                source_span,
                 ..
             } => {
-                queue.push(iterable_expr);
-                queue.push(init_value_expr);
-                queue.push(yield_expr);
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::list_reduce(
+                        reduce_variable.clone(),
+                        iterated_variable.clone(),
+                        iterable_expr.as_ref().clone(),
+                        yield_expr.as_ref().clone(),
+                        init_value_expr.as_ref().clone(),
+                    )
+                    .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                let unified_inferred_type = inferred_type.unify();
-
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of list aggregation: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
             Expr::PatternMatch {
+                inferred_type,
                 predicate,
                 match_arms,
-                inferred_type,
+                source_span,
                 ..
             } => {
-                queue.push(predicate);
-                for arm in match_arms.iter_mut().rev() {
-                    let arm_resolution_expr = &mut *arm.arm_resolution_expr;
-                    let arm_pattern: &mut ArmPattern = &mut arm.arm_pattern;
-                    internal::push_arm_pattern_expr(arm_pattern, &mut queue);
-                    queue.push(arm_resolution_expr);
-                }
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::pattern_match(predicate.as_ref().clone(), match_arms.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => {
-                        *inferred_type = unified_type;
-                    }
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of pattern match: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::Call {
                 call_type,
                 args,
                 inferred_type,
-                ..
+                source_span,
+                type_annotation,
+                generic_type_parameter,
             } => {
-                queue.extend(args.iter_mut());
+                let expr = Expr::Call {
+                    call_type: call_type.clone(),
+                    args: args.clone(),
+                    inferred_type: InferredType::unknown(),
+                    source_span: source_span.clone(),
+                    generic_type_parameter: generic_type_parameter.clone(),
+                    type_annotation: type_annotation.clone(),
+                };
 
-                match call_type {
-                    // We don't care about anything inside instance creation
-                    CallType::InstanceCreation(_) => {}
-                    // Make sure worker expression in function
-                    CallType::Function {
-                        worker,
-                        function_name,
-                    } => {
-                        if let Some(worker) = worker {
-                            queue.push(worker);
-                        }
+                let unified_type = unify_inferred_type(&mut original_expr, expr, inferred_type)?;
 
-                        let unified_inferred_type = inferred_type.unify();
-
-                        match unified_inferred_type {
-                            Ok(unified_type) => *inferred_type = unified_type,
-                            Err(e) => {
-                                errors.push(
-                                    UnResolvedTypesError::from(&expr_copied, None)
-                                        .with_additional_error_detail(format!(
-                                            "cannot determine the return type of function {}: {}",
-                                            function_name, e
-                                        )),
-                                );
-                            }
-                        }
-                    }
-
-                    _ => {
-                        let unified_inferred_type = inferred_type.unify();
-
-                        match unified_inferred_type {
-                            Ok(unified_type) => *inferred_type = unified_type,
-                            Err(e) => {
-                                errors.push(
-                                    UnResolvedTypesError::from(&expr_copied, None)
-                                        .with_additional_error_detail(format!(
-                                            "cannot determine the type of function return: {}",
-                                            e
-                                        )),
-                                );
-                            }
-                        }
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::SelectField {
-                expr,
                 inferred_type,
-                ..
+                expr,
+                field,
+                source_span,
+                type_annotation,
             } => {
-                queue.push(expr);
-                let unified_inferred_type = inferred_type.unify();
+                let expr =
+                    Expr::select_field(expr.as_ref().clone(), field, type_annotation.clone())
+                        .with_source_span(source_span.clone());
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of field selection: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                let unified_type = unify_inferred_type(&mut original_expr, expr, inferred_type)?;
+
+                *inferred_type = unified_type;
             }
 
             Expr::SelectIndex {
+                inferred_type,
                 expr,
                 index,
-                inferred_type,
+                source_span,
                 ..
             } => {
-                queue.push(expr);
-                queue.push(index);
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::select_index(expr.as_ref().clone(), index.as_ref().clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of dynamic field selection: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
-            Expr::Let { expr, .. } => {
-                queue.push(expr);
-            }
-            Expr::Literal { inferred_type, .. } => {
-                let unified_inferred_type = inferred_type.unify();
+            Expr::Let { .. } => {}
+            Expr::Literal {
+                inferred_type,
+                value,
+                source_span,
+                ..
+            } => {
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::literal(value.clone()).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of literal: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
-            Expr::Flags { inferred_type, .. } => {
-                let unified_inferred_type = inferred_type.unify();
+            Expr::Flags {
+                inferred_type,
+                flags,
+                source_span,
+                ..
+            } => {
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::flags(flags.clone()).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of flags: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
-            Expr::Identifier { inferred_type, .. } => {
-                let unified_inferred_type = inferred_type.unify();
+            Expr::Identifier {
+                inferred_type,
+                variable_id,
+                source_span,
+                type_annotation,
+                ..
+            } => {
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::identifier_with_variable_id(variable_id.clone(), type_annotation.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of identifier: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::Boolean { .. } => {}
-            Expr::Concat { exprs, .. } => {
-                queue.extend(exprs);
-            }
+            Expr::Concat { .. } => {}
             Expr::ExprBlock {
-                exprs,
                 inferred_type,
+                source_span,
                 ..
             } => {
-                queue.extend(exprs);
-
-                let unified_inferred_type = inferred_type.unify();
+                let unified_inferred_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::expr_block(vec![]).with_source_span(source_span.clone()),
+                    inferred_type,
+                );
 
                 if let Ok(unified_type) = unified_inferred_type {
                     *inferred_type = unified_type
@@ -516,244 +376,243 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), MultipleUnResolvedTypesError> 
             }
 
             Expr::Not {
-                expr,
                 inferred_type,
+                expr,
+                source_span,
                 ..
             } => {
-                queue.push(expr);
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::not(expr.as_ref().clone())
+                        .with_source_span(source_span.clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type of NOT expression: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
             Expr::Unwrap {
-                expr,
                 inferred_type,
+                expr,
+                source_span,
                 ..
             } => {
-                queue.push(expr);
-                let unified_inferred_type = inferred_type.unify();
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    expr.unwrap().with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
-            Expr::Throw { inferred_type, .. } => {
-                let unified_inferred_type = inferred_type.unify();
+            Expr::Throw {
+                inferred_type,
+                message,
+                source_span,
+                ..
+            } => {
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::throw(message).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
-            Expr::GetTag { inferred_type, .. } => {
-                let unified_inferred_type = inferred_type.unify();
+            Expr::GetTag {
+                inferred_type,
+                expr,
+                source_span,
+                ..
+            } => {
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::get_tag(expr.as_ref().clone()).with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(
-                            UnResolvedTypesError::from(&expr_copied, None)
-                                .with_additional_error_detail(format!(
-                                    "cannot determine the type: {}",
-                                    e
-                                )),
-                        );
-                    }
-                }
+                *inferred_type = unified_type;
             }
 
-            Expr::GreaterThan { lhs, rhs, .. } => {
-                queue.push(lhs);
-                queue.push(rhs);
-            }
+            Expr::GreaterThan { .. } => {}
 
             Expr::Plus {
+                inferred_type,
                 lhs,
                 rhs,
-                inferred_type,
+                source_span,
                 ..
-            } => internal::handle_math_op(
-                &mut queue,
-                lhs,
-                rhs,
-                inferred_type,
-                &mut errors,
-                &expr_copied,
-            ),
+            } => {
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::plus(lhs.as_ref().clone(), rhs.as_ref().clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
+
+                *inferred_type = unified_type;
+            }
 
             Expr::Minus {
+                inferred_type,
                 lhs,
                 rhs,
-                inferred_type,
+                source_span,
                 ..
-            } => internal::handle_math_op(
-                &mut queue,
-                lhs,
-                rhs,
-                inferred_type,
-                &mut errors,
-                &expr_copied,
-            ),
+            } => {
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::minus(lhs.as_ref().clone(), rhs.as_ref().clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
+
+                *inferred_type = unified_type;
+            }
 
             Expr::Divide {
+                inferred_type,
                 lhs,
                 rhs,
-                inferred_type,
+                source_span,
                 ..
-            } => internal::handle_math_op(
-                &mut queue,
-                lhs,
-                rhs,
-                inferred_type,
-                &mut errors,
-                &expr_copied,
-            ),
+            } => {
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::minus(lhs.as_ref().clone(), rhs.as_ref().clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
+
+                *inferred_type = unified_type;
+            }
 
             Expr::Multiply {
+                inferred_type,
                 lhs,
                 rhs,
-                inferred_type,
+                source_span,
                 ..
-            } => internal::handle_math_op(
-                &mut queue,
-                lhs,
-                rhs,
-                inferred_type,
-                &mut errors,
-                &expr_copied,
-            ),
+            } => {
+                let unified_type = unify_inferred_type(
+                    &mut original_expr,
+                    Expr::multiply(lhs.as_ref().clone(), rhs.as_ref().clone())
+                        .with_source_span(source_span.clone()),
+                    inferred_type,
+                )?;
 
-            Expr::And { lhs, rhs, .. } => {
-                queue.push(lhs);
-                queue.push(rhs);
-            }
-            Expr::Or { lhs, rhs, .. } => {
-                queue.push(lhs);
-                queue.push(rhs);
+                *inferred_type = unified_type;
             }
 
-            Expr::GreaterThanOrEqualTo { lhs, rhs, .. } => {
-                queue.push(lhs);
-                queue.push(rhs);
-            }
-            Expr::LessThanOrEqualTo { lhs, rhs, .. } => {
-                queue.push(lhs);
-                queue.push(rhs);
-            }
-            Expr::EqualTo { lhs, rhs, .. } => {
-                queue.push(lhs);
-                queue.push(rhs);
-            }
-            Expr::LessThan { lhs, rhs, .. } => {
-                queue.push(lhs);
-                queue.push(rhs);
-            }
+            Expr::And { .. } => {}
+            Expr::Or { .. } => {}
+
+            Expr::GreaterThanOrEqualTo { .. } => {}
+            Expr::LessThanOrEqualTo { .. } => {}
+            Expr::EqualTo { .. } => {}
+            Expr::LessThan { .. } => {}
             Expr::InvokeMethodLazy { .. } => {}
         }
     }
 
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(MultipleUnResolvedTypesError(errors))
-    }
+    Ok(())
 }
 
-mod internal {
-    use crate::{ArmPattern, Expr, InferredType, UnResolvedTypesError};
+fn unify_inferred_type(
+    original_expr: &mut Expr,
+    expr: Expr,
+    inferred_type: &InferredType,
+) -> Result<InferredType, TypeUnificationError> {
+    let unification_result = inferred_type.unify();
 
-    pub(crate) fn handle_math_op<'a>(
-        queue: &mut Vec<&'a mut Expr>,
-        left: &'a mut Expr,
-        right: &'a mut Expr,
-        inferred_type: &mut InferredType,
-        errors: &mut Vec<UnResolvedTypesError>,
-        expr: &Expr,
-    ) {
-        queue.push(left);
-        queue.push(right);
-        let unified_inferred_type = inferred_type.unify();
+    match unification_result {
+        Ok(unified_type) => Ok(unified_type),
+        Err(e) => match e {
+            UnificationFailureInternal::TypeMisMatch { expected, found } => {
+                let found_origin = found.critical_origin();
+                let found_source_span = found_origin.source_span();
+                let found_expr = found_source_span
+                    .as_ref()
+                    .and_then(|span| original_expr.lookup(span));
 
-        match unified_inferred_type {
-            Ok(unified_type) => *inferred_type = unified_type,
-            Err(e) => {
-                errors.push(
-                    UnResolvedTypesError::from(expr, None).with_additional_error_detail(format!(
-                        "cannot determine the type of math operation: {}",
-                        e
+                let expected_origin = expected.critical_origin();
+
+                let additional_message = match expected_origin {
+                    TypeOrigin::PatternMatch(span) => {
+                        format!(
+                            "expected {} based on pattern match branch at line {} column {}",
+                            expected.printable(),
+                            span.start_line(),
+                            span.start_column()
+                        )
+                    }
+                    TypeOrigin::Default => "".to_string(),
+                    TypeOrigin::NoOrigin => "".to_string(),
+                    TypeOrigin::Declared(source_span) => {
+                        format!(
+                            "{} declared at line {} column {}",
+                            expected.printable(),
+                            source_span.start_line(),
+                            source_span.start_column()
+                        )
+                    }
+                    TypeOrigin::OriginatedAt(_) => "".to_string(),
+                    TypeOrigin::Multiple(_) => "".to_string(),
+                };
+
+                match found_expr {
+                    Some(found_expr) => Err(TypeUnificationError::type_mismatch_error(
+                        found_expr,
+                        None,
+                        expected,
+                        found,
+                        vec![additional_message],
                     )),
-                );
-            }
-        }
-    }
 
-    // Push any existence of expr in arm patterns to queue
-    pub(crate) fn push_arm_pattern_expr<'a>(
-        arm_pattern: &'a mut ArmPattern,
-        queue: &mut Vec<&'a mut Expr>,
-    ) {
-        match arm_pattern {
-            ArmPattern::Literal(expr) => {
-                queue.push(expr);
-            }
-            ArmPattern::As(_, pattern) => {
-                push_arm_pattern_expr(pattern, queue);
-            }
-            ArmPattern::Constructor(_, patterns) => {
-                for pattern in patterns {
-                    push_arm_pattern_expr(pattern, queue);
+                    None => {
+                        let ambiguity_message = format!(
+                            "conflicting types {}, {}",
+                            found.printable(),
+                            expected.printable()
+                        );
+                        Err(TypeUnificationError::unresolved_types_error(
+                            expr,
+                            None,
+                            vec![ambiguity_message],
+                        ))
+                    }
                 }
             }
+            UnificationFailureInternal::ConflictingTypes {
+                conflicting_types,
+                additional_error_detail,
+            } => {
+                let mut additional_messages = vec![format!(
+                    "conflicting types: {}",
+                    conflicting_types
+                        .iter()
+                        .map(|t| t.printable())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )];
 
-            ArmPattern::TupleConstructor(patterns) => {
-                for pattern in patterns {
-                    push_arm_pattern_expr(pattern, queue);
-                }
+                additional_messages.extend(additional_error_detail);
+
+                Err(TypeUnificationError::unresolved_types_error(
+                    expr,
+                    None,
+                    additional_messages,
+                ))
             }
-
-            ArmPattern::ListConstructor(patterns) => {
-                for pattern in patterns {
-                    push_arm_pattern_expr(pattern, queue);
-                }
+            UnificationFailureInternal::UnknownType => {
+                Err(TypeUnificationError::unresolved_types_error(
+                    expr,
+                    None,
+                    vec!["cannot determine the type".to_string()],
+                ))
             }
-
-            ArmPattern::RecordConstructor(fields) => {
-                for (_, pattern) in fields {
-                    push_arm_pattern_expr(pattern, queue);
-                }
-            }
-
-            ArmPattern::WildCard => {}
-        }
+        },
     }
 }

@@ -47,7 +47,7 @@ pub fn infer_function_call_types(
 
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
-    use crate::type_inference::kind::GetTypeKind;
+    use crate::type_inference::GetTypeHint;
     use crate::{
         ActualType, DynamicParsedFunctionName, ExpectedType, Expr, FunctionCallError,
         FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeMismatchError,
@@ -68,7 +68,7 @@ mod internal {
             CallType::InstanceCreation(instance) => match instance {
                 InstanceCreationType::Worker { .. } => {
                     for arg in args.iter_mut() {
-                        arg.add_infer_type_mut(InferredType::Str);
+                        arg.add_infer_type_mut(InferredType::string());
                     }
 
                     Ok(())
@@ -237,7 +237,7 @@ mod internal {
                         tag_argument_types(original_expr, function_name, args, &parameter_types)?;
 
                         if let Some(function_result_type) = function_result_inferred_type {
-                            *function_result_type = InferredType::from_variant_cases(variant_type);
+                            *function_result_type = InferredType::from_type_variant(variant_type);
                         }
 
                         Ok(())
@@ -268,10 +268,10 @@ mod internal {
                         if let Some(function_result_type) = function_result_inferred_type {
                             *function_result_type = {
                                 if return_types.len() == 1 {
-                                    return_types[0].clone().into()
+                                    return_types.first().unwrap().into()
                                 } else {
-                                    InferredType::Sequence(
-                                        return_types.iter().map(|t| t.clone().into()).collect(),
+                                    InferredType::sequence(
+                                        return_types.iter().map(|t| t.into()).collect(),
                                     )
                                 }
                             }
@@ -340,7 +340,8 @@ mod internal {
         let is_valid = if provided.inferred_type().is_unknown() {
             true
         } else {
-            provided.inferred_type().get_type_kind() == expected.get_type_kind()
+            provided.inferred_type().get_type_hint().get_type_kind()
+                == expected.get_type_hint().get_type_kind()
         };
 
         if is_valid {
@@ -369,7 +370,7 @@ mod internal {
     ) -> Result<(), FunctionCallError> {
         for (arg, param_type) in args.iter_mut().zip(parameter_types) {
             check_function_arguments(function_call_expr, function_name, param_type, arg)?;
-            arg.add_infer_type_mut(param_type.clone().into());
+            arg.add_infer_type_mut(param_type.into());
         }
 
         Ok(())
@@ -435,13 +436,13 @@ mod function_parameters_inference_tests {
             },
             None,
             None,
-            vec![Expr::identifier_global("x", None).with_inferred_type(InferredType::U64)],
+            vec![Expr::identifier_global("x", None).with_inferred_type(InferredType::u64())],
         )
-        .with_inferred_type(InferredType::Sequence(vec![]));
+        .with_inferred_type(InferredType::sequence(vec![]));
 
         let expected = Expr::ExprBlock {
             exprs: vec![let_binding, call_expr],
-            inferred_type: InferredType::Unknown,
+            inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
         };

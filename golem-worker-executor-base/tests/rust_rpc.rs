@@ -80,6 +80,8 @@ async fn auction_example_1(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&registry_worker_id).await;
+
     drop(executor);
 
     info!("result: {:?}", create_auction_result);
@@ -152,6 +154,8 @@ async fn auction_example_2(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&registry_worker_id).await;
+
     drop(executor);
 
     info!("result: {:?}", create_auction_result);
@@ -202,6 +206,8 @@ async fn counter_resource_test_1(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(
@@ -251,6 +257,8 @@ async fn counter_resource_test_2(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(1)]));
@@ -298,6 +306,8 @@ async fn counter_resource_test_2_with_restart(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(1)]));
@@ -340,6 +350,8 @@ async fn counter_resource_test_3(
             vec![],
         )
         .await;
+
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
 
     drop(executor);
 
@@ -388,6 +400,8 @@ async fn counter_resource_test_3_with_restart(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(1)]));
@@ -429,6 +443,8 @@ async fn context_inheritance(
             vec![],
         )
         .await;
+
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
 
     drop(executor);
 
@@ -516,6 +532,8 @@ async fn counter_resource_test_5(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(
@@ -573,6 +591,8 @@ async fn counter_resource_test_5_with_restart(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
+
     drop(executor);
 
     check!(
@@ -629,6 +649,8 @@ async fn wasm_rpc_bug_32_test(
             }],
         )
         .await;
+
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
 
     drop(executor);
 
@@ -689,6 +711,8 @@ async fn error_message_non_existing_target_component(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&registry_worker_id).await;
+
     drop(executor);
 
     check!(worker_error_message(&create_auction_result.err().unwrap())
@@ -725,6 +749,8 @@ async fn ephemeral_worker_invocation_via_rpc1(
         )
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&caller_worker_id).await;
 
     drop(executor);
 

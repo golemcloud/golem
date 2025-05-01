@@ -15,7 +15,9 @@
 use crate::error::GolemError;
 use crate::services::oplog::{Oplog, OplogOps, OplogService};
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{AtomicOplogIndex, LogLevel, OplogEntry, OplogIndex};
+use golem_common::model::oplog::{
+    AtomicOplogIndex, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
+};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{IdempotencyKey, OwnedWorkerId};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -71,6 +73,7 @@ impl ReplayState {
             has_seen_logs: Arc::new(AtomicBool::new(false)),
         };
         result.move_replay_idx(OplogIndex::INITIAL).await; // By this we handle initial skipped regions applied by manual updates correctly
+        result.skip_forward().await;
         result
     }
 
@@ -118,10 +121,62 @@ impl ReplayState {
         self.try_get_oplog_entry(|_| true).await.unwrap()
     }
 
+    /// Checks whether the currently read `entry` is a hint entry is valid for replay, or
+    /// if a new oplog index should be tried instead.
+    ///
+    /// For hint entries, the next tried oplog index is the next one. When reaching
+    /// persist-nothing zones, it points to the end of the zone.
+    ///
+    /// If the entry is a hint entry, the result is `Some` and contains the current last
+    /// read index, so the next read will get the next one.
+    /// If the entry is the beginning of a persist-nothing zone, the result will be `Some`
+    /// containing the _end_ of the zone so the next read will get the first entry outside
+    /// the zone.
+    /// If the entry is not a hint entry the result is `None`.
+    ///
+    async fn should_skip_to(&self, entry: &OplogEntry) -> Option<OplogIndex> {
+        if entry.is_hint() {
+            // Keeping the last replayed index as-is, so the next attempt will read the next one
+            Some(self.last_replayed_index())
+        } else if let OplogEntry::ChangePersistenceLevel { level, .. } = &entry {
+            if level == &PersistenceLevel::PersistNothing {
+                let begin_index = self.last_replayed_index();
+                let end_index = self
+                    .lookup_oplog_entry(begin_index, |entry, _idx| match entry {
+                        OplogEntry::ChangePersistenceLevel { level, .. } => {
+                            level != &PersistenceLevel::PersistNothing
+                        }
+                        OplogEntry::ExportedFunctionCompleted { .. } => true,
+                        _ => false,
+                    })
+                    .await;
+
+                if let Some(end_index) = end_index {
+                    Some(end_index)
+                } else {
+                    // The zone has not been closed
+                    Some(self.replay_target())
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
     /// Reads the next oplog entry, and if it matches the given condition, skips
     /// every hint entry following it and returns the oplog index of the entry read.
     /// If the condition is not met, returns None and the current replay state remains
     /// unchanged.
+    ///
+    /// The auto-skipped hint entries can be of two kind:
+    /// - A set of oplog entry cases are always hint entries. They manipulate the worker status
+    ///   but are non-deterministic from the replay's point of view.
+    /// - Every oplog entry recorded in persist-nothing zones. These are there for observability,
+    ///   but they never participate in the replay. A persist-nothing zone is bounded by two
+    ///   ChangePersistenceLevel entries, or if the closing one is missing, it is up to the end of the
+    ///   oplog.
     pub async fn try_get_oplog_entry(
         &mut self,
         condition: impl FnOnce(&OplogEntry) -> bool,
@@ -136,37 +191,7 @@ impl ReplayState {
         let entry = self.internal_get_next_oplog_entry().await;
 
         if condition(&entry) {
-            // Skipping hint entries and recording log entries
-            let mut logs = HashSet::new();
-            while self.is_replay() {
-                let saved_replay_idx = self.last_replayed_index.get();
-                let saved_next_skipped_region = {
-                    let internal = self.internal.read().await;
-                    internal.next_skipped_region.clone()
-                };
-                let entry = self.internal_get_next_oplog_entry().await;
-                if !entry.is_hint() {
-                    self.last_replayed_index.set(saved_replay_idx);
-                    let mut internal = self.internal.write().await;
-                    // TODO: cache the last hint entry to avoid reading it again
-                    internal.next_skipped_region = saved_next_skipped_region;
-                    break;
-                } else if let OplogEntry::Log {
-                    level,
-                    context,
-                    message,
-                    ..
-                } = &entry
-                {
-                    let hash = Self::hash_log_entry(*level, context, message);
-                    logs.insert(hash);
-                }
-            }
-
-            self.has_seen_logs
-                .store(!logs.is_empty(), Ordering::Relaxed);
-            let mut internal = self.internal.write().await;
-            internal.log_hashes = logs;
+            self.skip_forward().await;
 
             Some((read_idx, entry))
         } else {
@@ -176,6 +201,53 @@ impl ReplayState {
 
             None
         }
+    }
+
+    async fn skip_forward(&mut self) {
+        // Skipping hint entries and recording log entries
+        let mut logs = HashSet::new();
+        while self.is_replay() {
+            let saved_replay_idx = self.last_replayed_index.get();
+            let saved_next_skipped_region = {
+                let internal = self.internal.read().await;
+                internal.next_skipped_region.clone()
+            };
+            let entry = self.internal_get_next_oplog_entry().await;
+            match self.should_skip_to(&entry).await {
+                Some(last_read_idx) => {
+                    // Recording seen log entries
+                    if let OplogEntry::Log {
+                        level,
+                        context,
+                        message,
+                        ..
+                    } = &entry
+                    {
+                        let hash = Self::hash_log_entry(*level, context, message);
+                        logs.insert(hash);
+                    }
+
+                    // Moving the replay pointer
+                    self.last_replayed_index.set(last_read_idx);
+                    // TODO: what to do with next_skipped_region if we jumped forward to end of persist-nothing zone?
+                }
+                None => {
+                    // We've found the first non-hint entry after the first read one,
+                    // so we move everything back the last position (saved_replay_idx), including
+                    // possibly skipped regions.
+                    self.last_replayed_index.set(saved_replay_idx);
+                    let mut internal = self.internal.write().await;
+                    // TODO: cache the last hint entry to avoid reading it again
+                    internal.next_skipped_region = saved_next_skipped_region;
+                    break;
+                }
+            }
+        }
+
+        self.has_seen_logs
+            .store(!logs.is_empty(), Ordering::Relaxed);
+        let mut internal = self.internal.write().await;
+        internal.log_hashes = logs;
     }
 
     /// Returns true if the given log entry has been seen since the last non-hint oplog entry.
@@ -223,7 +295,7 @@ impl ReplayState {
     }
 
     pub async fn lookup_oplog_entry(
-        &mut self,
+        &self,
         begin_idx: OplogIndex,
         check: impl Fn(&OplogEntry, OplogIndex) -> bool,
     ) -> Option<OplogIndex> {
@@ -232,7 +304,7 @@ impl ReplayState {
     }
 
     pub async fn lookup_oplog_entry_with_condition(
-        &mut self,
+        &self,
         begin_idx: OplogIndex,
         end_check: impl Fn(&OplogEntry, OplogIndex) -> bool,
         for_all_intermediate: impl Fn(&OplogEntry, OplogIndex) -> bool,
@@ -283,6 +355,7 @@ impl ReplayState {
         None
     }
 
+    // TODO: can we rewrite this on top of get_oplog_entry?
     pub async fn get_oplog_entry_exported_function_invoked(
         &mut self,
     ) -> Result<Option<(String, Vec<Value>, IdempotencyKey, InvocationContextStack)>, GolemError>
@@ -362,6 +435,7 @@ impl ReplayState {
         }
     }
 
+    // TODO: can we rewrite this on top of get_oplog_entry?
     pub async fn get_oplog_entry_exported_function_completed(
         &mut self,
     ) -> Result<Option<TypeAnnotatedValue>, GolemError> {

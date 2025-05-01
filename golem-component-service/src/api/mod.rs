@@ -14,10 +14,10 @@
 
 use crate::service::Services;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
 use golem_component_service_base::service::component::ComponentError as ComponentServiceError;
 use golem_component_service_base::service::plugin::PluginError;
-use golem_service_base::model::{ErrorBody, ErrorsBody};
 use poem::endpoint::PrometheusExporter;
 use poem::error::ReadBodyError;
 use poem::Route;
@@ -55,6 +55,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             component::ComponentApi::new(
                 services.component_service.clone(),
                 services.plugin_service.clone(),
+                services.api_mapper.clone(),
             ),
             healthcheck::HealthcheckApi,
             plugin::PluginApi {
@@ -167,11 +168,6 @@ impl From<ComponentServiceError> for ComponentError {
                     error: error.to_safe_string(),
                 }))
             }
-            ComponentServiceError::TransformationPluginNotFound { .. } => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
             ComponentServiceError::InternalPluginError(_) => {
                 ComponentError::InternalError(Json(ErrorBody {
                     error: error.to_safe_string(),
@@ -195,6 +191,11 @@ impl From<ComponentServiceError> for ComponentError {
             ComponentServiceError::InvalidFilePath(_) => {
                 ComponentError::InternalError(Json(ErrorBody {
                     error: error.to_safe_string(),
+                }))
+            }
+            ComponentServiceError::InvalidComponentName { .. } => {
+                ComponentError::BadRequest(Json(ErrorsBody {
+                    errors: vec![error.to_safe_string()],
                 }))
             }
         }

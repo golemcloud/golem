@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
+use golem_common::model::component::{ComponentOwner, DefaultComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::plugin::{
     ComponentPluginInstallationTarget, ComponentPluginScope, ComponentTransformerDefinition,
@@ -21,16 +21,19 @@ use golem_common::model::plugin::{
     PluginInstallation, PluginOwner, PluginTypeSpecificDefinition,
 };
 use golem_common::model::{
-    AccountId, ComponentId, ComponentType, Empty, HasAccountId, PluginInstallationId,
+    AccountId, ComponentId, ComponentType, Empty, PluginId, PluginInstallationId,
 };
 use golem_common::repo::component::DefaultComponentOwnerRow;
 use golem_common::repo::plugin::{DefaultPluginOwnerRow, DefaultPluginScopeRow};
 use golem_common::repo::plugin_installation::ComponentPluginInstallationRow;
 use golem_common::repo::RowMeta;
 use golem_component_service_base::model::Component;
-use golem_component_service_base::repo::component::{ComponentRecord, ComponentRepo};
+use golem_component_service_base::repo::component::{
+    record_metadata_serde, ComponentRecord, ComponentRepo, PluginInstallationRepoAction,
+};
 use golem_component_service_base::repo::plugin::PluginRepo;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_component_service_base::service::component::{ComponentByNameAndVersion, VersionType};
+use golem_service_base::model::ComponentName;
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
 use poem_openapi::NewType;
@@ -44,7 +47,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};
 use tracing::info;
-use uuid::Uuid;
+use uuid::{uuid, Uuid};
 
 pub mod constraint_data;
 pub mod postgres;
@@ -72,7 +75,9 @@ impl FromStr for UuidOwner {
     }
 }
 
-impl HasAccountId for UuidOwner {
+impl ComponentOwner for UuidOwner {
+    type Row = UuidOwnerRow;
+    type PluginOwner = UuidOwner;
     fn account_id(&self) -> AccountId {
         AccountId {
             value: self.0.to_string(),
@@ -80,13 +85,13 @@ impl HasAccountId for UuidOwner {
     }
 }
 
-impl ComponentOwner for UuidOwner {
-    type Row = UuidOwnerRow;
-    type PluginOwner = UuidOwner;
-}
-
 impl PluginOwner for UuidOwner {
     type Row = UuidOwnerRow;
+    fn account_id(&self) -> AccountId {
+        AccountId {
+            value: self.0.to_string(),
+        }
+    }
 }
 
 #[derive(sqlx::FromRow, Debug, Clone)]
@@ -252,6 +257,277 @@ async fn test_repo_component_name_unique_in_namespace(
     assert!(result1.is_ok());
     assert!(result2.is_err());
     assert!(result3.is_ok());
+}
+
+async fn test_repo_component_find_by_names(
+    component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
+) {
+    let component_name1 = ComponentName("shopping-cart".to_string());
+    let data = get_component_data("shopping-cart");
+
+    let component1 = Component::new(
+        ComponentId::new_v4(),
+        component_name1,
+        ComponentType::Durable,
+        &data,
+        vec![],
+        vec![],
+        HashMap::new(),
+        DefaultComponentOwner,
+    )
+    .unwrap();
+
+    component_repo
+        .create(&ComponentRecord::try_from_model(component1.clone(), true).unwrap())
+        .await
+        .unwrap();
+
+    let component_name2 = ComponentName("rust-echo".to_string());
+    let data = get_component_data("rust-echo");
+
+    let component2 = Component::new(
+        ComponentId::new_v4(),
+        component_name2,
+        ComponentType::Durable,
+        &data,
+        vec![],
+        vec![],
+        HashMap::new(),
+        DefaultComponentOwner,
+    )
+    .unwrap();
+
+    // rust-echo version:0
+    component_repo
+        .create(&ComponentRecord::try_from_model(component2.clone(), true).unwrap())
+        .await
+        .unwrap();
+
+    // rust-echo: version: 1
+    component_repo
+        .update(
+            &DefaultComponentOwnerRow {},
+            "default",
+            &component2.versioned_component_id.component_id.0,
+            data,
+            record_metadata_serde::serialize(&component2.metadata)
+                .unwrap()
+                .to_vec(),
+            Some(0),
+            None,
+        )
+        .await
+        .unwrap();
+
+    // only when activated component2 becomes available in the search
+    component_repo
+        .activate(
+            "default",
+            &component2.versioned_component_id.component_id.0,
+            1,
+            "",
+            "",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    // component 1 has only version 0
+    let component1_latest = component_repo
+        .get_by_names(
+            "default",
+            &[ComponentByNameAndVersion {
+                component_name: component1.component_name.clone(),
+                version_type: VersionType::Latest,
+            }],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(component1_latest.len(), 1);
+    assert_eq!(component1_latest[0].name, component1.component_name.0);
+    assert_eq!(component1_latest[0].version, 0);
+
+    let component1_version0 = component_repo
+        .get_by_names(
+            "default",
+            &[ComponentByNameAndVersion {
+                component_name: component1.component_name.clone(),
+                version_type: VersionType::Exact(0),
+            }],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(component1_version0.len(), 1);
+    assert_eq!(component1_latest[0].name, component1.component_name.0);
+    assert_eq!(component1_version0[0].version, 0);
+
+    let component1_version1 = component_repo
+        .get_by_names(
+            "default",
+            &[ComponentByNameAndVersion {
+                component_name: component1.component_name.clone(),
+                version_type: VersionType::Exact(1),
+            }],
+        )
+        .await
+        .unwrap();
+
+    assert!(component1_version1.is_empty());
+
+    // component 2 (this has version 0 and latest version 1)
+    let component2_latest = component_repo
+        .get_by_names(
+            "default",
+            &[ComponentByNameAndVersion {
+                component_name: component2.component_name.clone(),
+                version_type: VersionType::Latest,
+            }],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(component2_latest.len(), 1);
+    assert_eq!(component2_latest[0].name, component2.component_name.0);
+    assert_eq!(component2_latest[0].version, 1);
+
+    let component2_version0 = component_repo
+        .get_by_names(
+            "default",
+            &[ComponentByNameAndVersion {
+                component_name: component2.component_name.clone(),
+                version_type: VersionType::Exact(0),
+            }],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(component2_version0.len(), 1);
+    assert_eq!(component2_version0[0].name, component2.component_name.0);
+    assert_eq!(component2_version0[0].version, 0);
+
+    let component2_version1 = component_repo
+        .get_by_names(
+            "default",
+            &[ComponentByNameAndVersion {
+                component_name: component2.component_name.clone(),
+                version_type: VersionType::Exact(1),
+            }],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(component2_version1.len(), 1);
+    assert_eq!(component2_version1[0].name, component2.component_name.0);
+    assert_eq!(component2_version1[0].version, 1);
+
+    let component1_and_component_2_latest = component_repo
+        .get_by_names(
+            "default",
+            &[
+                ComponentByNameAndVersion {
+                    component_name: component1.component_name.clone(),
+                    version_type: VersionType::Latest,
+                },
+                ComponentByNameAndVersion {
+                    component_name: component2.component_name.clone(),
+                    version_type: VersionType::Latest,
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(component1_and_component_2_latest.len(), 2);
+    assert_eq!(
+        component1_and_component_2_latest[0].name,
+        component2.component_name.0
+    );
+    assert_eq!(component1_and_component_2_latest[0].version, 1);
+    assert_eq!(
+        component1_and_component_2_latest[1].name,
+        component1.component_name.0
+    );
+    assert_eq!(component1_and_component_2_latest[1].version, 0);
+
+    let component1_and_component_2_exact = component_repo
+        .get_by_names(
+            "default",
+            &[
+                ComponentByNameAndVersion {
+                    component_name: component1.component_name.clone(),
+                    version_type: VersionType::Exact(0),
+                },
+                ComponentByNameAndVersion {
+                    component_name: component2.component_name.clone(),
+                    version_type: VersionType::Exact(0),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(component1_and_component_2_exact.len(), 2);
+    assert_eq!(
+        component1_and_component_2_exact[0].name,
+        component2.component_name.0
+    );
+    assert_eq!(component1_and_component_2_exact[0].version, 0);
+    assert_eq!(
+        component1_and_component_2_exact[1].name,
+        component1.component_name.0
+    );
+    assert_eq!(component1_and_component_2_exact[1].version, 0);
+
+    let component1_component_2_latest_and_exact = component_repo
+        .get_by_names(
+            "default",
+            &[
+                ComponentByNameAndVersion {
+                    component_name: component1.component_name.clone(),
+                    version_type: VersionType::Latest,
+                },
+                ComponentByNameAndVersion {
+                    component_name: component2.component_name.clone(),
+                    version_type: VersionType::Exact(0),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(component1_component_2_latest_and_exact.len(), 2);
+    assert_eq!(
+        component1_component_2_latest_and_exact[0].name,
+        component2.component_name.0
+    );
+    assert_eq!(component1_component_2_latest_and_exact[0].version, 0);
+    assert_eq!(
+        component1_component_2_latest_and_exact[1].name,
+        component1.component_name.0
+    );
+    assert_eq!(component1_component_2_latest_and_exact[1].version, 0);
+
+    // invalid search
+    let invalid_search = component_repo
+        .get_by_names(
+            "default",
+            &[
+                ComponentByNameAndVersion {
+                    component_name: component1.component_name.clone(),
+                    version_type: VersionType::Exact(1),
+                },
+                ComponentByNameAndVersion {
+                    component_name: component2.component_name.clone(),
+                    version_type: VersionType::Exact(2),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+    assert!(invalid_search.is_empty())
 }
 
 async fn test_repo_component_delete(
@@ -452,6 +728,7 @@ async fn test_default_plugin_repo(
         .await?;
 
     let plugin1 = PluginDefinition {
+        id: PluginId(uuid!("76493C6B-16DA-4DC8-86B7-EF58035DDD7C")),
         name: "plugin1".to_string(),
         version: "v1".to_string(),
         description: "the first test plugin".to_string(),
@@ -465,10 +742,12 @@ async fn test_default_plugin_repo(
         }),
         scope: DefaultPluginScope::Global(Empty {}),
         owner: DefaultPluginOwner,
+        deleted: false,
     };
     let plugin1_row = plugin1.clone().into();
 
     let plugin2 = PluginDefinition {
+        id: PluginId(uuid!("3DFBAAF6-D40F-4FC4-8F33-6ED4C25213B1")),
         name: "plugin2".to_string(),
         version: "v1".to_string(),
         description: "the first test plugin".to_string(),
@@ -482,6 +761,7 @@ async fn test_default_plugin_repo(
             component_id: component_id.clone(),
         }),
         owner: DefaultPluginOwner,
+        deleted: false,
     };
     let plugin2_row = plugin2.clone().into();
 
@@ -571,6 +851,7 @@ async fn test_default_component_plugin_installation(
     .unwrap();
 
     let plugin1 = PluginDefinition {
+        id: PluginId(uuid!("F9890D4A-A3FA-4E8C-83D5-EABA0A9E1396")),
         name: "plugin2".to_string(),
         version: "v2".to_string(),
         description: "another test plugin".to_string(),
@@ -584,6 +865,7 @@ async fn test_default_component_plugin_installation(
         }),
         scope: DefaultPluginScope::Global(Empty {}),
         owner: plugin_owner.clone(),
+        deleted: false,
     };
     let plugin1_row = plugin1.clone().into();
 
@@ -604,8 +886,7 @@ async fn test_default_component_plugin_installation(
 
     let installation1 = PluginInstallation {
         id: PluginInstallationId::new_v4(),
-        name: plugin1.name.clone(),
-        version: plugin1.version.clone(),
+        plugin_id: plugin1.id.clone(),
         priority: 1000,
         parameters: HashMap::from_iter(vec![("param1".to_string(), "value1".to_string())]),
     };
@@ -616,12 +897,19 @@ async fn test_default_component_plugin_installation(
     )
     .unwrap();
 
-    component_repo.install_plugin(&installation1_row).await?;
+    component_repo
+        .apply_plugin_installation_changes(
+            &plugin_owner_row,
+            &component_id.0,
+            &[PluginInstallationRepoAction::Install {
+                record: installation1_row,
+            }],
+        )
+        .await?;
 
     let installation2 = PluginInstallation {
         id: PluginInstallationId::new_v4(),
-        name: plugin1.name.clone(),
-        version: plugin1.version.clone(),
+        plugin_id: plugin1.id.clone(),
         priority: 800,
         parameters: HashMap::default(),
     };
@@ -632,7 +920,15 @@ async fn test_default_component_plugin_installation(
     )
     .unwrap();
 
-    component_repo.install_plugin(&installation2_row).await?;
+    component_repo
+        .apply_plugin_installation_changes(
+            &plugin_owner_row,
+            &component_id.0,
+            &[PluginInstallationRepoAction::Install {
+                record: installation2_row,
+            }],
+        )
+        .await?;
 
     let installations2 = component_repo
         .get_installed_plugins(&plugin_owner_row, &component_id.0, 2)
@@ -647,13 +943,16 @@ async fn test_default_component_plugin_installation(
         .installation_id;
     let new_params: HashMap<String, String> =
         HashMap::from_iter(vec![("param2".to_string(), "value2".to_string())]);
+
     component_repo
-        .update_plugin_installation(
+        .apply_plugin_installation_changes(
             &plugin_owner_row,
             &component_id.0,
-            &latest_installation2_id,
-            600,
-            serde_json::to_vec(&new_params).unwrap(),
+            &[PluginInstallationRepoAction::Update {
+                plugin_installation_id: latest_installation2_id,
+                new_priority: 600,
+                new_parameters: serde_json::to_vec(&new_params).unwrap(),
+            }],
         )
         .await?;
 
@@ -666,8 +965,15 @@ async fn test_default_component_plugin_installation(
         .find(|installation| installation.priority == 1000)
         .unwrap()
         .installation_id;
+
     component_repo
-        .uninstall_plugin(&plugin_owner_row, &component_id.0, &latest_installation1_id)
+        .apply_plugin_installation_changes(
+            &plugin_owner_row,
+            &component_id.0,
+            &[PluginInstallationRepoAction::Uninstall {
+                plugin_installation_id: latest_installation1_id,
+            }],
+        )
         .await?;
 
     let installations4 = component_repo

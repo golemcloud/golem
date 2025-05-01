@@ -1,0 +1,32 @@
+[package]
+name = "update-test-v3"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
+opt-level = 's'
+strip = true
+
+[dependencies]
+bytes = "1.6.0"
+golem-rust = { git = "https://github.com/golemcloud/golem-rust", branch = "wit-bindgen", features = ["default", "export_load_snapshot", "export_save_snapshot"] }
+wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
+
+[package.metadata.component.target]
+path = "wit"
+
+[package.metadata.component.bindings.with]
+"golem:api/save-snapshot@1.1.6" = "golem_rust::save_snapshot::exports::golem::api::save_snapshot"
+"golem:api/load-snapshot@1.1.6" = "golem_rust::load_snapshot::exports::golem::api::load_snapshot"
+
+
+[package.metadata.component.target.dependencies]
+"golem:api" = { path = "wit/deps/golem-1.x" }
+"golem:rpc" = { path = "wit/deps/golem-rpc" }
+"wasi:clocks" = { path = "wit/deps/clocks" }
+"wasi:io" = { path = "wit/deps/io" }

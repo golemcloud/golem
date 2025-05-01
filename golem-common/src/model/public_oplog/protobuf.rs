@@ -15,9 +15,10 @@
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
 use crate::model::public_oplog::{
-    ActivatePluginParameters, CancelInvocationParameters, ChangeRetryPolicyParameters,
-    CreateParameters, DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters,
-    ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
+    ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters,
+    DescribeResourceParameters, EndRegionParameters, ErrorParameters,
+    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
     OplogCursor, PendingUpdateParameters, PendingWorkerInvocationParameters,
@@ -67,6 +68,7 @@ impl From<PluginInstallationDescription>
             plugin_name: plugin_installation_description.plugin_name,
             plugin_version: plugin_installation_description.plugin_version,
             parameters: HashMap::from_iter(plugin_installation_description.parameters),
+            registered: plugin_installation_description.registered,
         }
     }
 }
@@ -86,6 +88,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PluginInstallationDescription
                 .try_into()?,
             plugin_name: value.plugin_name,
             plugin_version: value.plugin_version,
+            registered: value.registered,
             parameters: BTreeMap::from_iter(value.parameters),
         })
     }
@@ -467,6 +470,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .value
                         .ok_or("Missing attribute value".to_string())?
                         .try_into()?,
+                },
+            )),
+            Entry::ChangePersistenceLevel(change) => Ok(PublicOplogEntry::ChangePersistenceLevel(
+                ChangePersistenceLevelParameters {
+                    timestamp: change.timestamp.ok_or("Missing timestamp field")?.into(),
+                    persistence_level: change.persistence_level().into(),
                 },
             )),
         }
@@ -853,6 +862,18 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             span_id: set.span_id.0.get(),
                             key: set.key,
                             value: Some(set.value.into()),
+                        }
+                    ))
+                }
+            }
+            PublicOplogEntry::ChangePersistenceLevel(change) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::ChangePersistenceLevel(
+                        golem_api_grpc::proto::golem::worker::ChangePersistenceLevelParameters {
+                            timestamp: Some(change.timestamp.into()),
+                            persistence_level: Into::<golem_api_grpc::proto::golem::worker::PersistenceLevel>::into(
+                                change.persistence_level,
+                            ) as i32,
                         }
                     ))
                 }

@@ -3,8 +3,8 @@ package golem:it;
 interface api {
   run: func() -> string;
 
-  start-polling: func(until: string) -> ();
-  increment: func() -> ();
+  start-polling: func(until: string);
+  increment: func();
   get-count: func() -> u64;
   slow-body-stream: func() -> u64;
 }

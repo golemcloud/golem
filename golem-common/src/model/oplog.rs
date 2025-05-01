@@ -288,6 +288,28 @@ impl SpanData {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialOrd, PartialEq, Encode, Decode, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
+pub enum PersistenceLevel {
+    PersistNothing,
+    PersistRemoteSideEffects,
+    Smart,
+}
+
+impl IntoValue for PersistenceLevel {
+    fn into_value(self) -> Value {
+        match self {
+            PersistenceLevel::PersistNothing => Value::Enum(0),
+            PersistenceLevel::PersistRemoteSideEffects => Value::Enum(1),
+            PersistenceLevel::Smart => Value::Enum(2),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        r#enum(&["persist-nothing", "persist-remote-side-effects", "smart"])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
     CreateV1 {
@@ -497,6 +519,11 @@ pub enum OplogEntry {
         span_id: SpanId,
         key: String,
         value: AttributeValue,
+    },
+    /// Change persistence level
+    ChangePersistenceLevel {
+        timestamp: Timestamp,
+        level: PersistenceLevel,
     },
 }
 
@@ -739,6 +766,13 @@ impl OplogEntry {
         }
     }
 
+    pub fn change_persistence_level(level: PersistenceLevel) -> OplogEntry {
+        OplogEntry::ChangePersistenceLevel {
+            timestamp: Timestamp::now_utc(),
+            level,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -833,7 +867,8 @@ impl OplogEntry {
             | OplogEntry::ExportedFunctionInvoked { timestamp, .. }
             | OplogEntry::StartSpan { timestamp, .. }
             | OplogEntry::FinishSpan { timestamp, .. }
-            | OplogEntry::SetSpanAttribute { timestamp, .. } => *timestamp,
+            | OplogEntry::SetSpanAttribute { timestamp, .. }
+            | OplogEntry::ChangePersistenceLevel { timestamp, .. } => *timestamp,
         }
     }
 
@@ -991,7 +1026,7 @@ impl WorkerError {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use crate::model::oplog::IndexedResourceKey;
+    use crate::model::oplog::{IndexedResourceKey, PersistenceLevel};
 
     impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
         fn from(value: IndexedResourceKey) -> Self {
@@ -1007,6 +1042,32 @@ mod protobuf {
             IndexedResourceKey {
                 resource_name: value.resource_name,
                 resource_params: value.resource_params,
+            }
+        }
+    }
+
+    impl From<PersistenceLevel> for golem_api_grpc::proto::golem::worker::PersistenceLevel {
+        fn from(value: PersistenceLevel) -> Self {
+            match value {
+                PersistenceLevel::PersistNothing => {
+                    golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistNothing
+                }
+                PersistenceLevel::PersistRemoteSideEffects => {
+                    golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistRemoteSideEffects
+                }
+                PersistenceLevel::Smart => {
+                    golem_api_grpc::proto::golem::worker::PersistenceLevel::Smart
+                }
+            }
+        }
+    }
+
+    impl From<golem_api_grpc::proto::golem::worker::PersistenceLevel> for PersistenceLevel {
+        fn from(value: golem_api_grpc::proto::golem::worker::PersistenceLevel) -> Self {
+            match value {
+                golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistNothing => PersistenceLevel::PersistNothing,
+                golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistRemoteSideEffects => PersistenceLevel::PersistRemoteSideEffects,
+                golem_api_grpc::proto::golem::worker::PersistenceLevel::Smart => PersistenceLevel::Smart,
             }
         }
     }

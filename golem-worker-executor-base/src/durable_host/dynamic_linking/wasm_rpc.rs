@@ -27,7 +27,7 @@ use golem_wasm_rpc::{CancellationTokenEntry, HostWasmRpc, Uri, Value, WasmRpcEnt
 use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use std::collections::HashMap;
-use tracing::{warn, Instrument};
+use tracing::Instrument;
 use uuid::Uuid;
 use wasmtime::component::types::{ComponentInstance, ComponentItem};
 use wasmtime::component::{LinkerInstance, Resource, ResourceType, Type, Val};
@@ -90,7 +90,6 @@ pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResu
     let mut resource_types = HashMap::new();
     for ((interface_name, resource_name), methods) in resources {
         let resource_type = DynamicRpcResource::analyse(&resource_name, &methods, rpc_metadata)?;
-        warn!("Resource {interface_name}.{resource_name} has type {resource_type:?}");
 
         if let Some(resource_type) = &resource_type {
             resource_types.insert(
@@ -144,7 +143,6 @@ pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResu
             rpc_metadata,
             &resource_types,
         )?;
-        warn!("Function {} has call type {call_type:?}", function.name);
 
         if let Some(call_type) = call_type {
             instance.func_new_async(
@@ -1194,7 +1192,7 @@ impl DynamicRpcResource {
             && resource_name.ends_with("-result")
             && methods
                 .iter()
-                .filter_map(|m| m.method_name.split('.').last().map(|s| s.to_string()))
+                .filter_map(|m| m.method_name.split('.').next_back().map(|s| s.to_string()))
                 .sorted()
                 .collect::<Vec<_>>()
                 == vec!["get".to_string(), "subscribe".to_string()]

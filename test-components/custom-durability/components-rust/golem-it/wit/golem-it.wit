@@ -1,0 +1,16 @@
+package golem:it;
+
+// See https://component-model.bytecodealliance.org/design/wit.html for more details about the WIT syntax
+
+interface golem-it-api {
+  callback: func(payload: string) -> string;
+
+  resource lazy-pollable-test {
+    constructor();
+    test: func(n: u32) -> string;
+  }
+}
+
+world golem-it {
+  export golem-it-api;
+}

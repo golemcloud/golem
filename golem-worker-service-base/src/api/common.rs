@@ -17,8 +17,8 @@ use std::fmt::{Debug, Formatter};
 use golem_api_grpc::proto::golem::apidefinition::v1::{api_definition_error, ApiDefinitionError};
 use golem_api_grpc::proto::golem::worker;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
-use golem_service_base::model::{ErrorBody, ErrorsBody};
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Union};
 
@@ -269,11 +269,18 @@ mod conversion {
                 }
                 ApiDefinitionServiceError::Internal(_) => ApiEndpointError::internal(error),
                 ApiDefinitionServiceError::RibInternal(_) => ApiEndpointError::internal(error),
-                ApiDefinitionServiceError::InvalidRibScript(_) => {
+                ApiDefinitionServiceError::RibParseError(_) => ApiEndpointError::bad_request(error),
+                ApiDefinitionServiceError::UnsupportedRibInput(_) => {
                     ApiEndpointError::bad_request(error)
                 }
                 ApiDefinitionServiceError::InvalidOasDefinition(_) => {
                     ApiEndpointError::bad_request(error)
+                }
+                ApiDefinitionServiceError::RibStaticAnalysisError(_) => {
+                    ApiEndpointError::internal(error)
+                }
+                ApiDefinitionServiceError::RibByteCodeGenerationError(_) => {
+                    ApiEndpointError::internal(error)
                 }
             }
         }
@@ -308,7 +315,7 @@ mod conversion {
     impl From<ValidationErrors> for ApiEndpointError {
         fn from(error: ValidationErrors) -> Self {
             let error =
-                WorkerServiceErrorsBody::Validation(golem_service_base::model::ErrorsBody {
+                WorkerServiceErrorsBody::Validation(golem_common::model::error::ErrorsBody {
                     errors: error.errors,
                 });
 
@@ -344,13 +351,31 @@ mod conversion {
                     })),
                 },
 
+                ApiDefinitionServiceError::RibStaticAnalysisError(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::InternalError(ErrorBody {
+                        error: error.to_safe_string(),
+                    })),
+                },
+
+                ApiDefinitionServiceError::RibByteCodeGenerationError(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::InternalError(ErrorBody {
+                        error: error.to_safe_string(),
+                    })),
+                },
+
                 ApiDefinitionServiceError::RibInternal(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::InternalError(ErrorBody {
                         error: error.to_safe_string(),
                     })),
                 },
 
-                ApiDefinitionServiceError::InvalidRibScript(_) => ApiDefinitionError {
+                ApiDefinitionServiceError::RibParseError(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![error.to_safe_string()],
+                    })),
+                },
+
+                ApiDefinitionServiceError::UnsupportedRibInput(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
                         errors: vec![error.to_safe_string()],
                     })),

@@ -139,6 +139,7 @@ impl Guest for Component {
         remote_side_effect("1"); // repeated 1x
 
         set_oplog_persistence_level(PersistenceLevel::PersistNothing);
+        // Unconditional side effect in persist-nothing block will lead to divergence
         remote_side_effect("2"); // repeated 3x
         println!("Changed level: {:?}", get_oplog_persistence_level());
         set_oplog_persistence_level(PersistenceLevel::Smart);

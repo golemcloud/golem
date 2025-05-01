@@ -206,6 +206,14 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     let function = find_function(&mut store, instance, &parsed)?;
 
+    validate_function_parameters(
+        &mut store,
+        &function,
+        &full_function_name,
+        &function_input,
+        parsed.function().is_indexed_resource(),
+    )?;
+
     if store.data().is_live() {
         store
             .data_mut()
@@ -260,6 +268,74 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     store.data().set_suspended().await?;
 
     call_result
+}
+
+fn validate_function_parameters(
+    store: &mut impl AsContextMut<Data = impl WorkerCtx>,
+    function: &FindFunctionResult,
+    raw_function_name: &str,
+    function_input: &[Value],
+    using_indexed_resource: bool,
+) -> Result<(), GolemError> {
+    match function {
+        FindFunctionResult::ExportedFunction(func) => {
+            let store = store.as_context_mut();
+            let param_types: Vec<_> = if using_indexed_resource {
+                // For indexed resources we are going to inject the resource handle as the first parameter
+                // later so we only have to validate the remaining parameters
+                let params = func.params(&store);
+                params.iter().skip(1).cloned().collect()
+            } else {
+                let params = func.params(&store);
+                params.to_vec()
+            };
+
+            if function_input.len() != param_types.len() {
+                return Err(GolemError::ParamTypeMismatch {
+                    details: format!(
+                        "expected {}, got {} parameters",
+                        param_types.len(),
+                        function_input.len()
+                    ),
+                });
+            }
+        }
+        FindFunctionResult::ResourceDrop => {
+            let expected = if using_indexed_resource { 0 } else { 1 };
+            if function_input.len() != expected {
+                return Err(GolemError::ValueMismatch {
+                    details: "unexpected parameter count for drop".to_string(),
+                });
+            }
+
+            if !using_indexed_resource {
+                let store = store.as_context_mut();
+                let self_uri = store.data().self_uri();
+
+                match function_input.first() {
+                    Some(Value::Handle { uri, resource_id }) => {
+                        if uri == &self_uri.value {
+                            Ok(*resource_id)
+                        } else {
+                            Err(GolemError::ValueMismatch {
+                                details: format!(
+                                    "trying to drop handle for on wrong worker ({} vs {}) {}",
+                                    uri, self_uri.value, raw_function_name
+                                ),
+                            })
+                        }
+                    }
+                    _ => Err(GolemError::ValueMismatch {
+                        details: format!(
+                            "unexpected function input for drop for {raw_function_name}"
+                        ),
+                    }),
+                }?;
+            }
+        }
+        FindFunctionResult::IncomingHttpHandlerBridge => {}
+    }
+    Ok(())
 }
 
 async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
@@ -378,16 +454,6 @@ async fn invoke<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
     let param_types = function.params(&store);
 
-    if function_input.len() != param_types.len() {
-        return Err(GolemError::ParamTypeMismatch {
-            details: format!(
-                "expected {}, got {} parameters",
-                param_types.len(),
-                function_input.len()
-            ),
-        });
-    }
-
     let mut params = Vec::new();
     let mut resources_to_drop = Vec::new();
     for (param, param_type) in function_input.iter().zip(param_types.iter()) {
@@ -449,7 +515,7 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
             );
     }
 
-    tracing::debug!("Invoking wasi:http/incoming-http-handler handle");
+    debug!("Invoking wasi:http/incoming-http-handler handle");
 
     let (_, mut task_exits) = {
         let (scheme, hyper_request) =
@@ -527,30 +593,11 @@ async fn drop_resource<Ctx: WorkerCtx>(
     raw_function_name: &str,
 ) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
-    let self_uri = store.data().self_uri();
-    if function_input.len() != 1 {
-        return Err(GolemError::ValueMismatch {
-            details: format!("unexpected parameter count for drop {raw_function_name}"),
-        });
-    }
 
     let resource_id = match function_input.first() {
-        Some(Value::Handle { uri, resource_id }) => {
-            if uri == &self_uri.value {
-                Ok(*resource_id)
-            } else {
-                Err(GolemError::ValueMismatch {
-                    details: format!(
-                        "trying to drop handle for on wrong worker ({} vs {}) {}",
-                        uri, self_uri.value, raw_function_name
-                    ),
-                })
-            }
-        }
-        _ => Err(GolemError::ValueMismatch {
-            details: format!("unexpected function input for drop for {raw_function_name}"),
-        }),
-    }?;
+        Some(Value::Handle { resource_id, .. }) => *resource_id,
+        _ => unreachable!(), // previously validated by `validate_function_parameters`
+    };
 
     if let ParsedFunctionReference::IndexedResourceDrop {
         resource,

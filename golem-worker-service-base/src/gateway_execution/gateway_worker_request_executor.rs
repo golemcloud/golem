@@ -41,6 +41,8 @@ impl WorkerResponse {
 #[derive(Clone, Debug)]
 pub struct WorkerRequestExecutorError(String);
 
+impl std::error::Error for WorkerRequestExecutorError {}
+
 impl Display for WorkerRequestExecutorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)

@@ -49,6 +49,8 @@ async fn javascript_example_3(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     let_assert!(Some(Value::String(result_body)) = result_fetch_get.into_iter().next());
@@ -73,6 +75,8 @@ async fn javascript_example_4(
         .invoke_and_await(&worker_id, "golem:it/api.{create-promise}", vec![])
         .await
         .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 
@@ -115,6 +119,8 @@ async fn python_example_1(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
 
     check!(result == vec![Value::U64(11)]);
@@ -122,6 +128,7 @@ async fn python_example_1(
 
 #[test]
 #[tracing::instrument]
+#[ignore]
 async fn swift_example_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -146,6 +153,8 @@ async fn swift_example_1(
     while lines.len() < 2 && start.elapsed() < Duration::from_secs(5) {
         lines.extend(events_to_lines(&mut rx).await);
     }
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
 

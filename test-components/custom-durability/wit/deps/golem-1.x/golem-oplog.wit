@@ -1,0 +1,333 @@
+package golem:api@1.1.6;
+
+/// Host interface for enumerating and searching for worker oplogs
+interface oplog {
+    use wasi:clocks/wall-clock@0.2.0.{datetime};
+    use golem:rpc/types@0.2.0.{wit-value};
+
+    use host.{account-id, component-version, oplog-index, retry-policy, uuid, worker-id};
+    use context.{attribute, attribute-value, span-id, trace-id};
+
+    variant wrapped-function-type {
+        /// The side-effect reads from the worker's local state (for example local file system,
+        /// random generator, etc.)
+        read-local,
+        /// The side-effect writes to the worker's local state (for example local file system)
+        write-local,
+        /// The side-effect reads from external state (for example a key-value store)
+        read-remote,
+        /// The side-effect manipulates external state (for example an RPC call)
+        write-remote,
+        /// The side-effect manipulates external state through multiple invoked functions (for example
+        /// a HTTP request where reading the response involves multiple host function calls)
+        ///
+        /// On the first invocation of the batch, the parameter should be `None` - this triggers
+        /// writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
+        /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
+        /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
+        write-remote-batched(option<oplog-index>)
+    }
+
+    record plugin-installation-description {
+        installation-id: uuid,
+        name: string,
+        version: string,
+        parameters: list<tuple<string, string>>
+    }
+
+    record create-parameters {
+        timestamp: datetime,
+        worker-id: worker-id,
+        component-version: component-version,
+        args: list<string>,
+        env: list<tuple<string, string>>,
+        account-id: account-id,
+        parent: option<worker-id>,
+        component-size: u64,
+        initial-total-linear-memory-size: u64,
+        initial-active-plugins: list<plugin-installation-description>
+    }
+
+    record imported-function-invoked-parameters {
+        timestamp: datetime,
+        function-name: string,
+        request: wit-value,
+        response: wit-value,
+        wrapped-function-type: wrapped-function-type,
+    }
+
+    record local-span-data {
+        span-id: span-id,
+        start: datetime,
+        parent: option<span-id>,
+        /// Optionally an index of the exported-function-invoked-parameters's invocation-context field
+        linked-context: option<u64>,
+        attributes: list<attribute>,
+        inherited: bool
+    }
+
+    record external-span-data {
+        span-id: span-id
+    }
+
+    variant span-data {
+        local-span(local-span-data),
+        external-span(external-span-data)
+    }
+
+    record exported-function-invoked-parameters {
+        timestamp: datetime,
+        function-name: string,
+        request: list<wit-value>,
+        idempotency-key: string,
+        trace-id: trace-id,
+        trace-states: list<string>,
+        /// The first one is the invocation context stack associated with the exported function invocation,
+        /// and further stacks can be added that are referenced by the `linked-context` field of `local-span-data`
+        invocation-context: list<list<span-data>>
+    }
+
+    record exported-function-completed-parameters {
+        timestamp: datetime,
+        response: wit-value,
+        consumed-fuel: s64
+    }
+
+    record error-parameters {
+        timestamp: datetime,
+        error: string
+    }
+
+    record jump-parameters {
+        timestamp: datetime,
+        start: oplog-index,
+        end: oplog-index
+    }
+
+    record change-retry-policy-parameters {
+        timestamp: datetime,
+        retry-policy: retry-policy
+    }
+
+    record end-atomic-region-parameters {
+        timestamp: datetime,
+        begin-index: oplog-index
+    }
+
+    record end-remote-write-parameters {
+        timestamp: datetime,
+        begin-index: oplog-index
+    }
+
+    record exported-function-invocation-parameters {
+        idempotency-key: string,
+        function-name: string,
+        input: option<list<wit-value>>
+    }
+
+    variant worker-invocation {
+        exported-function(exported-function-invocation-parameters),
+        manual-update(component-version)
+    }
+
+    record pending-worker-invocation-parameters {
+        timestamp: datetime,
+        invocation: worker-invocation
+    }
+
+    variant update-description {
+        /// Automatic update by replaying the oplog on the new version
+        auto-update,
+        /// Custom update by loading a given snapshot on the new version
+        snapshot-based(list<u8>)
+    }
+
+    record pending-update-parameters {
+        timestamp: datetime,
+        target-version: component-version,
+        update-description: update-description
+    }
+
+    record successful-update-parameters {
+        timestamp: datetime,
+        target-version: component-version,
+        new-component-size: u64,
+        new-active-plugins: list<plugin-installation-description>
+    }
+
+    record failed-update-parameters {
+        timestamp: datetime,
+        target-version: component-version,
+        details: option<string>
+    }
+
+    record grow-memory-parameters {
+        timestamp: datetime,
+        delta: u64
+    }
+
+    type worker-resource-id = u64;
+
+    record create-resource-parameters {
+        timestamp: datetime,
+        resource-id: worker-resource-id
+    }
+
+    record drop-resource-parameters {
+        timestamp: datetime,
+        resource-id: worker-resource-id
+    }
+
+    record describe-resource-parameters {
+        timestamp: datetime,
+        resource-id: worker-resource-id,
+        resource-name: string,
+        resource-params: list<wit-value>
+    }
+
+    enum log-level {
+        stdout,
+        stderr,
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+        critical
+    }
+
+    record log-parameters {
+        timestamp: datetime,
+        level: log-level,
+        context: string,
+        message: string
+    }
+
+    record activate-plugin-parameters {
+        timestamp: datetime,
+        plugin: plugin-installation-description
+    }
+
+    record deactivate-plugin-parameters {
+        timestamp: datetime,
+        plugin: plugin-installation-description
+    }
+
+    record revert-parameters {
+        timestamp: datetime,
+        start: oplog-index,
+        end: oplog-index
+    }
+
+    record cancel-invocation-parameters {
+        timestamp: datetime,
+        idempotency-key: string
+    }
+
+    record start-span-parameters {
+        timestamp: datetime,
+        span-id: span-id,
+        parent: option<span-id>,
+        linked-context: option<span-id>,
+        attributes: list<attribute>,
+    }
+
+    record finish-span-parameters {
+        timestamp: datetime,
+        span-id: span-id
+    }
+
+    record set-span-attribute-parameters {
+        timestamp: datetime,
+        span-id: span-id,
+        key: string,
+        value: attribute-value
+    }
+
+    variant oplog-entry {
+        /// The initial worker oplog entry
+        create(create-parameters),
+        /// The worker invoked a host function
+        imported-function-invoked(imported-function-invoked-parameters),
+        /// The worker has been invoked
+        exported-function-invoked(exported-function-invoked-parameters),
+        /// The worker has completed an invocation
+        exported-function-completed(exported-function-completed-parameters),
+        /// Worker suspended
+        suspend(datetime),
+        /// Worker failed
+        error(error-parameters),
+        /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
+        /// more predictable.
+        no-op(datetime),
+        /// The worker needs to recover up to the given target oplog index and continue running from
+        /// the source oplog index from there
+        /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
+        /// ignore all recorded operations in between.
+        jump(jump-parameters),
+        /// Indicates that the worker has been interrupted at this point.
+        /// Only used to recompute the worker's (cached) status, has no effect on execution.
+        interrupted(datetime),
+        /// Indicates that the worker has been exited using WASI's exit function.
+        exited(datetime),
+        /// Overrides the worker's retry policy
+        change-retry-policy(change-retry-policy-parameters),
+        /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
+        /// recovery except if there is a corresponding `EndAtomicRegion` entry.
+        begin-atomic-region(datetime),
+        /// Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
+        /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
+        /// compaction.
+        end-atomic-region(end-atomic-region-parameters),
+        /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
+        /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
+        /// unfinished remote writes cannot be recovered.
+        begin-remote-write(datetime),
+        /// Marks the end of a remote write operation. Only used when idempotence mode is off.
+        end-remote-write(end-remote-write-parameters),
+        /// An invocation request arrived while the worker was busy
+        pending-worker-invocation(pending-worker-invocation-parameters),
+        /// An update request arrived and will be applied as soon the worker restarts
+        pending-update(pending-update-parameters),
+        /// An update was successfully applied
+        successful-update(successful-update-parameters),
+        /// An update failed to be applied
+        failed-update(failed-update-parameters),
+        /// Increased total linear memory size
+        grow-memory(grow-memory-parameters),
+        /// Created a resource instance
+        create-resource(create-resource-parameters),
+        /// Dropped a resource instance
+        drop-resource(drop-resource-parameters),
+        /// Adds additional information for a created resource instance
+        describe-resource(describe-resource-parameters),
+        /// The worker emitted a log message
+        log(log-parameters),
+        /// The worker's has been restarted, forgetting all its history
+        restart(datetime),
+        /// Activates a plugin
+        activate-plugin(activate-plugin-parameters),
+        /// Deactivates a plugin
+        deactivate-plugin(deactivate-plugin-parameters),
+        /// Revert a worker to a previous state
+        revert(revert-parameters),
+        /// Cancel a pending invocation
+        cancel-invocation(cancel-invocation-parameters),
+        /// Start a new span in the invocation context
+        start-span(start-span-parameters),
+        /// Finish an open span in the invocation context
+        finish-span(finish-span-parameters),
+        /// Set an attribute on an open span in the invocation context
+        set-span-attribute(set-span-attribute-parameters),
+    }
+
+    resource get-oplog {
+        constructor(worker-id: worker-id, start: oplog-index);
+        get-next: func() -> option<list<oplog-entry>>;
+    }
+
+    resource search-oplog {
+        constructor(worker-id: worker-id, text: string);
+        get-next: func() -> option<list<tuple<oplog-index, oplog-entry>>>;
+    }
+}

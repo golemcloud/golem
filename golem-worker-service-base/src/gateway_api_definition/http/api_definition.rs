@@ -16,7 +16,10 @@ use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern
 use crate::gateway_api_definition::http::{HttpApiDefinitionRequest, RouteRequest};
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
 use crate::gateway_api_definition_transformer::transform_http_api_definition;
-use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled, StaticBinding};
+use crate::gateway_binding::{
+    GatewayBinding, GatewayBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
+    ResponseMappingCompiled, StaticBinding, WorkerNameCompiled,
+};
 use crate::gateway_binding::{HttpHandlerBindingCompiled, WorkerBindingCompiled};
 use crate::gateway_middleware::{
     HttpAuthenticationMiddleware, HttpCors, HttpMiddleware, HttpMiddlewares,
@@ -28,14 +31,15 @@ use crate::service::gateway::security_scheme::SecuritySchemeService;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_api_grpc::proto::golem::apidefinition::HttpRoute;
-use golem_service_base::model::{Component, VersionedComponentId};
-use golem_wasm_ast::analysis::AnalysedExport;
+use golem_common::model::component::VersionedComponentId;
+use golem_service_base::model::Component;
+use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType};
 use poem_openapi::Enum;
-use rib::RibError;
+use rib::{RibCompilationError, RibInputTypeInfo};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::str::FromStr;
@@ -81,21 +85,23 @@ impl HttpApiDefinition {
     ) -> Result<Self, ApiDefinitionError> {
         let mut registry = HashMap::new();
 
-        if let Some(security_schemes) = request.security {
-            for security_scheme_reference in security_schemes {
-                let security_scheme = security_scheme_service
-                    .get(
-                        &security_scheme_reference.security_scheme_identifier,
-                        namespace,
-                    )
-                    .await
-                    .map_err(ApiDefinitionError::SecuritySchemeError)?;
+        let security_schemes_in_definition = request
+            .routes
+            .iter()
+            .filter_map(|route| {
+                route.security.as_ref().map(|security_scheme_reference| {
+                    security_scheme_reference.security_scheme_identifier.clone()
+                })
+            })
+            .collect::<HashSet<_>>();
 
-                registry.insert(
-                    security_scheme_reference.security_scheme_identifier.clone(),
-                    security_scheme.clone(),
-                );
-            }
+        for security_scheme_identifier in security_schemes_in_definition {
+            let security_scheme = security_scheme_service
+                .get(&security_scheme_identifier, namespace)
+                .await
+                .map_err(ApiDefinitionError::SecuritySchemeError)?;
+
+            registry.insert(security_scheme_identifier, security_scheme);
         }
 
         let mut routes = vec![];
@@ -103,17 +109,13 @@ impl HttpApiDefinition {
         for route in request.routes {
             let mut http_middlewares = vec![];
 
-            if let Some(security) = route.security {
+            if let Some(security) = &route.security {
                 let security_scheme = security_scheme_service
                     .get(&security.security_scheme_identifier, namespace)
                     .await
                     .map_err(ApiDefinitionError::SecuritySchemeError)?;
 
                 http_middlewares.push(HttpMiddleware::authenticate_request(security_scheme));
-            }
-
-            if let Some(cors) = route.cors {
-                http_middlewares.push(HttpMiddleware::cors(cors));
             }
 
             routes.push(Route {
@@ -149,17 +151,9 @@ impl HttpApiDefinition {
 
 impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
     fn from(value: HttpApiDefinition) -> Self {
-        let global_security = value.security_schemes();
-        let security = if global_security.is_empty() {
-            None
-        } else {
-            Some(global_security)
-        };
-
         Self {
             id: value.id(),
             version: value.version(),
-            security,
             routes: value.routes.into_iter().map(RouteRequest::from).collect(),
             draft: value.draft,
         }
@@ -741,10 +735,11 @@ pub struct CompiledAuthCallBackRoute {
     pub http_auth_middleware: HttpAuthenticationMiddleware,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum RouteCompilationErrors {
     MetadataNotFoundError(VersionedComponentId),
-    RibError(RibError),
+    RibError(RibCompilationError),
+    ValidationError(ValidationErrors),
 }
 
 #[derive(Clone, Debug)]
@@ -777,6 +772,18 @@ impl CompiledRoute {
         route: &Route,
         metadata_dictionary: &ComponentMetadataDictionary,
     ) -> Result<CompiledRoute, RouteCompilationErrors> {
+        let query_params = route.path.query_params.as_ref();
+        let path_params = route
+            .path
+            .path_patterns
+            .iter()
+            .filter_map(|pattern| match pattern {
+                PathPattern::Var(var) => Some(var.key_name.as_str()),
+                PathPattern::CatchAllVar(var) => Some(var.key_name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
         match &route.binding {
             GatewayBinding::Default(worker_binding) => {
                 let metadata = metadata_dictionary
@@ -789,6 +796,15 @@ impl CompiledRoute {
                 let binding =
                     WorkerBindingCompiled::from_raw_worker_binding(worker_binding, metadata)
                         .map_err(RouteCompilationErrors::RibError)?;
+
+                Self::validate_rib_scripts(
+                    query_params,
+                    &path_params,
+                    binding.worker_name_compiled.as_ref(),
+                    binding.invocation_context_compiled.as_ref(),
+                    binding.idempotency_key_compiled.as_ref(),
+                    Some(&binding.response_compiled),
+                )?;
 
                 Ok(CompiledRoute {
                     method: route.method.clone(),
@@ -809,6 +825,15 @@ impl CompiledRoute {
                 let binding =
                     WorkerBindingCompiled::from_raw_worker_binding(worker_binding, metadata)
                         .map_err(RouteCompilationErrors::RibError)?;
+
+                Self::validate_rib_scripts(
+                    query_params,
+                    &path_params,
+                    binding.worker_name_compiled.as_ref(),
+                    binding.invocation_context_compiled.as_ref(),
+                    binding.idempotency_key_compiled.as_ref(),
+                    Some(&binding.response_compiled),
+                )?;
 
                 Ok(CompiledRoute {
                     method: route.method.clone(),
@@ -832,6 +857,15 @@ impl CompiledRoute {
                 )
                 .map_err(RouteCompilationErrors::RibError)?;
 
+                Self::validate_rib_scripts(
+                    query_params,
+                    &path_params,
+                    binding.worker_name_compiled.as_ref(),
+                    None,
+                    binding.idempotency_key_compiled.as_ref(),
+                    None,
+                )?;
+
                 Ok(CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
@@ -846,6 +880,203 @@ impl CompiledRoute {
                 binding: GatewayBindingCompiled::Static(static_binding.clone()),
                 middlewares: route.middlewares.clone(),
             }),
+        }
+    }
+
+    // Validate the Rib script that can exist
+    // in worker name, invocation context, idempotency key and response mapping
+    // to check if the query and path params lookups are actually in the API route
+    fn validate_rib_scripts(
+        api_query_params: &[QueryInfo],
+        path_params: &[&str],
+        worker_name_compiled: Option<&WorkerNameCompiled>,
+        invocation_context_compiled: Option<&InvocationContextCompiled>,
+        idempotency_key_compiled: Option<&IdempotencyKeyCompiled>,
+        response_mapping: Option<&ResponseMappingCompiled>,
+    ) -> Result<(), RouteCompilationErrors> {
+        let mut validation_errors = vec![];
+        if let Some(worker_name_compiled) = worker_name_compiled {
+            let input_type_info = &worker_name_compiled.rib_input_type_info;
+            let invalid_query_params =
+                Self::find_invalid_query_keys_in_rib(api_query_params, input_type_info);
+
+            if !invalid_query_params.is_empty() {
+                validation_errors.push(
+                    format!(
+                        "Following request.query lookups in worker name rib script is not present in API route: {}",
+                        invalid_query_params.join(", ")
+                    )
+                );
+            }
+
+            let invalid_path_params =
+                Self::find_invalid_path_keys_in_rib(path_params, input_type_info);
+
+            if !invalid_path_params.is_empty() {
+                validation_errors.push(
+                    format!(
+                        "Following request.path lookups in worker name rib script is not present in API route: {}",
+                        invalid_path_params.join(", ")
+                    )
+                );
+            }
+        }
+
+        if let Some(invocation_context_compiled) = invocation_context_compiled {
+            let input_type_info = &invocation_context_compiled.rib_input;
+            let invalid_query_params =
+                Self::find_invalid_query_keys_in_rib(api_query_params, input_type_info);
+
+            if !invalid_query_params.is_empty() {
+                validation_errors.push(
+                    format!(
+                        "Following request.query lookups in invocation context rib script is not present in API route: {}",
+                        invalid_query_params.join(", ")
+                    )
+                );
+            }
+
+            let invalid_path_params =
+                Self::find_invalid_path_keys_in_rib(path_params, input_type_info);
+
+            if !invalid_path_params.is_empty() {
+                validation_errors.push(
+                    format!(
+                        "Following request.path lookups in invocation context rib script is not present in API route: {}",
+                        invalid_path_params.join(", ")
+                    )
+                );
+            }
+        }
+
+        if let Some(idempotency_key_compiled) = idempotency_key_compiled {
+            let input_type_info = &idempotency_key_compiled.rib_input;
+            let invalid_query_params =
+                Self::find_invalid_query_keys_in_rib(api_query_params, input_type_info);
+
+            if !invalid_query_params.is_empty() {
+                validation_errors.push(
+                    format!(
+                        "Following request.query lookups in idempotency key rib script is not present in API route: {}",
+                        invalid_query_params.join(", ")
+                    )
+                );
+            }
+
+            let invalid_path_params =
+                Self::find_invalid_path_keys_in_rib(path_params, input_type_info);
+
+            if !invalid_path_params.is_empty() {
+                validation_errors.push(
+                    format!(
+                        "Following request.path lookups in idempotency key rib script is not present in API route: {}",
+                        invalid_path_params.join(", ")
+                    )
+                );
+            }
+        }
+
+        if let Some(response_mapping) = response_mapping {
+            let input_type_info = &response_mapping.rib_input;
+            let invalid_query_params =
+                Self::find_invalid_query_keys_in_rib(api_query_params, input_type_info);
+
+            if !invalid_query_params.is_empty() {
+                validation_errors.push(
+                    format!(
+                        "Following request.query lookups in response mapping rib script is not present in API route: {}",
+                        invalid_query_params.join(", ")
+                    )
+                );
+            }
+
+            let invalid_path_params =
+                Self::find_invalid_path_keys_in_rib(path_params, input_type_info);
+
+            if !invalid_path_params.is_empty() {
+                validation_errors.push(
+                    format!(
+                        "Following request.path lookups in response mapping rib script is not present in API route: {}",
+                        invalid_path_params.join(", ")
+                    )
+                );
+            }
+        }
+
+        if !validation_errors.is_empty() {
+            Err(RouteCompilationErrors::ValidationError(ValidationErrors {
+                errors: validation_errors,
+            }))
+        } else {
+            Ok(())
+        }
+    }
+
+    // Find all query param lookups in rib script that are not defined in the path pattern
+    fn find_invalid_query_keys_in_rib<'a>(
+        input_query_params: &[QueryInfo],
+        rib_input_type_info: &'a RibInputTypeInfo,
+    ) -> Vec<&'a str> {
+        let api_query_keys = input_query_params
+            .iter()
+            .map(|query| query.key_name.as_str())
+            .collect::<Vec<_>>();
+
+        let rib_query_keys = Self::get_request_lookups_in_rib(rib_input_type_info, "query");
+
+        // find request.query lookups in Rib that are not in actual API
+        rib_query_keys
+            .into_iter()
+            .filter(|&rib_query_key| !api_query_keys.contains(&rib_query_key))
+            .collect()
+    }
+
+    fn find_invalid_path_keys_in_rib<'a>(
+        path_params: &[&'a str],
+        rib_input_type_info: &'a RibInputTypeInfo,
+    ) -> Vec<&'a str> {
+        let rib_path_keys = Self::get_request_lookups_in_rib(rib_input_type_info, "path");
+
+        // find request.path lookups in Rib that are not in actual API
+        rib_path_keys
+            .into_iter()
+            .filter(|rib_path_key| !path_params.contains(rib_path_key))
+            .collect()
+    }
+
+    // Find all keys under `request.x` where x can be `path` or `query`
+    // which is part of the rib script
+    fn get_request_lookups_in_rib<'a>(
+        rib_input_type_info: &'a RibInputTypeInfo,
+        key_name: &'a str,
+    ) -> Vec<&'a str> {
+        // get path params from rib_input_type info
+        let rib_query_params = rib_input_type_info.get("request");
+
+        if let Some(rib_path_params) = rib_query_params {
+            match rib_path_params {
+                AnalysedType::Record(type_record) => type_record
+                    .fields
+                    .iter()
+                    .flat_map(|field| {
+                        if field.name == key_name {
+                            let typ = &field.typ;
+                            match typ {
+                                AnalysedType::Record(type_record) => {
+                                    type_record.fields.iter().map(|x| x.name.as_str()).collect()
+                                }
+                                _ => vec![],
+                            }
+                        } else {
+                            vec![]
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+
+                _ => vec![],
+            }
+        } else {
+            vec![]
         }
     }
 }

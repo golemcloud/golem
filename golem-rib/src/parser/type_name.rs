@@ -24,7 +24,7 @@ use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
 
 use crate::parser::errors::RibParseError;
 use crate::rib_source_span::GetSourcePosition;
-use crate::{InferredNumber, InferredType};
+use crate::{InferredNumber, InferredType, TypeInternal};
 
 // Rib grammar uses it's own `TypeName` instead of relying from any other crates to annotate types (Example: 1: u32, let x: u32 = 1;),
 // and sticks on to the  Display instance that aligns with what we see in WIT.
@@ -108,14 +108,14 @@ impl Display for TypeName {
                 }
             },
             TypeName::Record(fields) => {
-                write!(f, "record{{")?;
+                write!(f, "record {{ ")?;
                 for (i, (field, typ)) in fields.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
                     write!(f, "{}: {}", field, typ)?;
                 }
-                write!(f, "}}")
+                write!(f, " }}")
             }
             TypeName::Flags(flags) => {
                 write!(f, "flags<")?;
@@ -128,17 +128,17 @@ impl Display for TypeName {
                 write!(f, ">")
             }
             TypeName::Enum(cases) => {
-                write!(f, "enum<")?;
+                write!(f, "enum {{ ")?;
                 for (i, case) in cases.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
                     write!(f, "{}", case)?;
                 }
-                write!(f, ">")
+                write!(f, " }}")
             }
             TypeName::Variant { cases } => {
-                write!(f, "variant<")?;
+                write!(f, "variant {{")?;
                 for (i, (case, typ)) in cases.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -148,7 +148,7 @@ impl Display for TypeName {
                         write!(f, "({})", typ)?;
                     }
                 }
-                write!(f, ">")
+                write!(f, " }}")
             }
         }
     }
@@ -258,47 +258,43 @@ impl TryFrom<AnalysedType> for TypeName {
     }
 }
 
-impl From<TypeName> for InferredType {
-    fn from(type_name: TypeName) -> Self {
+impl From<&TypeName> for InferredType {
+    fn from(type_name: &TypeName) -> Self {
         match type_name {
-            TypeName::Bool => InferredType::Bool,
-            TypeName::S8 => InferredType::S8,
-            TypeName::U8 => InferredType::U8,
-            TypeName::S16 => InferredType::S16,
-            TypeName::U16 => InferredType::U16,
-            TypeName::S32 => InferredType::S32,
-            TypeName::U32 => InferredType::U32,
-            TypeName::S64 => InferredType::S64,
-            TypeName::U64 => InferredType::U64,
-            TypeName::F32 => InferredType::F32,
-            TypeName::F64 => InferredType::F64,
-            TypeName::Chr => InferredType::Chr,
-            TypeName::Str => InferredType::Str,
-            TypeName::List(inner_type) => {
-                InferredType::List(Box::new(inner_type.deref().clone().into()))
-            }
+            TypeName::Bool => InferredType::bool(),
+            TypeName::S8 => InferredType::s8(),
+            TypeName::U8 => InferredType::u8(),
+            TypeName::S16 => InferredType::s16(),
+            TypeName::U16 => InferredType::u16(),
+            TypeName::S32 => InferredType::s32(),
+            TypeName::U32 => InferredType::u32(),
+            TypeName::S64 => InferredType::s64(),
+            TypeName::U64 => InferredType::u64(),
+            TypeName::F32 => InferredType::f32(),
+            TypeName::F64 => InferredType::f64(),
+            TypeName::Chr => InferredType::char(),
+            TypeName::Str => InferredType::string(),
+            TypeName::List(inner_type) => InferredType::list(inner_type.deref().into()),
             TypeName::Tuple(inner_types) => {
-                InferredType::Tuple(inner_types.into_iter().map(|t| t.into()).collect())
+                InferredType::tuple(inner_types.iter().map(|t| t.into()).collect())
             }
-            TypeName::Option(type_name) => {
-                InferredType::Option(Box::new(type_name.deref().clone().into()))
-            }
-            TypeName::Result { ok, error } => InferredType::Result {
-                ok: ok.map(|x| Box::new(x.deref().clone().into())),
-                error: error.map(|x| Box::new(x.deref().clone().into())),
-            },
-            TypeName::Record(fields) => InferredType::Record(
+            TypeName::Option(type_name) => InferredType::option(type_name.deref().into()),
+            TypeName::Result { ok, error } => InferredType::result(
+                ok.as_deref().map(|x| x.into()),
+                error.as_deref().map(|x| x.into()),
+            ),
+            TypeName::Record(fields) => InferredType::record(
                 fields
-                    .into_iter()
-                    .map(|(field, typ)| (field, typ.deref().clone().into()))
+                    .iter()
+                    .map(|(field, typ)| (field.clone(), typ.deref().into()))
                     .collect(),
             ),
-            TypeName::Flags(flags) => InferredType::Flags(flags),
-            TypeName::Enum(cases) => InferredType::Enum(cases),
-            TypeName::Variant { cases } => InferredType::Variant(
+            TypeName::Flags(flags) => InferredType::flags(flags.clone()),
+            TypeName::Enum(cases) => InferredType::enum_(cases.clone()),
+            TypeName::Variant { cases } => InferredType::from_variant_cases(
                 cases
-                    .into_iter()
-                    .map(|(case, typ)| (case, typ.map(|x| x.deref().clone().into())))
+                    .iter()
+                    .map(|(case_name, typ)| (case_name.clone(), typ.as_deref().map(|x| x.into())))
                     .collect(),
             ),
         }
@@ -309,83 +305,80 @@ impl TryFrom<InferredType> for TypeName {
     type Error = String;
 
     fn try_from(value: InferredType) -> Result<Self, Self::Error> {
-        match value {
-            InferredType::Bool => Ok(TypeName::Bool),
-            InferredType::S8 => Ok(TypeName::S8),
-            InferredType::U8 => Ok(TypeName::U8),
-            InferredType::S16 => Ok(TypeName::S16),
-            InferredType::U16 => Ok(TypeName::U16),
-            InferredType::S32 => Ok(TypeName::S32),
-            InferredType::U32 => Ok(TypeName::U32),
-            InferredType::S64 => Ok(TypeName::S64),
-            InferredType::U64 => Ok(TypeName::U64),
-            InferredType::F32 => Ok(TypeName::F32),
-            InferredType::F64 => Ok(TypeName::F64),
-            InferredType::Chr => Ok(TypeName::Chr),
-            InferredType::Str => Ok(TypeName::Str),
-            InferredType::List(inferred_type) => {
-                let verified = inferred_type.deref().clone().try_into()?;
+        match value.inner.deref() {
+            TypeInternal::Bool => Ok(TypeName::Bool),
+            TypeInternal::S8 => Ok(TypeName::S8),
+            TypeInternal::U8 => Ok(TypeName::U8),
+            TypeInternal::S16 => Ok(TypeName::S16),
+            TypeInternal::U16 => Ok(TypeName::U16),
+            TypeInternal::S32 => Ok(TypeName::S32),
+            TypeInternal::U32 => Ok(TypeName::U32),
+            TypeInternal::S64 => Ok(TypeName::S64),
+            TypeInternal::U64 => Ok(TypeName::U64),
+            TypeInternal::F32 => Ok(TypeName::F32),
+            TypeInternal::F64 => Ok(TypeName::F64),
+            TypeInternal::Chr => Ok(TypeName::Chr),
+            TypeInternal::Str => Ok(TypeName::Str),
+            TypeInternal::List(inferred_type) => {
+                let verified = inferred_type.clone().try_into()?;
                 Ok(TypeName::List(Box::new(verified)))
             }
-            InferredType::Tuple(inferred_types) => {
+            TypeInternal::Tuple(inferred_types) => {
                 let mut verified_types = vec![];
                 for typ in inferred_types {
-                    let verified = typ.try_into()?;
+                    let verified = typ.clone().try_into()?;
                     verified_types.push(verified);
                 }
                 Ok(TypeName::Tuple(verified_types))
             }
-            InferredType::Record(name_and_types) => {
+            TypeInternal::Record(name_and_types) => {
                 let mut fields = vec![];
                 for (field, typ) in name_and_types {
-                    let verified = typ.try_into()?;
-                    fields.push((field, Box::new(verified)));
+                    fields.push((field.clone(), Box::new(typ.clone().try_into()?)));
                 }
                 Ok(TypeName::Record(fields))
             }
-            InferredType::Flags(flags) => Ok(TypeName::Flags(flags)),
-            InferredType::Enum(enums) => Ok(TypeName::Enum(enums)),
-            InferredType::Option(inferred_type) => {
-                let result = inferred_type.deref().clone().try_into()?;
+            TypeInternal::Flags(flags) => Ok(TypeName::Flags(flags.clone())),
+            TypeInternal::Enum(enums) => Ok(TypeName::Enum(enums.clone())),
+            TypeInternal::Option(inferred_type) => {
+                let result = inferred_type.clone().try_into()?;
                 Ok(TypeName::Option(Box::new(result)))
             }
-            InferredType::Result { ok, error } => {
-                let ok_unified = ok.map(|ok| ok.deref().clone().try_into()).transpose()?;
+            TypeInternal::Result { ok, error } => {
+                let ok_unified = ok.as_ref().map(|ok| ok.clone().try_into()).transpose()?;
                 let err_unified = error
-                    .map(|err| err.deref().clone().try_into())
+                    .as_ref()
+                    .map(|err| err.clone().try_into())
                     .transpose()?;
                 Ok(TypeName::Result {
                     ok: ok_unified.map(Box::new),
                     error: err_unified.map(Box::new),
                 })
             }
-            InferredType::Variant(variant) => {
+            TypeInternal::Variant(variant) => {
                 let mut cases = vec![];
                 for (case, typ) in variant {
-                    let verified = typ.map(TypeName::try_from).transpose()?;
-                    cases.push((case, verified.map(Box::new)));
+                    let verified = typ.clone().map(TypeName::try_from).transpose()?;
+                    cases.push((case.clone(), verified.map(Box::new)));
                 }
                 Ok(TypeName::Variant { cases })
             }
-            InferredType::Resource { .. } => {
+            TypeInternal::Resource { .. } => {
                 Err("Cannot convert a resource type to a type name".to_string())
             }
-            InferredType::OneOf(_) => {
-                Err("Cannot convert a one of type to a type name".to_string())
-            }
-            InferredType::AllOf(_) => {
+            TypeInternal::AllOf(_) => {
                 Err("Cannot convert a all of type to a type name".to_string())
             }
-            InferredType::Unknown => {
+            TypeInternal::Unknown => {
                 Err("Cannot convert an unknown type to a type name".to_string())
             }
-            InferredType::Sequence(_) => {
+            TypeInternal::Sequence(_) => {
                 Err("Cannot convert a sequence type to a type name".to_string())
             }
-            InferredType::Instance { .. } => {
+            TypeInternal::Instance { .. } => {
                 Err("Cannot convert an instance type to a type name".to_string())
             }
-            InferredType::Range { .. } => {
+            TypeInternal::Range { .. } => {
                 Err("Cannot convert a range type to a type name".to_string())
             }
         }
@@ -415,7 +408,7 @@ where
         attempt(string("char").map(|_| TypeName::Chr)),
         attempt(string("string").map(|_| TypeName::Str)),
     ))
-    .skip(spaces())
+    .skip(spaces().silent())
 }
 
 pub fn parse_list_type<Input>() -> impl Parser<Input, Output = TypeName>
@@ -427,10 +420,10 @@ where
     Input::Position: GetSourcePosition,
 {
     string("list")
-        .skip(spaces())
+        .skip(spaces().silent())
         .with(between(
-            char('<').skip(spaces()),
-            char('>').skip(spaces()),
+            char('<').skip(spaces().silent().silent()),
+            char('>').skip(spaces().silent().silent()),
             type_name(),
         ))
         .map(|inner_type| TypeName::List(Box::new(inner_type)))
@@ -445,10 +438,10 @@ where
     Input::Position: GetSourcePosition,
 {
     string("option")
-        .skip(spaces())
+        .skip(spaces().silent())
         .with(between(
-            char('<').skip(spaces()),
-            char('>').skip(spaces()),
+            char('<').skip(spaces().silent().silent()),
+            char('>').skip(spaces().silent().silent()),
             type_name(),
         ))
         .map(|inner_type| TypeName::Option(Box::new(inner_type)))
@@ -469,16 +462,24 @@ where
     Input::Position: GetSourcePosition,
 {
     string("result")
-        .skip(spaces())
+        .skip(spaces().silent())
         .with(optional(between(
-            char('<').skip(spaces()),
-            char('>').skip(spaces()),
+            char('<').skip(spaces().silent()),
+            char('>').skip(spaces().silent()),
             (
                 choice!(
-                    string("_").skip(spaces()).map(|_| ResultSuccess::NoType),
-                    type_name().skip(spaces()).map(ResultSuccess::WithType)
+                    string("_")
+                        .skip(spaces().silent())
+                        .map(|_| ResultSuccess::NoType),
+                    type_name()
+                        .skip(spaces().silent())
+                        .map(ResultSuccess::WithType)
                 ),
-                optional(char(',').skip(spaces()).with(type_name().skip(spaces()))),
+                optional(
+                    char(',')
+                        .skip(spaces().silent())
+                        .with(type_name().skip(spaces().silent())),
+                ),
             ),
         )))
         .map(|result| match result {
@@ -514,11 +515,11 @@ where
     Input::Position: GetSourcePosition,
 {
     string("tuple")
-        .skip(spaces())
+        .skip(spaces().silent())
         .with(between(
-            char('<').skip(spaces()),
-            char('>').skip(spaces()),
-            sep_by(type_name(), char(',').skip(spaces())),
+            char('<').skip(spaces().silent()),
+            char('>').skip(spaces().silent()),
+            sep_by(type_name(), char(',').skip(spaces().silent())),
         ))
         .map(TypeName::Tuple)
 }
@@ -531,7 +532,7 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    spaces().with(choice((
+    spaces().silent().with(choice((
         attempt(parse_basic_type()),
         attempt(parse_list_type()),
         attempt(parse_tuple_type()),

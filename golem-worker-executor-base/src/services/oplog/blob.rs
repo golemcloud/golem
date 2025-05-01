@@ -523,7 +523,7 @@ impl OplogArchive for BlobOplogArchive {
             let _ = entries.remove(&idx);
         }
 
-        if entries.len() == 0 {
+        if entries.is_empty() {
             let mut created = self.created.write().await;
             if *created {
                 self.blob_storage

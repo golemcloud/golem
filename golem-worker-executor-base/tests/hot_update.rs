@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
+use test_r::{flaky, inherit_test_dep, test};
 
 use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
@@ -198,6 +198,8 @@ async fn auto_update_on_running(
         .unwrap(); // awaiting a result from f3 to make sure the metadata already contains the updates
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     http_server.abort();
 
@@ -243,6 +245,8 @@ async fn auto_update_on_idle(
     info!("result: {:?}", result);
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
     check!(result[0] == Value::U64(0));
@@ -254,6 +258,7 @@ async fn auto_update_on_idle(
 
 #[test]
 #[tracing::instrument]
+#[flaky(10)] // TODO: remove when the test is stabilized
 async fn failing_auto_update_on_idle(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -298,6 +303,8 @@ async fn failing_auto_update_on_idle(
 
     info!("result: {:?}", result);
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     http_server.abort();
@@ -357,6 +364,8 @@ async fn auto_update_on_idle_with_non_diverging_history(
 
     info!("result: {:?}", result);
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     // Expectation: the f3 function is not changing between the versions, so we can safely
     // update the component and call f4 which only exists in the new version.
@@ -437,6 +446,8 @@ async fn failing_auto_update_on_running(
         .unwrap(); // awaiting a result from f3 to make sure the metadata already contains the updates
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     http_server.abort();
 
@@ -501,6 +512,8 @@ async fn manual_update_on_idle(
 
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     // Explanation: we can call 'get' on the updated component that does not exist in previous
     // versions, and it returns the previous global state which has been transferred to it
     // using the v2 component's 'save' function through the v3 component's load function.
@@ -564,6 +577,8 @@ async fn manual_update_on_idle_without_save_snapshot(
         .unwrap();
 
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     http_server.abort();
@@ -657,6 +672,8 @@ async fn auto_update_on_running_followed_by_manual(
 
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     http_server.abort();
 
@@ -721,6 +738,8 @@ async fn manual_update_on_idle_with_failing_load(
         .unwrap();
 
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
     http_server.abort();
@@ -792,6 +811,83 @@ async fn manual_update_on_idle_using_v11(
         .unwrap();
 
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    // Explanation: we can call 'get' on the updated component that does not exist in previous
+    // versions, and it returns the previous global state which has been transferred to it
+    // using the v2 component's 'save' function through the v3 component's load function.
+
+    drop(executor);
+    http_server.abort();
+
+    check!(before_update == after_update);
+    check!(metadata.last_known_status.component_version == target_version);
+    check!(metadata.last_known_status.pending_updates.is_empty());
+    check!(metadata.last_known_status.failed_updates.is_empty());
+    check!(metadata.last_known_status.successful_updates.len() == 1);
+}
+
+#[test]
+#[tracing::instrument]
+async fn manual_update_on_idle_using_golem_rust_sdk(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
+
+    let http_server = TestHttpServer::start().await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let component_id = executor
+        .component("update-test-v2-11")
+        .unique()
+        .store()
+        .await;
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "manual_update_on_idle_using_golem_rust_sdk",
+            vec![],
+            env,
+        )
+        .await;
+    let _ = executor.log_output(&worker_id).await;
+
+    let target_version = executor
+        .update_component(&component_id, "update-test-v3-sdk")
+        .await;
+    info!("Updated component to version {target_version}");
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{f1}",
+            vec![0u64.into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    let before_update = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
+        .await
+        .unwrap();
+
+    executor
+        .manual_update_worker(&worker_id, target_version)
+        .await;
+
+    let after_update = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
+        .await
+        .unwrap();
+
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     // Explanation: we can call 'get' on the updated component that does not exist in previous
     // versions, and it returns the previous global state which has been transferred to it

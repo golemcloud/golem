@@ -14,7 +14,6 @@
 
 pub(crate) use check_instance_returns::*;
 pub(crate) use exhaustive_pattern_match::*;
-pub(crate) use invalid_expr::*;
 pub(crate) use invalid_math_expr::*;
 pub(crate) use missing_fields::*;
 pub use path::*;
@@ -23,7 +22,6 @@ pub(crate) use unresolved_types::*;
 
 mod check_instance_returns;
 mod exhaustive_pattern_match;
-mod invalid_expr;
 mod invalid_math_expr;
 mod invalid_worker_name;
 mod missing_fields;
@@ -32,9 +30,8 @@ mod type_check_in_function_calls;
 mod type_mismatch;
 mod unresolved_types;
 
-use crate::rib_compilation_error::RibCompilationError;
+use crate::rib_type_error::RibTypeError;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
-use crate::type_checker::invalid_expr::check_invalid_expr;
 use crate::type_checker::invalid_math_expr::check_invalid_math_expr;
 use crate::type_checker::invalid_worker_name::check_invalid_worker_name;
 use crate::type_checker::type_check_in_function_calls::check_type_error_in_function_calls;
@@ -43,11 +40,10 @@ use crate::{Expr, FunctionTypeRegistry};
 pub fn type_check(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
-) -> Result<(), RibCompilationError> {
+) -> Result<(), RibTypeError> {
     check_type_error_in_function_calls(expr, function_type_registry)?;
     check_unresolved_types(expr)?;
     check_invalid_worker_name(expr)?;
-    check_invalid_expr(expr)?;
     check_invalid_program_return(expr)?;
     check_invalid_math_expr(expr)?;
     check_exhaustive_pattern_match(expr, function_type_registry)?;
@@ -63,6 +59,114 @@ mod type_check_tests {
         use crate::type_checker::type_check_tests::internal;
         use crate::type_checker::type_check_tests::internal::strip_spaces;
         use crate::{compile, Expr};
+
+        #[test]
+        async fn test_inference_pattern_match_invalid_0() {
+            let expr = r#"
+          let x: option<u64> = some(1);
+          match x {
+            some(x) => x,
+            none => "none"
+          }
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = internal::get_metadata_with_record_input_params();
+
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 4, column 24
+            `x`
+            cause: type mismatch. expected string, found u64
+            expected string based on pattern match branch at line 5 column 21
+            "#;
+
+            //assert!(false);
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_inference_pattern_match_invalid_1() {
+            let expr = r#"
+          let x: option<u64> = some(1);
+          match x {
+            some(x) => {foo: x},
+            none => {foo: "bar"}
+          }
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = internal::get_metadata_with_record_input_params();
+
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 4, column 24
+            `{foo: x}`
+            cause: type mismatch. expected string, found u64
+            expected string based on pattern match branch at line 5 column 21
+            "#;
+
+            //assert!(false);
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_inference_pattern_match_invalid_2() {
+            let expr = r#"
+          let x: option<u64> = some(1);
+          match x {
+            some(x) => ok(1),
+            none    => ok("none")
+          }
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = internal::get_metadata_with_record_input_params();
+
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 4, column 24
+            `ok(1)`
+            cause: type mismatch. expected string, found s32
+            expected string based on pattern match branch at line 5 column 24
+            "#;
+
+            //assert!(false);
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_inference_pattern_match_invalid_3() {
+            let expr = r#"
+          let x: option<u64> = some(1);
+          match x {
+            some(x) => ok("none"),
+            none    => ok(1)
+          }
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = internal::get_metadata_with_record_input_params();
+
+            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 5, column 24
+            `ok(1)`
+            cause: type mismatch. expected string, found s32
+            expected string based on pattern match branch at line 4 column 24
+            "#;
+
+            //assert!(false);
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
 
         #[test]
         fn test_type_mismatch_in_record_in_function_call1() {
@@ -159,8 +263,7 @@ mod type_check_tests {
             let expected = r#"
             error in the following rib found at line 2, column 51
             `(1, 2)`
-            cause: The expression is wrongly used (directly or indirectly) elsewhere resulting in conflicting types: `list`, `tuple`
-            help: ensure this expression is only used in contexts that align with its actual type
+            cause: ambiguous types: `list<number>`, `tuple<number, number>`
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -183,8 +286,7 @@ mod type_check_tests {
             let expected = r#"
             error in the following rib found at line 2, column 21
             `{a: "foo"}`
-            cause: The expression is wrongly used (directly or indirectly) elsewhere resulting in conflicting types: `list`, `record`
-            help: ensure this expression is only used in contexts that align with its actual type
+            cause: ambiguous types: `list<number>`, `record{a: str}`
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));

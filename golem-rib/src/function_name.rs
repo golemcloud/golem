@@ -14,9 +14,8 @@
 
 use crate::Expr;
 use bincode::{BorrowDecode, Decode, Encode};
-use combine::stream::position;
 use combine::stream::position::Stream;
-use combine::EasyParser;
+use combine::{eof, EasyParser, Parser};
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
 use semver::{BuildMetadata, Prerelease};
 use serde::{Deserialize, Serialize};
@@ -625,9 +624,9 @@ impl ParsedFunctionName {
     pub fn parse(name: impl AsRef<str>) -> Result<Self, String> {
         let name = name.as_ref();
 
-        let mut parser = crate::parser::call::function_name();
+        let mut parser = crate::parser::call::function_name().skip(eof());
 
-        let result = parser.easy_parse(position::Stream::new(name));
+        let result = parser.easy_parse(Stream::new(name));
 
         match result {
             Ok((parsed, _)) => Ok(parsed.to_parsed_function_name()),
@@ -1152,6 +1151,12 @@ mod function_name_tests {
     use test_r::test;
 
     #[test]
+    fn parse_function_name_does_not_accept_partial_matches() {
+        let result = ParsedFunctionName::parse("x:y/z");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn parse_function_name_global() {
         let parsed = ParsedFunctionName::parse("run-example").expect("Parsing failed");
         assert_eq!(parsed.site().interface_name(), None);
@@ -1403,6 +1408,100 @@ mod function_name_tests {
                         "\"hello\"".to_string(),
                         "{field-a: some(1)}".to_string(),
                     ],
+                },
+            },
+        );
+    }
+
+    #[test]
+    fn parse_function_name_indexed_method() {
+        let parsed = ParsedFunctionName::parse(
+            "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).something}",
+        )
+        .expect("Parsing failed");
+        assert_eq!(
+            parsed.site().interface_name(),
+            Some("ns:name/interface".to_string())
+        );
+        assert_eq!(
+            parsed.function().function_name(),
+            "[method]resource1.something".to_string()
+        );
+        assert!(parsed.function().is_indexed_resource());
+        assert_eq!(
+            parsed.function().raw_resource_params(),
+            Some(&vec![
+                "\"hello\"".to_string(),
+                "{field-a: some(1)}".to_string(),
+            ])
+        );
+        assert_eq!(
+            parsed.function().resource_method_name(),
+            Some("something".to_string())
+        );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None,
+                },
+                function: ParsedFunctionReference::IndexedResourceMethod {
+                    resource: "resource1".to_string(),
+                    resource_params: vec![
+                        "\"hello\"".to_string(),
+                        "{field-a: some(1)}".to_string(),
+                    ],
+                    method: "something".to_string(),
+                },
+            },
+        );
+    }
+
+    #[test]
+    fn parse_function_name_indexed_static_method() {
+        let parsed = ParsedFunctionName::parse(
+            "ns:name/interface.{[static]resource1(\"hello\", { field-a: some(1) }).something}",
+        )
+        .expect("Parsing failed");
+        assert_eq!(
+            parsed.site().interface_name(),
+            Some("ns:name/interface".to_string())
+        );
+        assert_eq!(
+            parsed.function().function_name(),
+            "[static]resource1.something".to_string()
+        );
+        assert!(parsed.function().is_indexed_resource());
+        assert_eq!(
+            parsed.function().raw_resource_params(),
+            Some(&vec![
+                "\"hello\"".to_string(),
+                "{field-a: some(1)}".to_string(),
+            ])
+        );
+        assert_eq!(
+            parsed.function().resource_method_name(),
+            Some("something".to_string())
+        );
+        assert_eq!(
+            parsed,
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None,
+                },
+                function: ParsedFunctionReference::IndexedResourceStaticMethod {
+                    resource: "resource1".to_string(),
+                    resource_params: vec![
+                        "\"hello\"".to_string(),
+                        "{field-a: some(1)}".to_string(),
+                    ],
+                    method: "something".to_string(),
                 },
             },
         );
@@ -1703,7 +1802,8 @@ mod function_name_tests {
     }
 
     fn round_trip_function_name_parse(input: &str) {
-        let parsed = ParsedFunctionName::parse(input).expect("Input Parsing failed");
+        let parsed = ParsedFunctionName::parse(input)
+            .unwrap_or_else(|_| panic!("Input Parsing failed for {input}"));
         let parsed_written =
             ParsedFunctionName::parse(parsed.to_string()).expect("Round-trip parsing failed");
         assert_eq!(parsed, parsed_written);

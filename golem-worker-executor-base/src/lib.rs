@@ -73,11 +73,11 @@ use golem_common::model::plugin::{
 };
 use golem_common::redis::RedisPool;
 use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_service_base::storage::sqlite::SqlitePool;
 use humansize::{ISizeFormatter, BINARY};
 use nonempty_collections::NEVec;
 use prometheus::Registry;
@@ -100,7 +100,7 @@ const VERSION: &str = golem_version!();
 pub struct RunDetails {
     pub http_port: u16,
     pub grpc_port: u16,
-    pub epoch_thread: std::thread::JoinHandle<()>,
+    pub epoch_thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
@@ -270,7 +270,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Ok(RunDetails {
             http_port,
             grpc_port,
-            epoch_thread,
+            epoch_thread: std::sync::Mutex::new(Some(epoch_thread)),
         })
     }
 }

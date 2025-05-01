@@ -1,7 +1,6 @@
-use super::PoemMultipartTypeRequirements;
+use super::{PluginId, PoemMultipartTypeRequirements};
 use crate::model::{
-    AccountId, ComponentId, ComponentVersion, Empty, HasAccountId, PluginInstallationId,
-    PoemTypeRequirements,
+    AccountId, ComponentId, ComponentVersion, Empty, PluginInstallationId, PoemTypeRequirements,
 };
 use async_trait::async_trait;
 use serde::de::{MapAccess, Visitor};
@@ -93,16 +92,30 @@ impl poem_openapi::types::ParseFromMultipartField for DefaultPluginScope {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginInstallation {
+    pub id: PluginInstallationId,
+    pub plugin_id: PluginId,
+    pub priority: i32,
+    pub parameters: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum PluginInstallationAction {
+    Install(PluginInstallationCreation),
+    Update(PluginInstallationUpdateWithId),
+    Uninstall(PluginUninstallation),
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct PluginInstallation {
-    pub id: PluginInstallationId,
-    pub name: String,
-    pub version: String,
-    pub priority: i32,
-    pub parameters: HashMap<String, String>,
+pub struct PluginUninstallation {
+    pub installation_id: PluginInstallationId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -117,23 +130,21 @@ pub struct PluginInstallationCreation {
     pub parameters: HashMap<String, String>,
 }
 
-impl PluginInstallationCreation {
-    pub fn with_generated_id(self) -> PluginInstallation {
-        PluginInstallation {
-            id: PluginInstallationId::new_v4(),
-            name: self.name,
-            version: self.version,
-            priority: self.priority,
-            parameters: self.parameters,
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInstallationUpdate {
+    pub priority: i32,
+    pub parameters: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct PluginInstallationUpdate {
+pub struct PluginInstallationUpdateWithId {
+    pub installation_id: PluginInstallationId,
     pub priority: i32,
     pub parameters: HashMap<String, String>,
 }
@@ -172,7 +183,6 @@ pub trait PluginOwner:
     Debug
     + Display
     + FromStr<Err = String>
-    + HasAccountId
     + Clone
     + PartialEq
     + Serialize
@@ -196,6 +206,8 @@ pub trait PluginOwner:
         + Sync
         + Unpin
         + 'static;
+
+    fn account_id(&self) -> AccountId;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -221,15 +233,13 @@ impl FromStr for DefaultPluginOwner {
     }
 }
 
-impl HasAccountId for DefaultPluginOwner {
-    fn account_id(&self) -> AccountId {
-        AccountId::placeholder()
-    }
-}
-
 impl PluginOwner for DefaultPluginOwner {
     #[cfg(feature = "sql")]
     type Row = crate::repo::plugin::DefaultPluginOwnerRow;
+
+    fn account_id(&self) -> AccountId {
+        AccountId::placeholder()
+    }
 }
 
 impl Serialize for DefaultPluginOwner {
@@ -273,6 +283,7 @@ impl<'de> Deserialize<'de> for DefaultPluginOwner {
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct PluginDefinition<Owner: PluginOwner, Scope: PluginScope> {
+    pub id: PluginId,
     pub name: String,
     pub version: String,
     pub description: String,
@@ -281,6 +292,7 @@ pub struct PluginDefinition<Owner: PluginOwner, Scope: PluginScope> {
     pub specs: PluginTypeSpecificDefinition,
     pub scope: Scope,
     pub owner: Owner,
+    pub deleted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -486,6 +498,7 @@ mod protobuf {
     {
         fn from(value: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>) -> Self {
             golem_api_grpc::proto::golem::component::PluginDefinition {
+                id: Some(value.id.into()),
                 name: value.name,
                 version: value.version,
                 description: value.description,
@@ -493,6 +506,7 @@ mod protobuf {
                 homepage: value.homepage,
                 specs: Some(value.specs.into()),
                 scope: Some(value.scope.into()),
+                deleted: value.deleted,
             }
         }
     }
@@ -506,6 +520,7 @@ mod protobuf {
             value: golem_api_grpc::proto::golem::component::PluginDefinition,
         ) -> Result<Self, Self::Error> {
             Ok(PluginDefinition {
+                id: value.id.ok_or("Missing plugin id")?.try_into()?,
                 name: value.name,
                 version: value.version,
                 description: value.description,
@@ -514,6 +529,7 @@ mod protobuf {
                 specs: value.specs.ok_or("Missing plugin specs")?.try_into()?,
                 scope: value.scope.ok_or("Missing plugin scope")?.try_into()?,
                 owner: DefaultPluginOwner,
+                deleted: value.deleted,
             })
         }
     }
@@ -522,8 +538,7 @@ mod protobuf {
         fn from(plugin_installation: PluginInstallation) -> Self {
             golem_api_grpc::proto::golem::component::PluginInstallation {
                 id: Some(plugin_installation.id.into()),
-                name: plugin_installation.name,
-                version: plugin_installation.version,
+                plugin_id: Some(plugin_installation.plugin_id.into()),
                 priority: plugin_installation.priority,
                 parameters: plugin_installation.parameters,
             }
@@ -538,8 +553,7 @@ mod protobuf {
         ) -> Result<Self, Self::Error> {
             Ok(PluginInstallation {
                 id: proto.id.ok_or("Missing id")?.try_into()?,
-                name: proto.name,
-                version: proto.version,
+                plugin_id: proto.plugin_id.ok_or("Missing plugin id")?.try_into()?,
                 priority: proto.priority,
                 parameters: proto.parameters,
             })

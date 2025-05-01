@@ -4,8 +4,13 @@ package golem.component;
 
 import public "golem/common/empty.proto";
 import public "golem/component/component_id.proto";
+import "golem/common/uuid.proto";
 
-message PluginDefinition {
+message PluginId {
+  golem.common.UUID value = 1;
+}
+
+message PluginDefinitionCreation {
   string name = 1;
   string version = 2;
   string description = 3;
@@ -13,6 +18,18 @@ message PluginDefinition {
   string homepage = 5;
   PluginTypeSpecificDefinition specs = 6;
   DefaultPluginScope scope = 7;
+}
+
+message PluginDefinition {
+  PluginId id = 1;
+  string name = 2;
+  string version = 3;
+  string description = 4;
+  bytes icon = 5;
+  string homepage = 6;
+  PluginTypeSpecificDefinition specs = 7;
+  DefaultPluginScope scope = 8;
+  bool deleted = 9;
 }
 
 message DefaultPluginScope {

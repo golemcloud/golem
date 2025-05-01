@@ -464,7 +464,7 @@ mkdir -pv ../data
 '''
 
 [tasks.merge-openapi]
-install_crate = { crate_name = "golem-openapi-client-generator", version = "=0.0.13" }
+install_crate = { crate_name = "golem-openapi-client-generator", version = "=0.0.15" }
 dependencies = [
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
@@ -498,6 +498,7 @@ dependencies = [
     "publish-golem-client",
     "publish-golem-service-base",
     "publish-golem-test-framework",
+    "publish-golem-rib-repl"
 ]
 
 [tasks.set-version]
@@ -612,6 +613,17 @@ args = [
     "-p",
     "golem-rib",
     "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
+[tasks.publish-golem-rib-repl]
+description = "Publishes golem-rib package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-rib-repl",
     "--allow-dirty",
     "--no-verify",
 ]

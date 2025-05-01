@@ -27,8 +27,9 @@ use crate::gateway_security::{
     SecuritySchemeWithProviderMetadata,
 };
 use crate::service::gateway::BoxConversionContext;
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::GatewayBindingType;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::ComponentName;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem_openapi::*;
 use rib::{RibInputTypeInfo, RibOutputTypeInfo};
@@ -100,9 +101,6 @@ impl HttpApiDefinitionRequest {
             crate::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: self.id,
                 version: self.version,
-                security: self
-                    .security
-                    .map(|x| x.into_iter().map(SecuritySchemeReference::new).collect()),
                 routes,
                 draft: self.draft,
             },
@@ -225,11 +223,12 @@ impl HttpApiDefinitionResponseData {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct RouteRequestData {
     pub method: MethodPattern,
     pub path: String,
     pub binding: GatewayBindingData,
-    pub cors: Option<HttpCors>,
     pub security: Option<String>,
 }
 
@@ -250,12 +249,13 @@ impl RouteRequestData {
             path,
             binding,
             security,
-            cors: self.cors,
         })
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct RouteResponseData {
     pub method: MethodPattern,
     pub path: String,
@@ -322,37 +322,21 @@ pub struct ResolvedGatewayBindingComponent {
 pub struct GatewayBindingData {
     #[oai(rename = "bindingType")]
     pub binding_type: Option<GatewayBindingType>, // descriminator to keep backward compatibility
-
-    // WORKER
-    // For binding type - worker
+    // For binding type - worker/default and file-server
     // Optional only to keep backward compatibility
     pub component: Option<GatewayBindingComponent>,
-    // For binding type - worker
+    // worker-name is optional to keep backward compatibility
+    // this is not required anymore with first class worker support in rib
+    // which is embedded in response field
     pub worker_name: Option<String>,
-    // For binding type - worker
+    // For binding type - worker/default
     pub idempotency_key: Option<String>,
-    // For binding type - worker
-    // Optional only to keep backward compatibility
+    // For binding type - worker/default and fileserver, this is required
+    // For binding type cors-preflight, this is optional otherwise default cors-preflight settings
+    // is used
     pub response: Option<String>,
-    // For binding type - worker
+    // For binding type - worker/default
     pub invocation_context: Option<String>,
-
-    // CORS binding type
-    //  For binding type - cors-middleware
-    // Optional only to keep backward compatibility
-    pub allow_origin: Option<String>,
-    //  For binding type - cors-middleware
-    // Optional only to keep backward compatibility
-    pub allow_methods: Option<String>,
-    //  For binding type - cors-middleware
-    // Optional only to keep backward compatibility
-    pub allow_headers: Option<String>,
-    //  For binding type - cors-middleware
-    pub expose_headers: Option<String>,
-    //  For binding type - cors-middleware
-    pub max_age: Option<u64>,
-    //  For binding type - cors-middleware
-    pub allow_credentials: Option<bool>,
 }
 
 impl GatewayBindingData {
@@ -478,7 +462,7 @@ impl From<HttpMiddlewares> for MiddlewareData {
 
         for i in value.0.iter() {
             match i {
-                HttpMiddleware::AddCorsHeaders(cors0) => cors = Some(cors0.clone()),
+                HttpMiddleware::Cors(cors0) => cors = Some(cors0.clone()),
                 HttpMiddleware::AuthenticateRequest(auth0) => {
                     let security_scheme_reference = SecuritySchemeReferenceData::from(
                         auth0.security_scheme_with_metadata.clone(),
@@ -536,10 +520,11 @@ impl From<SecuritySchemeReferenceData> for SecuritySchemeReference {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GatewayBindingResponseData {
-    pub component: Option<ResolvedGatewayBindingComponent>, // Optional to keep it backward compatible
-    pub worker_name: Option<String>, // If bindingType is Default or FileServer
-    pub idempotency_key: Option<String>, // If bindingType is Default or FileServer
-    pub response: Option<String>, // Optional to keep it backward compatible. If bindingType is Default or FileServer
+    pub component: Option<ResolvedGatewayBindingComponent>, // Allowed only if bindingType is Default, FileServer or HttpServer
+    pub worker_name: Option<String>, // Allowed only if bindingType is Default or FileServer
+    pub idempotency_key: Option<String>, // Allowed only if bindingType is Default or FileServer
+    pub invocation_context: Option<String>, // Allowed only if bindingType is Default or FileServer
+    pub response: Option<String>,    // Allowed only if bindingType is Default or FileServer
     #[oai(rename = "bindingType")]
     pub binding_type: Option<GatewayBindingType>,
     pub response_mapping_input: Option<RibInputTypeInfo>, // If bindingType is Default or FileServer
@@ -595,6 +580,7 @@ impl GatewayBindingResponseData {
                     component: None,
                     worker_name: None,
                     idempotency_key: None,
+                    invocation_context: None,
                     response: None,
                     binding_type: Some(binding_type),
                     response_mapping_input: None,
@@ -623,10 +609,15 @@ impl GatewayBindingResponseData {
             }),
             worker_name: worker_binding
                 .worker_name_compiled
-                .clone()
+                .as_ref()
                 .map(|compiled| compiled.worker_name.to_string()),
-            idempotency_key: worker_binding.idempotency_key_compiled.clone().map(
+            idempotency_key: worker_binding.idempotency_key_compiled.as_ref().map(
                 |idempotency_key_compiled| idempotency_key_compiled.idempotency_key.to_string(),
+            ),
+            invocation_context: worker_binding.invocation_context_compiled.as_ref().map(
+                |invocation_context_compiled| {
+                    invocation_context_compiled.invocation_context.to_string()
+                },
             ),
             response: Some(
                 worker_binding
@@ -663,11 +654,12 @@ impl GatewayBindingResponseData {
             }),
             worker_name: http_handler_binding
                 .worker_name_compiled
-                .clone()
+                .as_ref()
                 .map(|compiled| compiled.worker_name.to_string()),
-            idempotency_key: http_handler_binding.idempotency_key_compiled.clone().map(
+            idempotency_key: http_handler_binding.idempotency_key_compiled.as_ref().map(
                 |idempotency_key_compiled| idempotency_key_compiled.idempotency_key.to_string(),
             ),
+            invocation_context: None,
             response: None,
             binding_type: Some(binding_type),
             response_mapping_input: None,

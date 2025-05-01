@@ -48,6 +48,7 @@ mod common;
 pub mod api;
 pub mod blobstore;
 pub mod compatibility;
+pub mod durability;
 pub mod guest_languages1;
 pub mod guest_languages2;
 pub mod guest_languages3;
@@ -65,9 +66,7 @@ pub mod rust_rpc;
 pub mod rust_rpc_stubless;
 pub mod scalability;
 pub mod transactions;
-pub mod ts_rpc1;
 pub mod ts_rpc1_stubless;
-pub mod ts_rpc2;
 pub mod ts_rpc2_stubless;
 pub mod wasi;
 
@@ -84,6 +83,7 @@ tag_suite!(guest_languages1, group2);
 tag_suite!(transactions, group3);
 tag_suite!(wasi, group3);
 tag_suite!(revert, group3);
+tag_suite!(durability, group3);
 
 tag_suite!(scalability, group4);
 tag_suite!(hot_update, group4);
@@ -135,7 +135,7 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
         &self.component_directory
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
         self.component_service.clone()
     }
 
@@ -280,7 +280,7 @@ impl TestDependencies for WorkerExecutorTestDependencies {
         &self.component_directory
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
         self.component_service.clone()
     }
 

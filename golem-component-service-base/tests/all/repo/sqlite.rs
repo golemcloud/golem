@@ -14,12 +14,11 @@
 
 use crate::Tracing;
 use golem_common::config::DbSqliteConfig;
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::{
     db,
     migration::{Migrations, MigrationsDir},
 };
-use sqlx::Pool;
-use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential};
 use uuid::Uuid;
 
@@ -127,11 +126,19 @@ mod tests {
         )
         .await
     }
+
+    #[test]
+    #[tracing::instrument]
+    async fn component_find_by_names(
+        component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
+    ) {
+        crate::all::repo::test_repo_component_find_by_names(component_repo.clone()).await
+    }
 }
 
 pub struct SqliteDb {
     db_path: String,
-    pub pool: Arc<Pool<sqlx::Sqlite>>,
+    pub pool: SqlitePool,
 }
 
 impl SqliteDb {
@@ -142,7 +149,7 @@ impl SqliteDb {
             max_connections: 10,
         };
 
-        db::sqlite_migrate(
+        db::sqlite::migrate(
             &db_config,
             MigrationsDir::new("../golem-component-service/db/migration".into())
                 .sqlite_migrations(),
@@ -150,7 +157,7 @@ impl SqliteDb {
         .await
         .unwrap();
 
-        let pool = Arc::new(db::create_sqlite_pool(&db_config).await.unwrap());
+        let pool = SqlitePool::configured(&db_config).await.unwrap();
 
         Self { db_path, pool }
     }

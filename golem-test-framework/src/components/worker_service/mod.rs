@@ -1247,6 +1247,18 @@ pub trait WorkerService: WorkerServiceInternal {
     }
 
     async fn kill(&self);
+
+    async fn undeploy_api(&self, site: &str, id: &str, version: &str) -> crate::Result<()> {
+        match self.api_deployment_client() {
+            ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("undeploy_api"),
+            ApiDeploymentServiceClient::Http(client) => {
+                match client.undeploy_api(site, id, version).await {
+                    Ok(_) => Ok(()),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+        }
+    }
 }
 
 async fn new_worker_grpc_client(host: &str, grpc_port: u16) -> WorkerServiceGrpcClient<Channel> {
@@ -1764,18 +1776,6 @@ async fn grpc_api_definition_request_to_http(
                 api_definition_request::Definition::Http(definition) => {
                     join_all(definition.routes.into_iter().map(async |route| {
                         let binding = route.binding.unwrap();
-                        let cors_preflight = binding
-                            .static_binding
-                            .and_then(|binding| binding.static_binding)
-                            .map(|binding| match binding {
-                                static_binding::StaticBinding::HttpCorsPreflight(
-                                    cors_preflight,
-                                ) => cors_preflight,
-                                static_binding::StaticBinding::AuthCallback(_) => {
-                                    todo!() // TODO: is this supported on http?
-                                }
-                            });
-
                         golem_client::model::RouteRequestData {
                             method: match HttpMethod::try_from(route.method).unwrap() {
                                 HttpMethod::Get => golem_client::model::MethodPattern::Get,
@@ -1833,25 +1833,8 @@ async fn grpc_api_definition_request_to_http(
                                     .invocation_context
                                     .map(to_http_rib_expr),
                                 response: binding.response.map(to_http_rib_expr),
-                                allow_origin: cors_preflight
-                                    .as_ref()
-                                    .and_then(|cp| cp.allow_origin.clone()),
-                                allow_methods: cors_preflight
-                                    .as_ref()
-                                    .and_then(|cp| cp.allow_methods.clone()),
-                                allow_headers: cors_preflight
-                                    .as_ref()
-                                    .and_then(|cp| cp.allow_headers.clone()),
-                                expose_headers: cors_preflight
-                                    .as_ref()
-                                    .and_then(|cp| cp.expose_headers.clone()),
-                                max_age: cors_preflight.as_ref().and_then(|cp| cp.max_age),
-                                allow_credentials: cors_preflight
-                                    .as_ref()
-                                    .and_then(|cp| cp.allow_credentials),
                             },
-                            cors: None,     // TODO: map this from route.middleware?
-                            security: None, // TODO: map this from route.middleware?
+                            security: None,
                         }
                     }))
                     .await

@@ -95,16 +95,16 @@ mod record_tests {
     fn test_round_trip_read_write_record_multiple() {
         let input_expr = Expr::record(vec![
             (
-                "field".to_string(),
+                "field1".to_string(),
                 Expr::identifier_global("request", None),
             ),
             (
-                "field".to_string(),
+                "field2".to_string(),
                 Expr::identifier_global("request", None),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "{field: request, field: request}".to_string();
+        let expected_str = "{field1: request, field2: request}".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -112,11 +112,11 @@ mod record_tests {
     #[test]
     fn test_round_trip_read_write_record_of_literal() {
         let input_expr = Expr::record(vec![
-            ("field".to_string(), Expr::literal("hello")),
-            ("field".to_string(), Expr::literal("world")),
+            ("field1".to_string(), Expr::literal("hello")),
+            ("field2".to_string(), Expr::literal("world")),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = r#"{field: "hello", field: "world"}"#.to_string();
+        let expected_str = r#"{field1: "hello", field2: "world"}"#.to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -124,11 +124,11 @@ mod record_tests {
     #[test]
     fn test_round_trip_read_write_record_of_number() {
         let input_expr = Expr::record(vec![
-            ("field".to_string(), Expr::number(BigDecimal::from(1))),
-            ("field".to_string(), Expr::number(BigDecimal::from(2))),
+            ("field1".to_string(), Expr::number(BigDecimal::from(1))),
+            ("field2".to_string(), Expr::number(BigDecimal::from(2))),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "{field: 1, field: 2}".to_string();
+        let expected_str = "{field1: 1, field2: 2}".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -137,16 +137,16 @@ mod record_tests {
     fn test_round_trip_read_write_record_of_select_field() {
         let input_expr = Expr::record(vec![
             (
-                "field".to_string(),
+                "field1".to_string(),
                 Expr::select_field(Expr::identifier_global("request", None), "foo", None),
             ),
             (
-                "field".to_string(),
+                "field2".to_string(),
                 Expr::select_field(Expr::identifier_global("request", None), "bar", None),
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "{field: request.foo, field: request.bar}".to_string();
+        let expected_str = "{field1: request.foo, field2: request.bar}".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -155,14 +155,14 @@ mod record_tests {
     fn test_round_trip_read_write_record_of_select_index() {
         let input_expr = Expr::record(vec![
             (
-                "field".to_string(),
+                "field1".to_string(),
                 Expr::select_index(
                     Expr::identifier_global("request", None),
                     Expr::number(BigDecimal::from(1)),
                 ),
             ),
             (
-                "field".to_string(),
+                "field2".to_string(),
                 Expr::select_index(
                     Expr::identifier_global("request", None),
                     Expr::number(BigDecimal::from(2)),
@@ -170,7 +170,7 @@ mod record_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "{field: request[1], field: request[2]}".to_string();
+        let expected_str = "{field1: request[1], field2: request[2]}".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -179,7 +179,7 @@ mod record_tests {
     fn test_round_trip_read_write_record_of_sequence() {
         let input_expr = Expr::record(vec![
             (
-                "field".to_string(),
+                "field1".to_string(),
                 Expr::sequence(
                     vec![
                         Expr::identifier_global("request", None),
@@ -189,7 +189,7 @@ mod record_tests {
                 ),
             ),
             (
-                "field".to_string(),
+                "field2".to_string(),
                 Expr::sequence(
                     vec![
                         Expr::identifier_global("request", None),
@@ -200,7 +200,7 @@ mod record_tests {
             ),
         ]);
         let expr_str = to_string(&input_expr).unwrap();
-        let expected_str = "{field: [request, request], field: [request, request]}".to_string();
+        let expected_str = "{field1: [request, request], field2: [request, request]}".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1194,13 +1194,13 @@ mod let_tests {
             Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
                 Expr::option(Some(Expr::literal("foo")))
-                    .with_inferred_type(InferredType::Option(Box::new(InferredType::Str))),
+                    .with_inferred_type(InferredType::option(InferredType::string())),
                 Some(TypeName::Option(Box::new(TypeName::Str))),
             ),
             Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
                 Expr::option(Some(Expr::literal("bar")))
-                    .with_inferred_type(InferredType::Option(Box::new(InferredType::Str))),
+                    .with_inferred_type(InferredType::option(InferredType::string())),
                 Some(TypeName::Option(Box::new(TypeName::Str))),
             ),
         ]);
@@ -1218,13 +1218,13 @@ mod let_tests {
             Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
                 Expr::sequence(vec![Expr::literal("foo")], None)
-                    .with_inferred_type(InferredType::List(Box::new(InferredType::Str))),
+                    .with_inferred_type(InferredType::list(InferredType::string())),
                 Some(TypeName::List(Box::new(TypeName::Str))),
             ),
             Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
                 Expr::sequence(vec![Expr::literal("bar")], None)
-                    .with_inferred_type(InferredType::List(Box::new(InferredType::Str))),
+                    .with_inferred_type(InferredType::list(InferredType::string())),
                 Some(TypeName::List(Box::new(TypeName::Str))),
             ),
         ]);
@@ -1241,13 +1241,13 @@ mod let_tests {
             Expr::let_binding_with_variable_id(
                 VariableId::global("x".to_string()),
                 Expr::tuple(vec![Expr::literal("foo")])
-                    .with_inferred_type(InferredType::Tuple(vec![InferredType::Str])),
+                    .with_inferred_type(InferredType::tuple(vec![InferredType::string()])),
                 Some(TypeName::Tuple(vec![TypeName::Str])),
             ),
             Expr::let_binding_with_variable_id(
                 VariableId::global("y".to_string()),
                 Expr::tuple(vec![Expr::literal("bar")])
-                    .with_inferred_type(InferredType::Tuple(vec![InferredType::Str])),
+                    .with_inferred_type(InferredType::tuple(vec![InferredType::string()])),
                 Some(TypeName::Tuple(vec![TypeName::Str])),
             ),
         ]);

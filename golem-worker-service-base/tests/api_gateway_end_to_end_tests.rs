@@ -28,6 +28,7 @@ use crate::security::TestIdentityProvider;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::{ComponentId, IdempotencyKey};
+use golem_worker_service_base::gateway_api_definition::http::RouteCompilationErrors;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use golem_worker_service_base::gateway_execution::gateway_http_input_executor::{
     DefaultGatewayInputExecutor, GatewayHttpInputExecutor,
@@ -40,8 +41,9 @@ use golem_worker_service_base::gateway_request::http_request::ApiInputPath;
 use golem_worker_service_base::gateway_security::{
     Provider, SecurityScheme, SecuritySchemeIdentifier,
 };
+use golem_worker_service_base::service::gateway::api_definition_validator::ValidationErrors;
 use golem_worker_service_base::{api, gateway_api_definition};
-use http::header::LOCATION;
+use http::header::{LOCATION, ORIGIN};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
@@ -117,7 +119,7 @@ impl ConversionContext for EmptyTestConversionContext {
 }
 
 #[test]
-async fn test_legacy_api_def_for_valid_input() {
+async fn test_legacy_api_def_1() {
     let api_request =
         get_gateway_request("/foo/1", None, &HeaderMap::new(), serde_json::Value::Null);
 
@@ -167,7 +169,7 @@ async fn test_legacy_api_def_for_valid_input() {
 // This hardly occurs in practice when it comes to first class worker support,
 // where worker name is part of response mapping
 #[test]
-async fn test_legacy_api_def_for_valid_input_2() {
+async fn test_legacy_api_def_2() {
     let body = serde_json::json!({
         "foo_key": "foo_value",
         "bar_key": "bar_value"
@@ -225,7 +227,7 @@ async fn test_legacy_api_def_for_valid_input_2() {
 }
 
 #[test]
-async fn test_first_class_worker_api_with_resource() {
+async fn test_api_def_with_resource_1() {
     let api_request = get_gateway_request(
         "/foo/mystore",
         None,
@@ -275,7 +277,7 @@ async fn test_first_class_worker_api_with_resource() {
 }
 
 #[test]
-async fn test_first_class_worker_api_def_with_query_only() {
+async fn test_api_def_with_single_query_param() {
     let api_request = get_gateway_request("/foo?userid=jon", None, &HeaderMap::new(), Value::Null);
 
     let response_mapping = r#"
@@ -315,7 +317,7 @@ async fn test_first_class_worker_api_def_with_query_only() {
 }
 
 #[test]
-async fn test_first_class_worker_api_def_with_multiple_query_params() {
+async fn test_api_def_with_multiple_query_params() {
     let api_request = get_gateway_request(
         "/foo?userid=jon&country=usa",
         None,
@@ -361,7 +363,7 @@ async fn test_first_class_worker_api_def_with_multiple_query_params() {
 }
 
 #[test]
-async fn test_first_class_worker_api_def_with_path_and_query() {
+async fn test_api_def_with_query_and_path_params() {
     let api_request =
         get_gateway_request("/foo/jon?country=usa", None, &HeaderMap::new(), Value::Null);
 
@@ -403,7 +405,205 @@ async fn test_first_class_worker_api_def_with_path_and_query() {
 }
 
 #[test]
-async fn test_first_class_worker_api_def_with_path_1() {
+async fn test_api_def_with_invalid_path_lookup() {
+    let response_mapping = r#"
+       let user-id = request.path.user-id;
+       let worker-name = "shopping-cart-${user-id}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user-id, "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/bar", None, response_mapping).await;
+
+    let result = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification,
+        &internal::get_component_metadata(),
+        &DefaultNamespace::default(),
+    )
+    .unwrap_err();
+
+    let expected = RouteCompilationErrors::ValidationError(
+        ValidationErrors {
+            errors: vec!["Following request.path lookups in response mapping rib script is not present in API route: user-id".to_string()],
+        }
+    );
+
+    assert_eq!(result, expected)
+}
+
+#[test]
+async fn test_api_def_with_invalid_query_and_path_lookup() {
+    let response_mapping = r#"
+       let user-id = request.path.user-id;
+       let country = request.query.country;
+       let worker-name = "shopping-cart-${user-id}-${country}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user-id, country);
+      response
+    "#;
+
+    let api_specification1: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/bar", None, response_mapping).await;
+
+    let result1 = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification1,
+        &internal::get_component_metadata(),
+        &DefaultNamespace::default(),
+    )
+    .unwrap_err();
+
+    let expected = RouteCompilationErrors::ValidationError(
+        ValidationErrors {
+            errors: vec![
+                "Following request.query lookups in response mapping rib script is not present in API route: country".to_string(),
+                "Following request.path lookups in response mapping rib script is not present in API route: user-id".to_string(),
+            ],
+        }
+    );
+
+    assert_eq!(&result1, &expected);
+
+    let api_specification2 =
+        get_api_def_with_worker_binding("/foo/{user  -  id}?{cou ntry}", None, response_mapping)
+            .await;
+
+    let result2 = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification2,
+        &internal::get_component_metadata(),
+        &DefaultNamespace::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(&result2, &expected)
+}
+
+#[test]
+async fn test_api_def_with_path_parameters_in_space() {
+    let response_mapping = r#"
+       let user_id = request.path.user-id;
+       let country = request.query.country;
+       let worker-name = "shopping-cart-${user_id}-${country}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user_id, country);
+      response
+    "#;
+
+    // user-id and country is having space before and after
+    let api_specification: HttpApiDefinition = get_api_def_with_worker_binding(
+        "/foo/{ user-id   }?{    country }",
+        None,
+        response_mapping,
+    )
+    .await;
+
+    let api_request =
+        get_gateway_request("/foo/jon?country=usa", None, &HeaderMap::new(), Value::Null);
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (test_response.function_name, test_response.function_params);
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("jon".to_string()),
+            Value::String("usa".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_api_def_with_invalid_query_lookup() {
+    let response_mapping = r#"
+       let user-id = request.query.user-id;
+       let worker-name = "shopping-cart-${user-id}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user-id, "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{userid}", None, response_mapping).await;
+
+    let result = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification,
+        &internal::get_component_metadata(),
+        &DefaultNamespace::default(),
+    )
+    .unwrap_err();
+
+    let expected = RouteCompilationErrors::ValidationError(
+        ValidationErrors {
+            errors: vec!["Following request.query lookups in response mapping rib script is not present in API route: user-id".to_string()],
+        }
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_api_def_with_request_path_0() {
+    let empty_headers = HeaderMap::new();
+
+    let api_request = get_gateway_request("/foo/foo_value/1", None, &empty_headers, Value::Null);
+
+    let response_mapping = r#"
+         let bar-value: u32 = request.path.bar;
+         let worker = instance(request.path.foo);
+         let response = worker.add-item(bar-value, "bar");
+         response
+        "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{foo}/{bar}", None, response_mapping).await;
+
+    let session_store = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "foo_value".to_string(),
+        "golem:it/api.{add-item}".to_string(),
+        Value::Array(vec![
+            Value::Number(1.into()),
+            Value::String("bar".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+// A test where the input path is a number, and the rib script refers to request.path.* as a u64
+#[test]
+async fn test_api_def_with_request_path_only_1() {
     let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), Value::Null);
 
     let response_mapping = r#"
@@ -442,9 +642,9 @@ async fn test_first_class_worker_api_def_with_path_1() {
     assert_eq!(result, expected);
 }
 
-// A test where input requirement is a string, but the actual input is a number
+// A test where the input path is a number, but the rib script refers to request.path.* as a string (which is by default)
 #[test]
-async fn test_first_class_worker_api_def_with_path_2() {
+async fn test_api_def_with_request_path_only_2() {
     let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), Value::Null);
 
     // Anything under request.path is a string
@@ -484,8 +684,10 @@ async fn test_first_class_worker_api_def_with_path_2() {
     assert_eq!(result, expected);
 }
 
+// A test where the path parameter is a string,
+// but the rib script refers to request.path.* as a number
 #[test]
-async fn test_legacy_api_def_for_invalid_input_with_type_mismatch_1() {
+async fn test_legacy_api_def_with_invalid_input_1() {
     // RibInput (request.path.user-id) to form worker name is expected to be a u64
     let worker_name = r#"
       let id: u64 = request.path.user-id;
@@ -518,8 +720,10 @@ async fn test_legacy_api_def_for_invalid_input_with_type_mismatch_1() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+// A test where the path parameter is a string,
+// but the rib script refers to request.path.* as a number
 #[test]
-async fn test_api_def_for_invalid_input_with_type_mismatch_1() {
+async fn test_api_def_with_invalid_input_1() {
     let response_mapping = r#"
       let id: u64 = request.path.user-id;
       let worker = instance("shopping-cart-${id}");
@@ -548,57 +752,35 @@ async fn test_api_def_for_invalid_input_with_type_mismatch_1() {
 }
 
 #[test]
-async fn test_legacy_api_def_for_invalid_input_with_type_mismatch_2() {
-    let worker_name = r#"
-      "shopping-cart"
-    "#;
+async fn test_api_def_with_request_body_0() {
+    let empty_headers = HeaderMap::new();
 
-    // RibInput (request.path.user-id) to form response is expected to be a u64
+    let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
+
+    request_body.insert("foo_key".to_string(), Value::Number(Number::from(1)));
+
+    request_body.insert(
+        "bar_key".to_string(),
+        Value::String("bar_value".to_string()),
+    );
+
+    let api_request = get_gateway_request(
+        "/foo/john",
+        None,
+        &empty_headers,
+        Value::Object(request_body),
+    );
+
     let response_mapping = r#"
-      let user: u64 = request.path.user-id;
-      let response = golem:it/api.{get-cart-contents}("a", "user-${user}");
-      response
-    "#;
-
-    let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
-            .await;
-
-    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
-
-    // user-id is a string, but the rib expressions expects it to be a u64
-    let api_request =
-        get_gateway_request("/foo/bar", None, &HeaderMap::new(), serde_json::Value::Null);
-
-    let response = execute(
-        api_request,
-        &api_specification,
-        &session_store,
-        &TestIdentityProvider::default(),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[test]
-async fn test_api_def_for_invalid_input_with_type_mismatch_2() {
-    // RibInput (request.path.user-id) to form response is expected to be a u64
-    let response_mapping = r#"
-      let user: u64 = request.path.user-id;
-      let worker-instance = instance("shopping-cart");
-      let response = worker-instance.get-cart-contents("a", "user-${user}");
-      response
-    "#;
+         let worker = instance(request.body.bar_key);
+         let response = worker.add-item(request.body.foo_key, "bar");
+         response
+        "#;
 
     let api_specification: HttpApiDefinition =
         get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
 
-    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
-
-    // user-id is a string, but the rib expressions expects it to be a u64
-    let api_request =
-        get_gateway_request("/foo/bar", None, &HeaderMap::new(), serde_json::Value::Null);
+    let session_store = internal::get_session_store();
 
     let response = execute(
         api_request,
@@ -608,11 +790,28 @@ async fn test_api_def_for_invalid_input_with_type_mismatch_2() {
     )
     .await;
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "bar_value".to_string(),
+        "golem:it/api.{add-item}".to_string(),
+        Value::Array(vec![
+            Value::Number(1.into()),
+            Value::String("bar".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
 }
 
 #[test]
-async fn test_api_def_with_request_with_request_body() {
+async fn test_api_def_with_request_body_1() {
     let empty_headers = HeaderMap::new();
 
     let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
@@ -676,7 +875,68 @@ async fn test_api_def_with_request_with_request_body() {
 }
 
 #[test]
-async fn test_api_def_with_request_with_request_body_type_mismatch() {
+async fn test_api_def_with_request_body_2() {
+    let empty_headers = HeaderMap::new();
+
+    let api_request = get_gateway_request(
+        "/foo/2",
+        None,
+        &empty_headers,
+        Value::String("address".to_string()),
+    );
+
+    let worker_name = r#"
+        let userid: u64 = request.path.user-id;
+        let max: u64 = 100;
+        let zero: u64 = 0;
+        let one: u64 = 1;
+        let res = if userid > max then zero else one;
+        "shopping-cart-${res}"
+    "#;
+
+    let response_mapping = r#"
+        let response = golem:it/api.{get-cart-contents}(request.body, request.body);
+        response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
+            .await;
+
+    let session_store = internal::get_session_store();
+
+    let test_response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(test_response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "shopping-cart-1".to_string(),
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("address".to_string()),
+            Value::String("address".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+// A test where one of the keys in the request body is expected to be a number
+// based on rib script, but the actual value is a string
+#[test]
+async fn test_api_def_with_invalid_request_body() {
     let empty_headers = HeaderMap::new();
 
     let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
@@ -724,301 +984,11 @@ async fn test_api_def_with_request_with_request_body_type_mismatch() {
     let body = response.into_body().into_string().await.unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body, "invalid http request body\ninvalid value for key foo_key: expected number, found string\nexpected request body: record{bar_key: string, foo_key: u32}");
+    assert_eq!(body, "invalid http request body\ninvalid value for key foo_key: expected number, found string\nexpected request body: record { bar_key: string, foo_key: u32 }");
 }
 
 #[test]
-async fn test_api_def_with_security_for_input_with_invalid_signatures() {
-    let empty_headers = HeaderMap::new();
-    let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
-
-    let response_mapping = r#"
-      let id: u64 = request.path.user-id;
-      let worker = instance("shopping-cart-${id}");
-      let response = worker.get-cart-contents("a", "b");
-      response
-    "#;
-
-    let auth_call_back_url =
-        RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
-
-    let invalid_identity_provider_resolver =
-        TestIdentityProvider::get_provider_with_invalid_signatures();
-
-    let api_specification: HttpApiDefinition = get_api_def_with_security(
-        "/foo/{user-id}",
-        response_mapping,
-        &auth_call_back_url,
-        &invalid_identity_provider_resolver,
-    )
-    .await;
-
-    let session_store = internal::get_session_store();
-
-    let initial_redirect_response = execute(
-        api_request,
-        &api_specification,
-        &session_store,
-        &invalid_identity_provider_resolver,
-    )
-    .await;
-
-    let initial_redirect_response_headers = initial_redirect_response.headers();
-
-    let location = initial_redirect_response_headers
-        .get(LOCATION)
-        .expect("Expecting location")
-        .to_str()
-        .expect("Location should be a string");
-
-    let url = Url::parse(location).expect("Expect the initial redirection to be a full URL");
-
-    let query_components = ApiInputPath::query_components_from_str(url.query().unwrap_or_default());
-
-    let initial_redirect_response_info = security::get_initial_redirect_data(&query_components);
-
-    let actual_auth_call_back_url =
-        internal::decode_url(&initial_redirect_response_info.auth_call_back_url);
-
-    let call_back_request_from_identity_provider =
-        security::request_from_identity_provider_to_auth_call_back_endpoint(
-            initial_redirect_response_info.state.as_str(),
-            "foo_code", // Decided by IdentityProvider
-            initial_redirect_response_info.scope.as_str(),
-            &actual_auth_call_back_url.to_string(),
-            "localhost",
-        );
-
-    let auth_call_back_response = execute(
-        call_back_request_from_identity_provider,
-        &api_specification,
-        &session_store,
-        &invalid_identity_provider_resolver,
-    )
-    .await;
-
-    // The auth call back endpoint results in another redirect response
-    // which will now have the actual URL to the original protected resource
-    let redirect_response_headers = auth_call_back_response.headers();
-
-    // Manually creating the request to hit the original endpoint, as a browser
-    let input_http_request =
-        security::create_request_from_redirect(redirect_response_headers).await;
-
-    // Hitting the endpoint with an expired token
-    let test_response_from_actual_endpoint = execute(
-        input_http_request,
-        &api_specification,
-        &session_store,
-        &invalid_identity_provider_resolver,
-    )
-    .await;
-
-    // The final redirect from the protected endpoint should be the same as
-    // the initial redirect for unauthenticated request
-    assert_eq!(
-        test_response_from_actual_endpoint.status(),
-        StatusCode::UNAUTHORIZED
-    )
-}
-
-#[test]
-async fn test_api_def_with_security_for_input_when_session_expired() {
-    let empty_headers = HeaderMap::new();
-    let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
-
-    let response_mapping = r#"
-      let id: u64 = request.path.user-id;
-      let worker = instance("shopping-cart-${id}");
-      let response = worker.get-cart-contents("a", "b");
-      response
-    "#;
-
-    let auth_call_back_url =
-        RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
-
-    let invalid_identity_provider = TestIdentityProvider::get_provider_with_valid_id_token();
-
-    let api_specification: HttpApiDefinition = get_api_def_with_security(
-        "/foo/{user-id}",
-        response_mapping,
-        &auth_call_back_url,
-        &invalid_identity_provider,
-    )
-    .await;
-
-    // Until auth call back, we will use a valid session store
-    let session_store = internal::get_session_store();
-
-    let initial_response_to_identity_provider = execute(
-        api_request,
-        &api_specification,
-        &session_store,
-        &invalid_identity_provider,
-    )
-    .await;
-
-    let initial_redirect_response_headers = initial_response_to_identity_provider.headers();
-
-    let initial_redirect_location = initial_redirect_response_headers
-        .get(LOCATION)
-        .expect("Expecting location")
-        .to_str()
-        .expect("Location should be a string");
-
-    let initial_redirect_url = Url::parse(initial_redirect_location)
-        .expect("Expect the initial redirection to be a full URL");
-
-    let initial_redirect_data = security::get_initial_redirect_data(
-        &ApiInputPath::query_components_from_str(initial_redirect_url.query().unwrap_or_default()),
-    );
-
-    let actual_auth_call_back_url = internal::decode_url(&initial_redirect_data.auth_call_back_url);
-
-    let call_back_request_from_identity_provider =
-        security::request_from_identity_provider_to_auth_call_back_endpoint(
-            initial_redirect_data.state.as_str(),
-            "foo_code", // Decided by IdentityProvider
-            initial_redirect_data.scope.as_str(),
-            &actual_auth_call_back_url.to_string(),
-            "localhost",
-        );
-
-    let auth_call_back_response = execute(
-        call_back_request_from_identity_provider,
-        &api_specification,
-        &session_store,
-        &invalid_identity_provider,
-    )
-    .await;
-
-    // The auth call back endpoint results in another redirect response
-    // which will now have the actual URL to the original protected resource
-    let redirect_response_headers = auth_call_back_response.headers();
-
-    // Manually calling it back as we are the browser
-    let api_request_from_browser =
-        security::create_request_from_redirect(redirect_response_headers).await;
-
-    // Post auth call, we simulate the situation of an expired session
-    let session_store = internal::get_session_store_with_zero_ttl();
-
-    // Hitting the protected resource with an expired token
-    let test_response_from_actual_endpoint = execute(
-        api_request_from_browser,
-        &api_specification,
-        &session_store,
-        &invalid_identity_provider,
-    )
-    .await;
-
-    // And it should be a redirect which is same as the initial redirect to identity provider
-    let final_redirect = test_response_from_actual_endpoint.headers();
-
-    // The final redirect from the protected endpoint should be the same as
-    // the initial redirect for unauthenticated request
-    assert!(final_redirect.contains_key(LOCATION));
-    assert_eq!(final_redirect, initial_redirect_response_headers)
-}
-
-#[test]
-async fn test_api_def_with_security_for_input_with_expired_token() {
-    let empty_headers = HeaderMap::new();
-    let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
-
-    let response_mapping = r#"
-      let id: u64 = request.path.user-id;
-      let worker = instance("shopping-cart-${id}");
-      let response = worker.get-cart-contents("a", "b");
-      response
-    "#;
-
-    let auth_call_back_url =
-        RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
-
-    let invalid_identity_provider_resolver =
-        TestIdentityProvider::get_provider_with_expired_id_token();
-
-    let api_specification: HttpApiDefinition = get_api_def_with_security(
-        "/foo/{user-id}",
-        response_mapping,
-        &auth_call_back_url,
-        &invalid_identity_provider_resolver,
-    )
-    .await;
-
-    let session_store = internal::get_session_store();
-
-    let initial_response_to_identity_provider = execute(
-        api_request,
-        &api_specification,
-        &session_store,
-        &invalid_identity_provider_resolver,
-    )
-    .await;
-
-    let initial_redirect_response_headers = initial_response_to_identity_provider.headers();
-
-    let initial_redirect_location = initial_redirect_response_headers
-        .get(LOCATION)
-        .expect("Expecting location")
-        .to_str()
-        .expect("Location should be a string");
-
-    let initial_redirect_url = Url::parse(initial_redirect_location)
-        .expect("Expect the initial redirection to be a full URL");
-
-    let initial_redirect_data = security::get_initial_redirect_data(
-        &ApiInputPath::query_components_from_str(initial_redirect_url.query().unwrap_or_default()),
-    );
-
-    let actual_auth_call_back_url = internal::decode_url(&initial_redirect_data.auth_call_back_url);
-
-    let call_back_request_from_identity_provider =
-        security::request_from_identity_provider_to_auth_call_back_endpoint(
-            initial_redirect_data.state.as_str(),
-            "foo_code", // Decided by IdentityProvider
-            initial_redirect_data.scope.as_str(),
-            &actual_auth_call_back_url.to_string(),
-            "localhost",
-        );
-
-    let auth_call_back_response = execute(
-        call_back_request_from_identity_provider,
-        &api_specification,
-        &session_store,
-        &invalid_identity_provider_resolver,
-    )
-    .await;
-
-    // The auth call back endpoint results in another redirect response
-    // which will now have the actual URL to the original protected resource
-    let redirect_response_headers = auth_call_back_response.headers();
-
-    // Manually calling it back as we are the browser
-    let api_request_from_browser =
-        security::create_request_from_redirect(redirect_response_headers).await;
-
-    // Hitting the protected resource with an expired token
-    let test_response_from_actual_endpoint = execute(
-        api_request_from_browser,
-        &api_specification,
-        &session_store,
-        &invalid_identity_provider_resolver,
-    )
-    .await;
-
-    // And it should be a redirect which is same as the initial redirect to identity provider
-    let final_redirect = test_response_from_actual_endpoint.headers();
-
-    // The final redirect from the protected endpoint should be the same as
-    // the initial redirect for unauthenticated request
-    assert!(final_redirect.contains_key(LOCATION));
-    assert_eq!(final_redirect, initial_redirect_response_headers)
-}
-
-#[test]
-async fn test_api_def_with_security_for_valid_input() {
+async fn test_api_def_with_security() {
     let empty_headers = HeaderMap::new();
     let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
@@ -1138,9 +1108,302 @@ async fn test_api_def_with_security_for_valid_input() {
     assert_eq!(result, expected);
 }
 
+// A test where security is enabled but the signatures don't match
+#[test]
+async fn test_api_def_with_security_with_invalid_signatures() {
+    let empty_headers = HeaderMap::new();
+    let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let response_mapping = r#"
+      let id: u64 = request.path.user-id;
+      let worker = instance("shopping-cart-${id}");
+      let response = worker.get-cart-contents("a", "b");
+      response
+    "#;
+
+    let auth_call_back_url =
+        RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
+
+    let invalid_identity_provider_resolver =
+        TestIdentityProvider::get_provider_with_invalid_signatures();
+
+    let api_specification: HttpApiDefinition = get_api_def_with_security(
+        "/foo/{user-id}",
+        response_mapping,
+        &auth_call_back_url,
+        &invalid_identity_provider_resolver,
+    )
+    .await;
+
+    let session_store = internal::get_session_store();
+
+    let initial_redirect_response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider_resolver,
+    )
+    .await;
+
+    let initial_redirect_response_headers = initial_redirect_response.headers();
+
+    let location = initial_redirect_response_headers
+        .get(LOCATION)
+        .expect("Expecting location")
+        .to_str()
+        .expect("Location should be a string");
+
+    let url = Url::parse(location).expect("Expect the initial redirection to be a full URL");
+
+    let query_components = ApiInputPath::query_components_from_str(url.query().unwrap_or_default());
+
+    let initial_redirect_response_info = security::get_initial_redirect_data(&query_components);
+
+    let actual_auth_call_back_url =
+        internal::decode_url(&initial_redirect_response_info.auth_call_back_url);
+
+    let call_back_request_from_identity_provider =
+        security::request_from_identity_provider_to_auth_call_back_endpoint(
+            initial_redirect_response_info.state.as_str(),
+            "foo_code", // Decided by IdentityProvider
+            initial_redirect_response_info.scope.as_str(),
+            &actual_auth_call_back_url.to_string(),
+            "localhost",
+        );
+
+    let auth_call_back_response = execute(
+        call_back_request_from_identity_provider,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider_resolver,
+    )
+    .await;
+
+    // The auth call back endpoint results in another redirect response
+    // which will now have the actual URL to the original protected resource
+    let redirect_response_headers = auth_call_back_response.headers();
+
+    // Manually creating the request to hit the original endpoint, as a browser
+    let input_http_request =
+        security::create_request_from_redirect(redirect_response_headers).await;
+
+    // Hitting the endpoint with an expired token
+    let test_response_from_actual_endpoint = execute(
+        input_http_request,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider_resolver,
+    )
+    .await;
+
+    // The final redirect from the protected endpoint should be the same as
+    // the initial redirect for unauthenticated request
+    assert_eq!(
+        test_response_from_actual_endpoint.status(),
+        StatusCode::UNAUTHORIZED
+    )
+}
+
+// A test where security is enabled but the sessions is expired
+#[test]
+async fn test_api_def_with_security_with_expired_session() {
+    let empty_headers = HeaderMap::new();
+    let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let response_mapping = r#"
+      let id: u64 = request.path.user-id;
+      let worker = instance("shopping-cart-${id}");
+      let response = worker.get-cart-contents("a", "b");
+      response
+    "#;
+
+    let auth_call_back_url =
+        RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
+
+    let invalid_identity_provider = TestIdentityProvider::get_provider_with_valid_id_token();
+
+    let api_specification: HttpApiDefinition = get_api_def_with_security(
+        "/foo/{user-id}",
+        response_mapping,
+        &auth_call_back_url,
+        &invalid_identity_provider,
+    )
+    .await;
+
+    // Until auth call back, we will use a valid session store
+    let session_store = internal::get_session_store();
+
+    let initial_response_to_identity_provider = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider,
+    )
+    .await;
+
+    let initial_redirect_response_headers = initial_response_to_identity_provider.headers();
+
+    let initial_redirect_location = initial_redirect_response_headers
+        .get(LOCATION)
+        .expect("Expecting location")
+        .to_str()
+        .expect("Location should be a string");
+
+    let initial_redirect_url = Url::parse(initial_redirect_location)
+        .expect("Expect the initial redirection to be a full URL");
+
+    let initial_redirect_data = security::get_initial_redirect_data(
+        &ApiInputPath::query_components_from_str(initial_redirect_url.query().unwrap_or_default()),
+    );
+
+    let actual_auth_call_back_url = internal::decode_url(&initial_redirect_data.auth_call_back_url);
+
+    let call_back_request_from_identity_provider =
+        security::request_from_identity_provider_to_auth_call_back_endpoint(
+            initial_redirect_data.state.as_str(),
+            "foo_code", // Decided by IdentityProvider
+            initial_redirect_data.scope.as_str(),
+            &actual_auth_call_back_url.to_string(),
+            "localhost",
+        );
+
+    let auth_call_back_response = execute(
+        call_back_request_from_identity_provider,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider,
+    )
+    .await;
+
+    // The auth call back endpoint results in another redirect response
+    // which will now have the actual URL to the original protected resource
+    let redirect_response_headers = auth_call_back_response.headers();
+
+    // Manually calling it back as we are the browser
+    let api_request_from_browser =
+        security::create_request_from_redirect(redirect_response_headers).await;
+
+    // Post auth call, we simulate the situation of an expired session
+    let session_store = internal::get_session_store_with_zero_ttl();
+
+    // Hitting the protected resource with an expired token
+    let test_response_from_actual_endpoint = execute(
+        api_request_from_browser,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider,
+    )
+    .await;
+
+    // And it should be a redirect which is same as the initial redirect to identity provider
+    let final_redirect = test_response_from_actual_endpoint.headers();
+
+    // The final redirect from the protected endpoint should be the same as
+    // the initial redirect for unauthenticated request
+    assert!(final_redirect.contains_key(LOCATION));
+    assert_eq!(final_redirect, initial_redirect_response_headers)
+}
+
+// A test where security is enabled but the id-token is expired in the session
+#[test]
+async fn test_api_def_with_security_with_expired_token() {
+    let empty_headers = HeaderMap::new();
+    let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let response_mapping = r#"
+      let id: u64 = request.path.user-id;
+      let worker = instance("shopping-cart-${id}");
+      let response = worker.get-cart-contents("a", "b");
+      response
+    "#;
+
+    let auth_call_back_url =
+        RedirectUrl::new("http://localhost/auth/callback".to_string()).unwrap();
+
+    let invalid_identity_provider_resolver =
+        TestIdentityProvider::get_provider_with_expired_id_token();
+
+    let api_specification: HttpApiDefinition = get_api_def_with_security(
+        "/foo/{user-id}",
+        response_mapping,
+        &auth_call_back_url,
+        &invalid_identity_provider_resolver,
+    )
+    .await;
+
+    let session_store = internal::get_session_store();
+
+    let initial_response_to_identity_provider = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider_resolver,
+    )
+    .await;
+
+    let initial_redirect_response_headers = initial_response_to_identity_provider.headers();
+
+    let initial_redirect_location = initial_redirect_response_headers
+        .get(LOCATION)
+        .expect("Expecting location")
+        .to_str()
+        .expect("Location should be a string");
+
+    let initial_redirect_url = Url::parse(initial_redirect_location)
+        .expect("Expect the initial redirection to be a full URL");
+
+    let initial_redirect_data = security::get_initial_redirect_data(
+        &ApiInputPath::query_components_from_str(initial_redirect_url.query().unwrap_or_default()),
+    );
+
+    let actual_auth_call_back_url = internal::decode_url(&initial_redirect_data.auth_call_back_url);
+
+    let call_back_request_from_identity_provider =
+        security::request_from_identity_provider_to_auth_call_back_endpoint(
+            initial_redirect_data.state.as_str(),
+            "foo_code", // Decided by IdentityProvider
+            initial_redirect_data.scope.as_str(),
+            &actual_auth_call_back_url.to_string(),
+            "localhost",
+        );
+
+    let auth_call_back_response = execute(
+        call_back_request_from_identity_provider,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider_resolver,
+    )
+    .await;
+
+    // The auth call back endpoint results in another redirect response
+    // which will now have the actual URL to the original protected resource
+    let redirect_response_headers = auth_call_back_response.headers();
+
+    // Manually calling it back as we are the browser
+    let api_request_from_browser =
+        security::create_request_from_redirect(redirect_response_headers).await;
+
+    // Hitting the protected resource with an expired token
+    let test_response_from_actual_endpoint = execute(
+        api_request_from_browser,
+        &api_specification,
+        &session_store,
+        &invalid_identity_provider_resolver,
+    )
+    .await;
+
+    // And it should be a redirect which is same as the initial redirect to identity provider
+    let final_redirect = test_response_from_actual_endpoint.headers();
+
+    // The final redirect from the protected endpoint should be the same as
+    // the initial redirect for unauthenticated request
+    assert!(final_redirect.contains_key(LOCATION));
+    assert_eq!(final_redirect, initial_redirect_response_headers)
+}
+
 /// regression test for: https://zivergeteam.slack.com/archives/C057S2E4XT5/p1741430776997879
 #[test]
-async fn test_api_def_with_security_for_valid_input_relative_callback() {
+async fn test_api_def_with_security_with_relative_callback() {
     let empty_headers = HeaderMap::new();
     let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
@@ -1247,41 +1510,7 @@ async fn test_api_def_with_security_for_valid_input_relative_callback() {
 }
 
 #[test]
-async fn test_api_def_with_cors_preflight_for_valid_input() {
-    let empty_headers = HeaderMap::new();
-    let api_request =
-        get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
-
-    let cors = HttpCors::from_parameters(
-        Some("http://example.com".to_string()),
-        Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
-        Some("Content-Type, Authorization".to_string()),
-        Some("Content-Type, Authorization".to_string()),
-        Some(true),
-        Some(3600),
-    )
-    .unwrap();
-
-    let api_specification: HttpApiDefinition =
-        get_api_def_with_cors_preflight("/foo/{user-id}", &cors).await;
-
-    let session_store = internal::get_session_store();
-
-    let response = execute(
-        api_request,
-        &api_specification,
-        &session_store,
-        &TestIdentityProvider::get_provider_with_valid_id_token(),
-    )
-    .await;
-
-    let result = internal::get_preflight_from_response(response);
-
-    assert_eq!(result, cors);
-}
-
-#[test]
-async fn test_api_def_with_default_cors_preflight_for_valid_input() {
+async fn test_api_def_with_default_cors_preflight_1() {
     let empty_headers = HeaderMap::new();
     let api_request =
         get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
@@ -1307,7 +1536,7 @@ async fn test_api_def_with_default_cors_preflight_for_valid_input() {
 }
 
 #[test]
-async fn test_api_def_with_cors_preflight_default_for_preflight_input_and_simple_input() {
+async fn test_api_def_with_default_cors_preflight_2() {
     let empty_headers = HeaderMap::new();
     let preflight_request =
         get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
@@ -1367,7 +1596,41 @@ async fn test_api_def_with_cors_preflight_default_for_preflight_input_and_simple
 }
 
 #[test]
-async fn test_api_def_with_cors_preflight_for_preflight_input_and_simple_input() {
+async fn test_api_def_with_custom_cors_preflight_1() {
+    let empty_headers = HeaderMap::new();
+    let api_request =
+        get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let cors = HttpCors::from_parameters(
+        Some("http://example.com".to_string()),
+        Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
+        Some("Content-Type, Authorization".to_string()),
+        Some("Content-Type, Authorization".to_string()),
+        Some(true),
+        Some(3600),
+    )
+    .unwrap();
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_cors_preflight_route_only("/foo/{user-id}", &cors).await;
+
+    let session_store = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::get_provider_with_valid_id_token(),
+    )
+    .await;
+
+    let result = internal::get_preflight_from_response(response);
+
+    assert_eq!(result, cors);
+}
+
+#[test]
+async fn test_api_def_with_custom_cors_preflight_2() {
     let empty_headers = HeaderMap::new();
     let preflight_request =
         get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
@@ -1393,12 +1656,8 @@ async fn test_api_def_with_cors_preflight_for_preflight_input_and_simple_input()
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_cors_preflight_for_get_endpoint_resource(
-            "/foo/{user-id}",
-            response_mapping,
-            &cors,
-        )
-        .await;
+        get_api_def_with_preflight_and_get_endpoint("/foo/{user-id}", response_mapping, &cors)
+            .await;
 
     let session_store = internal::get_session_store();
 
@@ -1451,7 +1710,68 @@ async fn test_api_def_with_cors_preflight_for_preflight_input_and_simple_input()
 }
 
 #[test]
-async fn test_api_def_with_path_and_query_params_1() {
+async fn test_api_def_with_custom_cors_preflight_3() {
+    let empty_headers = HeaderMap::new();
+    let preflight_request =
+        get_preflight_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    // We intentionally make the origin different for the get endpoint
+    let mut api_request =
+        get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    api_request
+        .headers_mut()
+        .insert(ORIGIN, HeaderValue::from_static("http://wrongdomain.com"));
+
+    let cors = HttpCors::from_parameters(
+        Some("http://example.com".to_string()),
+        Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
+        Some("Content-Type, Authorization".to_string()),
+        Some("Content-Type, Authorization".to_string()),
+        Some(true),
+        Some(3600),
+    )
+    .unwrap();
+
+    let response_mapping = r#"
+      let id: u64 = request.path.user-id;
+      let worker-name = "shopping-cart-${id}";
+      let worker = instance(worker-name);
+      let response = worker.get-cart-contents("a", "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_preflight_and_get_endpoint("/foo/{user-id}", response_mapping, &cors)
+            .await;
+
+    let session_store = internal::get_session_store();
+
+    let preflight_response = execute(
+        preflight_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+    let actual_response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let pre_flight_response = get_preflight_from_response(preflight_response);
+
+    assert_eq!(pre_flight_response, cors);
+
+    // Since the origin is different for the get endpoint, we expect a forbidden response
+    assert_eq!(actual_response.status(), StatusCode::FORBIDDEN);
+}
+
+#[test]
+async fn test_api_def_with_path_and_query_1() {
     let empty_headers = HeaderMap::new();
     let api_request =
         get_gateway_request("/foo/1", Some("token-id=jon"), &empty_headers, Value::Null);
@@ -1545,70 +1865,8 @@ async fn test_api_def_with_path_and_query_2() {
     assert_eq!(result, expected);
 }
 
-// Test that ensures that the input requirement of path and query is a number, but the actual inputs are strings
-// Also both request.header.value and request.headers.value works
-// Along with these, it also makes use of parameters from request body
 #[test]
-async fn test_api_def_with_path_and_query_and_header_and_body() {
-    let mut headers = HeaderMap::new();
-    headers.insert("baz", HeaderValue::from_static("42"));
-    headers.insert("qux", HeaderValue::from_static("qux_value"));
-
-    let body = serde_json::json!({
-        "quux": "quux_value"
-    });
-
-    let api_request = get_gateway_request("/foo/1", Some("bar=2"), &headers, body);
-
-    // Default types for path and query parameters are string
-    let response_mapping = r#"
-        let path_foo = request.path.foo;
-        let query_bar = request.query.bar;
-        let header_baz = request.headers.baz;
-        let header_qux = request.header.qux;
-        let body_quux: string = request.body.quux;
-        let arg1 = "${path_foo}-${query_bar}";
-        let arg2 = "${header_baz}-${header_qux}-${body_quux}";
-        let my-instance = instance("shopping-cart-${path_foo}");
-        let response = my-instance.get-cart-contents(arg1, arg2);
-        response
-    "#;
-
-    let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{foo}?{bar}", None, response_mapping).await;
-
-    let session_store = internal::get_session_store();
-
-    let response = execute(
-        api_request,
-        &api_specification,
-        &session_store,
-        &TestIdentityProvider::default(),
-    )
-    .await;
-
-    let test_response = internal::get_details_from_response(response).await;
-
-    let result = (
-        test_response.worker_name,
-        test_response.function_name,
-        test_response.function_params,
-    );
-
-    let expected = (
-        "shopping-cart-1".to_string(),
-        "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("1-2".to_string()),
-            Value::String("42-qux_value-quux_value".to_string()),
-        ]),
-    );
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-async fn test_api_def_with_path_and_query_params_lookup_complex_for_valid_input() {
+async fn test_api_def_with_path_and_query_3() {
     let empty_headers = HeaderMap::new();
     let api_request = get_gateway_request(
         "/foo/1",
@@ -1664,66 +1922,7 @@ async fn test_api_def_with_path_and_query_params_lookup_complex_for_valid_input(
 }
 
 #[test]
-async fn test_api_def_with_request_body_params_lookup_for_valid_input1() {
-    let empty_headers = HeaderMap::new();
-
-    let api_request = get_gateway_request(
-        "/foo/2",
-        None,
-        &empty_headers,
-        Value::String("address".to_string()),
-    );
-
-    let worker_name = r#"
-        let userid: u64 = request.path.user-id;
-        let max: u64 = 100;
-        let zero: u64 = 0;
-        let one: u64 = 1;
-        let res = if userid > max then zero else one;
-        "shopping-cart-${res}"
-    "#;
-
-    let response_mapping = r#"
-        let response = golem:it/api.{get-cart-contents}(request.body, request.body);
-        response
-    "#;
-
-    let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
-            .await;
-
-    let session_store = internal::get_session_store();
-
-    let test_response = execute(
-        api_request,
-        &api_specification,
-        &session_store,
-        &TestIdentityProvider::default(),
-    )
-    .await;
-
-    let test_response = internal::get_details_from_response(test_response).await;
-
-    let result = (
-        test_response.worker_name,
-        test_response.function_name,
-        test_response.function_params,
-    );
-
-    let expected = (
-        "shopping-cart-1".to_string(),
-        "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("address".to_string()),
-            Value::String("address".to_string()),
-        ]),
-    );
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-async fn test_api_def_with_request_body_params_lookup_for_valid_input2() {
+async fn test_api_def_with_path_and_request_body_1() {
     let empty_headers = HeaderMap::new();
 
     let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
@@ -1790,7 +1989,7 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input2() {
 }
 
 #[test]
-async fn test_api_def_with_request_body_params_lookup_for_valid_input3() {
+async fn test_api_def_with_path_and_request_body_2() {
     let empty_headers = HeaderMap::new();
 
     let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
@@ -1854,8 +2053,70 @@ async fn test_api_def_with_request_body_params_lookup_for_valid_input3() {
     assert_eq!(result, expected);
 }
 
+// Test that ensures that the input requirement of path and query is a number, but the actual inputs are strings
+// Also both request.header.value and request.headers.value works
+// Along with these, it also makes use of parameters from request body
 #[test]
-async fn test_api_def_for_valid_input_with_idempotency_key_in_header() {
+async fn test_api_def_with_path_and_query_and_header_and_body() {
+    let mut headers = HeaderMap::new();
+    headers.insert("baz", HeaderValue::from_static("42"));
+    headers.insert("qux", HeaderValue::from_static("qux_value"));
+
+    let body = serde_json::json!({
+        "quux": "quux_value"
+    });
+
+    let api_request = get_gateway_request("/foo/1", Some("bar=2"), &headers, body);
+
+    // Default types for path and query parameters are string
+    let response_mapping = r#"
+        let path_foo = request.path.foo;
+        let query_bar = request.query.bar;
+        let header_baz = request.headers.baz;
+        let header_qux = request.header.qux;
+        let body_quux: string = request.body.quux;
+        let arg1 = "${path_foo}-${query_bar}";
+        let arg2 = "${header_baz}-${header_qux}-${body_quux}";
+        let my-instance = instance("shopping-cart-${path_foo}");
+        let response = my-instance.get-cart-contents(arg1, arg2);
+        response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{foo}?{bar}", None, response_mapping).await;
+
+    let session_store = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (
+        test_response.worker_name,
+        test_response.function_name,
+        test_response.function_params,
+    );
+
+    let expected = (
+        "shopping-cart-1".to_string(),
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("1-2".to_string()),
+            Value::String("42-qux_value-quux_value".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_api_def_with_idempotency_key() {
     async fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
         let api_request = get_gateway_request("/getcartcontent/1", None, header_map, Value::Null);
 
@@ -2147,7 +2408,10 @@ async fn get_api_def_with_default_cors_preflight(path_pattern: &str) -> HttpApiD
     .unwrap()
 }
 
-async fn get_api_def_with_cors_preflight(path_pattern: &str, cors: &HttpCors) -> HttpApiDefinition {
+async fn get_api_def_with_cors_preflight_route_only(
+    path_pattern: &str,
+    cors: &HttpCors,
+) -> HttpApiDefinition {
     let yaml_string = format!(
         r#"
           id: users-api
@@ -2199,7 +2463,7 @@ async fn get_api_def_with_cors_preflight(path_pattern: &str, cors: &HttpCors) ->
     .unwrap()
 }
 
-async fn get_api_def_with_cors_preflight_for_get_endpoint_resource(
+async fn get_api_def_with_preflight_and_get_endpoint(
     path_pattern: &str,
     rib_expression: &str,
     cors: &HttpCors,
@@ -2317,10 +2581,10 @@ async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
 
 mod internal {
     use async_trait::async_trait;
+    use golem_common::model::component::VersionedComponentId;
     use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
     use golem_service_base::auth::DefaultNamespace;
-    use golem_service_base::model::VersionedComponentId;
     use golem_wasm_ast::analysis::analysed_type::{field, handle, record, result, str, tuple, u32};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
@@ -2352,7 +2616,7 @@ mod internal {
     };
     use golem_worker_service_base::gateway_middleware::HttpCors;
     use golem_worker_service_base::gateway_rib_interpreter::{
-        DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
+        DefaultRibInterpreter, RibRuntimeError, WorkerServiceRibInterpreter,
     };
     use http::header::{
         ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
@@ -2450,11 +2714,12 @@ mod internal {
 
     struct TestFileServerBindingHandler {}
     #[async_trait]
-    impl<Namespace> FileServerBindingHandler<Namespace> for TestFileServerBindingHandler {
+    impl FileServerBindingHandler<DefaultNamespace> for TestFileServerBindingHandler {
         async fn handle_file_server_binding_result(
             &self,
-            _namespace: &Namespace,
-            _worker_detail: &WorkerDetails,
+            _namespace: DefaultNamespace,
+            _worker_name: Option<&str>,
+            _component_id: &ComponentId,
             _original_result: RibResult,
         ) -> FileServerBindingResult {
             unimplemented!()
@@ -2512,13 +2777,13 @@ mod internal {
 
     pub fn create_record(
         values: Vec<(String, TypeAnnotatedValue)>,
-    ) -> Result<TypeAnnotatedValue, EvaluationError> {
+    ) -> Result<TypeAnnotatedValue, RibRuntimeError> {
         let mut name_type_pairs = vec![];
         let mut name_value_pairs = vec![];
 
         for (key, value) in values.iter() {
             let typ = Type::try_from(value)
-                .map_err(|_| EvaluationError("Failed to get type".to_string()))?;
+                .map_err(|_| RibRuntimeError("Failed to get type".to_string()))?;
             name_type_pairs.push(NameTypePair {
                 name: key.to_string(),
                 typ: Some(typ),
@@ -2726,8 +2991,8 @@ mod internal {
         ))
     }
 
-    pub fn get_test_file_server_binding_handler<Namespace>(
-    ) -> Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send> {
+    pub fn get_test_file_server_binding_handler(
+    ) -> Arc<dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send> {
         Arc::new(TestFileServerBindingHandler {})
     }
 
@@ -3178,6 +3443,24 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
             ))
         }
 
+        async fn get_client(
+            &self,
+            security_scheme: &SecurityScheme,
+        ) -> Result<OpenIdClient, IdentityProviderError> {
+            let provider_metadata = self
+                .get_provider_metadata(&security_scheme.provider_type())
+                .await?;
+
+            let client = CoreClient::from_provider_metadata(
+                provider_metadata,
+                security_scheme.client_id().clone(),
+                Some(security_scheme.client_secret().clone()),
+            )
+            .set_redirect_uri(security_scheme.redirect_url());
+
+            Ok(OpenIdClient { client })
+        }
+
         // In real, this token verifier depends on the provider metadata
         // however, we simply use our own public key for testing
         // instead of relying providers public key.
@@ -3225,24 +3508,6 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
                 Some(CsrfToken::new("token".to_string())),
                 Some(Nonce::new("nonce".to_string())),
             )
-        }
-
-        async fn get_client(
-            &self,
-            security_scheme: &SecurityScheme,
-        ) -> Result<OpenIdClient, IdentityProviderError> {
-            let provider_metadata = self
-                .get_provider_metadata(&security_scheme.provider_type())
-                .await?;
-
-            let client = CoreClient::from_provider_metadata(
-                provider_metadata,
-                security_scheme.client_id().clone(),
-                Some(security_scheme.client_secret().clone()),
-            )
-            .set_redirect_uri(security_scheme.redirect_url());
-
-            Ok(OpenIdClient { client })
         }
     }
 

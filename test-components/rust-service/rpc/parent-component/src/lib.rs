@@ -1,7 +1,6 @@
-use std::cell::RefCell;
 use crate::bindings::exports::golem::itrpc_exports::rpc_api::Guest;
 use crate::bindings::golem::it_client::child_component_client::{Api, Data};
-use crate::bindings::golem::rpc::types::Uri;
+use std::cell::RefCell;
 use std::env;
 
 #[allow(static_mut_refs)]
@@ -18,25 +17,23 @@ thread_local! {
 }
 
 fn with_api<T>(f: impl FnOnce(&Api) -> T) -> T {
-    STATE.with_borrow_mut(|state| {
-        match &state.api {
-            None => {
-                let remote_component_id =
-                    env::var("CHILD_COMPONENT_ID").expect("CHILD_COMPONENT_ID not set");
+    STATE.with_borrow_mut(|state| match &state.api {
+        None => {
+            let remote_component_id =
+                env::var("CHILD_COMPONENT_ID").expect("CHILD_COMPONENT_ID not set");
 
-                let remote_worker_name = env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
+            let uuid = bindings::golem::rpc::types::parse_uuid(&remote_component_id).unwrap();
+            let worker_name = env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
 
-                let uri = Uri {
-                    value: format!("urn:worker:{remote_component_id}/{remote_worker_name}"),
-                };
-
-                let api = Api::new(&uri);
-                let result = f(&api);
-                state.api = Some(api);
-                result
-            }
-            Some(api) => f(api)
+            let api = Api::custom(&bindings::golem::rpc::types::WorkerId {
+                component_id: bindings::golem::rpc::types::ComponentId { uuid },
+                worker_name,
+            });
+            let result = f(&api);
+            state.api = Some(api);
+            result
         }
+        Some(api) => f(api),
     })
 }
 
