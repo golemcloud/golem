@@ -29,13 +29,13 @@ impl ExtractInnerType for OptionalType {
 
 impl ExtractInnerType for OkType {
     fn inner_type(&self) -> InferredType {
-        self.0.clone().unwrap_or(InferredType::Unknown)
+        self.0.clone().unwrap_or(InferredType::unknown())
     }
 }
 
 impl ExtractInnerType for ErrType {
     fn inner_type(&self) -> InferredType {
-        self.0.clone().unwrap_or(InferredType::Unknown)
+        self.0.clone().unwrap_or(InferredType::unknown())
     }
 }
 

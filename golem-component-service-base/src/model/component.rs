@@ -13,18 +13,20 @@
 // limitations under the License.
 
 use chrono::Utc;
-use golem_common::model::component::{ComponentOwner, VersionedComponentId};
+use golem_common::model::component::{ComponentOwner, DefaultComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{
     FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
 };
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
-use golem_common::model::plugin::PluginInstallation;
+use golem_common::model::plugin::{PluginInstallation, PluginInstallationAction};
 use golem_common::model::InitialComponentFile;
 use golem_common::model::{ComponentFilePathWithPermissions, ComponentId, ComponentType};
 use golem_service_base::model::ComponentName;
+use poem_openapi_derive::Object;
 use rib::WorkerFunctionsInRib;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::SystemTime;
@@ -117,10 +119,8 @@ impl<Owner: ComponentOwner> From<Component<Owner>> for golem_service_base::model
     }
 }
 
-impl<Owner: ComponentOwner> From<Component<Owner>>
-    for golem_api_grpc::proto::golem::component::Component
-{
-    fn from(value: Component<Owner>) -> Self {
+impl From<Component<DefaultComponentOwner>> for golem_api_grpc::proto::golem::component::Component {
+    fn from(value: Component<DefaultComponentOwner>) -> Self {
         let component_type: golem_api_grpc::proto::golem::component::ComponentType =
             value.component_type.into();
         Self {
@@ -187,4 +187,9 @@ impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
 pub struct InitialComponentFilesArchiveAndPermissions {
     pub archive: NamedTempFile,
     pub files: Vec<ComponentFilePathWithPermissions>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+pub struct BatchPluginInstallationUpdates {
+    pub actions: Vec<PluginInstallationAction>,
 }

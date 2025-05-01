@@ -17,18 +17,20 @@ use crate::instance_type::{FunctionName, InstanceType};
 use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
 use crate::{
-    DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, ExprVisitor,
-    FunctionCallError, InferredType, TypeName,
+    DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionCallError,
+    InferredType, TypeInternal, TypeName, TypeOrigin,
 };
+use std::collections::VecDeque;
 use std::ops::Deref;
 
 // This phase is responsible for identifying the worker function invocations
 // such as `worker.foo("x, y, z")` or `cart-resource.add-item(..)` etc
 // lazy method invocations are converted to actual Expr::Call
 pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError> {
-    let mut visitor = ExprVisitor::bottom_up(expr);
+    let mut queue = VecDeque::new();
+    queue.push_back(expr);
 
-    while let Some(expr) = visitor.pop_back() {
+    while let Some(expr) = queue.pop_back() {
         if let Expr::InvokeMethodLazy {
             lhs,
             method,
@@ -41,8 +43,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
         {
             let inferred_type = lhs.inferred_type();
 
-            match &inferred_type {
-                InferredType::Instance { instance_type } => {
+            match inferred_type.internal_type() {
+                TypeInternal::Instance { instance_type } => {
                     let type_parameter = generic_type_parameter
                         .as_ref()
                         .map(|gtp| {
@@ -112,9 +114,12 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 instance_type.worker_name(),
                             );
 
-                            let new_inferred_type = InferredType::Instance {
-                                instance_type: Box::new(resource_instance_type),
-                            };
+                            let new_inferred_type = InferredType::new(
+                                TypeInternal::Instance {
+                                    instance_type: Box::new(resource_instance_type),
+                                },
+                                TypeOrigin::NoOrigin,
+                            );
 
                             let new_call_type =
                                 CallType::InstanceCreation(InstanceCreationType::Resource {
@@ -229,7 +234,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                 // This implies, none of the phase identified `lhs` to be an instance-type yet.
                 // Re-running (fix point) the same phase will help identify the instance type of `lhs`.
                 // Hence, this phase is part of computing the fix-point of compiler type inference.
-                InferredType::Unknown => {}
+                TypeInternal::Unknown => {}
                 _ => {
                     return Err(FunctionCallError::invalid_function_call(
                         method,
@@ -252,6 +257,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                 }
             }
         }
+
+        expr.visit_expr_nodes_lazy(&mut queue);
     }
 
     Ok(())

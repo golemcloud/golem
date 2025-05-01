@@ -32,6 +32,7 @@ use golem_worker_executor_base::services::compiled_component::CompiledComponentS
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, Mutex};
+use tokio::task::spawn_blocking;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::{info, warn, Instrument};
@@ -179,12 +180,20 @@ impl CompileWorker {
             .await?;
 
             let start = Instant::now();
-            let component = Component::from_binary(&engine, &bytes).map_err(|e| {
-                CompilationError::CompileFailure(format!(
-                    "Failed to compile component {:?}: {}",
-                    component_with_version, e
-                ))
-            })?;
+            let component = spawn_blocking({
+                let component_with_version = component_with_version.clone();
+                move || {
+                    Component::from_binary(&engine, &bytes).map_err(|e| {
+                        CompilationError::CompileFailure(format!(
+                            "Failed to compile component {:?}: {}",
+                            component_with_version, e
+                        ))
+                    })
+                }
+            })
+            .instrument(tracing::Span::current())
+            .await
+            .map_err(|join_err| CompilationError::Unexpected(join_err.to_string()))??;
             let end = Instant::now();
 
             let compilation_time = end.duration_since(start);

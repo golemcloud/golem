@@ -520,10 +520,11 @@ impl From<SecuritySchemeReferenceData> for SecuritySchemeReference {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GatewayBindingResponseData {
-    pub component: Option<ResolvedGatewayBindingComponent>, // Optional to keep it backward compatible
-    pub worker_name: Option<String>, // If bindingType is Default or FileServer
-    pub idempotency_key: Option<String>, // If bindingType is Default or FileServer
-    pub response: Option<String>, // Optional to keep it backward compatible. If bindingType is Default or FileServer
+    pub component: Option<ResolvedGatewayBindingComponent>, // Allowed only if bindingType is Default, FileServer or HttpServer
+    pub worker_name: Option<String>, // Allowed only if bindingType is Default or FileServer
+    pub idempotency_key: Option<String>, // Allowed only if bindingType is Default or FileServer
+    pub invocation_context: Option<String>, // Allowed only if bindingType is Default or FileServer
+    pub response: Option<String>,    // Allowed only if bindingType is Default or FileServer
     #[oai(rename = "bindingType")]
     pub binding_type: Option<GatewayBindingType>,
     pub response_mapping_input: Option<RibInputTypeInfo>, // If bindingType is Default or FileServer
@@ -579,6 +580,7 @@ impl GatewayBindingResponseData {
                     component: None,
                     worker_name: None,
                     idempotency_key: None,
+                    invocation_context: None,
                     response: None,
                     binding_type: Some(binding_type),
                     response_mapping_input: None,
@@ -607,10 +609,15 @@ impl GatewayBindingResponseData {
             }),
             worker_name: worker_binding
                 .worker_name_compiled
-                .clone()
+                .as_ref()
                 .map(|compiled| compiled.worker_name.to_string()),
-            idempotency_key: worker_binding.idempotency_key_compiled.clone().map(
+            idempotency_key: worker_binding.idempotency_key_compiled.as_ref().map(
                 |idempotency_key_compiled| idempotency_key_compiled.idempotency_key.to_string(),
+            ),
+            invocation_context: worker_binding.invocation_context_compiled.as_ref().map(
+                |invocation_context_compiled| {
+                    invocation_context_compiled.invocation_context.to_string()
+                },
             ),
             response: Some(
                 worker_binding
@@ -647,11 +654,12 @@ impl GatewayBindingResponseData {
             }),
             worker_name: http_handler_binding
                 .worker_name_compiled
-                .clone()
+                .as_ref()
                 .map(|compiled| compiled.worker_name.to_string()),
-            idempotency_key: http_handler_binding.idempotency_key_compiled.clone().map(
+            idempotency_key: http_handler_binding.idempotency_key_compiled.as_ref().map(
                 |idempotency_key_compiled| idempotency_key_compiled.idempotency_key.to_string(),
             ),
+            invocation_context: None,
             response: None,
             binding_type: Some(binding_type),
             response_mapping_input: None,
