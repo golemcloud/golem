@@ -668,12 +668,14 @@ dependencies = ["build-release-override-linux-arm64"]
 
 [tasks.run]
 description = "Runs all the services locally"
-dependencies = ["build"]
+#dependencies = ["build"]
 
 condition = { fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager." }
 condition_script = ["nginx -v", "lnav --version", "redis-server --version"]
 
 script = '''
+#!/bin/bash
+
 mkdir -pv data logs
 
 redis-server --port 6380 --save "" --appendonly no &> logs/redis.log &

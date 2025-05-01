@@ -76,6 +76,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "WasmRpcTarget",
                 "golem_common::model::component_metadata::WasmRpcTarget",
             ),
+            (
+                "GrpcTarget",
+                "golem_common::model::component_metadata::GrpcTarget",
+            ),
             ("WorkerFilter", "golem_common::model::WorkerFilter"),
             ("WorkerId", "golem_common::model::WorkerId"),
             (

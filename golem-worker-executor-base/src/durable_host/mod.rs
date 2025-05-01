@@ -111,6 +111,7 @@ mod cli;
 mod clocks;
 mod filesystem;
 pub mod golem;
+pub mod grpc;
 pub mod http;
 pub mod io;
 pub mod keyvalue;

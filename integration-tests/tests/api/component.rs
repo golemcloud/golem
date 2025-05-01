@@ -65,9 +65,6 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                                 },
                             ),
                         ]),
-                        remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                            golem_common::model::component_metadata::GolemWorkerRemote {},
-                        ),
                     }),
                 ),
                 (
@@ -81,9 +78,6 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                                 component_type: ComponentType::Ephemeral
                             }
                         )]),
-                        remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                            golem_common::model::component_metadata::GolemWorkerRemote {},
-                        ),
                     }),
                 ),
             ])
@@ -190,9 +184,6 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                         },
                     ),
                 ]),
-                remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                    golem_common::model::component_metadata::GolemWorkerRemote {},
-                ),
             }),
     );
     check!(
@@ -213,9 +204,6 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                         component_type: ComponentType::Ephemeral,
                     }
                 )]),
-                remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                    golem_common::model::component_metadata::GolemWorkerRemote {},
-                ),
             }),
     );
     check!(ephemeral_meta.dynamic_linking.len() == 0);
@@ -334,9 +322,6 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
                     component_type: ComponentType::Durable,
                 },
             )]),
-            remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                golem_common::model::component_metadata::GolemWorkerRemote {},
-            ),
         }),
     );
     deps.component_service()

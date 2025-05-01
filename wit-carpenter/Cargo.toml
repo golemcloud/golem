@@ -13,5 +13,7 @@ prost-build = "0.13.5"
 prost-types = "0.13.5"
 convert_case = "0.8.0"
 regex = "1.11.1"
-prost-reflect = "0.14.7"
+prost-reflect = { version = "0.14.7", features = ["serde", "text-format"] }
 prost = "0.13.5"
+bytes = { workspace = true }
+heck = "0.5.0"

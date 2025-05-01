@@ -65,9 +65,6 @@ async fn auction_example_1(
                         },
                     ),
                 ]),
-                remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                    golem_common::model::component_metadata::GolemWorkerRemote {},
-                ),
             }),
         )])
         .store()
@@ -163,9 +160,6 @@ async fn auction_example_2(
                         },
                     ),
                 ]),
-                remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                    golem_common::model::component_metadata::GolemWorkerRemote {},
-                ),
             }),
         )])
         .store()
@@ -263,9 +257,6 @@ async fn counter_resource_test_1(
                             },
                         ),
                     ]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
             (
@@ -279,9 +270,6 @@ async fn counter_resource_test_1(
                             component_type: ComponentType::Ephemeral,
                         },
                     )]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
         ])
@@ -352,9 +340,6 @@ async fn counter_resource_test_2(
                             },
                         ),
                     ]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
             (
@@ -368,9 +353,6 @@ async fn counter_resource_test_2(
                             component_type: ComponentType::Ephemeral,
                         },
                     )]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
         ])
@@ -442,9 +424,6 @@ async fn counter_resource_test_2_with_restart(
                             },
                         ),
                     ]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
             (
@@ -458,9 +437,6 @@ async fn counter_resource_test_2_with_restart(
                             component_type: ComponentType::Ephemeral,
                         },
                     )]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
         ])
@@ -536,9 +512,6 @@ async fn counter_resource_test_3(
                             },
                         ),
                     ]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
             (
@@ -552,9 +525,6 @@ async fn counter_resource_test_3(
                             component_type: ComponentType::Ephemeral,
                         },
                     )]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
         ])
@@ -626,9 +596,6 @@ async fn counter_resource_test_3_with_restart(
                             },
                         ),
                     ]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
             (
@@ -642,9 +609,6 @@ async fn counter_resource_test_3_with_restart(
                             component_type: ComponentType::Ephemeral,
                         },
                     )]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
         ])
@@ -720,9 +684,6 @@ async fn context_inheritance(
                             },
                         ),
                     ]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
             (
@@ -736,9 +697,6 @@ async fn context_inheritance(
                             component_type: ComponentType::Ephemeral,
                         },
                     )]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
         ])
@@ -857,9 +815,6 @@ async fn counter_resource_test_5(
                             },
                         ),
                     ]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
             (
@@ -873,9 +828,6 @@ async fn counter_resource_test_5(
                             component_type: ComponentType::Ephemeral,
                         },
                     )]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
         ])
@@ -950,9 +902,6 @@ async fn counter_resource_test_5_with_restart(
                             },
                         ),
                     ]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
             (
@@ -966,9 +915,6 @@ async fn counter_resource_test_5_with_restart(
                             component_type: ComponentType::Ephemeral,
                         },
                     )]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
         ])
@@ -1062,9 +1008,6 @@ async fn wasm_rpc_bug_32_test(
                             },
                         ),
                     ]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
             (
@@ -1078,9 +1021,6 @@ async fn wasm_rpc_bug_32_test(
                             component_type: ComponentType::Ephemeral,
                         },
                     )]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
         ])
@@ -1154,9 +1094,6 @@ async fn error_message_non_existing_target_component(
                         },
                     ),
                 ]),
-                remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                    golem_common::model::component_metadata::GolemWorkerRemote {},
-                ),
             }),
         )])
         .store()
@@ -1236,9 +1173,6 @@ async fn ephemeral_worker_invocation_via_rpc1(
                             },
                         ),
                     ]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
             (
@@ -1252,9 +1186,6 @@ async fn ephemeral_worker_invocation_via_rpc1(
                             component_type: ComponentType::Ephemeral,
                         },
                     )]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
         ])
@@ -1355,9 +1286,6 @@ async fn golem_bug_1265_test(
                             },
                         ),
                     ]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
             (
@@ -1371,9 +1299,6 @@ async fn golem_bug_1265_test(
                             component_type: ComponentType::Ephemeral,
                         },
                     )]),
-                    remote: golem_common::model::component_metadata::RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
         ])

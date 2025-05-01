@@ -1,9 +1,7 @@
 use crate::grpc;
 use crate::wit;
-use core::fmt;
 use grpc::FileFromUtils;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 fn fill_root_types() -> Vec<wit::Type> {
     let types = vec![
@@ -126,12 +124,9 @@ fn fill_root_types() -> Vec<wit::Type> {
     types
 }
 
-// write
-
 pub trait WitUtils {
     fn from_fd(file_descriptor_set: &prost_types::FileDescriptorSet, version: Option<&str>)
         -> Self;
-    fn _from_openapi(path: &Path) -> Self;
     fn merge_wits(wits: Vec<Wit>) -> Self;
     fn to_string_format(self) -> String;
 }
@@ -147,10 +142,6 @@ impl WitUtils for Wit {
         }
 
         Self::merge_wits(wits)
-    }
-
-    fn _from_openapi(_path: &Path) -> Self {
-        wit::Wit::default()
     }
 
     fn merge_wits(wits: Vec<Wit>) -> Self {
@@ -201,80 +192,61 @@ impl WitUtils for Wit {
 
     fn to_string_format(self) -> String {
         let wit_template_str = r#"
-        /**
-{{package_meta.docs}}
-*/
-package {{package_meta.name_space}}:{{package_meta.name}}@{{package_meta.version}};
+            package {{package_meta.name_space}}:{{package_meta.name}};
 
-{{#interfaces}}
-/**
-* {{docs}}
-*/
-interface {{name}} {
-    {{#uses}}
-    use {{interface_name}}.{ {{#type_names}}{{.}}{{^last}}, {{/last}}{{/type_names}}};
-    {{/uses}}
-    {{#types}}
-    /**
-    * {{docs}}
-    */{{#is_record}}
-    record {{name}} {
-        {{#fields}}
-        {{name}}: {{{type_name}}},
-        {{/fields}}
-    }
-    {{/is_record}}
-    {{#is_enum}}
-    enum {{name}} {
-        {{#fields}}
-        {{name}},
-        {{/fields}}
-    }
-    {{/is_enum}}
-    {{#is_variant}}
-    variant {{name}} {
-        {{#fields}}
-        {{name}}({{{type_name}}}),
-        {{/fields}}
-    }
-    {{/is_variant}}
-    {{/types}}
-    {{#functions}}
-    /**
-    * {{docs}}
-    */
-    {{name}}: func({{#parameters}}{{name}}: {{{type_name}}}{{^last}}, {{/last}}{{/parameters}}){{#result}} -> result<{{{ok}}}, {{{err}}}>{{/result}};
-    {{/functions}}
-    {{#resources}}
-    /**
-    * {{docs}}
-    */
-    resource {{name}} {
-        constructor({{#constructor.parameters}}{{name}}: {{{type_name}}}{{^last}}, {{/last}}{{/constructor.parameters}});
-        
-        {{#functions}}
-        /**
-        * {{docs}}
-        */
-        {{name}}: func({{#parameters}}{{name}}: {{{type_name}}}{{^last}}, {{/last}}{{/parameters}}) -> result<{{{result.ok}}}, {{{result.err}}}>;
-        
-        {{/functions}}
-    }
-{{/resources}}
+            {{#interfaces}}
+            interface {{name}} {
+                {{#uses}}
+                use {{interface_name}}.{ {{#type_names}}{{.}}{{^last}}, {{/last}}{{/type_names}}};
+                {{/uses}}
+                {{#types}}
+                {{#is_record}}
+                record {{name}} {
+                    {{#fields}}
+                    {{name}}: {{{type_name}}},
+                    {{/fields}}
+                }
+                {{/is_record}}
+                {{#is_enum}}
+                enum {{name}} {
+                    {{#fields}}
+                    {{name}},
+                    {{/fields}}
+                }
+                {{/is_enum}}
+                {{#is_variant}}
+                variant {{name}} {
+                    {{#fields}}
+                    {{name}}({{{type_name}}}),
+                    {{/fields}}
+                }
+                {{/is_variant}}
+                {{/types}}
+                {{#functions}}
+                {{name}}: func({{#parameters}}{{name}}: {{{type_name}}}{{^last}}, {{/last}}{{/parameters}}){{#result}} -> result<{{{ok}}}, {{{err}}}>{{/result}};
+                {{/functions}}
+                {{#resources}}
+                resource {{name}} {
+                    constructor({{#constructor.parameters}}{{name}}: {{{type_name}}}{{^last}}, {{/last}}{{/constructor.parameters}});
+                    
+                    {{#functions}}
+                    {{name}}: func({{#parameters}}{{name}}: {{{type_name}}}{{^last}}, {{/last}}{{/parameters}}) -> result<{{{result.ok}}}, {{{result.err}}}>;
+                    
+                    {{/functions}}
+                }
+            {{/resources}}
 
-}
+            }
 
-{{/interfaces}}
+            {{/interfaces}}
 
-/**
-* {{world.docs}}
-*/
-world {{world.name}} {
-    {{#world.exports}}
-    export {{.}};
-    {{/world.exports}}
-}
-        "#;
+
+            world {{package_meta.name}}-world {
+                {{#world.exports}}
+                export {{.}};
+                {{/world.exports}}
+            }
+            "#;
 
         let template = mustache::compile_str(wit_template_str).unwrap();
 
@@ -287,25 +259,6 @@ pub struct Wit {
     pub package_meta: PackageMetadata,
     pub interfaces: Vec<Interface>,
     pub world: World,
-}
-
-impl fmt::Display for Wit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "/*\n{}\n*/", &self.package_meta.docs)?;
-        writeln!(
-            f,
-            "package {}:{}:{};",
-            self.package_meta.name_space, self.package_meta.name, self.package_meta.version
-        )?;
-        writeln!(f)?;
-
-        for interface in &self.interfaces {
-            writeln!(f, "{}", interface)?;
-        }
-
-        writeln!(f, "{}", self.world)?;
-        writeln!(f)
-    }
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -323,17 +276,6 @@ pub struct World {
     pub exports: Vec<String>,
 }
 
-impl fmt::Display for World {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "/*\n{}\n*/", self.docs)?;
-        writeln!(f, "world {} {{", self.name)?;
-        for export in &self.exports {
-            writeln!(f, "  export {};", export)?;
-        }
-        writeln!(f, "}}\n")
-    }
-}
-
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Interface {
     pub docs: String,
@@ -348,45 +290,6 @@ pub struct Interface {
 pub struct Uses {
     pub interface_name: String,
     pub type_names: Vec<String>,
-}
-
-impl fmt::Display for Interface {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "/*\n{}\n*/", self.docs)?;
-        writeln!(f, "interface {} {{", self.name)?;
-
-        for use_ in &self.uses {
-            write!(f, "\n uses {}.{{", use_.interface_name)?;
-            for (index, type_name) in use_.type_names.iter().enumerate() {
-                if index > 0 {
-                    write!(f, ",")?;
-                };
-                write!(f, "{}", type_name)?;
-            }
-        }
-        writeln!(f, "}}")?;
-
-        writeln!(f)?;
-
-        for type_definition in &self.types {
-            writeln!(f, " {}\n", type_definition)?;
-        }
-
-        writeln!(f)?;
-
-        for function_ in &self.functions {
-            writeln!(f, " {}\n", function_)?;
-        }
-
-        writeln!(f)?;
-
-        for resource in &self.resources {
-            writeln!(f, "{}", resource)?;
-        }
-        writeln!(f, "}}")?;
-
-        writeln!(f)
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -409,35 +312,6 @@ pub struct Parameter {
     pub type_name: String,
 }
 
-impl fmt::Display for Function {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // spacing calculation
-        writeln!(f, "/*\n  {}\n*/\n", &self.docs)?;
-
-        write!(f, "  {}: func(", &self.name)?;
-        for (index, param) in self.parameters.iter().enumerate() {
-            if index > 0 {
-                write!(f, ", ")?;
-            };
-            write!(f, "{}: {}", param.name, param.type_name)?;
-        }
-
-        match &self.result {
-            Some(result) => {
-                if &result.ok == "result" {
-                    write!(f, ") -> result<{}, {}>;", &result.ok, &result.err)?;
-                } else {
-                    write!(f, ");")?;
-                }
-            }
-            None => {
-                write!(f, ");")?;
-            }
-        };
-        writeln!(f)
-    }
-}
-
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Resource {
     pub docs: String,
@@ -450,32 +324,6 @@ pub struct Resource {
 pub struct Constructor {
     pub name: String,
     pub parameters: Vec<Parameter>,
-}
-
-impl fmt::Display for Resource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "/*\n{}\n*/\n", self.docs)?;
-        writeln!(f, "  resource {} {{", self.name)?;
-
-        writeln!(f)?;
-
-        write!(f, "    contructor(")?;
-        for (index, param) in self.constructor.parameters.iter().enumerate() {
-            if index > 0 {
-                write!(f, ", ")?;
-            };
-            write!(f, "{}: {}", param.name, param.type_name)?;
-        }
-
-        write!(f, ");")?;
-        writeln!(f)?;
-
-        for function_ in &self.functions {
-            writeln!(f, " {};\n", function_)?;
-        }
-        writeln!(f, "}}")?;
-        writeln!(f)
-    }
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -493,20 +341,4 @@ pub struct Type {
 pub struct Field {
     pub name: String,
     pub type_name: String,
-}
-
-impl fmt::Display for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let kind = &self.kind;
-
-        writeln!(f, "/*\n{}\n*/\n", self.docs)?;
-        writeln!(f, " {} {} {{", kind, self.name)?;
-        for field in self.fields.iter() {
-            writeln!(f, "  {}: {},", field.name, field.type_name)?;
-        }
-
-        writeln!(f, " }}")?;
-
-        writeln!(f)
-    }
 }

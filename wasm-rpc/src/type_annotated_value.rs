@@ -83,7 +83,7 @@ impl TypeAnnotatedValueConstructors for TypeAnnotatedValue {
     }
 }
 
-pub fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<String>> {
+fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<String>> {
     match val {
         Value::Bool(bool) => Ok(TypeAnnotatedValue::Bool(*bool)),
         Value::S8(value) => Ok(TypeAnnotatedValue::S8(*value as i32)),

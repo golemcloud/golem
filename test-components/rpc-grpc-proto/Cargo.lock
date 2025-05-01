@@ -20,13 +20,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rpc_grpc_grpcbin"
-version = "0.0.1"
-dependencies = [
- "wit-bindgen-rt",
-]
-
-[[package]]
 name = "wit-bindgen-rt"
 version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

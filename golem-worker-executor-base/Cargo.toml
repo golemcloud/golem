@@ -23,6 +23,7 @@ golem-rib = { path = "../golem-rib", version = "=0.0.0" }
 golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
+golem-grpc = { path = "../golem-grpc", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 async-lock = "3.4.0"
@@ -96,6 +97,11 @@ prost-reflect = { version = "0.14.7", features = ["serde", "text-format"] }
 once_cell.workspace = true
 prost-build = "0.13.5"
 convert_case = "0.8.0"
+axum-core = "0.5.2"
+axum.workspace = true
+wit-carpenter = { version = "0.0.0", path = "../wit-carpenter" }
+heck = "0.5.0"
+base64 = "0.22.1"
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }

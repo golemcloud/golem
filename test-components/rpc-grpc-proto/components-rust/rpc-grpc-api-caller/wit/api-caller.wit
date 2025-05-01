@@ -9,7 +9,7 @@ interface rpc-grpc-api-caller-api {
     name : string
   }
   
-  hello: func(input: input) -> output;
+  hello: func() -> output;
 }
 
 world rpc-grpc-api-caller {

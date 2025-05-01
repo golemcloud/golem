@@ -1,112 +1,74 @@
-/**
-grpcbin
-*/
-package rpc-grpc:grpcbin@0.1.0;
 
-/**
-* grpcbin
-*/
+package rpc-grpc:grpcbin;
+
 interface grpcbin {
     
-    /**
-    * HeadersMessage.Values
-    */
     record headers-message-values {
         values: list<string>,
     }
             
-    /**
-    * HeadersMessage.MetadataEntry
-    */
     record headers-message-metadata-entry {
         key: option<string>,
         value: option<headers-message-values>,
     }
             
-    /**
-    * HeadersMessage
-    */
     record headers-message {
         metadata: list<headers-message-metadata-entry>,
     }
             
-    /**
-    * SpecificErrorRequest
-    */
     record specific-error-request {
         code: option<u32>,
         reason: option<string>,
     }
             
-    /**
-    * EmptyMessage
-    */
     record empty-message {
+        empty: bool,
     }
             
-    /**
-    * DummyMessage.Sub
-    */
     record dummy-message-sub {
         f-string: option<string>,
     }
             
-    /**
-    * DummyMessage.Enum
-    */    
+    
     enum dummy-message-enum {
-        enum-n1,
+        enum1,
     }
         
-    /**
-    * DummyMessage
-    */
     record dummy-message {
         f-string: option<string>,
         f-strings: list<string>,
-        f-int-n32: option<s32>,
-        f-int-n32-s: list<s32>,
+        f-int32: option<s32>,
+        f-int32s: list<s32>,
         f-enum: option<dummy-message-enum>,
         f-enums: list<dummy-message-enum>,
         f-sub: option<dummy-message-sub>,
         f-subs: list<dummy-message-sub>,
         f-bool: option<bool>,
         f-bools: list<bool>,
-        f-int-n64: option<s64>,
-        f-int-n64-s: list<s64>,
+        f-int64: option<s64>,
+        f-int64s: list<s64>,
         f-bytes: option<list<u8>>,
         f-bytess: list<list<u8>>,
         f-float: option<f32>,
         f-floats: list<f32>,
     }
             
-    /**
-    * IndexReply.Endpoint
-    */
     record index-reply-endpoint {
         path: option<string>,
         description: option<string>,
     }
             
-    /**
-    * IndexReply
-    */
     record index-reply {
         description: option<string>,
         endpoints: list<index-reply-endpoint>,
     }
             
-    /**
-    * 
-    */
     record grpc-configuration {
         url: string,
         secret-token: string,
     }
             
-    /**
-    * 
-    */    
+    
     enum grpc-status-code {
         ok,
         cancelled,
@@ -127,9 +89,6 @@ interface grpcbin {
         unauthenticated,
     }
         
-    /**
-    * 
-    */
     record grpc-status {
         code: grpc-status-code,
         message: string,
@@ -139,79 +98,54 @@ interface grpcbin {
     
 }
 
-/**
-* GRPCBin
-*/
 interface g-r-p-c-bin {
-    use grpcbin.{ grpc-configuration, grpc-status, };
-    use grpcbin.{ empty-message, headers-message, index-reply, dummy-message, specific-error-request, };
+    use grpcbin.{ empty-message, dummy-message, grpc-status, grpc-configuration, };
     
     
-    /**
-    * 
-    */
-    resource g-r-p-c-bin-resource {
+    resource g-r-p-c-bin-resource-unary {
         constructor(grpc-configuration: grpc-configuration, );
         
-        /**
-        * Index
-        */
-        index: func(empty-message: empty-message, ) -> result<index-reply, grpc-status>;
+        dummy-unary: func(empty-message: empty-message, ) -> result<dummy-message, grpc-status>;
         
-        /**
-        * Empty
-        */
-        empty: func(empty-message: empty-message, ) -> result<empty-message, grpc-status>;
+    }
+
+    resource dummy-server-stream-resource-server-streaming {
+        constructor(grpc-configuration: grpc-configuration, );
         
-        /**
-        * DummyUnary
-        */
-        dummy-unary: func(dummy-message: dummy-message, ) -> result<dummy-message, grpc-status>;
+        send: func(message: empty-message, ) -> result<option<bool>, grpc-status>;
         
-        /**
-        * DummyServerStream
-        */
-        dummy-server-stream: func(dummy-message: dummy-message, ) -> result<dummy-message, grpc-status>;
+        receive: func() -> result<option<dummy-message>, grpc-status>;
         
-        /**
-        * DummyClientStream
-        */
-        dummy-client-stream: func(dummy-message: dummy-message, ) -> result<dummy-message, grpc-status>;
+        finish: func() -> result<bool, grpc-status>;
         
-        /**
-        * DummyBidirectionalStreamStream
-        */
-        dummy-bidirectional-stream-stream: func(dummy-message: dummy-message, ) -> result<dummy-message, grpc-status>;
+    }
+
+    resource dummy-client-stream-resource-client-streaming {
+        constructor(grpc-configuration: grpc-configuration, );
         
-        /**
-        * SpecificError
-        */
-        specific-error: func(specific-error-request: specific-error-request, ) -> result<empty-message, grpc-status>;
+        send: func(message: empty-message, ) -> result<option<bool>, grpc-status>;
         
-        /**
-        * RandomError
-        */
-        random-error: func(empty-message: empty-message, ) -> result<empty-message, grpc-status>;
+        finish: func() -> result<dummy-message, grpc-status>;
         
-        /**
-        * HeadersUnary
-        */
-        headers-unary: func(empty-message: empty-message, ) -> result<headers-message, grpc-status>;
+    }
+
+    resource dummy-bi-stream-resource-bidirectional-streaming {
+        constructor(grpc-configuration: grpc-configuration, );
         
-        /**
-        * NoResponseUnary
-        */
-        no-response-unary: func(empty-message: empty-message, ) -> result<empty-message, grpc-status>;
+        send: func(message: empty-message, ) -> result<option<bool>, grpc-status>;
+        
+        receive: func() -> result<option<dummy-message>, grpc-status>;
+        
+        finish: func() -> result<bool, grpc-status>;
         
     }
 
 }
 
 
-/**
-* 
-*/
+
 world grpcbin-world {
     export grpcbin;
     export g-r-p-c-bin;
 }
+        

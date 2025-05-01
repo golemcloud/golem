@@ -1,20 +1,12 @@
-/**
-{{package_meta.docs}}
-*/
-package {{package_meta.name_space}}:{{package_meta.name}}@{{package_meta.version}};
+package {{package_meta.name_space}}:{{package_meta.name}};
 
 {{#interfaces}}
-/**
-* {{docs}}
-*/
 interface {{name}} {
     {{#uses}}
     use {{interface_name}}.{ {{#type_names}}{{.}}{{^last}}, {{/last}}{{/type_names}}};
     {{/uses}}
     {{#types}}
-    /**
-    * {{docs}}
-    */{{#is_record}}
+    {{#is_record}}
     record {{name}} {
         {{#fields}}
         {{name}}: {{{type_name}}},
@@ -37,22 +29,13 @@ interface {{name}} {
     {{/is_variant}}
     {{/types}}
     {{#functions}}
-    /**
-    * {{docs}}
-    */
     {{name}}: func({{#parameters}}{{name}}: {{{type_name}}}{{^last}}, {{/last}}{{/parameters}}){{#result}} -> result<{{{ok}}}, {{{err}}}>{{/result}};
     {{/functions}}
     {{#resources}}
-    /**
-    * {{docs}}
-    */
     resource {{name}} {
         constructor({{#constructor.parameters}}{{name}}: {{{type_name}}}{{^last}}, {{/last}}{{/constructor.parameters}});
         
         {{#functions}}
-        /**
-        * {{docs}}
-        */
         {{name}}: func({{#parameters}}{{name}}: {{{type_name}}}{{^last}}, {{/last}}{{/parameters}}) -> result<{{{result.ok}}}, {{{result.err}}}>;
         
         {{/functions}}
@@ -63,10 +46,8 @@ interface {{name}} {
 
 {{/interfaces}}
 
-/**
-* {{world.docs}}
-*/
-world {{world.name}} {
+
+world {{package_meta.name}}-world {
     {{#world.exports}}
     export {{.}};
     {{/world.exports}}

@@ -10,10 +10,3 @@ includes:
 - components-*/*/golem.yaml
 witDeps:
 - wit/deps
-customCommands:
-  wit-gen:
-  - command: golem-cli wit generate \
-              -i component-rust/rpc-grpc-grpcbin/grpc \
-              -r grpc \
-              --component-name rpc-grpc-grpcbin \
-              -o component-rust/rpc-grpc-grpcbin/wit/

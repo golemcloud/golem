@@ -9,11 +9,9 @@ components:
   rpc-grpc:api-caller:
     template: rust
 
-# Example for adding dependencies for Worker to Worker communication:
-# See https://learn.golem.cloud/docs/app-manifest#fields_dependencies for more information
-#
 dependencies:
  rpc-grpc:api-caller:
  - target: rpc-grpc:grpcbin
-   type: wasm-rpc
-   remote: grpc
+   type: grpc
+   proto:
+    root: /home/balaram/golem-fork/test-components/rpc-grpc-proto/components-rust/rpc-grpc-api-caller/proto/

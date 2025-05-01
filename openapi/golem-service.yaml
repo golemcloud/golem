@@ -7158,14 +7158,41 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    DynamicLinkedGrpc:
+      type: object
+      properties:
+        targets:
+          description: Maps resource names within the dynamic linked interface to target information
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/GrpcTarget'
+        metadata:
+          $ref: '#/components/schemas/GrpcMetadata'
+      required:
+      - targets
+      - metadata
     DynamicLinkedInstance:
       discriminator:
         propertyName: type
         mapping:
           WasmRpc: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+          Grpc: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedGrpc'
       type: object
       oneOf:
       - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+      - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedGrpc'
+    DynamicLinkedInstance_DynamicLinkedGrpc:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Grpc
+            type: string
+            enum:
+            - Grpc
+        required:
+        - type
+      - $ref: '#/components/schemas/DynamicLinkedGrpc'
     DynamicLinkedInstance_DynamicLinkedWasmRpc:
       allOf:
       - type: object
@@ -7186,11 +7213,8 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/WasmRpcTarget'
-        remote:
-          $ref: '#/components/schemas/RpcRemote'
       required:
       - targets
-      - remote
     DynamicLinking:
       type: object
       properties:
@@ -7200,33 +7224,6 @@ components:
             $ref: '#/components/schemas/DynamicLinkedInstance'
       required:
       - dynamicLinking
-    EndpointConfig:
-      type: object
-      properties:
-        method:
-          type: string
-        endpoint:
-          type: string
-        noPathParams:
-          type: integer
-          format: int32
-        noQueryParams:
-          type: integer
-          format: int32
-        queryParamNames:
-          type: array
-          items:
-            type: string
-        hasBody:
-          type: boolean
-      required:
-      - method
-      - endpoint
-      - noPathParams
-      - noQueryParams
-      - hasBody
-    GolemWorkerRemote:
-      type: object
     GrpcMetadata:
       type: object
       properties:
@@ -7237,20 +7234,22 @@ components:
             format: uint8
         packageName:
           type: string
-        url:
-          type: string
-        apiToken:
-          type: string
       required:
       - fileDescriptorSet
       - packageName
-      - url
-      - apiToken
-    GrpcRemote:
+    GrpcTarget:
       type: object
       properties:
-        metadata:
-          $ref: '#/components/schemas/GrpcMetadata'
+        interfaceName:
+          type: string
+        componentName:
+          type: string
+        componentType:
+          $ref: '#/components/schemas/ComponentType'
+      required:
+      - interfaceName
+      - componentName
+      - componentType
     InitialComponentFile:
       type: object
       properties:
@@ -7283,20 +7282,6 @@ components:
           format: uint64
       required:
       - initial
-    OpenApiMetadata:
-      type: object
-      properties:
-        endpoints:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/EndpointConfig'
-      required:
-      - endpoints
-    OpenApiRemote:
-      type: object
-      properties:
-        metadata:
-          $ref: '#/components/schemas/OpenApiMetadata'
     OplogProcessorDefinition:
       type: object
       properties:
@@ -7541,54 +7526,6 @@ components:
             $ref: '#/components/schemas/ProducerField'
       required:
       - fields
-    RpcRemote:
-      discriminator:
-        propertyName: type
-        mapping:
-          OpenApi: '#/components/schemas/RpcRemote_OpenApiRemote'
-          Grpc: '#/components/schemas/RpcRemote_GrpcRemote'
-          GolemWorker: '#/components/schemas/RpcRemote_GolemWorkerRemote'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/RpcRemote_OpenApiRemote'
-      - $ref: '#/components/schemas/RpcRemote_GrpcRemote'
-      - $ref: '#/components/schemas/RpcRemote_GolemWorkerRemote'
-    RpcRemote_GolemWorkerRemote:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: GolemWorker
-            type: string
-            enum:
-            - GolemWorker
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemWorkerRemote'
-    RpcRemote_GrpcRemote:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Grpc
-            type: string
-            enum:
-            - Grpc
-        required:
-        - type
-      - $ref: '#/components/schemas/GrpcRemote'
-    RpcRemote_OpenApiRemote:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: OpenApi
-            type: string
-            enum:
-            - OpenApi
-        required:
-        - type
-      - $ref: '#/components/schemas/OpenApiRemote'
     VersionedName:
       type: object
       properties:

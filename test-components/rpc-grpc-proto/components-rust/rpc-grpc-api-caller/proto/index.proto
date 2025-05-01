@@ -5,14 +5,14 @@ syntax = "proto3";
 package grpcbin;
 
 service GRPCBin {
-  // Stream endpoint that receives 10 DummyMessages and replies with the last received one
-  rpc DummyServerStream(EmptyMessage) returns (stream DummyMessage) {}
-  
-  rpc DummyClientStream(stream EmptyMessage) returns (DummyMessage) {}
+  // rpc DummyServerStream(EmptyMessage) returns (stream DummyMessage) {}
 
-  rpc DummyBiStream(stream EmptyMessage) returns (stream DummyMessage) {}
+  // rpc DummyClientStream(stream EmptyMessage) returns (DummyMessage) {}
+
+  // rpc DummyBiStream(stream EmptyMessage) returns (stream DummyMessage) {}
 
   rpc DummyUnary(EmptyMessage) returns (DummyMessage) {}
+
 
 }
 

@@ -21,7 +21,7 @@ use axum::Router;
 use golem_api_grpc::proto::golem::worker::v1::{worker_execution_error, ComponentParseFailed};
 use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
 use golem_common::model::component_metadata::{
-    DynamicLinkedInstance, DynamicLinkedWasmRpc, RpcRemote, WasmRpcTarget,
+    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
 use golem_common::model::oplog::{IndexedResourceKey, OplogIndex, WorkerResourceId};
 use golem_common::model::{
@@ -3200,9 +3200,6 @@ async fn scheduled_invocation_test(
                             component_type: ComponentType::Durable,
                         },
                     )]),
-                    remote: RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
             (
@@ -3217,9 +3214,6 @@ async fn scheduled_invocation_test(
                             component_type: ComponentType::Durable,
                         },
                     )]),
-                    remote: RpcRemote::GolemWorker(
-                        golem_common::model::component_metadata::GolemWorkerRemote {},
-                    ),
                 }),
             ),
         ])

@@ -1,6 +1,5 @@
 mod grpc;
 mod wit;
-// mod openapi;
 use prost::Message;
 use std::path::Path;
 pub use wit::WitUtils;
@@ -27,6 +26,7 @@ pub fn from_grpc(path: &Path, version: Option<&str>) -> (wit::Wit, String, Vec<u
     };
 
     let file_descriptor_set = config.load_fds(&[proto_path], &[protos_root]).unwrap();
+
     let wit = wit::Wit::from_fd(&file_descriptor_set, version);
 
     (

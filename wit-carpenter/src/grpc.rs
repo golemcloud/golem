@@ -1,95 +1,58 @@
-use crate::{from_grpc, wit};
-use convert_case::{Case, Casing};
-use prost_types::FileDescriptorProto;
+use crate::wit;
+use heck::ToKebabCase;
+use prost_types::{FileDescriptorProto, MethodDescriptorProto};
 use std::{
     collections::{HashMap, HashSet},
-    fs,
-    path::Path,
     vec,
 };
 
-// enum RpcType {
-//     Unary,
-//     ServerStreaming,
-//     ClientStreaming,
-//     BidirectionalStreaming,
-// }
-fn _add(left: u64, right: u64) -> Result<u64, std::io::Error> {
-    // let mut config = prost_build::Config::new();
-    // let _file_descriptor_set = config.load_fds(&["in/grpc.proto"], &["in"])?;
-
-    // Add custom attributes to messages that are service inputs or outputs.
-    // for file in &file_descriptor_set.file {
-    //     // print file
-    //     // println!("file name: {:?}", file);
-
-    //     // print proto package version
-    //     println!("proto package version: {}", file.package.clone().unwrap());
-
-    //     println!("\nfile name: {}", file.name.clone().unwrap());
-    //     for enum_ in &file.enum_type {
-    //         // print enum name
-    //         println!("enum name: {}", enum_.name.clone().unwrap());
-    //     }
-    //     for message in &file.message_type {
-
-    //         println!("\nmessage : \n{:?}\n\n", message);
-
-    //         // print message name
-    //         println!("message name: {}", message.name.clone().unwrap());
-    //     }
-    //     for service in &file.service {
-    //         // print service
-    //         // println!("service name: {:?}", service);
-
-    //         // print service name
-    //         println!("service name: {}", service.name.clone().unwrap());
-
-    //         for method in &service.method {
-    //             // print method
-    //             println!("\nmethod : \n{:?}\n\n", method);
-
-    //             // determine rpc type and print
-    //             // first determine if rpc type is unary or server streaming or client streaming or bidirectional streaming
-    //             // print method name
-    //             // use switch or if else to determine rpc type
-
-    //             let rpc_type  = match method.client_streaming() {
-    //                 true => "client streaming",
-    //                 false => match method.server_streaming() {
-    //                     true => "server streaming",
-    //                     false => match method.server_streaming() && method.client_streaming() {
-    //                         true => "bidirectional streaming",
-    //                         false => "unary",
-    //                     },
-    //                 },
-    //             };
-    //             // print rpc type
-    //             println!("rpc type: {}", rpc_type);
-
-    //             println!("method name: {}", method.name());
-    //             // print input message name
-    //             println!("input message name: {}", method.input_type());
-
-    //         }
-    //     }
-    // }
-
-    let (wit, package_name, _) = from_grpc(Path::new("./in/"), None);
-
-    let template = mustache::compile_path("templates/wit.mustache").unwrap();
-    let wit_output = template.render_to_string(&wit).unwrap();
-    fs::write("out/wit.wit", wit_output).unwrap();
-    println!(
-        "WIT file generated successfully for package {}",
-        package_name
-    );
-
-    Ok(left + right)
+fn get_rpc_type(method: &MethodDescriptorProto) -> String {
+    match method.server_streaming() && method.client_streaming() {
+        true => "bidirectional-streaming".to_string(),
+        false => match method.server_streaming() && !method.client_streaming() {
+            true => "server-streaming".to_string(),
+            false => match method.client_streaming() && !method.server_streaming() {
+                true => "client-streaming".to_string(),
+                false => "unary".to_string(),
+            },
+        },
+    }
 }
 
 pub trait FileFromUtils {
     fn from_util(file_descriptor_proto: &FileDescriptorProto, version: Option<&str>) -> Self;
+}
+
+trait MessageFromUtils {
+    fn from_util(message: &prost_types::DescriptorProto, package_name: &str) -> Self;
+}
+
+trait NestedMessageFromUtils {
+    fn from_util_nested(
+        types: &mut Vec<wit::Type>,
+        message: &prost_types::DescriptorProto,
+        package_name: &str,
+    );
+}
+trait FieldFromUtils {
+    fn from_util(field: &prost_types::FieldDescriptorProto, package_name: &str) -> Self;
+}
+
+trait InterfaceFromUtils {
+    fn from_util(service: &prost_types::ServiceDescriptorProto, package_name: &str) -> Self;
+}
+
+trait ResourceFromUtils {
+    fn from_util(
+        service: &prost_types::ServiceDescriptorProto,
+        unary_methods: Vec<&prost_types::MethodDescriptorProto>,
+        package_name: &str,
+    ) -> Self;
+    fn from_util_non_unary(
+        service: &prost_types::ServiceDescriptorProto,
+        method: &prost_types::MethodDescriptorProto,
+        package_name: &str,
+    ) -> Self;
 }
 
 impl FileFromUtils for wit::Wit {
@@ -116,9 +79,9 @@ impl FileFromUtils for wit::Wit {
                 }
             }
         };
-        let wit_package_name = sanitize_type_name(
-            &sanitize_for_kebab(&processed_package_name.replace(".", "-")).to_case(Case::Kebab),
-        );
+        let wit_package_name = processed_package_name
+            .replace(".", "-")
+            .to_custom_kebab_case();
 
         let mut types = vec![];
 
@@ -135,7 +98,7 @@ impl FileFromUtils for wit::Wit {
 
         let types_interface = wit::Interface {
             // add package name to types interface name
-            name: sanitize_type_name(&sanitize_for_kebab(package_name).to_case(Case::Kebab)),
+            name: package_name.to_custom_kebab_case(),
             docs: package_name.to_owned(),
             types,
             ..Default::default()
@@ -166,8 +129,7 @@ impl FileFromUtils for wit::Wit {
             interfaces,
 
             world: wit::World {
-                name: sanitize_type_name(&sanitize_for_kebab(package_name).to_case(Case::Kebab))
-                    + "-world",
+                name: package_name.to_custom_kebab_case() + "-world",
                 exports,
                 ..Default::default()
             },
@@ -175,7 +137,7 @@ impl FileFromUtils for wit::Wit {
     }
 }
 
-impl FromUtils for wit::Interface {
+impl InterfaceFromUtils for wit::Interface {
     fn from_util(service: &prost_types::ServiceDescriptorProto, package_name: &str) -> Self {
         let mut uses: HashMap<String, HashSet<String>> = HashMap::new();
         service.method.iter().for_each(|method| {
@@ -186,27 +148,53 @@ impl FromUtils for wit::Interface {
             process_use_type(method.output_type(), &mut uses);
 
             // system types by default
-            uses.entry(sanitize_for_kebab(package_name).to_case(Case::Kebab))
+            uses.entry(package_name.to_custom_kebab_case())
                 .or_default()
                 .insert("grpc-configuration".to_owned());
-            uses.entry(sanitize_for_kebab(package_name).to_case(Case::Kebab))
+            uses.entry(package_name.to_custom_kebab_case())
                 .or_default()
                 .insert("grpc-status".to_owned());
         });
 
+        let unary_methods: Vec<&prost_types::MethodDescriptorProto> = service
+            .method
+            .iter()
+            .filter(|method| get_rpc_type(method) == "unary")
+            .collect();
+
+        let remaining_methods: Vec<&prost_types::MethodDescriptorProto> = service
+            .method
+            .iter()
+            .filter(|method| get_rpc_type(method) != "unary")
+            .collect();
+
+        let mut resources = if !unary_methods.is_empty() {
+            vec![wit::Resource::from_util(
+                service,
+                unary_methods,
+                package_name,
+            )]
+        } else {
+            vec![]
+        };
+
+        remaining_methods.iter().for_each(|method| {
+            resources.push(wit::Resource::from_util_non_unary(
+                service,
+                method,
+                package_name,
+            ))
+        });
+
         Self {
-            name: sanitize_type_name(&sanitize_for_kebab(service.name()).to_case(Case::Kebab)),
-            resources: vec![wit::Resource::from_util(service, package_name)],
+            name: service.name().to_custom_kebab_case(),
+            resources,
             functions: vec![],
             uses: uses
                 .iter()
                 .map(|uses_| wit::Uses {
-                    interface_name: sanitize_type_name(&sanitize_for_kebab(uses_.0)),
-                    type_names: uses_
-                        .1
-                        .iter()
-                        .map(|use_| sanitize_type_name(use_))
-                        .collect(),
+                    interface_name: uses_.0.to_custom_kebab_case(),
+                    type_names: uses_.1.iter().cloned().collect(),
                 })
                 .collect(),
             types: vec![],
@@ -218,7 +206,7 @@ impl FromUtils for wit::Interface {
 impl From<&prost_types::EnumDescriptorProto> for wit::Type {
     fn from(enum_: &prost_types::EnumDescriptorProto) -> Self {
         Self {
-            name: sanitize_type_name(&sanitize_for_kebab(enum_.name()).to_case(Case::Kebab)),
+            name: enum_.name().to_custom_kebab_case(),
             docs: enum_.name().replace("*", "."),
             kind: "enum".to_owned(),
             is_enum: true,
@@ -226,9 +214,7 @@ impl From<&prost_types::EnumDescriptorProto> for wit::Type {
                 .value
                 .iter()
                 .map(|enum_value| {
-                    let enum_value_ = sanitize_type_name(
-                        &sanitize_for_kebab(enum_value.name()).to_case(Case::Kebab),
-                    );
+                    let enum_value_ = enum_value.name().to_custom_kebab_case();
                     wit::Field {
                         name: enum_value_.clone(),
                         type_name: enum_value_,
@@ -243,7 +229,7 @@ impl From<&prost_types::EnumDescriptorProto> for wit::Type {
 impl From<&prost_types::OneofDescriptorProto> for wit::Type {
     fn from(onof: &prost_types::OneofDescriptorProto) -> Self {
         Self {
-            name: sanitize_type_name(&sanitize_for_kebab(onof.name()).to_case(Case::Kebab)),
+            name: onof.name().to_custom_kebab_case(),
             kind: "variant".to_owned(),
             is_variant: true,
             ..Default::default()
@@ -267,16 +253,16 @@ impl FieldFromUtils for wit::Field {
             prost_types::field_descriptor_proto::Type::Bool => "bool".to_owned(),
             prost_types::field_descriptor_proto::Type::String => "string".to_owned(),
             prost_types::field_descriptor_proto::Type::Group => todo!(),
-            prost_types::field_descriptor_proto::Type::Message => sanitize_type_name(
-                &sanitize_for_kebab(field.type_name().trim_start_matches(&trim))
-                    .to_case(Case::Kebab),
-            ),
+            prost_types::field_descriptor_proto::Type::Message => field
+                .type_name()
+                .trim_start_matches(&trim)
+                .to_custom_kebab_case(),
             prost_types::field_descriptor_proto::Type::Bytes => "list<u8>".to_owned(),
             prost_types::field_descriptor_proto::Type::Uint32 => "u32".to_owned(),
-            prost_types::field_descriptor_proto::Type::Enum => sanitize_type_name(
-                &sanitize_for_kebab(field.type_name().trim_start_matches(&trim))
-                    .to_case(Case::Kebab),
-            ),
+            prost_types::field_descriptor_proto::Type::Enum => field
+                .type_name()
+                .trim_start_matches(&trim)
+                .to_custom_kebab_case(),
             prost_types::field_descriptor_proto::Type::Sfixed32 => "f32".to_owned(),
             prost_types::field_descriptor_proto::Type::Sfixed64 => "f64".to_owned(),
             prost_types::field_descriptor_proto::Type::Sint32 => "s32".to_owned(),
@@ -284,7 +270,7 @@ impl FieldFromUtils for wit::Field {
         };
 
         Self {
-            name: sanitize_type_name(&sanitize_for_kebab(field.name()).to_case(Case::Kebab)),
+            name: field.name().to_custom_kebab_case(),
             type_name: match field.label() {
                 prost_types::field_descriptor_proto::Label::Optional => {
                     format!("option<{}>", &type_)
@@ -294,25 +280,6 @@ impl FieldFromUtils for wit::Field {
             },
         }
     }
-}
-
-trait MessageFromUtils {
-    fn from_util(message: &prost_types::DescriptorProto, package_name: &str) -> Self;
-}
-
-trait NestedMessageFromUtils {
-    fn from_util_nested(
-        types: &mut Vec<wit::Type>,
-        message: &prost_types::DescriptorProto,
-        package_name: &str,
-    );
-}
-trait FieldFromUtils {
-    fn from_util(field: &prost_types::FieldDescriptorProto, package_name: &str) -> Self;
-}
-
-trait FromUtils {
-    fn from_util(field: &prost_types::ServiceDescriptorProto, package_name: &str) -> Self;
 }
 
 impl NestedMessageFromUtils for wit::Type {
@@ -402,15 +369,20 @@ impl MessageFromUtils for wit::Type {
             // add message name to field name
             let field_type_name = format!("{}*{}", message.name(), oneof.name());
             fields.push(wit::Field {
-                name: sanitize_type_name(&sanitize_for_kebab(oneof.name()).to_case(Case::Kebab)),
-                type_name: sanitize_type_name(
-                    &sanitize_for_kebab(&field_type_name).to_case(Case::Kebab),
-                ),
+                name: oneof.name().to_custom_kebab_case(),
+                type_name: field_type_name.to_custom_kebab_case(),
             });
         });
 
+        if fields.is_empty() {
+            fields.push(wit::Field {
+                name: "empty".to_string(),
+                type_name: "bool".to_string(),
+            })
+        }
+
         Self {
-            name: sanitize_type_name(&sanitize_for_kebab(message.name()).to_case(Case::Kebab)),
+            name: message.name().to_custom_kebab_case(),
             docs: message.name().to_owned().replace("*", "."),
             kind: "record".to_owned(),
             is_record: true,
@@ -420,11 +392,106 @@ impl MessageFromUtils for wit::Type {
     }
 }
 
-impl FromUtils for wit::Resource {
-    fn from_util(service: &prost_types::ServiceDescriptorProto, packgae_name: &str) -> Self {
+impl ResourceFromUtils for wit::Resource {
+    fn from_util_non_unary(
+        service: &prost_types::ServiceDescriptorProto,
+        method: &prost_types::MethodDescriptorProto,
+        packgae_name: &str,
+    ) -> Self {
+        let trim = ".".to_string() + packgae_name;
+
+        let send = wit::Function {
+            name: "send".to_string(),
+            docs: "".to_string(),
+            parameters: vec![wit::Parameter {
+                name: "message".to_string(),
+                type_name: method
+                    .input_type()
+                    .trim_start_matches(&trim)
+                    .to_custom_kebab_case()
+                    .to_string(),
+            }],
+            result: Some(wit::ReturnType {
+                ok: "option<bool>".to_owned(),
+                err: "grpc-status".to_owned(),
+            }),
+        };
+
+        let receive = wit::Function {
+            name: "receive".to_string(),
+            docs: "".to_string(),
+            parameters: vec![],
+            result: Some(wit::ReturnType {
+                ok: format!(
+                    "option<{}>",
+                    method
+                        .output_type()
+                        .trim_start_matches(&trim)
+                        .to_custom_kebab_case()
+                ),
+                err: "grpc-status".to_owned(),
+            }),
+        };
+
+        let finish = wit::Function {
+            name: "finish".to_string(),
+            docs: "".to_string(),
+            parameters: vec![],
+            result: Some(wit::ReturnType {
+                ok: "bool".to_string(),
+                err: "grpc-status".to_owned(),
+            }),
+        };
+
+        let finish_client_streaming = wit::Function {
+            name: "finish".to_string(),
+            docs: "".to_string(),
+            parameters: vec![],
+            result: Some(wit::ReturnType {
+                ok: method
+                    .output_type()
+                    .trim_start_matches(&trim)
+                    .to_custom_kebab_case()
+                    .to_string(),
+                err: "grpc-status".to_owned(),
+            }),
+        };
+
+        let (functions, rpc_type) = match method.client_streaming() && method.server_streaming() {
+            true => (vec![send, receive, finish], "bidirectional-streaming"),
+            false => match method.server_streaming() {
+                true => (vec![send, receive, finish], "server-streaming"),
+                false => match method.client_streaming() {
+                    true => (vec![send, finish_client_streaming], "client-streaming"),
+                    false => (vec![], "unary"),
+                },
+            },
+        };
+
+        let constructor_params = vec![wit::Parameter {
+            name: "grpc-configuration".to_owned(),
+            type_name: "grpc-configuration".to_owned(),
+        }];
+
         let resource = Self {
-            name: sanitize_type_name(&sanitize_for_kebab(service.name()).to_case(Case::Kebab))
-                + "-resource",
+            name: method.name().to_custom_kebab_case() + &format!("-resource-{}", rpc_type),
+            constructor: wit::Constructor {
+                name: "new".to_owned(),
+                parameters: constructor_params,
+            },
+            functions,
+            docs: service.name().to_owned(),
+        };
+        resource
+    }
+
+    fn from_util(
+        service: &prost_types::ServiceDescriptorProto,
+        unary_methods: Vec<&prost_types::MethodDescriptorProto>,
+        packgae_name: &str,
+    ) -> Self {
+        let resource = Self {
+            name: service.name().to_custom_kebab_case() + "-resource-unary",
             constructor: wit::Constructor {
                 name: "new".to_owned(),
                 parameters: vec![wit::Parameter {
@@ -432,32 +499,29 @@ impl FromUtils for wit::Resource {
                     type_name: "grpc-configuration".to_owned(),
                 }],
             },
-            functions: service
-                .method
+            functions: unary_methods
                 .iter()
                 .map(|method| {
                     let trim = ".".to_string() + packgae_name;
-                    // only unary rpc type is supported for now
+
                     wit::Function {
-                        name: sanitize_type_name(
-                            &sanitize_for_kebab(method.name()).to_case(Case::Kebab),
-                        ),
+                        name: method.name().to_custom_kebab_case(),
                         docs: method.name().to_owned(),
                         parameters: vec![wit::Parameter {
-                            name: sanitize_type_name(
-                                &sanitize_for_kebab(method.input_type().trim_start_matches(&trim))
-                                    .to_case(Case::Kebab),
-                            ),
-                            type_name: sanitize_type_name(
-                                &sanitize_for_kebab(method.input_type().trim_start_matches(&trim))
-                                    .to_case(Case::Kebab),
-                            ),
+                            name: method
+                                .input_type()
+                                .trim_start_matches(&trim)
+                                .to_custom_kebab_case(),
+                            type_name: method
+                                .input_type()
+                                .trim_start_matches(&trim)
+                                .to_custom_kebab_case(),
                         }],
                         result: Some(wit::ReturnType {
-                            ok: sanitize_type_name(
-                                &sanitize_for_kebab(method.output_type().trim_start_matches(&trim))
-                                    .to_case(Case::Kebab),
-                            ),
+                            ok: method
+                                .output_type()
+                                .trim_start_matches(&trim)
+                                .to_custom_kebab_case(),
                             err: "grpc-status".to_owned(),
                         }),
                     }
@@ -470,22 +534,16 @@ impl FromUtils for wit::Resource {
 }
 
 fn sanitize_type_name(type_name: &str) -> String {
-    // replace any special character with -, use regex to find special characters
     let re1 = regex::Regex::new(r"[^a-zA-Z0-9]").unwrap();
     let mut typ_ = re1.replace_all(type_name, "-").into_owned();
-    // if we find any digits like after - then input character n before the digit found
-    // get me the regex for this
-    // dont replace digit at the regex
 
-    let re2 = regex::Regex::new(r"-(\d)").unwrap();
-    typ_ = re2.replace_all(&typ_, "-n$1").into_owned();
     typ_ = typ_.trim_start_matches("-").to_owned();
     typ_
 }
 
 fn sanitize_for_kebab(type_name: &str) -> String {
     // find any two Capital sitting side by side then place - infront of first
-    // GRPCBin -> G-R-P-C-Bin not G-RP-C-Bin
+    // GRPCBin -> G-R-P-C-Bin
     // repeact regex replace untill not found anymore.
     let mut typ_ = type_name.to_owned();
     let re = regex::Regex::new(r"([A-Z])([A-Z])").unwrap();
@@ -527,19 +585,37 @@ fn process_use_type(type_: &str, uses: &mut HashMap<String, HashSet<String>>) {
     let index = type_.rfind('.');
     if index.is_some() {
         let split = type_.split_at(index.unwrap());
-        uses.entry(sanitize_for_kebab(split.0).to_case(Case::Kebab))
+        uses.entry(split.0.to_custom_kebab_case())
             .or_default()
-            .insert(sanitize_for_kebab(split.1).to_case(Case::Kebab));
+            .insert(split.1.to_custom_kebab_case());
+    }
+}
+
+trait ToCustomKebabCase {
+    fn to_custom_kebab_case(&self) -> String;
+}
+
+impl ToCustomKebabCase for str {
+    fn to_custom_kebab_case(&self) -> String {
+        sanitize_for_kebab(self).to_kebab_case()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
+    use crate::{from_grpc, WitUtils};
+    use std::{fs, path::Path};
 
     #[test]
     fn it_works() {
-        let result = _add(2, 2).unwrap();
-        assert_eq!(result, 4);
+        let (wit, package_name, _) = from_grpc(Path::new("./in/"), None);
+
+        fs::write("out/wit.wit", wit.to_string_format()).unwrap();
+        println!(
+            "WIT file generated successfully for package {}",
+            package_name
+        );
+        assert_eq!(0, 0);
     }
 }

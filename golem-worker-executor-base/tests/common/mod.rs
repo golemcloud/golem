@@ -1,5 +1,7 @@
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_grpc::golem_grpc_0_1_x::types::{GrpcConfiguration, GrpcMetadata};
+use golem_grpc::{GrpcEntry, HostGrpc};
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_worker_executor_base::services::additional_config::{
     ComponentServiceConfig, ComponentServiceLocalConfig, DefaultAdditionalGolemConfig,
@@ -828,7 +830,9 @@ impl HostWasmRpc for TestWorkerCtx {
         &mut self,
         worker_id: golem_wasm_rpc::WorkerId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.new(worker_id).await
+        (&mut self.durable_ctx as &mut dyn HostWasmRpc)
+            .new(worker_id)
+            .await
     }
 
     async fn ephemeral(
@@ -844,7 +848,7 @@ impl HostWasmRpc for TestWorkerCtx {
         function_name: String,
         function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<WitValue, RpcError>> {
-        self.durable_ctx
+        (&mut self.durable_ctx as &mut dyn HostWasmRpc)
             .invoke_and_await(self_, function_name, function_params)
             .await
     }
@@ -1141,4 +1145,38 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
 
 fn get_durable_ctx(ctx: &mut TestWorkerCtx) -> &mut DurableWorkerCtx<TestWorkerCtx> {
     &mut ctx.durable_ctx
+}
+
+#[async_trait]
+impl HostGrpc for TestWorkerCtx {
+    async fn new(&mut self) -> anyhow::Result<Resource<GrpcEntry>> {
+        (&mut self.durable_ctx as &mut dyn HostGrpc).new().await
+    }
+
+    async fn invoke_and_await(
+        &mut self,
+        self_: Resource<GrpcEntry>,
+        function_name: String,
+        service_full_name: String,
+        method_full_name: String,
+        params: String,
+        grpc_configuration: GrpcConfiguration,
+        grpc_metadata: GrpcMetadata,
+    ) -> anyhow::Result<Result<String, String>> {
+        (&mut self.durable_ctx as &mut dyn HostGrpc)
+            .invoke_and_await(
+                self_,
+                function_name,
+                service_full_name,
+                method_full_name,
+                params,
+                grpc_configuration,
+                grpc_metadata,
+            )
+            .await
+    }
+
+    async fn drop(&mut self, rep: Resource<GrpcEntry>) -> anyhow::Result<()> {
+        HostGrpc::drop(&mut self.durable_ctx, rep).await
+    }
 }

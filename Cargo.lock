@@ -897,7 +897,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
- "axum-core",
+ "axum-core 0.4.5",
  "bytes 1.10.1",
  "futures-util",
  "http 1.3.1",
@@ -944,6 +944,25 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "axum-core"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68464cd0412f486726fb3373129ef5d2993f90c34bc2bc1c1e9943b2f4fc7ca6"
+dependencies = [
+ "bytes 1.10.1",
+ "futures-core",
+ "http 1.3.1",
+ "http-body 1.0.1",
+ "http-body-util",
+ "mime",
+ "pin-project-lite",
+ "rustversion",
+ "sync_wrapper 1.0.2",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]
@@ -3256,6 +3275,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-grpc"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "golem-common",
+ "prost-reflect",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "wasmtime",
+ "wit-bindgen-rt 0.40.0",
+]
+
+[[package]]
 name = "golem-openapi-client-generator"
 version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3485,6 +3519,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "golem-common",
+ "golem-grpc",
  "golem-service-base",
  "golem-wasm-rpc",
  "golem-worker-executor-base",
@@ -3510,6 +3545,8 @@ dependencies = [
  "async-scoped",
  "async-trait",
  "axum",
+ "axum-core 0.5.2",
+ "base64 0.22.1",
  "bigdecimal",
  "bincode",
  "bit-vec",
@@ -3530,11 +3567,13 @@ dependencies = [
  "goldenfile",
  "golem-api-grpc",
  "golem-common",
+ "golem-grpc",
  "golem-rib",
  "golem-service-base",
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "heck",
  "hex",
  "http 1.3.1",
  "http-body 1.0.1",
@@ -3586,6 +3625,7 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
+ "wit-carpenter",
  "zstd",
 ]
 
@@ -9889,7 +9929,9 @@ dependencies = [
 name = "wit-carpenter"
 version = "0.0.0"
 dependencies = [
+ "bytes 1.10.1",
  "convert_case 0.8.0",
+ "heck",
  "mustache",
  "prost",
  "prost-build",
