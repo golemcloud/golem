@@ -88,13 +88,13 @@ mod invalid_syntax_tests {
           let x = 1;
           let y = 2;
           let z = 3;
-          let result = {x, y, z;
+          let result = {x;
           result"#;
         let result = Expr::from_text(input);
         let expected_error = [
             "Parse error at line: 5, column: 26",
-            "Unexpected `,`",
-            "Expected whitespace or `}`",
+            "Unexpected `;`",
+            "Expected `:`",
             "",
         ]
         .join("\n");

@@ -21,28 +21,29 @@ use combine::{
 };
 
 use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
+use crate::rib_source_span::GetSourcePosition;
 
 pub fn flag<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
+    Input::Position: GetSourcePosition,
 {
     let flag_name = many1(letter().or(char_('_')).or(digit()).or(char_('-')))
-        .map(|s: Vec<char>| s.into_iter().collect::<String>());
+        .map(|s: Vec<char>| s.into_iter().collect());
 
-    let flag_name_parser = attempt(flag_name.skip(spaces()));
-
-    let open_brace = attempt(char_('{').skip(spaces()));
-
-    open_brace
-        .with(
-            sep_by(
-                attempt(flag_name_parser).skip(spaces().silent()),
-                char_(',').skip(spaces().silent()),
-            )
-            .skip(char_('}').skip(spaces().silent())),
-        )
-        .map(Expr::flags)
+    (
+        char_('{').skip(spaces().silent()),
+        sep_by(
+            attempt(flag_name.skip(spaces().silent())),
+            char_(',').skip(spaces().silent()),
+        ),
+        char_('}').skip(spaces().silent()),
+    )
+        .map(|(_, flags, _): (_, Vec<String>, _)| Expr::flags(flags))
 }
 
 #[cfg(test)]

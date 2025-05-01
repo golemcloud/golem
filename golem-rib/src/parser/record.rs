@@ -17,7 +17,11 @@ use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::rib_source_span::{GetSourcePosition, SourceSpan};
 use combine::parser::char::digit;
-use combine::{between, many, parser, parser::char::{char as char_, letter, spaces}, position, sep_by1, ParseError, Parser, Stream};
+use combine::{
+    between, many, parser,
+    parser::char::{char as char_, letter, spaces},
+    position, sep_by1, ParseError, Parser, Stream,
+};
 
 parser! {
     pub fn record[Input]()(Input) -> Expr
@@ -39,20 +43,22 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-
-        between(
-            char_('{').skip(spaces().silent()),
-            char_('}').skip(spaces().silent()),
-            sep_by1(field().skip(spaces().silent()), char_(',').skip(spaces().silent())),
+    between(
+        char_('{').skip(spaces().silent()),
+        char_('}').skip(spaces().silent()),
+        sep_by1(
+            field().skip(spaces().silent()),
+            char_(',').skip(spaces().silent()),
+        ),
+    )
+    .map(|fields: Vec<Field>| {
+        Expr::record(
+            fields
+                .iter()
+                .map(|f| (f.key.clone(), f.value.clone()))
+                .collect::<Vec<_>>(),
         )
-        .map(|fields: Vec<Field>| {
-            Expr::record(
-                fields
-                    .iter()
-                    .map(|f| (f.key.clone(), f.value.clone()))
-                    .collect::<Vec<_>>(),
-            )
-        })
+    })
 }
 
 fn field_key<Input>() -> impl Parser<Input, Output = String>
@@ -234,5 +240,4 @@ mod tests {
             )]))
         );
     }
-
 }
