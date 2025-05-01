@@ -187,6 +187,17 @@ mod invalid_syntax_tests {
     }
 
     #[test]
+    fn invalid_record_in_rib_program_6() {
+        let input = r#"{ foo: bar, foo: abc, bar: baz, baz: baz, baz: baz}"#;
+        let error = Expr::from_text(input).unwrap_err();
+
+        assert_eq!(
+            error,
+            "Parse error at line: 1, column: 1\nduplicate keys found in record: foo, baz\n"
+        );
+    }
+
+    #[test]
     fn invalid_sequence_in_rib_program_1() {
         let input = r#"
           let x = 1;

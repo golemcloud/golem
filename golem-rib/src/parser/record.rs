@@ -51,14 +51,38 @@ where
             char_(',').skip(spaces().silent()),
         ),
     )
-    .map(|fields: Vec<Field>| {
-        Expr::record(
-            fields
-                .iter()
-                .map(|f| (f.key.clone(), f.value.clone()))
-                .collect::<Vec<_>>(),
-        )
+    .and_then(|fields: Vec<Field>| {
+        let duplicate_keys = find_duplicate_keys(&fields);
+
+        if !duplicate_keys.is_empty() {
+            Err(RibParseError::Message(format!(
+                "duplicate keys found in record: {}",
+                duplicate_keys.join(", ")
+            )))
+        } else {
+            Ok(Expr::record(
+                fields
+                    .iter()
+                    .map(|f| (f.key.clone(), f.value.clone()))
+                    .collect::<Vec<_>>(),
+            ))
+        }
     })
+}
+
+fn find_duplicate_keys(fields: &[Field]) -> Vec<String> {
+    let mut keys = std::collections::HashMap::new();
+    let mut duplicates = vec![];
+
+    for field in fields {
+        if keys.contains_key(&field.key) {
+            duplicates.push(field.key.clone());
+        } else {
+            keys.insert(field.key.clone(), true);
+        }
+    }
+
+    duplicates
 }
 
 fn field_key<Input>() -> impl Parser<Input, Output = String>
