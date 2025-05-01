@@ -264,4 +264,35 @@ mod tests {
             )]))
         );
     }
+
+    #[test]
+    fn test_record_nested() {
+        let expr = r#"
+      {
+         headers: { ContentType: "json", userid: "foo" },
+         body: "foo",
+         status: status
+       }
+        "#;
+
+        let result = Expr::from_text(expr);
+
+        assert_eq!(
+            result,
+            Ok(Expr::record(vec![
+                (
+                    "headers".to_string(),
+                    Expr::record(vec![
+                        ("ContentType".to_string(), Expr::literal("json")),
+                        ("userid".to_string(), Expr::literal("foo"))
+                    ])
+                ),
+                ("body".to_string(), Expr::literal("foo")),
+                (
+                    "status".to_string(),
+                    Expr::identifier_global("status", None)
+                )
+            ]))
+        );
+    }
 }

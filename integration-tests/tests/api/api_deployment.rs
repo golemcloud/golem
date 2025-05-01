@@ -684,9 +684,7 @@ async fn create_api_definition(
                                             let result = worker.get-cart-contents();
                                             let status: u64 = 200;
                                             {
-                                              headers: {
-                                                {ContentType: "json", userid: "foo"}
-                                              },
+                                              headers: { ContentType: "json", userid: "foo" },
                                               body: "foo",
                                               status: status
                                             }

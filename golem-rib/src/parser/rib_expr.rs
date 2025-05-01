@@ -30,7 +30,6 @@ use crate::parser::identifier::identifier;
 use crate::parser::integer::integer;
 use crate::parser::let_binding::let_binding;
 use crate::parser::literal::literal;
-use crate::parser::multi_line_code_block::multi_line_block;
 use crate::parser::not::not;
 use crate::parser::optional::option;
 use crate::parser::pattern_match::pattern_match;
@@ -41,6 +40,7 @@ use crate::rib_source_span::{GetSourcePosition, SourceSpan};
 
 use crate::parser::list_aggregation::list_aggregation;
 use crate::parser::list_comprehension::list_comprehension;
+use crate::parser::multi_line_code_block::multi_line_block;
 use crate::parser::record::record;
 use crate::parser::result::result;
 use crate::parser::type_name::type_name;
