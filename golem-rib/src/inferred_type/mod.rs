@@ -41,7 +41,7 @@ pub struct InferredType {
     pub origin: TypeOrigin,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Task {
     RecordBuilder(RecordBuilder),
     Inspect(TaskIndex, InferredType),
@@ -52,7 +52,7 @@ pub enum Task {
 pub struct Inspect(InferredType);
 pub type TaskIndex = usize;
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct RecordBuilder {
     task_index: TaskIndex, // The index in the task stack to which this builder belongs
     field_and_tasks: Vec<(String, Vec<TaskIndex>)>,
@@ -60,10 +60,14 @@ pub struct RecordBuilder {
 
 
 impl RecordBuilder {
-    pub fn new(index: TaskIndex, fields: &Vec<(String, Vec<TaskIndex>)>) -> RecordBuilder {
+    pub fn field_names(&self) -> Vec<&String> {
+        self.field_and_tasks.iter().map(|(name, _)| name).collect()
+    }
+
+    pub fn new(index: TaskIndex, fields: Vec<(String, Vec<TaskIndex>)>) -> RecordBuilder {
         RecordBuilder {
-            task_index: 0,
-            field_and_tasks: fields.clone(),
+            task_index: index,
+            field_and_tasks: fields
         }
     }
 
@@ -82,7 +86,7 @@ impl RecordBuilder {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TaskStack {
     tasks: Vec<Task>,
 }
@@ -124,10 +128,11 @@ impl TaskStack {
         TaskStack { tasks: stack }
     }
 
-    pub fn last_record(&self) -> Option<RecordBuilder> {
+    pub fn get_record(&self, record_fields: Vec<&String>) -> Option<RecordBuilder> {
         for task in self.tasks.iter().rev(){
             match task {
-                Task::RecordBuilder(builder) => return Some(builder.clone()),
+                Task::RecordBuilder(builder) if builder.field_names() == record_fields =>
+                    return Some(builder.clone()),
 
                 _ => {}
             }
@@ -143,15 +148,13 @@ impl TaskStack {
 // {foo: vec(1, 2, 3)}, inspect(string), inspect(string)
 // {foo : all_of(string, u8)}
 // [{foo:
-fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType> {
+fn process_inferred_type(inferred_types: Vec<InferredType>) -> TaskStack {
     let mut ephemeral_tasks = VecDeque::new();
     let tasks =
         inferred_types.iter()
             .enumerate().map(|(i, inf)| Task::Inspect(i, inf.clone())).collect::<Vec<_>>();
 
     ephemeral_tasks.extend(tasks.clone());
-
-    let mut result = vec![];
 
     let mut task_stack: TaskStack = TaskStack::new();
 
@@ -164,9 +167,16 @@ fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType>
 
                         let mut next_available_index = task_stack.next_index();
 
-                        let builder = task_stack.last_record().unwrap_or_else(||{
+                        // When we accumulate two records only if the match exact. We don't take any
+                        // decision on merging fields in AllOf. The same goes to other types.
+                        // We are able to merge only if we fully get the type - otherwise they are kept the same
+                        let record_identifier: Vec<&String> = fields.iter()
+                            .map(|(field, _)| field)
+                            .collect::<Vec<_>>();
+
+                        let builder = task_stack.get_record(record_identifier).unwrap_or_else(||{
                             new_builder = true;
-                            RecordBuilder::new(next_available_index, &vec![])
+                            RecordBuilder::new(next_available_index, vec![])
                         });
 
                         let mut field_task_index = if new_builder {
@@ -196,6 +206,7 @@ fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType>
                         let new_field_task_stack = TaskStack::init(tasks);
 
                         task_stack.extend(new_field_task_stack);
+                        dbg!(task_stack.clone());
                     }
 
                     // When it finds primitives it stop pushing more tasks into the ephemeral queue
@@ -227,9 +238,7 @@ fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType>
         }
     }
 
-    dbg!(&task_stack);
-
-    result
+   task_stack
 }
 
 impl InferredType {
@@ -1035,7 +1044,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_inferred_type_all_xx() {
+    fn test_get_task_stack() {
         let inferred_types = vec![InferredType::record(
             vec![
                 ("foo".to_string(), InferredType::s8()),
@@ -1050,9 +1059,56 @@ mod tests {
 
        let result = process_inferred_type(inferred_types);
 
-        dbg!(result);
+        let expected = TaskStack {
+            tasks: vec![
+                Task::RecordBuilder(
+                    RecordBuilder {
+                        task_index: 0,
+                        field_and_tasks: vec![
+                            (
+                                "foo".to_string(),
+                               vec![
+                                    1,
+                                ],
+                            ),
+                            (
+                                "bar".to_string(),
+                                vec![
+                                    2,
+                                ],
+                            ),
+                        ],
+                    },
+                ),
+                Task::Complete(
+                    1,
+                    InferredType::s8(),
+                ),
+                Task::Complete(
+                    2,
+                    InferredType::u8()
+                ),
+                Task::RecordBuilder(
+                    RecordBuilder {
+                        task_index: 3,
+                        field_and_tasks: vec![
+                            (
+                                "foo".to_string(),
+                                vec![
+                                    4,
+                                ],
+                            ),
+                        ],
+                    },
+                ),
+                Task::Complete(
+                    4,
+                    InferredType::string(),
+                ),
+            ],
+        };
 
-        assert!(false)
+        assert_eq!(result, expected);
     }
 
     #[test]
