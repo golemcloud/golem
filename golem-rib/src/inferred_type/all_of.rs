@@ -35,10 +35,61 @@ pub enum MergeTask {
     RecordBuilder(RecordBuilder),
     Inspect(TaskIndex, InferredType),
     AllOfBuilder(AllOfBuilder),
+    ResultBuilder(ResultBuilder),
     Complete(TaskIndex, InferredType),
 }
 
+impl MergeTask {
+    pub fn get_index_in_stack(&self) -> TaskIndex {
+        match self {
+            MergeTask::Inspect(index, _) => *index,
+            MergeTask::RecordBuilder(builder) => builder.task_index,
+            MergeTask::AllOfBuilder(builder) => builder.task_index,
+            MergeTask::ResultBuilder(builder) => builder.task_index,
+            MergeTask::Complete(index, _) => *index,
+        }
+    }
+}
+
 pub type TaskIndex = usize;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResultBuilder {
+    task_index: TaskIndex,
+    ok: Option<Vec<TaskIndex>>,
+    error: Option<Vec<TaskIndex>>,
+}
+
+impl ResultBuilder {
+    pub fn insert_ok(&mut self, task_index: TaskIndex) {
+        if self.ok.is_none() {
+            self.ok = Some(vec![task_index]);
+        }
+
+        if let Some(ok) = &mut self.ok {
+            ok.push(task_index);
+        }
+    }
+
+    pub fn insert_error(&mut self, task_index: TaskIndex) {
+        if self.error.is_none() {
+            self.error = Some(vec![task_index]);
+        }
+
+        if let Some(error) = &mut self.error {
+            error.push(task_index);
+        }
+    }
+
+
+    pub fn new(index: TaskIndex, ok: Option<Vec<TaskIndex>>, error: Option<Vec<TaskIndex>>) -> ResultBuilder {
+        ResultBuilder {
+            task_index: index,
+            ok,
+            error,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AllOfBuilder {
@@ -110,16 +161,19 @@ impl MergeTaskStack {
         self.tasks.extend(other.tasks);
     }
 
-    pub fn update_record_builder(&mut self, record_builder: RecordBuilder) {
+    pub fn update_build_task(&mut self, task: MergeTask) {
         // does it exist before
-        let index = record_builder.task_index;
+        let index = task.get_index_in_stack();
 
         if let Some(_) = self.tasks.get(index) {
-            self.tasks[index] = MergeTask::RecordBuilder(record_builder);
+            self.tasks[index] = task;
         } else {
-            self.tasks.push(MergeTask::RecordBuilder(record_builder));
+            self.tasks.push(task);
         }
     }
+
+
+
     pub fn update(&mut self, index: &TaskIndex, task: MergeTask) {
         if index < &self.tasks.len() {
             self.tasks[*index] = task;
@@ -146,6 +200,42 @@ impl MergeTaskStack {
                 MergeTask::RecordBuilder(builder) if builder.field_names() == record_fields => {
                     return Some(builder.clone())
                 }
+
+                _ => {}
+            }
+        }
+
+        None
+    }
+
+    pub fn get_result(&self, result_fields: (bool, bool)) -> Option<ResultBuilder> {
+        for task in self.tasks.iter().rev() {
+            match task {
+                MergeTask::ResultBuilder(builder)  => {
+                   match result_fields {
+                       (true, true) => {
+                           if builder.ok.is_some() && builder.error.is_some() {
+                               return Some(builder.clone());
+                           }
+                       }
+                       (true, false) => {
+                           if builder.ok.is_some() && builder.error.is_none() {
+                               return Some(builder.clone());
+                           }
+
+                       }
+                       (false, true) => {
+                           if builder.ok.is_none() && builder.error.is_some() {
+                               return Some(builder.clone());
+                           }
+                       }
+                       (false, false) => {
+                           if builder.ok.is_none() && builder.error.is_none() {
+                               return Some(builder.clone());
+                           }
+                       }
+                   }
+                    }
 
                 _ => {}
             }
@@ -210,7 +300,75 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                             ));
                         }
 
-                        final_task_stack.update_record_builder(new_builder);
+                        final_task_stack.update_build_task(MergeTask::RecordBuilder(new_builder));
+
+                        let new_field_task_stack = MergeTaskStack::init(tasks_for_final_stack);
+
+                        final_task_stack.extend(new_field_task_stack);
+                    }
+
+                    TypeInternal::Result {
+                        ok,
+                        error,
+                    } => {
+                        let mut new_result_builder = false;
+
+                        let mut next_available_index = final_task_stack.next_index();
+
+                        let result_identifier: (bool, bool) = {
+                            match (ok, error) {
+                                (Some(_), Some(_)) => (true, true),
+                                (Some(_), None) => (true, false),
+                                (None, Some(_)) => (false, true),
+                                (None, None) => (false, false),
+                            }
+                        };
+
+                        let builder = final_task_stack
+                            .get_result(result_identifier)
+                            .unwrap_or_else(|| {
+                                new_result_builder = true;
+                                ResultBuilder::new(next_available_index, ok.as_ref().map(|_| vec![]), error.as_ref().map(|_| vec![]))
+                            });
+
+                        let mut field_task_index = if new_result_builder {
+                            next_available_index
+                        } else {
+                            next_available_index - 1
+                        };
+
+                        let mut new_builder = builder.clone();
+                        let mut tasks_for_final_stack = vec![];
+
+                        if let Some(inferred_type) = ok {
+                            field_task_index += 1;
+
+                            new_builder.insert_ok(field_task_index);
+
+                            tasks_for_final_stack
+                                .push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+
+                            temp_task_queue.push_back(MergeTask::Inspect(
+                                field_task_index,
+                                inferred_type.clone(),
+                            ));
+                        }
+
+                        if let Some(inferred_type) = error {
+                            field_task_index += 1;
+
+                            new_builder.insert_error(field_task_index);
+
+                            tasks_for_final_stack
+                                .push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+
+                            temp_task_queue.push_back(MergeTask::Inspect(
+                                field_task_index,
+                                inferred_type.clone(),
+                            ));
+                        }
+
+                        final_task_stack.update_build_task(MergeTask::ResultBuilder(new_builder));
 
                         let new_field_task_stack = MergeTaskStack::init(tasks_for_final_stack);
 
@@ -221,14 +379,14 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
 
                         // was this part of an inspection task? if yes then we in-place update
                         // the inspection task with all_of_builder
-                        let existing_or_old = final_task_stack.get(task_index);
+                        let existing_or_new = final_task_stack.get(task_index);
 
-                        let all_of_builder_index = match existing_or_old {
+                        let all_of_builder_index = match existing_or_new {
                             Some(_) => task_index,
                             None => final_task_stack.next_index()
                         };
 
-                        let mut task_index = match existing_or_old {
+                        let mut task_index = match existing_or_new {
                             // already exists
                             Some(_) => final_task_stack.next_index() - 1,
                             None => final_task_stack.next_index()
@@ -279,6 +437,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                 }
             }
 
+            MergeTask::ResultBuilder(_) => {}
             MergeTask::RecordBuilder(_) => {}
             MergeTask::AllOfBuilder(_) => {}
             MergeTask::Complete(index, task) => {
@@ -396,7 +555,6 @@ mod tests {
 
         let result = get_merge_task(inferred_types);
 
-        dbg!(&result);
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::RecordBuilder(RecordBuilder {
@@ -412,6 +570,32 @@ mod tests {
                 }),
                 MergeTask::Complete(3, InferredType::s8()),
                 MergeTask::Complete(4, InferredType::u8()),
+            ],
+        };
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_get_task_stack_4() {
+        let result_internal = TypeInternal::Result {
+            ok: Some(InferredType::s8()),
+            error: Some(InferredType::u8()),
+        };
+
+        let inferred_type = InferredType::new(result_internal, TypeOrigin::NoOrigin);
+
+        let result = get_merge_task(vec![inferred_type]);
+
+        let expected = MergeTaskStack {
+            tasks: vec![
+                MergeTask::ResultBuilder(ResultBuilder {
+                    task_index: 0,
+                    ok: Some(vec![1]),
+                    error: Some(vec![2]),
+                }),
+                MergeTask::Complete(1, InferredType::s8()),
+                MergeTask::Complete(2, InferredType::u8())
             ],
         };
 
