@@ -158,7 +158,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
 
     temp_task_queue.extend(merge_tasks.clone());
 
-    let mut task_stack: MergeTaskStack = MergeTaskStack::new();
+    let mut final_task_stack: MergeTaskStack = MergeTaskStack::new();
 
     while let Some(task) = temp_task_queue.pop_front() {
         match task {
@@ -167,13 +167,13 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                     TypeInternal::Record(fields) => {
                         let mut new_record_builder = false;
 
-                        let mut next_available_index = task_stack.next_index();
+                        let mut next_available_index = final_task_stack.next_index();
 
                         let record_identifier: Vec<&String> =
                             fields.iter().map(|(field, _)| field).collect::<Vec<_>>();
 
                         let builder =
-                            task_stack.get_record(record_identifier).unwrap_or_else(|| {
+                            final_task_stack.get_record(record_identifier).unwrap_or_else(|| {
                                 new_record_builder = true;
                                 RecordBuilder::new(next_available_index, vec![])
                             });
@@ -185,14 +185,14 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                         };
 
                         let mut new_builder = builder.clone();
-                        let mut tasks = vec![];
+                        let mut tasks_for_final_stack = vec![];
 
                         for (field, inferred_type) in fields.iter() {
                             field_task_index += 1;
 
                             new_builder.insert(field.clone(), field_task_index);
 
-                            tasks.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+                            tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
 
                             temp_task_queue.push_back(MergeTask::Inspect(
                                 field_task_index,
@@ -200,26 +200,26 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                             ));
                         }
 
-                        task_stack.update_record_builder(new_builder);
+                        final_task_stack.update_record_builder(new_builder);
 
-                        let new_field_task_stack = MergeTaskStack::init(tasks);
+                        let new_field_task_stack = MergeTaskStack::init(tasks_for_final_stack);
 
-                        task_stack.extend(new_field_task_stack);
+                        final_task_stack.extend(new_field_task_stack);
                     }
 
                     TypeInternal::AllOf(inferred_types) => {
-                        let next_available_index = task_stack.next_index();
+                        let next_available_index = final_task_stack.next_index();
 
                         let mut task_index = next_available_index;
 
                         let mut pointers = vec![];
-                        let mut tasks = vec![];
+                        let mut tasks_for_final_stack = vec![];
 
 
                         for inf in inferred_types.iter() {
                             task_index += 1;
-                            pointers.push(task_stack.next_index());
-                            tasks.push(MergeTask::Inspect(task_index, inf.clone()));
+                            pointers.push(final_task_stack.next_index());
+                            tasks_for_final_stack.push(MergeTask::Inspect(task_index, inf.clone()));
 
                             // We push the inspection task
                             temp_task_queue.push_back(MergeTask::Inspect(
@@ -230,12 +230,12 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
 
                         let new_all_of_builder = AllOfBuilder::new(next_available_index, pointers);
 
-                        task_stack.update(
+                        final_task_stack.update(
                             &next_available_index,
                             MergeTask::AllOfBuilder(new_all_of_builder),
                         );
 
-                        task_stack.extend(MergeTaskStack::init(tasks));
+                        final_task_stack.extend(MergeTaskStack::init(tasks_for_final_stack));
                     }
 
                     // When it finds primitives it stop pushing more tasks into the ephemeral queue
@@ -252,7 +252,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                     | TypeInternal::F32
                     | TypeInternal::F64
                     | TypeInternal::Chr
-                    | TypeInternal::Str => task_stack.update(
+                    | TypeInternal::Str => final_task_stack.update(
                         &task_index,
                         MergeTask::Complete(task_index.clone(), inferred_type.clone()),
                     ),
@@ -263,12 +263,12 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
             MergeTask::RecordBuilder(_) => {}
             MergeTask::AllOfBuilder(_) => {}
             MergeTask::Complete(index, task) => {
-                task_stack.update(&index, MergeTask::Complete(index.clone(), task.clone()));
+                final_task_stack.update(&index, MergeTask::Complete(index.clone(), task.clone()));
             }
         }
     }
 
-    task_stack
+    final_task_stack
 }
 
 pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
