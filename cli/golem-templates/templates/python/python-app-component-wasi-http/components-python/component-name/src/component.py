@@ -1,26 +1,20 @@
+# make sure this stays before other urllib uses
+from urllib3.contrib.wasi import enable_wasi_backend
+enable_wasi_backend("component_name")
+
 import asyncio
-import poll_loop
 
 from pack_name import exports
 from pack_name.types import Ok
-from pack_name.imports import types
 from pack_name.imports.types import (
     Method_Get,
-    Method_Post,
-    Scheme,
-    Scheme_Http,
-    Scheme_Https,
-    Scheme_Other,
     IncomingRequest,
     ResponseOutparam,
     OutgoingResponse,
     Fields,
     OutgoingBody,
-    OutgoingRequest,
 )
-from poll_loop import Stream, Sink, PollLoop
-from typing import Tuple
-from urllib import parse
+from poll_loop import Sink, PollLoop
 
 # see https://github.com/bytecodealliance/componentize-py/tree/main/examples/http for a full example.
 

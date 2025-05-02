@@ -45,8 +45,8 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Install componentize-py
-        run: pip install componentize-py==0.16.0
+      - name: Install uv
+        run: pip install uv==0.6.17
       - name: Install WASI SDK
         run: |
           WASI_VERSION=25

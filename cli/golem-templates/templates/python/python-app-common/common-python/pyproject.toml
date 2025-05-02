@@ -1,0 +1,25 @@
+[project]
+name = "lib"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.9"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "componentize-py==0.16.0",
+]
+
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"
+
+[tool.uv]
+override-dependencies = [
+  # Golem fork of urllib3 that enables usage with WASI
+  "urllib3 @ git+https://github.com/golemcloud/urllib3@1273c71ff7fccfdb5d1415118fa43e786b9d1818"
+]
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = "lib"

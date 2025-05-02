@@ -1,0 +1,23 @@
+[project]
+name = "component-name"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.9"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "componentize-py==0.16.0",
+    "urllib3",
+    "lib"
+]
+
+[tool.uv]
+package = false
+override-dependencies = [
+  # Golem fork of urllib3 that enables usage with WASI
+  "urllib3 @ git+https://github.com/golemcloud/urllib3@1273c71ff7fccfdb5d1415118fa43e786b9d1818"
+]
+
+[tool.uv.sources]
+lib = { path = "../../common-python" }
