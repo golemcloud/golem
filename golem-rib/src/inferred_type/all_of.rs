@@ -14,7 +14,7 @@
 
 use crate::{InferredType, TypeInternal};
 use std::collections::VecDeque;
-
+use poem_openapi::__private::poem::web::Field;
 // This module is responsible to merge the types when constructing InferredType::AllOf, while
 // selecting the type with maximum `TypeOrigin` information. This gives two advantages. We save some memory footprint
 // (Ex: `{foo : string}` and `{foo: all_of(string, u8)}` will be merged to `{foo: all_of(string, u8)}`.)
@@ -117,10 +117,10 @@ pub struct RecordBuilder {
 }
 
 impl RecordBuilder {
-    pub fn field_names(&self) -> Vec<&String> {
+    pub fn field_names(&self) -> Vec<String> {
         self.field_and_pointers
             .iter()
-            .map(|(name, _)| name)
+            .map(|(name, _)| name.clone())
             .collect()
     }
 
@@ -173,7 +173,6 @@ impl MergeTaskStack {
     }
 
 
-
     pub fn update(&mut self, index: &TaskIndex, task: MergeTask) {
         if index < &self.tasks.len() {
             self.tasks[*index] = task;
@@ -194,10 +193,10 @@ impl MergeTaskStack {
         MergeTaskStack { tasks: stack }
     }
 
-    pub fn get_record(&self, record_fields: Vec<&String>) -> Option<RecordBuilder> {
+    pub fn get_record(&self, record_fields: &RecordKey) -> Option<RecordBuilder> {
         for task in self.tasks.iter().rev() {
             match task {
-                MergeTask::RecordBuilder(builder) if builder.field_names() == record_fields => {
+                MergeTask::RecordBuilder(builder) if builder.field_names() == record_fields.0 => {
                     return Some(builder.clone())
                 }
 
@@ -208,11 +207,11 @@ impl MergeTaskStack {
         None
     }
 
-    pub fn get_result(&self, result_fields: (bool, bool)) -> Option<ResultBuilder> {
+    pub fn get_result(&self, result_key: &ResultKey) -> Option<ResultBuilder> {
         for task in self.tasks.iter().rev() {
             match task {
                 MergeTask::ResultBuilder(builder)  => {
-                   match result_fields {
+                   match (result_key.ok, result_key.error) {
                        (true, true) => {
                            if builder.ok.is_some() && builder.error.is_some() {
                                return Some(builder.clone());
@@ -245,6 +244,36 @@ impl MergeTaskStack {
     }
 }
 
+struct RecordKey(Vec<String>);
+
+impl RecordKey {
+    pub fn new(fields: &Vec<(String, InferredType)>) -> RecordKey {
+        let mut keys = vec![];
+
+        for (field, _) in fields.iter() {
+            keys.push(field.clone());
+        }
+
+        RecordKey(keys)
+    }
+}
+
+struct ResultKey {
+    ok: bool,
+    error: bool,
+}
+
+impl ResultKey {
+    pub fn new(ok: &Option<InferredType>, error: &Option<InferredType>) -> ResultKey {
+        match (ok, error) {
+            (Some(_), Some(_)) => ResultKey { ok: true, error: true },
+            (Some(_), None) => ResultKey { ok: true, error: false },
+            (None, Some(_)) => ResultKey { ok: false, error: true },
+            (None, None) => ResultKey { ok: false, error: false },
+        }
+    }
+}
+
 fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
     let mut temp_task_queue = VecDeque::new();
 
@@ -267,11 +296,11 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
 
                         let mut next_available_index = final_task_stack.next_index();
 
-                        let record_identifier: Vec<&String> =
-                            fields.iter().map(|(field, _)| field).collect::<Vec<_>>();
+                        let record_identifier: RecordKey =
+                            RecordKey::new(fields);
 
                         let builder = final_task_stack
-                            .get_record(record_identifier)
+                            .get_record(&record_identifier)
                             .unwrap_or_else(|| {
                                 new_record_builder = true;
                                 RecordBuilder::new(next_available_index, vec![])
@@ -315,17 +344,10 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
 
                         let mut next_available_index = final_task_stack.next_index();
 
-                        let result_identifier: (bool, bool) = {
-                            match (ok, error) {
-                                (Some(_), Some(_)) => (true, true),
-                                (Some(_), None) => (true, false),
-                                (None, Some(_)) => (false, true),
-                                (None, None) => (false, false),
-                            }
-                        };
+                        let result_key:ResultKey = ResultKey::new(ok, error);
 
                         let builder = final_task_stack
-                            .get_result(result_identifier)
+                            .get_result(&result_key)
                             .unwrap_or_else(|| {
                                 new_result_builder = true;
                                 ResultBuilder::new(next_available_index, ok.as_ref().map(|_| vec![]), error.as_ref().map(|_| vec![]))
@@ -469,6 +491,7 @@ pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
     all_of_types
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::inferred_type::TypeOrigin;
@@ -590,7 +613,7 @@ mod tests {
         ];
 
         let result = get_merge_task(inferred_types);
-        
+
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::ResultBuilder(ResultBuilder {
