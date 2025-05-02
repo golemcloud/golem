@@ -198,18 +198,23 @@ fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType>
                         task_stack.extend(new_field_task_stack);
                     }
 
-                    TypeInternal::S8 => {
-                        task_stack.update(&index, Task::Complete(index.clone(), inferred_type.clone()));
-                    }
-
-                    TypeInternal::Str => {
-                        task_stack.update(&index, Task::Complete(index.clone(), inferred_type.clone()));
-                    }
-
-                    TypeInternal::U8 => {
-                        task_stack.update(&index, Task::Complete(index.clone(), inferred_type.clone()));
-                    }
-
+                    // When it finds primitives it stop pushing more tasks into the ephemeral queue
+                    // and only updates to the persistent task stack.
+                    TypeInternal::Bool
+                    |TypeInternal::S8
+                    |TypeInternal::U8
+                    |TypeInternal::S16
+                    |TypeInternal::U16
+                    |TypeInternal::S32
+                    |TypeInternal::U32
+                    |TypeInternal::S64
+                    |TypeInternal::U64
+                    |TypeInternal::F32
+                    |TypeInternal::F64
+                    |TypeInternal::Chr
+                    |TypeInternal::Str => {
+                        task_stack.update(&index, Task::Complete(index.clone(), inferred_type.clone()))
+                    },
                     _ => {}
                 }
             }
