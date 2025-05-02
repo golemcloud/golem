@@ -144,19 +144,18 @@ impl TaskStack {
 // {foo : all_of(string, u8)}
 // [{foo:
 fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType> {
-    let mut task_queue = VecDeque::new();
+    let mut ephemeral_tasks = VecDeque::new();
     let tasks =
         inferred_types.iter()
             .enumerate().map(|(i, inf)| Task::Inspect(i, inf.clone())).collect::<Vec<_>>();
-    // First we push the tasks to a queue
-    // which keeps getting populated until all tasks are complete
-    task_queue.extend(tasks.clone());
+
+    ephemeral_tasks.extend(tasks.clone());
 
     let mut result = vec![];
 
     let mut task_stack: TaskStack = TaskStack::new();
 
-    while let Some(task) = task_queue.pop_front() {
+    while let Some(task) = ephemeral_tasks.pop_front() {
         match task {
             Task::Inspect(index, inferred_type) => {
                 match inferred_type.internal_type() {
@@ -165,21 +164,23 @@ fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType>
                         // or a new builder, with the new index available in the stack
                         let mut new_builder = false;
 
+                        let mut next_available_index = task_stack.next_index();
+
                         let builder = task_stack.last_record().unwrap_or_else(||{
+                            // it's a new builder and the next available index will be occupied later
+                            // by this build itself
                             new_builder = true;
-                            RecordBuilder::new(index, &vec![])
+                            RecordBuilder::new(next_available_index, &vec![])
                         });
 
-                        dbg!(builder.clone());
-                        dbg!(new_builder);
-                        dbg!(index.clone());
-
+                        // in the task task, if there is a new build in the next slot.
+                        //
                         let mut field_task_index = if new_builder {
-                            // if an inspect record
-                            builder.task_index
+                            next_available_index // this will be occupied by the builder itself, and `field_Task_index + 1` will be occupied fields
                         } else {
-                            // an old builder is existing, the next index should begin after `index`
-                            index
+                            // if an old builder,
+                            // the new tasks can start from next_available_index
+                            next_available_index - 1
                         };
 
                         let mut new_builder = builder.clone();
@@ -194,23 +195,31 @@ fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType>
                                 Task::Inspect(field_task_index, inferred_type.clone())
                             );
 
-                            task_queue.push_back(Task::Inspect(field_task_index, inferred_type.clone()));
+                            ephemeral_tasks.push_back(Task::Inspect(field_task_index, inferred_type.clone()));
 
                         }
 
-                        // update will take care of whether it is an existing builder or not
                         task_stack.update_record_builder(new_builder);
 
-                        let new_task_stack = TaskStack::init(tasks);
+                        let new_field_task_stack = TaskStack::init(tasks);
 
-                        task_stack.extend(new_task_stack);
+                        task_stack.extend(new_field_task_stack);
+
+                        dbg!(task_stack.clone());
                     }
 
                     TypeInternal::S8 => {
+                        dbg!(&index);
                         task_stack.update(&index, Task::Complete(index.clone(), inferred_type.clone()));
                     }
 
                     TypeInternal::Str => {
+                        dbg!(&index);
+                        task_stack.update(&index, Task::Complete(index.clone(), inferred_type.clone()));
+                    }
+
+                    TypeInternal::U8 => {
+                        dbg!(&index);
                         task_stack.update(&index, Task::Complete(index.clone(), inferred_type.clone()));
                     }
 
@@ -1032,20 +1041,19 @@ mod tests {
     use test_r::test;
 
     use super::*;
-    use crate::rib_source_span::SourceSpan;
-    use crate::type_inference::GetTypeHint;
-    use crate::TypeName;
 
     #[test]
     fn test_inferred_type_all_xx() {
         let inferred_types = vec![InferredType::record(
             vec![
-                ("foo".to_string(), InferredType::s8())
+                ("foo".to_string(), InferredType::s8()),
+                ("bar".to_string(), InferredType::u8())
             ],
         ), InferredType::record(
             vec![
                 ("foo".to_string(), InferredType::string())
             ],
+
         )];
 
        let result = process_inferred_type(inferred_types);
