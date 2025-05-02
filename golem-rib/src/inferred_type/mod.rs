@@ -14,11 +14,11 @@
 
 pub use type_internal::*;
 
-pub(crate) use flatten::*;
+pub(crate) use all_of::*;
 pub(crate) use type_origin::*;
 pub(crate) use unification::*;
 
-mod flatten;
+mod all_of;
 mod type_internal;
 mod type_origin;
 mod unification;
@@ -33,7 +33,6 @@ use std::collections::{HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
-use log::warn;
 
 #[derive(Debug, Clone, Eq, PartialOrd, Ord)]
 pub struct InferredType {
@@ -41,205 +40,6 @@ pub struct InferredType {
     pub origin: TypeOrigin,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum Task {
-    RecordBuilder(RecordBuilder),
-    Inspect(TaskIndex, InferredType),
-    AllOfBuilder(TaskIndex, Vec<TaskIndex>),
-    Complete(TaskIndex, InferredType),
-}
-
-pub struct Inspect(InferredType);
-pub type TaskIndex = usize;
-
-#[derive(Default, Clone, Debug, PartialEq)]
-pub struct RecordBuilder {
-    task_index: TaskIndex, // The index in the task stack to which this builder belongs
-    field_and_tasks: Vec<(String, Vec<TaskIndex>)>,
-}
-
-
-impl RecordBuilder {
-    pub fn field_names(&self) -> Vec<&String> {
-        self.field_and_tasks.iter().map(|(name, _)| name).collect()
-    }
-
-    pub fn new(index: TaskIndex, fields: Vec<(String, Vec<TaskIndex>)>) -> RecordBuilder {
-        RecordBuilder {
-            task_index: index,
-            field_and_tasks: fields
-        }
-    }
-
-    pub fn insert(&mut self, field_name: String, task_index: TaskIndex) {
-        let mut found = false;
-        self.field_and_tasks.iter_mut()
-            .find(|(name, _)| name == &field_name)
-            .map(|(_, task_indices)| {
-                found = true;
-                task_indices.push(task_index)
-            });
-
-        if !found {
-            self.field_and_tasks.push((field_name, vec![task_index]));
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TaskStack {
-    tasks: Vec<Task>,
-}
-
-impl TaskStack {
-
-    pub fn extend(&mut self, other: TaskStack) {
-        self.tasks.extend(other.tasks);
-    }
-
-    pub fn update_record_builder(&mut self, record_builder: RecordBuilder) {
-        // does it exist before
-        let index = record_builder.task_index;
-
-        if let Some(_) = self.tasks.get(index) {
-            self.tasks[index] = Task::RecordBuilder(record_builder);
-        } else {
-            self.tasks.push(Task::RecordBuilder(record_builder));
-        }
-
-    }
-    pub fn update(&mut self, index: &TaskIndex, task: Task) {
-        if index < &self.tasks.len() {
-            self.tasks[*index] = task;
-        } else {
-            self.tasks.push(task);
-        }
-    }
-
-    pub fn next_index(&self) -> TaskIndex {
-       self.tasks.len()
-    }
-
-    pub fn new() -> TaskStack {
-        TaskStack { tasks: vec![] }
-    }
-
-    pub fn init(stack: Vec<Task>) -> TaskStack {
-        TaskStack { tasks: stack }
-    }
-
-    pub fn get_record(&self, record_fields: Vec<&String>) -> Option<RecordBuilder> {
-        for task in self.tasks.iter().rev(){
-            match task {
-                Task::RecordBuilder(builder) if builder.field_names() == record_fields =>
-                    return Some(builder.clone()),
-
-                _ => {}
-            }
-        }
-
-        None
-    }
-}
-
-// {foo: string}
-// {foo: string}
-// {foo: string}
-// {foo: vec(1, 2, 3)}, inspect(string), inspect(string)
-// {foo : all_of(string, u8)}
-// [{foo:
-fn process_inferred_type(inferred_types: Vec<InferredType>) -> TaskStack {
-    let mut ephemeral_tasks = VecDeque::new();
-    let tasks =
-        inferred_types.iter()
-            .enumerate().map(|(i, inf)| Task::Inspect(i, inf.clone())).collect::<Vec<_>>();
-
-    ephemeral_tasks.extend(tasks.clone());
-
-    let mut task_stack: TaskStack = TaskStack::new();
-
-    while let Some(task) = ephemeral_tasks.pop_front() {
-        match task {
-            Task::Inspect(index, inferred_type) => {
-                match inferred_type.internal_type() {
-                    TypeInternal::Record(fields) => {
-                        let mut new_builder = false;
-
-                        let mut next_available_index = task_stack.next_index();
-
-                        // When we accumulate two records only if the match exact. We don't take any
-                        // decision on merging fields in AllOf. The same goes to other types.
-                        // We are able to merge only if we fully get the type - otherwise they are kept the same
-                        let record_identifier: Vec<&String> = fields.iter()
-                            .map(|(field, _)| field)
-                            .collect::<Vec<_>>();
-
-                        let builder = task_stack.get_record(record_identifier).unwrap_or_else(||{
-                            new_builder = true;
-                            RecordBuilder::new(next_available_index, vec![])
-                        });
-
-                        let mut field_task_index = if new_builder {
-                            next_available_index
-                        } else {
-                            next_available_index - 1
-                        };
-
-                        let mut new_builder = builder.clone();
-                        let mut tasks = vec![];
-
-                        for (field, inferred_type) in fields.iter() {
-                            field_task_index += 1;
-
-                            new_builder.insert(field.clone(), field_task_index);
-
-                            tasks.push(
-                                Task::Inspect(field_task_index, inferred_type.clone())
-                            );
-
-                            ephemeral_tasks.push_back(Task::Inspect(field_task_index, inferred_type.clone()));
-
-                        }
-
-                        task_stack.update_record_builder(new_builder);
-
-                        let new_field_task_stack = TaskStack::init(tasks);
-
-                        task_stack.extend(new_field_task_stack);
-                        dbg!(task_stack.clone());
-                    }
-
-                    // When it finds primitives it stop pushing more tasks into the ephemeral queue
-                    // and only updates to the persistent task stack.
-                    TypeInternal::Bool
-                    |TypeInternal::S8
-                    |TypeInternal::U8
-                    |TypeInternal::S16
-                    |TypeInternal::U16
-                    |TypeInternal::S32
-                    |TypeInternal::U32
-                    |TypeInternal::S64
-                    |TypeInternal::U64
-                    |TypeInternal::F32
-                    |TypeInternal::F64
-                    |TypeInternal::Chr
-                    |TypeInternal::Str => {
-                        task_stack.update(&index, Task::Complete(index.clone(), inferred_type.clone()))
-                    },
-                    _ => {}
-                }
-            }
-
-            Task::RecordBuilder(_) => {}
-            Task::AllOfBuilder(_, _) => {}
-            Task::Complete(index, task) => {
-                task_stack.update(&index, Task::Complete(index.clone(), task.clone()));
-            }
-        }
-    }
-
-   task_stack
-}
 
 impl InferredType {
     pub fn total_origins(&self) -> usize {
@@ -1035,85 +835,5 @@ impl From<&AnalysedType> for InferredType {
                 )
             }
         }
-    }
-}
-
-mod tests {
-    use test_r::test;
-
-    use super::*;
-
-    #[test]
-    fn test_get_task_stack() {
-        let inferred_types = vec![InferredType::record(
-            vec![
-                ("foo".to_string(), InferredType::s8()),
-                ("bar".to_string(), InferredType::u8())
-            ],
-        ), InferredType::record(
-            vec![
-                ("foo".to_string(), InferredType::string())
-            ],
-
-        )];
-
-       let result = process_inferred_type(inferred_types);
-
-        let expected = TaskStack {
-            tasks: vec![
-                Task::RecordBuilder(
-                    RecordBuilder {
-                        task_index: 0,
-                        field_and_tasks: vec![
-                            (
-                                "foo".to_string(),
-                               vec![
-                                    1,
-                                ],
-                            ),
-                            (
-                                "bar".to_string(),
-                                vec![
-                                    2,
-                                ],
-                            ),
-                        ],
-                    },
-                ),
-                Task::Complete(
-                    1,
-                    InferredType::s8(),
-                ),
-                Task::Complete(
-                    2,
-                    InferredType::u8()
-                ),
-                Task::RecordBuilder(
-                    RecordBuilder {
-                        task_index: 3,
-                        field_and_tasks: vec![
-                            (
-                                "foo".to_string(),
-                                vec![
-                                    4,
-                                ],
-                            ),
-                        ],
-                    },
-                ),
-                Task::Complete(
-                    4,
-                    InferredType::string(),
-                ),
-            ],
-        };
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_inferred_number() {
-        let inferred_number = InferredNumber::S8;
-        assert_eq!(inferred_number.to_string(), "s8");
     }
 }
