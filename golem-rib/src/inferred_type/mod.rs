@@ -148,8 +148,6 @@ fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType>
     let tasks =
         inferred_types.iter()
             .enumerate().map(|(i, inf)| Task::Inspect(i, inf.clone())).collect::<Vec<_>>();
-
-
     // First we push the tasks to a queue
     // which keeps getting populated until all tasks are complete
     task_queue.extend(tasks.clone());
@@ -157,8 +155,6 @@ fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType>
     let mut result = vec![];
 
     let mut task_stack: TaskStack = TaskStack::new();
-
-    task_stack.extend(TaskStack::init(tasks));
 
     while let Some(task) = task_queue.pop_front() {
         match task {
@@ -169,17 +165,20 @@ fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType>
                         // or a new builder, with the new index available in the stack
                         let mut new_builder = false;
 
-                        // this is the index of the last builder
-                        // or else it will be next_available_index
-                        let builder = task_stack.last_record().unwrap_or({
+                        let builder = task_stack.last_record().unwrap_or_else(||{
                             new_builder = true;
                             RecordBuilder::new(index, &vec![])
                         });
 
+                        dbg!(builder.clone());
+                        dbg!(new_builder);
+                        dbg!(index.clone());
 
-                        let mut task_index = if new_builder {
-                            index + 1
+                        let mut field_task_index = if new_builder {
+                            // if an inspect record
+                            builder.task_index
                         } else {
+                            // an old builder is existing, the next index should begin after `index`
                             index
                         };
 
@@ -187,13 +186,16 @@ fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType>
                         let mut tasks = vec![];
 
                         for (field, inferred_type) in fields.iter() {
-                            new_builder.insert(field.clone(), task_index + 1);
+                            field_task_index += 1;
+
+                            new_builder.insert(field.clone(), field_task_index);
 
                             tasks.push(
-                                Task::Inspect(task_index + 1, inferred_type.clone())
+                                Task::Inspect(field_task_index, inferred_type.clone())
                             );
 
-                            task_queue.push_back(Task::Inspect(task_index + 1, inferred_type.clone()));
+                            task_queue.push_back(Task::Inspect(field_task_index, inferred_type.clone()));
+
                         }
 
                         // update will take care of whether it is an existing builder or not
