@@ -77,7 +77,7 @@ impl ApiDeploymentApi {
             .auth_service
             .authorize_project_action(
                 &payload.project_id,
-                ProjectAction::ViewApiDefinition,
+                ProjectAction::UpsertApiDeployment,
                 &auth_ctx,
             )
             .await?;
@@ -155,7 +155,7 @@ impl ApiDeploymentApi {
 
         let namespace = self
             .auth_service
-            .authorize_project_action(&project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
+            .authorize_project_action(&project_id, ProjectAction::ViewApiDeployment, &auth_ctx)
             .await?;
 
         let api_deployments = self
@@ -198,7 +198,7 @@ impl ApiDeploymentApi {
 
         let namespace = self
             .auth_service
-            .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
+            .authorize_project_action(project_id, ProjectAction::ViewApiDeployment, &auth_ctx)
             .await?;
 
         let api_deployment = self
@@ -226,10 +226,9 @@ impl ApiDeploymentApi {
 
         let auth_ctx = CloudAuthCtx::new(token.secret());
 
-        // TODO: should not use ProjectAction::ViewApiDefinition, rather a deployment action
         let namespace = self
             .auth_service
-            .authorize_project_action(&project_id.0, ProjectAction::ViewApiDefinition, &auth_ctx)
+            .authorize_project_action(&project_id.0, ProjectAction::DeleteApiDeployment, &auth_ctx)
             .await?;
 
         let response = self
@@ -299,7 +298,7 @@ impl ApiDeploymentApi {
         //       for now kept in sync with delete
         let namespace = self
             .auth_service
-            .authorize_project_action(&project_id.0, ProjectAction::ViewApiDefinition, &auth_ctx)
+            .authorize_project_action(&project_id.0, ProjectAction::DeleteApiDeployment, &auth_ctx)
             .await?;
 
         let response = self

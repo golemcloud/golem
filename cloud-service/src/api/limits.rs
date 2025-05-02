@@ -66,12 +66,10 @@ impl From<PlanLimitError> for LimitsError {
                     error: value.to_safe_string(),
                 }))
             }
-            PlanLimitError::Unauthorized(_) => LimitsError::Unauthorized(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
             PlanLimitError::LimitExceeded(_) => LimitsError::LimitExceeded(Json(ErrorBody {
                 error: value.to_safe_string(),
             })),
+            PlanLimitError::AuthError(inner) => inner.into(),
         }
     }
 }
@@ -79,11 +77,18 @@ impl From<PlanLimitError> for LimitsError {
 impl From<AuthServiceError> for LimitsError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(_) => LimitsError::Unauthorized(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
+            AuthServiceError::InvalidToken(_)
+            | AuthServiceError::AccountOwnershipRequired
+            | AuthServiceError::RoleMissing { .. }
+            | AuthServiceError::AccountAccessForbidden { .. }
+            | AuthServiceError::ProjectAccessForbidden { .. }
+            | AuthServiceError::ProjectActionForbidden { .. } => {
+                LimitsError::Unauthorized(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
             AuthServiceError::InternalTokenServiceError(_)
-            | AuthServiceError::InternalAccountGrantError(_) => {
+            | AuthServiceError::InternalRepoError(_) => {
                 LimitsError::InternalError(Json(ErrorBody {
                     error: value.to_safe_string(),
                 }))

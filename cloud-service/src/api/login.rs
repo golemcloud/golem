@@ -59,15 +59,20 @@ type Result<T> = std::result::Result<T, LoginError>;
 impl From<AuthServiceError> for LoginError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(_) => LoginError::BadRequest(Json(ErrorsBody {
-                errors: vec![value.to_safe_string()],
-            })),
-            AuthServiceError::InternalTokenServiceError(_)
-            | AuthServiceError::InternalAccountGrantError(_) => {
-                LoginError::Internal(Json(ErrorBody {
-                    error: value.to_safe_string(),
+            AuthServiceError::InvalidToken(_)
+            | AuthServiceError::AccountOwnershipRequired
+            | AuthServiceError::RoleMissing { .. }
+            | AuthServiceError::AccountAccessForbidden { .. }
+            | AuthServiceError::ProjectAccessForbidden { .. }
+            | AuthServiceError::ProjectActionForbidden { .. } => {
+                LoginError::BadRequest(Json(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
                 }))
             }
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalRepoError(_) => LoginError::Internal(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
         }
     }
 }

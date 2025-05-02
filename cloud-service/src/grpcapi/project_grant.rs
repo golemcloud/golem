@@ -32,14 +32,19 @@ use tracing::Instrument;
 impl From<AuthServiceError> for ProjectGrantError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(_) => {
+            AuthServiceError::InvalidToken(_)
+            | AuthServiceError::AccountOwnershipRequired
+            | AuthServiceError::RoleMissing { .. }
+            | AuthServiceError::AccountAccessForbidden { .. }
+            | AuthServiceError::ProjectAccessForbidden { .. }
+            | AuthServiceError::ProjectActionForbidden { .. } => {
                 project_grant_error::Error::Unauthorized(ErrorBody {
                     error: value.to_safe_string(),
                 })
             }
             AuthServiceError::InternalTokenServiceError(_)
-            | AuthServiceError::InternalAccountGrantError(_) => {
-                project_grant_error::Error::Unauthorized(ErrorBody {
+            | AuthServiceError::InternalRepoError(_) => {
+                project_grant_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
                 })
             }
@@ -50,35 +55,34 @@ impl From<AuthServiceError> for ProjectGrantError {
 
 impl From<project_grant::ProjectGrantError> for ProjectGrantError {
     fn from(value: project_grant::ProjectGrantError) -> Self {
-        let error = match value {
+        match value {
             project_grant::ProjectGrantError::InternalRepoError(_) => {
-                project_grant_error::Error::InternalError(ErrorBody {
+                wrap_error(project_grant_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
-                })
+                }))
             }
-            project_grant::ProjectGrantError::Unauthorized(_) => {
-                project_grant_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_safe_string(),
-                })
-            }
+            project_grant::ProjectGrantError::AuthError(inner) => inner.into(),
             project_grant::ProjectGrantError::ProjectNotFound(_) => {
-                project_grant_error::Error::BadRequest(ErrorsBody {
+                wrap_error(project_grant_error::Error::BadRequest(ErrorsBody {
                     errors: vec![value.to_safe_string()],
-                })
+                }))
             }
             project_grant::ProjectGrantError::AccountNotFound(_) => {
-                project_grant_error::Error::BadRequest(ErrorsBody {
+                wrap_error(project_grant_error::Error::BadRequest(ErrorsBody {
                     errors: vec![value.to_safe_string()],
-                })
+                }))
             }
             project_grant::ProjectGrantError::ProjectPolicyNotFound(_) => {
-                project_grant_error::Error::BadRequest(ErrorsBody {
+                wrap_error(project_grant_error::Error::BadRequest(ErrorsBody {
                     errors: vec![value.to_safe_string()],
-                })
+                }))
             }
-        };
-        ProjectGrantError { error: Some(error) }
+        }
     }
+}
+
+fn wrap_error(error: project_grant_error::Error) -> ProjectGrantError {
+    ProjectGrantError { error: Some(error) }
 }
 
 impl From<project_policy::ProjectPolicyError> for ProjectGrantError {

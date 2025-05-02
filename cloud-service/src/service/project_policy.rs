@@ -52,6 +52,8 @@ impl ProjectPolicyServiceDefault {
     }
 }
 
+// TODO: Project policies have no owner, so also no way to check who owns them / has permission to access them.
+// Currently policies can be created and deleted by any user.
 #[async_trait]
 impl ProjectPolicyService for ProjectPolicyServiceDefault {
     async fn create(&self, project_policy: &ProjectPolicy) -> Result<(), ProjectPolicyError> {

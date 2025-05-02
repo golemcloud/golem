@@ -15,7 +15,6 @@ service CloudProjectService {
   rpc CreateProject (CreateProjectRequest) returns (CreateProjectResponse);
   rpc DeleteProject (DeleteProjectRequest) returns (DeleteProjectResponse);
   rpc GetProject (GetProjectRequest) returns (GetProjectResponse);
-  rpc GetProjectActions (GetProjectActionsRequest) returns (GetProjectActionsResponse);
 }
 
 message GetDefaultProjectRequest {
@@ -80,21 +79,4 @@ message GetProjectResponse {
     golem.cloud.project.Project success = 1;
     golem.cloud.project.v1.ProjectError error = 2;
   }
-}
-
-message GetProjectActionsRequest {
-  golem.common.ProjectId projectId = 1;
-}
-
-message GetProjectActionsResponse {
-  oneof result {
-      GetProjectActionsSuccessResponse success = 1;
-      golem.cloud.project.v1.ProjectError error = 2;
-  }
-}
-
-message GetProjectActionsSuccessResponse {
-  golem.common.ProjectId projectId = 1;
-  golem.common.AccountId owner_account_id = 2;
-  repeated golem.cloud.projectpolicy.ProjectAction actions = 3;
 }

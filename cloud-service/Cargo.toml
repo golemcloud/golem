@@ -89,3 +89,4 @@ futures = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
+backtrace-on-stack-overflow = "0.3.0"

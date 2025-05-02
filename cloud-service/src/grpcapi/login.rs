@@ -27,15 +27,20 @@ use tracing::Instrument;
 impl From<AuthServiceError> for LoginError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(_) => login_error::Error::BadRequest(ErrorsBody {
-                errors: vec![value.to_safe_string()],
-            }),
-            AuthServiceError::InternalTokenServiceError(_)
-            | AuthServiceError::InternalAccountGrantError(_) => {
+            AuthServiceError::InvalidToken(_)
+            | AuthServiceError::AccountOwnershipRequired
+            | AuthServiceError::RoleMissing { .. }
+            | AuthServiceError::AccountAccessForbidden { .. }
+            | AuthServiceError::ProjectAccessForbidden { .. }
+            | AuthServiceError::ProjectActionForbidden { .. } => {
                 login_error::Error::Internal(ErrorBody {
                     error: value.to_safe_string(),
                 })
             }
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalRepoError(_) => login_error::Error::Internal(ErrorBody {
+                error: value.to_safe_string(),
+            }),
         };
         LoginError { error: Some(error) }
     }

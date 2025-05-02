@@ -6,17 +6,14 @@ use crate::grpcapi::get_authorisation_token;
 use crate::model;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::project;
-use crate::service::project_auth;
-use crate::service::project_auth::ProjectAuthorisationService;
 use cloud_api_grpc::proto::golem::cloud::project::v1::cloud_project_service_server::CloudProjectService;
 use cloud_api_grpc::proto::golem::cloud::project::v1::{
     create_project_response, delete_project_response, get_default_project_response,
-    get_project_actions_response, get_project_response, get_projects_response, project_error,
-    CreateProjectRequest, CreateProjectResponse, CreateProjectSuccessResponse,
-    DeleteProjectRequest, DeleteProjectResponse, GetDefaultProjectRequest,
-    GetDefaultProjectResponse, GetProjectActionsRequest, GetProjectActionsResponse,
-    GetProjectActionsSuccessResponse, GetProjectRequest, GetProjectResponse, GetProjectsRequest,
-    GetProjectsResponse, GetProjectsSuccessResponse, ProjectError,
+    get_project_response, get_projects_response, project_error, CreateProjectRequest,
+    CreateProjectResponse, CreateProjectSuccessResponse, DeleteProjectRequest,
+    DeleteProjectResponse, GetDefaultProjectRequest, GetDefaultProjectResponse, GetProjectRequest,
+    GetProjectResponse, GetProjectsRequest, GetProjectsResponse, GetProjectsSuccessResponse,
+    ProjectError,
 };
 use cloud_api_grpc::proto::golem::cloud::project::Project;
 use cloud_common::grpc::proto_project_id_string;
@@ -32,12 +29,19 @@ use tracing::Instrument;
 impl From<AuthServiceError> for ProjectError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(_) => project_error::Error::Unauthorized(ErrorBody {
-                error: value.to_safe_string(),
-            }),
-            AuthServiceError::InternalTokenServiceError(_)
-            | AuthServiceError::InternalAccountGrantError(_) => {
+            AuthServiceError::InvalidToken(_)
+            | AuthServiceError::AccountOwnershipRequired
+            | AuthServiceError::RoleMissing { .. }
+            | AuthServiceError::AccountAccessForbidden { .. }
+            | AuthServiceError::ProjectAccessForbidden { .. }
+            | AuthServiceError::ProjectActionForbidden { .. } => {
                 project_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalRepoError(_) => {
+                project_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
                 })
             }
@@ -48,59 +52,42 @@ impl From<AuthServiceError> for ProjectError {
 
 impl From<project::ProjectError> for ProjectError {
     fn from(value: project::ProjectError) -> Self {
-        let error = match value {
+        match value {
             project::ProjectError::InternalRepoError(_)
             | project::ProjectError::FailedToCreateDefaultProject(_)
-            | project::ProjectError::InternalProjectAuthorisationError(_)
             | project::ProjectError::InternalConversionError { .. }
             | project::ProjectError::InternalPlanLimitError(_) => {
-                project_error::Error::InternalError(ErrorBody {
+                wrap_error(project_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
-                })
-            }
-            project::ProjectError::Unauthorized(_) => {
-                project_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_safe_string(),
-                })
+                }))
             }
             project::ProjectError::LimitExceeded(_) => {
-                project_error::Error::LimitExceeded(ErrorBody {
+                wrap_error(project_error::Error::LimitExceeded(ErrorBody {
                     error: value.to_safe_string(),
-                })
+                }))
             }
             project::ProjectError::PluginNotFound { .. } => {
-                project_error::Error::BadRequest(ErrorsBody {
+                wrap_error(project_error::Error::BadRequest(ErrorsBody {
                     errors: vec![value.to_safe_string()],
-                })
+                }))
             }
             project::ProjectError::InternalPluginError(_) => {
-                project_error::Error::InternalError(ErrorBody {
+                wrap_error(project_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
-                })
+                }))
             }
-        };
-        ProjectError { error: Some(error) }
+            project::ProjectError::CannotDeleteDefaultProject => {
+                wrap_error(project_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                }))
+            }
+            project::ProjectError::InternalProjectAuthorisationError(inner) => inner.into(),
+        }
     }
 }
 
-impl From<project_auth::ProjectAuthorisationError> for ProjectError {
-    fn from(value: project_auth::ProjectAuthorisationError) -> Self {
-        let error = match value {
-            project_auth::ProjectAuthorisationError::InternalRepoError(_)
-            | project_auth::ProjectAuthorisationError::InternalProjectGrantError(_)
-            | project_auth::ProjectAuthorisationError::InternalProjectPolicyError(_) => {
-                project_error::Error::InternalError(ErrorBody {
-                    error: value.to_safe_string(),
-                })
-            }
-            project_auth::ProjectAuthorisationError::Unauthorized(_) => {
-                project_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_safe_string(),
-                })
-            }
-        };
-        ProjectError { error: Some(error) }
-    }
+fn wrap_error(error: project_error::Error) -> ProjectError {
+    ProjectError { error: Some(error) }
 }
 
 fn bad_request_error(error: &str) -> ProjectError {
@@ -114,7 +101,6 @@ fn bad_request_error(error: &str) -> ProjectError {
 pub struct ProjectGrpcApi {
     pub auth_service: Arc<dyn AuthService + Sync + Send>,
     pub project_service: Arc<dyn project::ProjectService + Sync + Send>,
-    pub project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
 }
 
 impl ProjectGrpcApi {
@@ -140,7 +126,7 @@ impl ProjectGrpcApi {
     ) -> Result<Project, ProjectError> {
         let auth = self.auth(metadata).await?;
 
-        let result = self.project_service.get_own_default(&auth).await?;
+        let result = self.project_service.get_default(&auth).await?;
         Ok(result.into())
     }
 
@@ -176,39 +162,11 @@ impl ProjectGrpcApi {
         let auth = self.auth(metadata).await?;
 
         let projects = match request.project_name {
-            Some(name) => self.project_service.get_own_by_name(&name, &auth).await?,
-            None => self.project_service.get_own(&auth).await?,
+            Some(name) => self.project_service.get_all_by_name(&name, &auth).await?,
+            None => self.project_service.get_all(&auth).await?,
         };
 
         Ok(projects.into_iter().map(|p| p.into()).collect())
-    }
-
-    async fn get_actions(
-        &self,
-        request: GetProjectActionsRequest,
-        metadata: MetadataMap,
-    ) -> Result<GetProjectActionsSuccessResponse, ProjectError> {
-        let auth = self.auth(metadata).await?;
-        let id: ProjectId = request
-            .project_id
-            .and_then(|id| id.try_into().ok())
-            .ok_or_else(|| bad_request_error("Missing project id"))?;
-
-        let result = self.project_auth_service.get_by_project(&id, &auth).await?;
-
-        let actions = result
-            .actions
-            .actions
-            .clone()
-            .iter()
-            .map(|a| a.clone().into())
-            .collect::<Vec<i32>>();
-
-        Ok(GetProjectActionsSuccessResponse {
-            project_id: Some(result.project_id.clone().into()),
-            owner_account_id: Some(result.owner_account_id.clone().into()),
-            actions,
-        })
     }
 
     async fn delete(
@@ -370,30 +328,6 @@ impl CloudProjectService for ProjectGrpcApi {
         };
 
         Ok(Response::new(GetProjectResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn get_project_actions(
-        &self,
-        request: Request<GetProjectActionsRequest>,
-    ) -> Result<Response<GetProjectActionsResponse>, Status> {
-        let (m, _, r) = request.into_parts();
-
-        let record = recorded_grpc_api_request!(
-            "get_project_actions",
-            project_id = proto_project_id_string(&r.project_id)
-        );
-
-        let response = match self.get_actions(r, m).instrument(record.span.clone()).await {
-            Ok(result) => record.succeed(get_project_actions_response::Result::Success(result)),
-            Err(error) => record.fail(
-                get_project_actions_response::Result::Error(error.clone()),
-                &ProjectTraceErrorKind(&error),
-            ),
-        };
-
-        Ok(Response::new(GetProjectActionsResponse {
             result: Some(response),
         }))
     }

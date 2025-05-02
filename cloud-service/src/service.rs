@@ -21,7 +21,6 @@ pub mod oauth2_token;
 pub mod plan;
 pub mod plan_limit;
 pub mod project;
-pub mod project_auth;
 pub mod project_grant;
 pub mod project_policy;
 pub mod token;
@@ -39,7 +38,6 @@ pub struct Services {
     pub oauth2_service: Arc<dyn oauth2::OAuth2Service + Sync + Send>,
     pub token_service: Arc<dyn token::TokenService + Sync + Send>,
     pub login_service: Arc<dyn login::LoginService + Sync + Send>,
-    pub project_auth_service: Arc<dyn project_auth::ProjectAuthorisationService + Sync + Send>,
     pub project_service: Arc<dyn project::ProjectService + Sync + Send>,
     pub project_policy_service: Arc<dyn project_policy::ProjectPolicyService + Sync + Send>,
     pub project_grant_service: Arc<dyn project_grant::ProjectGrantService + Sync + Send>,
@@ -63,12 +61,38 @@ impl Services {
             }
         };
 
+        let oauth2_token_service: Arc<dyn oauth2_token::OAuth2TokenService + Sync + Send> =
+            Arc::new(oauth2_token::OAuth2TokenServiceDefault::new(
+                repositories.oauth2_token_repo.clone(),
+                repositories.token_repo.clone(),
+                repositories.account_repo.clone(),
+            ));
+
+        let token_service: Arc<dyn token::TokenService + Sync + Send> =
+            Arc::new(token::TokenServiceDefault::new(
+                repositories.token_repo.clone(),
+                repositories.oauth2_web_flow_state_repo.clone(),
+                repositories.account_repo.clone(),
+                oauth2_token_service.clone(),
+            ));
+
+        let auth_service: Arc<dyn auth::AuthService + Sync + Send> =
+            Arc::new(auth::AuthServiceDefault::new(
+                token_service.clone(),
+                repositories.account_repo.clone(),
+                repositories.account_grant_repo.clone(),
+                repositories.project_repo.clone(),
+                repositories.project_policy_repo.clone(),
+                repositories.project_grant_repo.clone(),
+            ));
+
         let plan_service: Arc<dyn plan::PlanService + Sync + Send> = Arc::new(
             plan::PlanServiceDefault::new(repositories.plan_repo.clone(), config.plans.clone()),
         );
 
         let plan_limit_service: Arc<dyn plan_limit::PlanLimitService + Sync + Send> =
             Arc::new(plan_limit::PlanLimitServiceDefault::new(
+                auth_service.clone(),
                 repositories.plan_repo.clone(),
                 repositories.account_repo.clone(),
                 repositories.account_workers_repo.clone(),
@@ -82,18 +106,21 @@ impl Services {
 
         let account_service: Arc<dyn account::AccountService + Sync + Send> =
             Arc::new(account::AccountServiceDefault::new(
+                auth_service.clone(),
                 repositories.account_repo.clone(),
                 plan_service.clone(),
             ));
 
         let account_summary_service: Arc<dyn account_summary::AccountSummaryService + Sync + Send> =
             Arc::new(account_summary::AccountSummaryServiceDefault::new(
+                auth_service.clone(),
                 repositories.account_summary_repo,
             ));
 
         let account_grant_service: Arc<dyn account_grant::AccountGrantService + Sync + Send> =
             Arc::new(account_grant::AccountGrantServiceDefault::new(
-                repositories.account_grant_repo,
+                auth_service.clone(),
+                repositories.account_grant_repo.clone(),
                 repositories.account_repo.clone(),
             ));
 
@@ -123,14 +150,6 @@ impl Services {
             oauth2::OAuth2ServiceDefault::new(oauth2_github_client, oauth2_session_service.clone()),
         );
 
-        let token_service: Arc<dyn token::TokenService + Sync + Send> =
-            Arc::new(token::TokenServiceDefault::new(
-                repositories.token_repo.clone(),
-                repositories.oauth2_web_flow_state_repo.clone(),
-                repositories.account_repo.clone(),
-                oauth2_token_service.clone(),
-            ));
-
         let login_service: Arc<dyn login::LoginService + Sync + Send> =
             Arc::new(login::LoginServiceDefault::new(
                 oauth2_provider_client.clone(),
@@ -141,10 +160,6 @@ impl Services {
                 config.accounts.clone(),
             ));
 
-        let auth_service: Arc<dyn auth::AuthService + Sync + Send> = Arc::new(
-            auth::AuthServiceDefault::new(token_service.clone(), account_grant_service.clone()),
-        );
-
         let project_policy_service: Arc<dyn project_policy::ProjectPolicyService + Sync + Send> =
             Arc::new(project_policy::ProjectPolicyServiceDefault::new(
                 repositories.project_policy_repo.clone(),
@@ -152,17 +167,10 @@ impl Services {
 
         let project_grant_service: Arc<dyn project_grant::ProjectGrantService + Sync + Send> =
             Arc::new(project_grant::ProjectGrantServiceDefault::new(
-                repositories.project_repo.clone(),
                 repositories.project_grant_repo.clone(),
                 repositories.project_policy_repo.clone(),
                 repositories.account_repo.clone(),
-            ));
-
-        let project_auth_service: Arc<dyn project_auth::ProjectAuthorisationService + Sync + Send> =
-            Arc::new(project_auth::ProjectAuthorisationServiceDefault::new(
-                repositories.project_repo.clone(),
-                project_grant_service.clone(),
-                project_policy_service.clone(),
+                auth_service.clone(),
             ));
 
         let plugin_service_client =
@@ -170,8 +178,8 @@ impl Services {
 
         let project_service: Arc<dyn project::ProjectService + Sync + Send> =
             Arc::new(project::ProjectServiceDefault::new(
+                auth_service.clone(),
                 repositories.project_repo.clone(),
-                project_auth_service.clone(),
                 plan_limit_service.clone(),
                 plugin_service_client.clone(),
             ));
@@ -188,7 +196,6 @@ impl Services {
             oauth2_token_service,
             oauth2_session_service,
             oauth2_service,
-            project_auth_service,
             project_policy_service,
             project_grant_service,
             project_service,

@@ -4,13 +4,14 @@ use async_trait::async_trait;
 use cloud_common::model::CloudPluginOwner;
 use cloud_common::repo::CloudPluginOwnerRow;
 use conditional_trait_gen::trait_gen;
+use futures::{future, TryFutureExt};
 use golem_common::model::ProjectId;
-use golem_service_base::db::{Pool, PoolApi};
+use golem_service_base::db::Pool;
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
 };
 use golem_service_base::repo::RepoError;
-use sqlx::Row;
+use sqlx::{QueryBuilder, Row};
 use std::result::Result;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -56,19 +57,31 @@ impl From<Project> for ProjectRecord {
     }
 }
 
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct OwnerAccountIdRow {
+    pub owner_account_id: String,
+}
+
 #[async_trait]
 pub trait ProjectRepo {
     async fn create(&self, project: &ProjectRecord) -> Result<(), RepoError>;
 
     async fn get(&self, project_id: &Uuid) -> Result<Option<ProjectRecord>, RepoError>;
 
-    async fn get_own(&self, account_id: &str) -> Result<Vec<ProjectRecord>, RepoError>;
-
-    async fn get_own_count(&self, account_id: &str) -> Result<u64, RepoError>;
-
-    async fn get_own_default(&self, account_id: &str) -> Result<Option<ProjectRecord>, RepoError>;
-
     async fn get_all(&self) -> Result<Vec<ProjectRecord>, RepoError>;
+
+    async fn get_owned(
+        &self,
+        account_id: &str,
+        additional_projects: &[Uuid],
+    ) -> Result<Vec<ProjectRecord>, RepoError>;
+
+    /// get owners of the accounts. Will not error if one of the projects was not found.
+    async fn get_owners(&self, project_ids: &[Uuid]) -> Result<Vec<String>, RepoError>;
+
+    async fn get_owned_count(&self, account_id: &str) -> Result<u64, RepoError>;
+
+    async fn get_default(&self, account_id: &str) -> Result<Option<ProjectRecord>, RepoError>;
 
     async fn delete(&self, project_id: &Uuid) -> Result<(), RepoError>;
 
@@ -135,9 +148,9 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
 
         let query = sqlx::query(
             r#"
-              INSERT INTO projects
+            INSERT INTO projects
                 (project_id, name, description)
-              VALUES
+            VALUES
                 ($1, $2, $3)
             "#,
         )
@@ -149,9 +162,9 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
 
         let query = sqlx::query(
             r#"
-              INSERT INTO project_account
+            INSERT INTO project_account
                 (project_id, owner_account_id, is_default)
-              VALUES
+            VALUES
                 ($1, $2, $3)
             "#,
         )
@@ -172,9 +185,11 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
     async fn get(&self, project_id: &Uuid) -> Result<Option<ProjectRecord>, RepoError> {
         let query = sqlx::query_as::<_, ProjectRecord>(
             r#"
-               SELECT * FROM project_account pa JOIN projects p ON pa.project_id = p.project_id
-               WHERE p.project_id = $1
-               "#,
+            SELECT * FROM project_account pa
+            JOIN projects p ON pa.project_id = p.project_id
+            WHERE
+            p.project_id = $1
+            "#,
         )
         .bind(project_id);
 
@@ -184,64 +199,112 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
             .await
     }
 
-    async fn get_own(&self, account_id: &str) -> Result<Vec<ProjectRecord>, RepoError> {
+    async fn get_all(&self) -> Result<Vec<ProjectRecord>, RepoError> {
         let query = sqlx::query_as::<_, ProjectRecord>(
             r#"
-               SELECT * FROM project_account pa JOIN projects p ON pa.project_id = p.project_id
-               WHERE pa.owner_account_id = $1
-               "#,
-        )
-        .bind(account_id);
+            SELECT * FROM project_account pa
+            JOIN projects p ON pa.project_id = p.project_id
+            "#,
+        );
 
         self.db_pool
-            .with_ro("project", "get_own")
+            .with_ro("project", "get_all")
             .fetch_all(query)
             .await
     }
 
-    async fn get_own_count(&self, account_id: &str) -> Result<u64, RepoError> {
+    async fn get_owned(
+        &self,
+        account_id: &str,
+        additional_project_ids: &[Uuid],
+    ) -> Result<Vec<ProjectRecord>, RepoError> {
+        let mut query = QueryBuilder::new(
+            r#"
+            SELECT * FROM project_account pa
+            JOIN projects p ON pa.project_id = p.project_id
+            WHERE
+                pa.owner_account_id =
+            "#,
+        );
+        query.push_bind(account_id);
+
+        if !additional_project_ids.is_empty() {
+            query.push("OR p.project_id IN (");
+
+            {
+                let mut in_list = query.separated(", ");
+                for project_id in additional_project_ids {
+                    in_list.push_bind(project_id);
+                }
+                in_list.push_unseparated(")");
+            }
+        }
+
+        self.db_pool
+            .with_ro("project", "get_owned")
+            .fetch_all(query.build_query_as::<ProjectRecord>())
+            .await
+    }
+
+    async fn get_owned_count(&self, account_id: &str) -> Result<u64, RepoError> {
         let query = sqlx::query(
             r#"
-               SELECT count(distinct p.project_id) AS project_count
-               FROM project_account pa JOIN projects p ON pa.project_id = p.project_id
-               WHERE pa.owner_account_id = $1
-               "#,
+            SELECT count(distinct p.project_id) AS project_count
+            FROM project_account pa JOIN projects p ON pa.project_id = p.project_id
+            WHERE pa.owner_account_id = $1
+            "#,
         )
         .bind(account_id);
 
         let result = self
             .db_pool
-            .with_ro("project", "get_own_count")
-            .fetch_one(query)
+            .with_ro("project", "get_owned_count")
+            .fetch_optional(query)
+            .and_then(|row| match row {
+                Some(row) => future::ok(row),
+                None => future::err(sqlx::Error::RowNotFound.into()),
+            })
             .await?;
 
         let count: i64 = result.get("project_count");
         Ok(count as u64)
     }
 
-    async fn get_own_default(&self, account_id: &str) -> Result<Option<ProjectRecord>, RepoError> {
+    async fn get_owners(&self, project_ids: &[Uuid]) -> Result<Vec<String>, RepoError> {
+        if project_ids.is_empty() {
+            return Ok(Vec::new());
+        };
+
+        let mut query =
+            QueryBuilder::new("SELECT owner_account_id FROM project_account WHERE project_id IN (");
+
+        {
+            let mut in_list = query.separated(", ");
+            for project_id in project_ids {
+                in_list.push_bind(project_id);
+            }
+            in_list.push_unseparated(") ");
+        }
+
+        self.db_pool
+            .with_ro("project", "get_by_ids")
+            .fetch_all(query.build_query_as::<OwnerAccountIdRow>())
+            .await
+            .map(|vs| vs.into_iter().map(|v| v.owner_account_id).collect())
+    }
+
+    async fn get_default(&self, account_id: &str) -> Result<Option<ProjectRecord>, RepoError> {
         let query = sqlx::query_as::<_, ProjectRecord>(
             r#"
-               SELECT * FROM project_account pa JOIN projects p ON pa.project_id = p.project_id
-               WHERE pa.owner_account_id = $1 AND pa.is_default = true
-               "#,
+            SELECT * FROM project_account pa JOIN projects p ON pa.project_id = p.project_id
+            WHERE pa.owner_account_id = $1 AND pa.is_default = true
+            "#,
         )
         .bind(account_id);
 
         self.db_pool
             .with_ro("project", "get_own_default")
             .fetch_optional_as(query)
-            .await
-    }
-
-    async fn get_all(&self) -> Result<Vec<ProjectRecord>, RepoError> {
-        let query = sqlx::query_as::<_, ProjectRecord>(
-            "SELECT * FROM project_account pa JOIN projects p ON pa.project_id = p.project_id",
-        );
-
-        self.db_pool
-            .with_ro("project", "get_all")
-            .fetch_all(query)
             .await
     }
 

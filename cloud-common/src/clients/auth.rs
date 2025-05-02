@@ -1,27 +1,31 @@
 use crate::auth::{CloudAuthCtx, CloudNamespace};
-use crate::clients::grant::{GrantError, GrantService};
-use crate::clients::project::{ProjectError, ProjectService};
-use crate::model::{ProjectAction, Role, TokenSecret};
+use crate::config::RemoteCloudServiceConfig;
+use crate::model::{ProjectAction, TokenSecret};
 use async_trait::async_trait;
+use cloud_api_grpc::proto::golem::cloud::auth::v1::cloud_auth_service_client::CloudAuthServiceClient;
+use cloud_api_grpc::proto::golem::cloud::auth::v1::{
+    authorize_project_action_response, get_account_response, AuthorizeProjectActionRequest,
+    GetAccountRequest,
+};
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, UnknownError, WorkerExecutionError,
 };
-use golem_common::model::{AccountId, ProjectId};
+use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::{AccountId, ProjectId, RetryConfig};
+use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
+use std::fmt::Display;
 use std::str::FromStr;
-use std::sync::Arc;
+use tonic::codec::CompressionEncoding;
 use tonic::metadata::MetadataMap;
-use tracing::debug;
+use tonic::transport::Channel;
+use tonic::Status;
 use uuid::Uuid;
 
 #[async_trait]
 pub trait BaseAuthService {
-    async fn authorize_role(
-        &self,
-        role: Role,
-        ctx: &CloudAuthCtx,
-    ) -> Result<AccountId, AuthServiceError>;
+    async fn get_account(&self, ctx: &CloudAuthCtx) -> Result<AccountId, AuthServiceError>;
 
     async fn authorize_project_action(
         &self,
@@ -33,64 +37,122 @@ pub trait BaseAuthService {
 
 #[derive(Clone)]
 pub struct CloudAuthService {
-    project_service: Arc<dyn ProjectService + Send + Sync>,
-    grant_service: Arc<dyn GrantService + Send + Sync>,
+    auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>>,
+    retry_config: RetryConfig,
 }
 
 impl CloudAuthService {
-    pub fn new(
-        project_service: Arc<dyn ProjectService + Send + Sync>,
-        grant_service: Arc<dyn GrantService + Send + Sync>,
-    ) -> Self {
+    pub fn new(config: &RemoteCloudServiceConfig) -> Self {
+        let auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>> = GrpcClient::new(
+            "auth",
+            |channel| {
+                CloudAuthServiceClient::new(channel)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+            },
+            config.uri(),
+            GrpcClientConfig {
+                retries_on_unavailable: config.retries.clone(),
+                ..Default::default() // TODO
+            },
+        );
         Self {
-            project_service,
-            grant_service,
+            auth_service_client,
+            retry_config: config.retries.clone(),
         }
     }
 }
 
 #[async_trait]
 impl BaseAuthService for CloudAuthService {
-    async fn authorize_role(
-        &self,
-        role: Role,
-        ctx: &CloudAuthCtx,
-    ) -> Result<AccountId, AuthServiceError> {
-        let account_and_roles = self
-            .grant_service
-            .get_self_grants(&ctx.token_secret)
-            .await?;
-        if account_and_roles.roles.contains(&role) {
-            Ok(account_and_roles.account_id)
-        } else {
-            Err(AuthServiceError::Forbidden(format!("No role {role:?}")))
-        }
+    async fn get_account(&self, ctx: &CloudAuthCtx) -> Result<AccountId, AuthServiceError> {
+        let result: Result<AccountId, AuthClientError> = with_retries(
+            "auth",
+            "get-account",
+            None,
+            &self.retry_config,
+            &(self.auth_service_client.clone(), ctx.token_secret.value),
+            |(client, token)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("get-account", move |client| {
+                            let request = authorised_request(GetAccountRequest {}, token);
+
+                            Box::pin(client.get_account(request))
+                        })
+                        .await?
+                        .into_inner();
+                    match response.result {
+                        None => Err("Empty response".to_string().into()),
+                        Some(get_account_response::Result::Success(payload)) => Ok(AccountId {
+                            value: payload.account_id.unwrap().name,
+                        }),
+                        Some(get_account_response::Result::Error(error)) => Err(error.into()),
+                    }
+                })
+            },
+            AuthClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
     }
 
     async fn authorize_project_action(
         &self,
         project_id: &ProjectId,
-        permission: ProjectAction,
+        action: ProjectAction,
         ctx: &CloudAuthCtx,
     ) -> Result<CloudNamespace, AuthServiceError> {
-        let project_actions = self
-            .project_service
-            .get_actions(project_id, &ctx.token_secret)
-            .await?;
-        let project_id = project_actions.project_id.clone();
-        let account_id: AccountId = project_actions.owner_account_id;
-        let actions = project_actions.actions.actions;
-        let has_permission = actions.contains(&permission);
+        let result: Result<CloudNamespace, AuthClientError> = with_retries(
+            "auth",
+            "authorize-project-actioon",
+            Some(format!("{action}")),
+            &self.retry_config,
+            &(
+                self.auth_service_client.clone(),
+                project_id.clone(),
+                action.clone(),
+                ctx.token_secret.value,
+            ),
+            |(client, project_id, action, token)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("authorize-project-action", move |client| {
+                            let request = authorised_request(
+                                AuthorizeProjectActionRequest {
+                                    project_id: Some(project_id.clone().into()),
+                                    action: action.clone() as i32,
+                                },
+                                token,
+                            );
 
-        debug!("is_authorized - project_id: {project_id}, action: {permission:?}, actions: {actions:?}, has_permission: {has_permission}");
+                            Box::pin(client.authorize_project_action(request))
+                        })
+                        .await?
+                        .into_inner();
+                    match response.result {
+                        None => Err("Empty response".to_string().into()),
+                        Some(authorize_project_action_response::Result::Success(payload)) => {
+                            let account_id = AccountId {
+                                value: payload.project_owner_account_id.unwrap().name,
+                            };
+                            Ok(CloudNamespace {
+                                account_id,
+                                project_id: project_id.clone(),
+                            })
+                        }
+                        Some(authorize_project_action_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            AuthClientError::is_retriable,
+        )
+        .await;
 
-        if has_permission {
-            Ok(CloudNamespace::new(project_id, account_id))
-        } else {
-            Err(AuthServiceError::Forbidden(format!(
-                "No permission {permission:?}"
-            )))
-        }
+        result.map_err(|e| e.into())
     }
 }
 
@@ -120,75 +182,6 @@ impl SafeDisplay for AuthServiceError {
     }
 }
 
-impl From<GrantError> for AuthServiceError {
-    fn from(value: GrantError) -> Self {
-        use cloud_api_grpc::proto::golem::cloud::grant::v1::grant_error;
-
-        match value {
-            GrantError::Server(err) => match err.error {
-                Some(grant_error::Error::Unauthorized(error)) => {
-                    AuthServiceError::Unauthorized(error.error)
-                }
-                Some(grant_error::Error::InternalError(error)) => {
-                    AuthServiceError::internal_client_error(error.error)
-                }
-                Some(grant_error::Error::BadRequest(errors)) => {
-                    AuthServiceError::internal_client_error(errors.errors.join(", "))
-                }
-                Some(grant_error::Error::NotFound(error)) => {
-                    AuthServiceError::Forbidden(error.error)
-                }
-                None => AuthServiceError::internal_client_error("Unknown error"),
-            },
-            GrantError::Connection(status) => {
-                AuthServiceError::internal_client_error(format!("Connection error: {status}"))
-            }
-            GrantError::Transport(error) => {
-                AuthServiceError::internal_client_error(format!("Transport error: {error}"))
-            }
-            GrantError::Unknown(error) => {
-                AuthServiceError::internal_client_error(format!("Unknown error: {error}"))
-            }
-        }
-    }
-}
-
-impl From<ProjectError> for AuthServiceError {
-    fn from(value: ProjectError) -> Self {
-        use cloud_api_grpc::proto::golem::cloud::project::v1::project_error;
-
-        match value {
-            ProjectError::Server(err) => match err.error {
-                Some(project_error::Error::BadRequest(errors)) => {
-                    AuthServiceError::internal_client_error(errors.errors.join(", "))
-                }
-                Some(project_error::Error::InternalError(error)) => {
-                    AuthServiceError::internal_client_error(error.error)
-                }
-                Some(project_error::Error::Unauthorized(error)) => {
-                    AuthServiceError::Unauthorized(error.error)
-                }
-                Some(project_error::Error::LimitExceeded(error)) => {
-                    AuthServiceError::Forbidden(error.error)
-                }
-                Some(project_error::Error::NotFound(error)) => {
-                    AuthServiceError::Forbidden(error.error)
-                }
-                None => AuthServiceError::internal_client_error("Unknown error"),
-            },
-            ProjectError::Connection(status) => {
-                AuthServiceError::internal_client_error(format!("Connection error: {status}"))
-            }
-            ProjectError::Transport(error) => {
-                AuthServiceError::internal_client_error(format!("Transport error: {error}"))
-            }
-            ProjectError::Unknown(error) => {
-                AuthServiceError::internal_client_error(format!("Unknown error: {error}"))
-            }
-        }
-    }
-}
-
 impl From<AuthServiceError> for golem_api_grpc::proto::golem::worker::v1::WorkerError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
@@ -210,6 +203,99 @@ impl From<AuthServiceError> for golem_api_grpc::proto::golem::worker::v1::Worker
         golem_api_grpc::proto::golem::worker::v1::WorkerError { error: Some(error) }
     }
 }
+
+#[derive(Debug)]
+pub enum AuthClientError {
+    Server(cloud_api_grpc::proto::golem::cloud::auth::v1::AuthError),
+    Connection(Status),
+    Transport(tonic::transport::Error),
+    Unknown(String),
+}
+
+impl From<cloud_api_grpc::proto::golem::cloud::auth::v1::AuthError> for AuthClientError {
+    fn from(value: cloud_api_grpc::proto::golem::cloud::auth::v1::AuthError) -> Self {
+        Self::Server(value)
+    }
+}
+
+impl From<Status> for AuthClientError {
+    fn from(value: Status) -> Self {
+        Self::Connection(value)
+    }
+}
+
+impl From<tonic::transport::Error> for AuthClientError {
+    fn from(value: tonic::transport::Error) -> Self {
+        Self::Transport(value)
+    }
+}
+
+impl From<String> for AuthClientError {
+    fn from(value: String) -> Self {
+        Self::Unknown(value)
+    }
+}
+
+impl AuthClientError {
+    fn is_retriable(error: &AuthClientError) -> bool {
+        matches!(
+            error,
+            AuthClientError::Connection(_) | AuthClientError::Transport(_)
+        )
+    }
+}
+
+impl From<AuthClientError> for AuthServiceError {
+    fn from(value: AuthClientError) -> Self {
+        use cloud_api_grpc::proto::golem::cloud::auth::v1::auth_error::Error;
+
+        match value {
+            AuthClientError::Server(err) => match err.error {
+                Some(Error::BadRequest(errors)) => {
+                    AuthServiceError::internal_client_error(errors.errors.join(", "))
+                }
+                Some(Error::InternalError(error)) => {
+                    AuthServiceError::internal_client_error(error.error)
+                }
+                Some(Error::Unauthorized(error)) => AuthServiceError::Unauthorized(error.error),
+                None => AuthServiceError::internal_client_error("Unknown error"),
+            },
+            AuthClientError::Connection(status) => {
+                AuthServiceError::internal_client_error(format!("Connection error: {status}"))
+            }
+            AuthClientError::Transport(error) => {
+                AuthServiceError::internal_client_error(format!("Transport error: {error}"))
+            }
+            AuthClientError::Unknown(error) => {
+                AuthServiceError::internal_client_error(format!("Unknown error: {error}"))
+            }
+        }
+    }
+}
+
+impl Display for AuthClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use cloud_api_grpc::proto::golem::cloud::auth::v1::auth_error::Error;
+
+        match &self {
+            AuthClientError::Server(err) => match &err.error {
+                Some(Error::BadRequest(errors)) => {
+                    write!(f, "Invalid request: {:?}", errors.errors)
+                }
+                Some(Error::InternalError(error)) => {
+                    write!(f, "Internal server error: {}", error.error)
+                }
+                Some(Error::Unauthorized(error)) => write!(f, "Unauthorized: {}", error.error),
+                None => write!(f, "Unknown error"),
+            },
+            AuthClientError::Connection(status) => write!(f, "Connection error: {status}"),
+            AuthClientError::Transport(error) => write!(f, "Transport error: {error}"),
+            AuthClientError::Unknown(error) => write!(f, "Unknown error: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for AuthClientError {}
 
 pub fn authorised_request<T>(request: T, access_token: &Uuid) -> tonic::Request<T> {
     let mut req = tonic::Request::new(request);

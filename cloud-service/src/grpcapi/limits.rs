@@ -29,12 +29,19 @@ use tracing::Instrument;
 impl From<AuthServiceError> for LimitsError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(_) => limits_error::Error::Unauthorized(ErrorBody {
-                error: value.to_safe_string(),
-            }),
-            AuthServiceError::InternalTokenServiceError(_)
-            | AuthServiceError::InternalAccountGrantError(_) => {
+            AuthServiceError::InvalidToken(_)
+            | AuthServiceError::ProjectAccessForbidden { .. }
+            | AuthServiceError::ProjectActionForbidden { .. }
+            | AuthServiceError::AccountOwnershipRequired
+            | AuthServiceError::RoleMissing { .. }
+            | AuthServiceError::AccountAccessForbidden { .. } => {
                 limits_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalRepoError(_) => {
+                limits_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
                 })
             }
@@ -45,27 +52,34 @@ impl From<AuthServiceError> for LimitsError {
 
 impl From<PlanLimitError> for LimitsError {
     fn from(value: PlanLimitError) -> Self {
-        let error = match value {
-            PlanLimitError::AccountNotFound(_) => limits_error::Error::BadRequest(ErrorsBody {
-                errors: vec![value.to_safe_string()],
-            }),
-            PlanLimitError::ProjectNotFound(_) => limits_error::Error::BadRequest(ErrorsBody {
-                errors: vec![value.to_safe_string()],
-            }),
-            PlanLimitError::Unauthorized(_) => limits_error::Error::Unauthorized(ErrorBody {
-                error: value.to_safe_string(),
-            }),
-            PlanLimitError::LimitExceeded(_) => limits_error::Error::LimitExceeded(ErrorBody {
-                error: value.to_safe_string(),
-            }),
-            PlanLimitError::Internal(_) | PlanLimitError::InternalRepoError(_) => {
-                limits_error::Error::InternalError(ErrorBody {
-                    error: value.to_safe_string(),
-                })
+        match value {
+            PlanLimitError::AccountNotFound(_) => {
+                wrap_error(limits_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                }))
             }
-        };
-        LimitsError { error: Some(error) }
+            PlanLimitError::ProjectNotFound(_) => {
+                wrap_error(limits_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                }))
+            }
+            PlanLimitError::LimitExceeded(_) => {
+                wrap_error(limits_error::Error::LimitExceeded(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+            PlanLimitError::Internal(_) | PlanLimitError::InternalRepoError(_) => {
+                wrap_error(limits_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+            PlanLimitError::AuthError(inner) => inner.into(),
+        }
     }
+}
+
+fn wrap_error(error: limits_error::Error) -> LimitsError {
+    LimitsError { error: Some(error) }
 }
 
 fn bad_request_error<T>(error: T) -> LimitsError

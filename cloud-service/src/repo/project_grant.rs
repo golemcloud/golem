@@ -47,7 +47,7 @@ pub trait ProjectGrantRepo {
 
     async fn get(&self, project_grant_id: &Uuid) -> Result<Option<ProjectGrantRecord>, RepoError>;
 
-    async fn get_by_account(
+    async fn get_by_grantee_account(
         &self,
         grantee_account_id: &str,
     ) -> Result<Vec<ProjectGrantRecord>, RepoError>;
@@ -121,7 +121,7 @@ impl ProjectGrantRepo for DbProjectGrantRepo<golem_service_base::db::postgres::P
             .await
     }
 
-    async fn get_by_account(
+    async fn get_by_grantee_account(
         &self,
         grantee_account_id: &str,
     ) -> Result<Vec<ProjectGrantRecord>, RepoError> {

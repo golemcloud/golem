@@ -42,13 +42,18 @@ type Result<T> = std::result::Result<T, AccountSummaryError>;
 impl From<AuthServiceError> for AccountSummaryError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(_) => {
+            AuthServiceError::InvalidToken(_)
+            | AuthServiceError::AccountOwnershipRequired
+            | AuthServiceError::RoleMissing { .. }
+            | AuthServiceError::AccountAccessForbidden { .. }
+            | AuthServiceError::ProjectAccessForbidden { .. }
+            | AuthServiceError::ProjectActionForbidden { .. } => {
                 AccountSummaryError::Unauthorized(Json(ErrorBody {
                     error: value.to_safe_string(),
                 }))
             }
             AuthServiceError::InternalTokenServiceError(_)
-            | AuthServiceError::InternalAccountGrantError(_) => {
+            | AuthServiceError::InternalRepoError(_) => {
                 AccountSummaryError::InternalError(Json(ErrorBody {
                     error: value.to_safe_string(),
                 }))
@@ -60,16 +65,12 @@ impl From<AuthServiceError> for AccountSummaryError {
 impl From<AccountSummaryServiceError> for AccountSummaryError {
     fn from(value: AccountSummaryServiceError) -> Self {
         match value {
-            AccountSummaryServiceError::Unauthorized(_) => {
-                AccountSummaryError::Unauthorized(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
             AccountSummaryServiceError::Internal(_) => {
                 AccountSummaryError::InternalError(Json(ErrorBody {
                     error: value.to_safe_string(),
                 }))
             }
+            AccountSummaryServiceError::AuthError(inner) => inner.into(),
         }
     }
 }

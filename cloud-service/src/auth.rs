@@ -18,16 +18,24 @@ impl AccountAuthorisation {
         AccountAuthorisation::new(Token::admin(), vec![Role::Admin])
     }
 
+    pub fn has_account(&self, account_id: &AccountId) -> bool {
+        self.token.account_id == *account_id
+    }
+
+    pub fn has_role(&self, role: &Role) -> bool {
+        self.roles.contains(role)
+    }
+
+    pub fn has_admin(&self) -> bool {
+        self.has_role(&Role::Admin)
+    }
+
     pub fn has_account_and_role(&self, account_id: &AccountId, role: &Role) -> bool {
         self.token.account_id == *account_id && self.roles.contains(role)
     }
 
     pub fn has_account_or_role(&self, account_id: &AccountId, role: &Role) -> bool {
         self.token.account_id == *account_id || self.roles.contains(role)
-    }
-
-    pub fn has_role(&self, role: &Role) -> bool {
-        self.roles.contains(role)
     }
 
     pub fn as_plugin_owner(&self) -> CloudPluginOwner {

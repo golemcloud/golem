@@ -47,9 +47,11 @@ pub trait AccountRepo {
 
     async fn get(&self, account_id: &str) -> Result<Option<AccountRecord>, RepoError>;
 
+    async fn find_all(&self, email: Option<&str>) -> Result<Vec<AccountRecord>, RepoError>;
+
     async fn find(
         &self,
-        own_account_id: &str,
+        accounts: &[String],
         email: Option<&str>,
     ) -> Result<Vec<AccountRecord>, RepoError>;
 
@@ -138,26 +140,33 @@ impl AccountRepo for DbAccountRepo<golem_service_base::db::postgres::PostgresPoo
             .await
     }
 
+    async fn find_all(&self, email: Option<&str>) -> Result<Vec<AccountRecord>, RepoError> {
+        let mut query = QueryBuilder::new("SELECT * FROM accounts a WHERE deleted = false");
+        if let Some(email) = email {
+            query.push(" AND a.email = ");
+            query.push_bind(email);
+        };
+
+        self.db_pool
+            .with_ro("account", "find_all")
+            .fetch_all(query.build_query_as::<AccountRecord>())
+            .await
+    }
+
     async fn find(
         &self,
-        own_account_id: &str,
+        accounts: &[String],
         email: Option<&str>,
     ) -> Result<Vec<AccountRecord>, RepoError> {
-        let mut query = QueryBuilder::new("SELECT * FROM accounts a WHERE (id = ");
-        query.push_bind(own_account_id);
-        query.push(
-            r#"
-                OR EXISTS (
-                    SELECT 1
-                    FROM project_grants pg
-                        INNER JOIN projects p ON p.project_id = pg.grantor_project_id
-                        INNER JOIN project_account pa ON pa.project_id = p.project_id
-                    WHERE pa.owner_account_id = a.id AND pg.grantee_account_id =
-            "#,
-        );
-
-        query.push_bind(own_account_id);
-        query.push(")) AND deleted = false");
+        let mut query = QueryBuilder::new("SELECT * FROM accounts a WHERE id IN (");
+        {
+            let mut in_list = query.separated(", ");
+            for account in accounts {
+                in_list.push_bind(account);
+            }
+            in_list.push_unseparated(") ");
+        }
+        query.push("AND deleted = false");
 
         if let Some(email) = email {
             query.push(" AND a.email = ");

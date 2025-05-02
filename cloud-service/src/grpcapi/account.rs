@@ -29,12 +29,19 @@ use tracing::Instrument;
 impl From<AuthServiceError> for AccountError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(_) => account_error::Error::Unauthorized(ErrorBody {
-                error: value.to_safe_string(),
-            }),
-            AuthServiceError::InternalTokenServiceError(_)
-            | AuthServiceError::InternalAccountGrantError(_) => {
+            AuthServiceError::InvalidToken(_)
+            | AuthServiceError::ProjectAccessForbidden { .. }
+            | AuthServiceError::ProjectActionForbidden { .. }
+            | AuthServiceError::AccountOwnershipRequired
+            | AuthServiceError::RoleMissing { .. }
+            | AuthServiceError::AccountAccessForbidden { .. } => {
                 account_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalRepoError(_) => {
+                account_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
                 })
             }
@@ -45,36 +52,37 @@ impl From<AuthServiceError> for AccountError {
 
 impl From<account::AccountError> for AccountError {
     fn from(value: account::AccountError) -> Self {
-        let error = match value {
-            account::AccountError::Unauthorized(_) => {
-                account_error::Error::Unauthorized(ErrorBody {
+        match value {
+            account::AccountError::Internal(_) => {
+                wrap_error(account_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
-                })
+                }))
             }
-            account::AccountError::Internal(_) => account_error::Error::InternalError(ErrorBody {
-                error: value.to_safe_string(),
-            }),
             account::AccountError::AccountNotFound(_) => {
-                account_error::Error::NotFound(ErrorBody {
+                wrap_error(account_error::Error::NotFound(ErrorBody {
                     error: value.to_safe_string(),
-                })
+                }))
             }
             account::AccountError::ArgValidation(errors) => {
-                account_error::Error::BadRequest(ErrorsBody { errors })
+                wrap_error(account_error::Error::BadRequest(ErrorsBody { errors }))
             }
             account::AccountError::InternalRepoError(_) => {
-                account_error::Error::InternalError(ErrorBody {
+                wrap_error(account_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
-                })
+                }))
             }
             account::AccountError::InternalPlanError(_) => {
-                account_error::Error::InternalError(ErrorBody {
+                wrap_error(account_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
-                })
+                }))
             }
-        };
-        AccountError { error: Some(error) }
+            account::AccountError::AuthError(inner) => inner.into(),
+        }
     }
+}
+
+fn wrap_error(error: account_error::Error) -> AccountError {
+    AccountError { error: Some(error) }
 }
 
 fn bad_request_error(error: &str) -> AccountError {

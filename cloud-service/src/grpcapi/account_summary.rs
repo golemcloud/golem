@@ -27,9 +27,18 @@ impl From<AuthServiceError> for AccountSummaryError {
                     error: value.to_safe_string(),
                 })
             }
-            AuthServiceError::InternalTokenServiceError(_)
-            | AuthServiceError::InternalAccountGrantError(_) => {
+            AuthServiceError::AccountOwnershipRequired
+            | AuthServiceError::RoleMissing { .. }
+            | AuthServiceError::AccountAccessForbidden { .. }
+            | AuthServiceError::ProjectActionForbidden { .. }
+            | AuthServiceError::ProjectAccessForbidden { .. } => {
                 account_summary_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalRepoError(_) => {
+                account_summary_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
                 })
             }
@@ -40,20 +49,19 @@ impl From<AuthServiceError> for AccountSummaryError {
 
 impl From<AccountSummaryServiceError> for AccountSummaryError {
     fn from(value: AccountSummaryServiceError) -> Self {
-        let error = match value {
-            AccountSummaryServiceError::Unauthorized(_) => {
-                account_summary_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_safe_string(),
-                })
-            }
+        match value {
             AccountSummaryServiceError::Internal(_) => {
-                account_summary_error::Error::InternalError(ErrorBody {
+                wrap_error(account_summary_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
-                })
+                }))
             }
-        };
-        AccountSummaryError { error: Some(error) }
+            AccountSummaryServiceError::AuthError(inner) => inner.into(),
+        }
     }
+}
+
+fn wrap_error(error: account_summary_error::Error) -> AccountSummaryError {
+    AccountSummaryError { error: Some(error) }
 }
 
 pub struct AccountSummaryGrpcApi {

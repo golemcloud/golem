@@ -2,7 +2,6 @@ use crate::service::account::AccountError;
 use crate::service::account_grant::AccountGrantServiceError;
 use crate::service::auth::AuthServiceError;
 use crate::service::project::ProjectError;
-use crate::service::project_auth::ProjectAuthorisationError;
 use crate::service::project_grant::ProjectGrantError;
 use crate::service::project_policy::ProjectPolicyError;
 use crate::service::token::TokenServiceError;
@@ -110,15 +109,20 @@ type ApiResult<T> = Result<T, ApiError>;
 impl From<AuthServiceError> for ApiError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(_) => ApiError::Unauthorized(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
-            AuthServiceError::InternalTokenServiceError(_)
-            | AuthServiceError::InternalAccountGrantError(_) => {
-                ApiError::InternalError(Json(ErrorBody {
+            AuthServiceError::InvalidToken(_)
+            | AuthServiceError::AccountOwnershipRequired
+            | AuthServiceError::RoleMissing { .. }
+            | AuthServiceError::AccountAccessForbidden { .. }
+            | AuthServiceError::ProjectAccessForbidden { .. }
+            | AuthServiceError::ProjectActionForbidden { .. } => {
+                ApiError::Unauthorized(Json(ErrorBody {
                     error: value.to_safe_string(),
                 }))
             }
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalRepoError(_) => ApiError::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
         }
     }
 }
@@ -126,9 +130,6 @@ impl From<AuthServiceError> for ApiError {
 impl From<AccountError> for ApiError {
     fn from(value: AccountError) -> Self {
         match value {
-            AccountError::Unauthorized(_) => ApiError::Unauthorized(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
             AccountError::Internal(_) => ApiError::InternalError(Json(ErrorBody {
                 error: value.to_safe_string(),
             })),
@@ -144,6 +145,7 @@ impl From<AccountError> for ApiError {
             AccountError::InternalPlanError(_) => ApiError::InternalError(Json(ErrorBody {
                 error: value.to_safe_string(),
             })),
+            AccountError::AuthError(inner) => inner.into(),
         }
     }
 }
@@ -181,9 +183,6 @@ impl From<TokenServiceError> for ApiError {
 impl From<AccountGrantServiceError> for ApiError {
     fn from(value: AccountGrantServiceError) -> Self {
         match value {
-            AccountGrantServiceError::Unauthorized(_) => ApiError::Unauthorized(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
             AccountGrantServiceError::InternalRepoError(_) => {
                 ApiError::InternalError(Json(ErrorBody {
                     error: value.to_safe_string(),
@@ -197,6 +196,7 @@ impl From<AccountGrantServiceError> for ApiError {
                     errors: vec![value.to_safe_string()],
                 }))
             }
+            AccountGrantServiceError::InternalAuthError(inner) => inner.into(),
         }
     }
 }
@@ -257,11 +257,18 @@ type LimitedApiResult<T> = Result<T, LimitedApiError>;
 impl From<AuthServiceError> for LimitedApiError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(_) => LimitedApiError::Unauthorized(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
+            AuthServiceError::InvalidToken(_)
+            | AuthServiceError::ProjectAccessForbidden { .. }
+            | AuthServiceError::ProjectActionForbidden { .. }
+            | AuthServiceError::RoleMissing { .. }
+            | AuthServiceError::AccountOwnershipRequired
+            | AuthServiceError::AccountAccessForbidden { .. } => {
+                LimitedApiError::Unauthorized(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
             AuthServiceError::InternalTokenServiceError(_)
-            | AuthServiceError::InternalAccountGrantError(_) => {
+            | AuthServiceError::InternalRepoError(_) => {
                 LimitedApiError::InternalError(Json(ErrorBody {
                     error: value.to_safe_string(),
                 }))
@@ -275,16 +282,12 @@ impl From<ProjectError> for LimitedApiError {
         match value {
             ProjectError::InternalRepoError(_)
             | ProjectError::FailedToCreateDefaultProject(_)
-            | ProjectError::InternalProjectAuthorisationError(_)
             | ProjectError::InternalConversionError { .. }
             | ProjectError::InternalPlanLimitError(_) => {
                 LimitedApiError::InternalError(Json(ErrorBody {
                     error: value.to_safe_string(),
                 }))
             }
-            ProjectError::Unauthorized(_) => LimitedApiError::Unauthorized(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
             ProjectError::LimitExceeded(_) => LimitedApiError::LimitExceeded(Json(ErrorBody {
                 error: value.to_safe_string(),
             })),
@@ -296,25 +299,12 @@ impl From<ProjectError> for LimitedApiError {
                     error: value.to_safe_string(),
                 }))
             }
-        }
-    }
-}
-
-impl From<ProjectAuthorisationError> for LimitedApiError {
-    fn from(value: ProjectAuthorisationError) -> Self {
-        match value {
-            ProjectAuthorisationError::InternalRepoError(_)
-            | ProjectAuthorisationError::InternalProjectGrantError(_)
-            | ProjectAuthorisationError::InternalProjectPolicyError(_) => {
-                LimitedApiError::InternalError(Json(ErrorBody {
-                    error: value.to_safe_string(),
+            ProjectError::CannotDeleteDefaultProject => {
+                LimitedApiError::BadRequest(Json(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
                 }))
             }
-            ProjectAuthorisationError::Unauthorized(_) => {
-                LimitedApiError::Unauthorized(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
+            ProjectError::InternalProjectAuthorisationError(inner) => inner.into(),
         }
     }
 }
@@ -327,9 +317,7 @@ impl From<ProjectGrantError> for LimitedApiError {
                     error: value.to_safe_string(),
                 }))
             }
-            ProjectGrantError::Unauthorized(_) => LimitedApiError::InternalError(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
+            ProjectGrantError::AuthError(inner) => inner.into(),
             ProjectGrantError::ProjectNotFound(_) => {
                 LimitedApiError::BadRequest(Json(ErrorsBody {
                     errors: vec![value.to_safe_string()],
@@ -424,7 +412,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             project::ProjectApi {
                 auth_service: services.auth_service.clone(),
                 project_service: services.project_service.clone(),
-                project_auth_service: services.project_auth_service.clone(),
                 api_mapper: services.api_mapper.clone(),
             },
             project_grant::ProjectGrantApi {

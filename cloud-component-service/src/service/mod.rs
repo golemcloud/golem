@@ -3,7 +3,6 @@ use crate::service::component::CloudComponentService;
 use crate::service::plugin::CloudPluginService;
 use cloud_api_grpc::proto::golem::cloud::project::v1::project_error;
 use cloud_common::clients::auth::{AuthServiceError, BaseAuthService, CloudAuthService};
-use cloud_common::clients::grant::{GrantService, GrantServiceDefault};
 use cloud_common::clients::limit::{LimitError, LimitService, LimitServiceDefault};
 use cloud_common::clients::project::{ProjectError, ProjectService, ProjectServiceDefault};
 use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, CloudPluginScope};
@@ -110,13 +109,8 @@ impl Services {
         let project_service: Arc<dyn ProjectService + Send + Sync> =
             Arc::new(ProjectServiceDefault::new(&config.cloud_service));
 
-        let grant_service: Arc<dyn GrantService + Send + Sync> =
-            Arc::new(GrantServiceDefault::new(&config.cloud_service));
-
-        let auth_service: Arc<dyn BaseAuthService + Send + Sync> = Arc::new(CloudAuthService::new(
-            project_service.clone(),
-            grant_service.clone(),
-        ));
+        let auth_service: Arc<dyn BaseAuthService + Send + Sync> =
+            Arc::new(CloudAuthService::new(&config.cloud_service));
 
         let object_store: Arc<dyn component_object_store::ComponentObjectStore + Send + Sync> =
             Arc::new(BlobStorageComponentObjectStore::new(blob_storage.clone()));

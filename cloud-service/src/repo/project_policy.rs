@@ -28,6 +28,19 @@ pub struct ProjectPolicyRecord {
     pub create_api_definition: bool,
     pub update_api_definition: bool,
     pub delete_api_definition: bool,
+    pub delete_project: bool,
+    pub view_project: bool,
+    pub view_plugin_installations: bool,
+    pub create_plugin_installation: bool,
+    pub update_plugin_installation: bool,
+    pub delete_plugin_installation: bool,
+    pub upsert_api_deployment: bool,
+    pub view_api_deployment: bool,
+    pub delete_api_deployment: bool,
+    pub upsert_api_domain: bool,
+    pub view_api_domain: bool,
+    pub delete_api_domain: bool,
+    pub batch_update_plugin_installations: bool,
 }
 
 impl From<ProjectPolicyRecord> for ProjectPolicy {
@@ -78,6 +91,45 @@ impl From<ProjectPolicyRecord> for ProjectPolicy {
         }
         if value.delete_api_definition {
             project_actions.insert(ProjectAction::DeleteApiDefinition);
+        }
+        if value.delete_project {
+            project_actions.insert(ProjectAction::DeleteProject);
+        }
+        if value.view_project {
+            project_actions.insert(ProjectAction::ViewProject);
+        }
+        if value.view_plugin_installations {
+            project_actions.insert(ProjectAction::ViewPluginInstallations);
+        }
+        if value.create_plugin_installation {
+            project_actions.insert(ProjectAction::CreatePluginInstallation);
+        }
+        if value.update_plugin_installation {
+            project_actions.insert(ProjectAction::UpdatePluginInstallation);
+        }
+        if value.delete_plugin_installation {
+            project_actions.insert(ProjectAction::DeletePluginInstallation);
+        }
+        if value.upsert_api_deployment {
+            project_actions.insert(ProjectAction::UpsertApiDeployment);
+        }
+        if value.view_api_deployment {
+            project_actions.insert(ProjectAction::ViewApiDeployment);
+        }
+        if value.delete_api_deployment {
+            project_actions.insert(ProjectAction::DeleteApiDeployment);
+        }
+        if value.upsert_api_domain {
+            project_actions.insert(ProjectAction::UpsertApiDomain);
+        }
+        if value.view_api_domain {
+            project_actions.insert(ProjectAction::ViewApiDomain);
+        }
+        if value.delete_api_domain {
+            project_actions.insert(ProjectAction::DeleteApiDomain);
+        }
+        if value.batch_update_plugin_installations {
+            project_actions.insert(ProjectAction::BatchUpdatePluginInstallations);
         }
 
         ProjectPolicy {
@@ -155,6 +207,58 @@ impl From<ProjectPolicy> for ProjectPolicyRecord {
                 .project_actions
                 .actions
                 .contains(&ProjectAction::DeleteApiDefinition),
+            delete_project: value
+                .project_actions
+                .actions
+                .contains(&ProjectAction::DeleteProject),
+            view_project: value
+                .project_actions
+                .actions
+                .contains(&ProjectAction::ViewProject),
+            view_plugin_installations: value
+                .project_actions
+                .actions
+                .contains(&ProjectAction::ViewPluginInstallations),
+            create_plugin_installation: value
+                .project_actions
+                .actions
+                .contains(&ProjectAction::CreatePluginInstallation),
+            update_plugin_installation: value
+                .project_actions
+                .actions
+                .contains(&ProjectAction::UpdatePluginInstallation),
+            delete_plugin_installation: value
+                .project_actions
+                .actions
+                .contains(&ProjectAction::DeletePluginInstallation),
+            upsert_api_deployment: value
+                .project_actions
+                .actions
+                .contains(&ProjectAction::UpsertApiDeployment),
+            view_api_deployment: value
+                .project_actions
+                .actions
+                .contains(&ProjectAction::ViewApiDeployment),
+            delete_api_deployment: value
+                .project_actions
+                .actions
+                .contains(&ProjectAction::DeleteApiDeployment),
+            upsert_api_domain: value
+                .project_actions
+                .actions
+                .contains(&ProjectAction::UpsertApiDomain),
+            view_api_domain: value
+                .project_actions
+                .actions
+                .contains(&ProjectAction::ViewApiDomain),
+            delete_api_domain: value
+                .project_actions
+                .actions
+                .contains(&ProjectAction::DeleteApiDomain),
+            batch_update_plugin_installations: value
+                .project_actions
+                .actions
+                .contains(&ProjectAction::BatchUpdatePluginInstallations),
         }
     }
 }
@@ -199,7 +303,10 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
                 view_component, create_component, update_component, delete_component,
                 view_worker, create_worker, update_worker, delete_worker,
                 view_project_grants, create_project_grants, delete_project_grants,
-                view_api_definition, create_api_definition, update_api_definition, delete_api_definition
+                view_api_definition, create_api_definition, update_api_definition, delete_api_definition,
+                delete_project, view_project, view_plugin_installations, create_plugin_installation, update_plugin_installation,
+                delete_plugin_installation, upsert_api_deployment, view_api_deployment, delete_api_deployment,
+                upsert_api_domain, view_api_domain, delete_api_domain, batch_update_plugin_installations
                 )
               VALUES
                 (
@@ -207,7 +314,11 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
                  $3, $4, $5, $6,
                  $7, $8, $9, $10,
                  $11, $12, $13,
-                 $14, $15, $16, $17
+                 $14, $15, $16, $17,
+                 $18, $19, $20, $21,
+                 $22, $23, $24, $25,
+                 $26, $27, $28, $29,
+                 $30
                 )
             "#,
              )
@@ -227,7 +338,20 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
             .bind(project_policy.view_api_definition)
             .bind(project_policy.create_api_definition)
             .bind(project_policy.update_api_definition)
-            .bind(project_policy.delete_api_definition);
+            .bind(project_policy.delete_api_definition)
+            .bind(project_policy.delete_project)
+            .bind(project_policy.view_project)
+            .bind(project_policy.view_plugin_installations)
+            .bind(project_policy.create_plugin_installation)
+            .bind(project_policy.update_plugin_installation)
+            .bind(project_policy.delete_plugin_installation)
+            .bind(project_policy.upsert_api_deployment)
+            .bind(project_policy.view_api_deployment)
+            .bind(project_policy.delete_api_deployment)
+            .bind(project_policy.upsert_api_domain)
+            .bind(project_policy.view_api_domain)
+            .bind(project_policy.delete_api_domain)
+            .bind(project_policy.batch_update_plugin_installations);
 
         self.db_pool
             .with_rw("project_policy", "create")

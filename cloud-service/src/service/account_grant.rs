@@ -4,38 +4,34 @@ use async_trait::async_trait;
 use golem_common::model::AccountId;
 use tracing::error;
 
-use crate::auth::AccountAuthorisation;
 use crate::repo::account::AccountRepo;
 use crate::repo::account_grant::AccountGrantRepo;
+use crate::{auth::AccountAuthorisation, model::AccountAction};
 use cloud_common::model::Role;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
 
+use super::auth::{AuthService, AuthServiceError};
+
 #[derive(Debug, thiserror::Error)]
 pub enum AccountGrantServiceError {
-    #[error("Unauthorized: {0}")]
-    Unauthorized(String),
     #[error("Account Not Found: {0}")]
     AccountNotFound(AccountId),
     #[error("Arg Validation error: {}", .0.join(", "))]
     ArgValidation(Vec<String>),
     #[error("Internal error: {0}")]
     InternalRepoError(#[from] RepoError),
-}
-
-impl AccountGrantServiceError {
-    fn unauthorized(error: impl AsRef<str>) -> Self {
-        Self::Unauthorized(error.as_ref().to_string())
-    }
+    #[error(transparent)]
+    InternalAuthError(#[from] AuthServiceError),
 }
 
 impl SafeDisplay for AccountGrantServiceError {
     fn to_safe_string(&self) -> String {
         match self {
-            AccountGrantServiceError::Unauthorized(_) => self.to_string(),
             AccountGrantServiceError::AccountNotFound(_) => self.to_string(),
             AccountGrantServiceError::ArgValidation(_) => self.to_string(),
             AccountGrantServiceError::InternalRepoError(inner) => inner.to_safe_string(),
+            AccountGrantServiceError::InternalAuthError(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -62,42 +58,21 @@ pub trait AccountGrantService {
 }
 
 pub struct AccountGrantServiceDefault {
+    auth_service: Arc<dyn AuthService>,
     account_grant_repo: Arc<dyn AccountGrantRepo + Send + Sync>,
     account_repo: Arc<dyn AccountRepo + Sync + Send>,
 }
 
 impl AccountGrantServiceDefault {
     pub fn new(
+        auth_service: Arc<dyn AuthService>,
         account_grant_repo: Arc<dyn AccountGrantRepo + Send + Sync>,
         account_repo: Arc<dyn AccountRepo + Sync + Send>,
     ) -> Self {
         Self {
+            auth_service,
             account_grant_repo,
             account_repo,
-        }
-    }
-
-    fn check_authorization(
-        &self,
-        account_id: &AccountId,
-        auth: &AccountAuthorisation,
-    ) -> Result<(), AccountGrantServiceError> {
-        if auth.has_account_or_role(account_id, &Role::Admin) {
-            Ok(())
-        } else {
-            Err(AccountGrantServiceError::unauthorized(
-                "Access to another account.",
-            ))
-        }
-    }
-
-    fn check_admin(&self, auth: &AccountAuthorisation) -> Result<(), AccountGrantServiceError> {
-        if auth.has_role(&Role::Admin) {
-            Ok(())
-        } else {
-            Err(AccountGrantServiceError::unauthorized(
-                "Admin role required.",
-            ))
         }
     }
 }
@@ -109,18 +84,17 @@ impl AccountGrantService for AccountGrantServiceDefault {
         account_id: &AccountId,
         auth: &AccountAuthorisation,
     ) -> Result<Vec<Role>, AccountGrantServiceError> {
-        self.check_authorization(account_id, auth)?;
-        let mut roles = match self.account_grant_repo.get(account_id).await {
+        self.auth_service
+            .authorize_account_action(auth, account_id, &AccountAction::ViewAccountGrants)
+            .await?;
+
+        let roles = match self.account_grant_repo.get(account_id).await {
             Ok(roles) => roles,
             Err(error) => {
                 error!("DB call failed. {:?}", error);
                 return Err(error.into());
             }
         };
-
-        // TODO: Capture them in account grants table and use monoidal addition of capabilities similar to project grants and capabilities
-        roles.extend(Role::all_project_roles());
-        roles.extend(Role::all_plugin_roles());
 
         Ok(roles)
     }
@@ -131,7 +105,9 @@ impl AccountGrantService for AccountGrantServiceDefault {
         role: &Role,
         auth: &AccountAuthorisation,
     ) -> Result<(), AccountGrantServiceError> {
-        self.check_admin(auth)?;
+        self.auth_service
+            .authorize_account_action(auth, account_id, &AccountAction::CreateAccountGrant)
+            .await?;
 
         let account = self.account_repo.get(account_id.value.as_str()).await?;
 
@@ -156,7 +132,10 @@ impl AccountGrantService for AccountGrantServiceDefault {
         role: &Role,
         auth: &AccountAuthorisation,
     ) -> Result<(), AccountGrantServiceError> {
-        self.check_admin(auth)?;
+        self.auth_service
+            .authorize_account_action(auth, account_id, &AccountAction::DeleteAccountGrant)
+            .await?;
+
         if auth.token.account_id == *account_id && role == &Role::Admin {
             return Err(AccountGrantServiceError::ArgValidation(vec![
                 "Cannot remove Admin role from current account.".to_string(),

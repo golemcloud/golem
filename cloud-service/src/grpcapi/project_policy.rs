@@ -26,14 +26,19 @@ use tracing::Instrument;
 impl From<AuthServiceError> for ProjectPolicyError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(_) => {
+            AuthServiceError::InvalidToken(_)
+            | AuthServiceError::AccountOwnershipRequired
+            | AuthServiceError::RoleMissing { .. }
+            | AuthServiceError::AccountAccessForbidden { .. }
+            | AuthServiceError::ProjectAccessForbidden { .. }
+            | AuthServiceError::ProjectActionForbidden { .. } => {
                 project_policy_error::Error::Unauthorized(ErrorBody {
                     error: value.to_safe_string(),
                 })
             }
             AuthServiceError::InternalTokenServiceError(_)
-            | AuthServiceError::InternalAccountGrantError(_) => {
-                project_policy_error::Error::Unauthorized(ErrorBody {
+            | AuthServiceError::InternalRepoError(_) => {
+                project_policy_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
                 })
             }

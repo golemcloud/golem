@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::auth::{AuthServiceError, BaseAuthService};
-use cloud_common::model::{ProjectAction, Role};
+use cloud_common::model::ProjectAction;
 use cloud_debugging_service::auth::AuthService;
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 
@@ -10,11 +10,7 @@ pub struct TestAuthService;
 
 #[async_trait]
 impl BaseAuthService for TestAuthService {
-    async fn authorize_role(
-        &self,
-        _role: Role,
-        ctx: &CloudAuthCtx,
-    ) -> Result<AccountId, AuthServiceError> {
+    async fn get_account(&self, ctx: &CloudAuthCtx) -> Result<AccountId, AuthServiceError> {
         Ok(AccountId::from(ctx.token_secret.value.to_string().as_str()))
     }
 

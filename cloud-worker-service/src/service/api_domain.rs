@@ -183,7 +183,7 @@ impl ApiDomainService for ApiDomainServiceDefault {
         let project_id = &payload.project_id;
 
         let namespace = self
-            .is_authorized(project_id, ProjectAction::CreateApiDefinition, auth)
+            .is_authorized(project_id, ProjectAction::UpsertApiDomain, auth)
             .await?;
 
         let account_id = namespace.account_id.clone();
@@ -279,7 +279,7 @@ impl ApiDomainService for ApiDomainServiceDefault {
         auth: &CloudAuthCtx,
     ) -> Result<Vec<ApiDomain>, ApiDomainServiceError> {
         let namespace = self
-            .is_authorized(project_id, ProjectAction::ViewApiDefinition, auth)
+            .is_authorized(project_id, ProjectAction::ViewApiDomain, auth)
             .await?;
 
         info!(
@@ -308,7 +308,7 @@ impl ApiDomainService for ApiDomainServiceDefault {
         auth: &CloudAuthCtx,
     ) -> Result<(), ApiDomainServiceError> {
         let namespace = self
-            .is_authorized(project_id, ProjectAction::DeleteApiDefinition, auth)
+            .is_authorized(project_id, ProjectAction::DeleteApiDomain, auth)
             .await?;
 
         info!(

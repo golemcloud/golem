@@ -106,6 +106,19 @@ pub enum ProjectAction {
     CreateApiDefinition = 12,
     UpdateApiDefinition = 13,
     DeleteApiDefinition = 14,
+    DeleteProject = 15,
+    ViewProject = 16,
+    ViewPluginInstallations = 17,
+    CreatePluginInstallation = 18,
+    UpdatePluginInstallation = 19,
+    DeletePluginInstallation = 20,
+    UpsertApiDeployment = 21,
+    ViewApiDeployment = 22,
+    DeleteApiDeployment = 23,
+    UpsertApiDomain = 24,
+    ViewApiDomain = 25,
+    DeleteApiDomain = 26,
+    BatchUpdatePluginInstallations = 27,
 }
 
 impl From<ProjectAction> for i32 {
@@ -139,6 +152,21 @@ impl Display for ProjectAction {
             ProjectAction::CreateApiDefinition => write!(f, "CreateApiDefinition"),
             ProjectAction::UpdateApiDefinition => write!(f, "UpdateApiDefinition"),
             ProjectAction::DeleteApiDefinition => write!(f, "DeleteApiDefinition"),
+            ProjectAction::DeleteProject => write!(f, "DeleteProject"),
+            ProjectAction::ViewProject => write!(f, "ViewProject"),
+            ProjectAction::ViewPluginInstallations => write!(f, "ViewPluginInstallations"),
+            ProjectAction::CreatePluginInstallation => write!(f, "CreatePluginInstallation"),
+            ProjectAction::UpdatePluginInstallation => write!(f, "UpdatePluginInstallation"),
+            ProjectAction::DeletePluginInstallation => write!(f, "DeletePluginInstallation"),
+            ProjectAction::UpsertApiDeployment => write!(f, "UpsertApiDeployment"),
+            ProjectAction::ViewApiDeployment => write!(f, "ViewApiDeployment"),
+            ProjectAction::DeleteApiDeployment => write!(f, "DeleteApiDeployment"),
+            ProjectAction::UpsertApiDomain => write!(f, "UpsertApiDomain"),
+            ProjectAction::ViewApiDomain => write!(f, "ViewApiDomain"),
+            ProjectAction::DeleteApiDomain => write!(f, "DeleteApiDomain"),
+            ProjectAction::BatchUpdatePluginInstallations => {
+                write!(f, "BatchUpdatePluginInstallations")
+            }
         }
     }
 }
@@ -163,6 +191,19 @@ impl FromStr for ProjectAction {
             "CreateApiDefinition" => Ok(ProjectAction::CreateApiDefinition),
             "UpdateApiDefinition" => Ok(ProjectAction::UpdateApiDefinition),
             "DeleteApiDefinition" => Ok(ProjectAction::DeleteApiDefinition),
+            "DeleteProject" => Ok(ProjectAction::DeleteProject),
+            "ViewProject" => Ok(ProjectAction::ViewProject),
+            "ViewPluginInstallations" => Ok(ProjectAction::ViewPluginInstallations),
+            "CreatePluginInstallation" => Ok(ProjectAction::CreatePluginInstallation),
+            "UpdatePluginInstallation" => Ok(ProjectAction::UpdatePluginInstallation),
+            "DeletePluginInstallation" => Ok(ProjectAction::DeletePluginInstallation),
+            "UpsertApiDeployment" => Ok(ProjectAction::UpsertApiDeployment),
+            "ViewApiDeployment" => Ok(ProjectAction::ViewApiDeployment),
+            "DeleteApiDeployment" => Ok(ProjectAction::DeleteApiDeployment),
+            "UpsertApiDomain" => Ok(ProjectAction::UpsertApiDomain),
+            "ViewApiDomain" => Ok(ProjectAction::ViewApiDomain),
+            "DeleteApiDomain" => Ok(ProjectAction::DeleteApiDomain),
+            "BatchUpdatePluginInstallations" => Ok(ProjectAction::BatchUpdatePluginInstallations),
             _ => Err(format!("Unknown project action: {}", s)),
         }
     }
@@ -224,28 +265,6 @@ pub struct ProjectAuthorisedActions {
     pub actions: ProjectActions,
 }
 
-impl TryFrom<cloud_api_grpc::proto::golem::cloud::project::v1::GetProjectActionsSuccessResponse>
-    for ProjectAuthorisedActions
-{
-    type Error = String;
-
-    fn try_from(
-        value: cloud_api_grpc::proto::golem::cloud::project::v1::GetProjectActionsSuccessResponse,
-    ) -> Result<Self, Self::Error> {
-        let actions: HashSet<ProjectAction> = value
-            .actions
-            .into_iter()
-            .map(|action| action.try_into())
-            .collect::<Result<_, _>>()?;
-
-        Ok(Self {
-            project_id: value.project_id.ok_or("Missing worker_id")?.try_into()?,
-            owner_account_id: value.owner_account_id.ok_or("Missing account_id")?.into(),
-            actions: ProjectActions { actions },
-        })
-    }
-}
-
 #[derive(
     Debug,
     Clone,
@@ -264,33 +283,6 @@ impl TryFrom<cloud_api_grpc::proto::golem::cloud::project::v1::GetProjectActions
 pub enum Role {
     Admin = 0,
     MarketingAdmin = 1,
-    ViewProject = 2,
-    DeleteProject = 3,
-    CreateProject = 4,
-    UpdateProject = 5,
-    InstanceServer = 6,
-    ViewPlugin = 7,
-    CreatePlugin = 8,
-    DeletePlugin = 9,
-}
-
-impl Role {
-    pub fn all() -> Vec<Role> {
-        Role::iter().collect::<Vec<Role>>()
-    }
-
-    pub fn all_project_roles() -> Vec<Role> {
-        vec![
-            Role::ViewProject,
-            Role::DeleteProject,
-            Role::CreateProject,
-            Role::UpdateProject,
-        ]
-    }
-
-    pub fn all_plugin_roles() -> Vec<Role> {
-        vec![Role::ViewPlugin, Role::CreatePlugin, Role::DeletePlugin]
-    }
 }
 
 impl From<Role> for i32 {
@@ -314,14 +306,6 @@ impl FromStr for Role {
         match s {
             "Admin" => Ok(Role::Admin),
             "MarketingAdmin" => Ok(Role::MarketingAdmin),
-            "ViewProject" => Ok(Role::ViewProject),
-            "DeleteProject" => Ok(Role::DeleteProject),
-            "CreateProject" => Ok(Role::CreateProject),
-            "InstanceServer" => Ok(Role::InstanceServer),
-            "ViewPlugin" => Ok(Role::ViewPlugin),
-            "CreatePlugin" => Ok(Role::CreatePlugin),
-            "DeletePlugin" => Ok(Role::DeletePlugin),
-            "UpdateProject" => Ok(Role::UpdateProject),
             _ => Err(format!("Unknown role id: {}", s)),
         }
     }
@@ -332,14 +316,6 @@ impl Display for Role {
         match self {
             Role::Admin => write!(f, "Admin"),
             Role::MarketingAdmin => write!(f, "MarketingAdmin"),
-            Role::ViewProject => write!(f, "ViewProject"),
-            Role::DeleteProject => write!(f, "DeleteProject"),
-            Role::CreateProject => write!(f, "CreateProject"),
-            Role::InstanceServer => write!(f, "InstanceServer"),
-            Role::ViewPlugin => write!(f, "ViewPlugin"),
-            Role::CreatePlugin => write!(f, "CreatePlugin"),
-            Role::DeletePlugin => write!(f, "DeletePlugin"),
-            Role::UpdateProject => write!(f, "UpdateProject"),
         }
     }
 }

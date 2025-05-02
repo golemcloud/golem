@@ -195,7 +195,7 @@ impl LoginServiceDefault {
         // This unwrap is infallible.
         let account_id = AccountId::from_str(&account_config.id).unwrap();
         self.account_service
-            .update(
+            .create(
                 &account_id,
                 &AccountData {
                     name: account_config.name.clone(),

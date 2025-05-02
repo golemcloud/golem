@@ -1,9 +1,7 @@
 use async_trait::async_trait;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::auth::{AuthServiceError, BaseAuthService};
-use cloud_common::clients::grant::GrantService;
-use cloud_common::clients::project::ProjectService;
-use cloud_common::model::{ProjectAction, Role};
+use cloud_common::model::ProjectAction;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
     get_component_metadata_response, GetLatestComponentRequest,
@@ -15,7 +13,6 @@ use golem_common::retries::with_retries;
 use golem_worker_service_base::app_config::ComponentServiceConfig;
 use golem_worker_service_base::service::component::ComponentServiceError;
 use golem_worker_service_base::service::with_metadata;
-use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -42,13 +39,9 @@ pub struct CloudAuthService {
 
 impl CloudAuthService {
     pub fn new(
-        project_service: Arc<dyn ProjectService + Send + Sync>,
-        grant_service: Arc<dyn GrantService + Send + Sync>,
+        common_auth: cloud_common::clients::auth::CloudAuthService,
         component_service_config: ComponentServiceConfig,
     ) -> Self {
-        let common_auth =
-            cloud_common::clients::auth::CloudAuthService::new(project_service, grant_service);
-
         let component_service_client = GrpcClient::new(
             "auth_service",
             |channel| {
@@ -154,12 +147,8 @@ impl CloudAuthService {
 
 #[async_trait]
 impl BaseAuthService for CloudAuthService {
-    async fn authorize_role(
-        &self,
-        role: Role,
-        ctx: &CloudAuthCtx,
-    ) -> Result<AccountId, AuthServiceError> {
-        self.common_auth.authorize_role(role, ctx).await
+    async fn get_account(&self, ctx: &CloudAuthCtx) -> Result<AccountId, AuthServiceError> {
+        self.common_auth.get_account(ctx).await
     }
 
     async fn authorize_project_action(

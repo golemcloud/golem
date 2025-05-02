@@ -856,3 +856,26 @@ impl PluginInstallationTarget for ProjectPluginInstallationTarget {
         "project_plugin_installation"
     }
 }
+
+#[derive(Debug, Clone)]
+pub enum GlobalAction {
+    CreateAccount,
+    ViewAccountSummaries,
+    ViewAccountCount,
+}
+
+#[derive(Debug, Clone)]
+pub enum AccountAction {
+    ViewAccount,
+    UpdateAccount,
+    ViewPlan,
+    CreateProject,
+    DeleteAccount,
+    ViewAccountGrants,
+    CreateAccountGrant,
+    DeleteAccountGrant,
+    ViewDefaultProject,
+    ListProjectGrants,
+    ViewLimits,
+    UpdateLimits,
+}

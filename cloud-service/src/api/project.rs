@@ -3,7 +3,6 @@ use crate::model::*;
 use crate::service::api_mapper::RemoteCloudApiMapper;
 use crate::service::auth::AuthService;
 use crate::service::project::ProjectService;
-use crate::service::project_auth::ProjectAuthorisationService;
 use cloud_common::auth::GolemSecurityScheme;
 use cloud_common::model::ProjectAction;
 use futures_util::{stream, StreamExt, TryStreamExt};
@@ -22,7 +21,6 @@ use tracing::Instrument;
 pub struct ProjectApi {
     pub auth_service: Arc<dyn AuthService + Sync + Send>,
     pub project_service: Arc<dyn ProjectService + Sync + Send>,
-    pub project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
     pub api_mapper: Arc<RemoteCloudApiMapper>,
 }
 
@@ -56,7 +54,7 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> LimitedApiResult<Json<Project>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let project = self.project_service.get_own_default(&auth).await?;
+        let project = self.project_service.get_default(&auth).await?;
         Ok(Json(project))
     }
 
@@ -94,12 +92,12 @@ impl ProjectApi {
             Some(project_name) => {
                 let projects = self
                     .project_service
-                    .get_own_by_name(&project_name, &auth)
+                    .get_all_by_name(&project_name, &auth)
                     .await?;
                 Ok(Json(projects))
             }
             None => {
-                let projects = self.project_service.get_own(&auth).await?;
+                let projects = self.project_service.get_all(&auth).await?;
                 Ok(Json(projects))
             }
         }
@@ -244,8 +242,8 @@ impl ProjectApi {
     ) -> LimitedApiResult<Json<Vec<ProjectAction>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
         let result = self
-            .project_auth_service
-            .get_by_project(&project_id, &auth)
+            .auth_service
+            .get_project_actions(&auth, &project_id)
             .await?;
         Ok(Json(Vec::from_iter(result.actions.actions)))
     }

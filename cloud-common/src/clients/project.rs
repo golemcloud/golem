@@ -2,13 +2,12 @@ use std::fmt::Display;
 
 use crate::clients::auth::authorised_request;
 use crate::config::RemoteCloudServiceConfig;
-use crate::model::{ProjectAuthorisedActions, ProjectView, TokenSecret};
+use crate::model::{ProjectView, TokenSecret};
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use cloud_api_grpc::proto::golem::cloud::project::v1::project_error::Error;
 use cloud_api_grpc::proto::golem::cloud::project::v1::{
-    get_default_project_response, get_project_actions_response, get_project_response,
-    GetDefaultProjectRequest, GetProjectActionsRequest, GetProjectRequest,
+    get_default_project_response, get_project_response, GetDefaultProjectRequest, GetProjectRequest,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::ProjectId;
@@ -28,12 +27,6 @@ pub trait ProjectService {
     ) -> Result<ProjectView, ProjectError>;
 
     async fn get_default(&self, token: &TokenSecret) -> Result<ProjectView, ProjectError>;
-
-    async fn get_actions(
-        &self,
-        project_id: &ProjectId,
-        token: &TokenSecret,
-    ) -> Result<ProjectAuthorisedActions, ProjectError>;
 }
 
 #[derive(Clone)]
@@ -136,54 +129,6 @@ impl ProjectService for ProjectServiceDefault {
                             Ok(project.try_into()?)
                         }
                         Some(get_default_project_response::Result::Error(error)) => {
-                            Err(error.into())
-                        }
-                    }
-                })
-            },
-            ProjectError::is_retriable,
-        )
-        .await
-    }
-
-    async fn get_actions(
-        &self,
-        project_id: &ProjectId,
-        token: &TokenSecret,
-    ) -> Result<ProjectAuthorisedActions, ProjectError> {
-        with_retries(
-            "project",
-            "get-actions",
-            Some(format!("{project_id}")),
-            &self.retry_config,
-            &(
-                self.project_service_client.clone(),
-                project_id.clone(),
-                token.clone(),
-            ),
-            |(client, id, token)| {
-                Box::pin(async move {
-                    let response = client
-                        .call("get-project-actions", move |client| {
-                            let request = authorised_request(
-                                GetProjectActionsRequest {
-                                    project_id: Some(id.clone().into()),
-                                },
-                                &token.value,
-                            );
-
-                            Box::pin(client.get_project_actions(request))
-                        })
-                        .await?
-                        .into_inner();
-                    match response.result {
-                        None => Err("Empty response".to_string().into()),
-                        Some(get_project_actions_response::Result::Success(response)) => {
-                            let actions = response.try_into()?;
-
-                            Ok(actions)
-                        }
-                        Some(get_project_actions_response::Result::Error(error)) => {
                             Err(error.into())
                         }
                     }

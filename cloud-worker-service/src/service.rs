@@ -24,7 +24,6 @@ use crate::service::auth::{AuthService, CloudAuthService};
 use crate::service::worker::{WorkerService, WorkerServiceDefault};
 use crate::service::worker_request_executor::CloudGatewayWorkerRequestExecutor;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
-use cloud_common::clients::grant::{GrantService, GrantServiceDefault};
 use cloud_common::clients::limit::{LimitService, LimitServiceDefault};
 use cloud_common::clients::project::{ProjectService, ProjectServiceDefault};
 use cloud_common::model::TokenSecret;
@@ -106,13 +105,11 @@ impl ApiServices {
         let project_service: Arc<dyn ProjectService + Send + Sync> = Arc::new(
             ProjectServiceDefault::new(&config.cloud_specific_config.cloud_service),
         );
-        let grant_service: Arc<dyn GrantService + Send + Sync> = Arc::new(
-            GrantServiceDefault::new(&config.cloud_specific_config.cloud_service),
-        );
 
         let auth_service: Arc<dyn AuthService + Send + Sync> = Arc::new(CloudAuthService::new(
-            project_service.clone(),
-            grant_service.clone(),
+            cloud_common::clients::auth::CloudAuthService::new(
+                &config.cloud_specific_config.cloud_service,
+            ),
             config.base_config.component_service.clone(),
         ));
 

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::auth::{AuthServiceError, BaseAuthService};
-use cloud_common::model::{ProjectAction, Role, TokenSecret};
+use cloud_common::model::{ProjectAction, TokenSecret};
 use cloud_worker_service::model::{ApiDomain, Certificate, CertificateRequest, DomainRequest};
 use cloud_worker_service::repo::api_certificate::{ApiCertificateRepo, DbApiCertificateRepo};
 use cloud_worker_service::repo::api_domain::{ApiDomainRepo, DbApiDomainRepo};
@@ -73,11 +73,7 @@ impl TestAuthService {
 
 #[async_trait]
 impl BaseAuthService for TestAuthService {
-    async fn authorize_role(
-        &self,
-        _role: Role,
-        ctx: &CloudAuthCtx,
-    ) -> Result<AccountId, AuthServiceError> {
+    async fn get_account(&self, ctx: &CloudAuthCtx) -> Result<AccountId, AuthServiceError> {
         Ok(AccountId::from(ctx.token_secret.value.to_string().as_str()))
     }
 

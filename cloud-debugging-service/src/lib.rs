@@ -9,8 +9,7 @@ use anyhow::{Context, Error};
 use async_trait::async_trait;
 use axum::routing::any;
 use axum::Router;
-use cloud_common::clients::grant::{GrantService, GrantServiceDefault};
-use cloud_common::clients::project::{ProjectService, ProjectServiceDefault};
+use cloud_common::clients::auth::CloudAuthService;
 use cloud_worker_executor::services::component::ComponentServiceCloudGrpc;
 use cloud_worker_executor::services::plugins::CloudPluginsWrapper;
 use cloud_worker_executor::CloudGolemTypes;
@@ -177,14 +176,8 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
     ) -> anyhow::Result<All<DebugContext<CloudGolemTypes>>> {
         let remote_cloud_service_config = self.debug_config.cloud_service.clone();
 
-        let project_service: Arc<dyn ProjectService + Send + Sync> =
-            Arc::new(ProjectServiceDefault::new(&remote_cloud_service_config));
-        let grant_service: Arc<dyn GrantService + Send + Sync> =
-            Arc::new(GrantServiceDefault::new(&remote_cloud_service_config));
-
         let auth_service: Arc<dyn AuthService + Send + Sync> = Arc::new(AuthServiceDefault::new(
-            project_service.clone(),
-            grant_service.clone(),
+            CloudAuthService::new(&remote_cloud_service_config),
             self.debug_config.component_service.clone(),
         ));
 

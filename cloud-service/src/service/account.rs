@@ -1,10 +1,9 @@
 use crate::auth::AccountAuthorisation;
-use crate::model::{Account, AccountData, Plan};
+use crate::model::{Account, AccountAction, AccountData, GlobalAction, Plan};
 use crate::repo::account::{AccountRecord, AccountRepo};
 use crate::service::plan::{PlanError, PlanService};
 use async_trait::async_trait;
 use cloud_common::model::PlanId;
-use cloud_common::model::Role;
 use golem_common::model::AccountId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
@@ -12,10 +11,10 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{error, info};
 
+use super::auth::{AuthService, AuthServiceError, ViewableAccounts};
+
 #[derive(Debug, thiserror::Error)]
 pub enum AccountError {
-    #[error("Unauthorized: {0}")]
-    Unauthorized(String),
     #[error("Account Not Found: {0}")]
     AccountNotFound(AccountId),
     #[error("Arg Validation error: {}", .0.join(", "))]
@@ -26,17 +25,19 @@ pub enum AccountError {
     InternalRepoError(#[from] RepoError),
     #[error(transparent)]
     InternalPlanError(#[from] PlanError),
+    #[error(transparent)]
+    AuthError(#[from] AuthServiceError),
 }
 
 impl SafeDisplay for AccountError {
     fn to_safe_string(&self) -> String {
         match self {
-            AccountError::Unauthorized(_) => self.to_string(),
             AccountError::AccountNotFound(_) => self.to_string(),
             AccountError::ArgValidation(_) => self.to_string(),
             AccountError::Internal(_) => self.to_string(),
             AccountError::InternalRepoError(inner) => inner.to_safe_string(),
             AccountError::InternalPlanError(inner) => inner.to_safe_string(),
+            AccountError::AuthError(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -90,16 +91,19 @@ pub trait AccountService {
 }
 
 pub struct AccountServiceDefault {
+    auth_service: Arc<dyn AuthService>,
     account_repo: Arc<dyn AccountRepo + Sync + Send>,
     plan_service: Arc<dyn PlanService + Sync + Send>,
 }
 
 impl AccountServiceDefault {
     pub fn new(
+        auth_service: Arc<dyn AuthService>,
         account_repo: Arc<dyn AccountRepo + Sync + Send>,
         plan_service: Arc<dyn PlanService + Sync + Send>,
     ) -> Self {
         AccountServiceDefault {
+            auth_service,
             account_repo,
             plan_service,
         }
@@ -124,7 +128,10 @@ impl AccountService for AccountServiceDefault {
         account: &AccountData,
         auth: &AccountAuthorisation,
     ) -> Result<Account, AccountError> {
-        check_root(auth)?;
+        self.auth_service
+            .authorize_global_action(auth, &GlobalAction::CreateAccount)
+            .await?;
+
         let plan_id = self.get_default_plan_id().await?;
         info!("Creating account: {}", id);
         match self
@@ -148,13 +155,16 @@ impl AccountService for AccountServiceDefault {
 
     async fn update(
         &self,
-        id: &AccountId,
+        account_id: &AccountId,
         account: &AccountData,
         auth: &AccountAuthorisation,
     ) -> Result<Account, AccountError> {
-        check_authorized(id, auth)?;
-        info!("Updating account: {}", id);
-        let current_account = self.account_repo.get(&id.value).await?;
+        self.auth_service
+            .authorize_account_action(auth, account_id, &AccountAction::UpdateAccount)
+            .await?;
+
+        info!("Updating account: {}", account_id);
+        let current_account = self.account_repo.get(&account_id.value).await?;
         let plan_id = match current_account {
             Some(current_account) => current_account.plan_id,
             None => self.get_default_plan_id().await?.0,
@@ -162,7 +172,7 @@ impl AccountService for AccountServiceDefault {
         let result = self
             .account_repo
             .update(&AccountRecord {
-                id: id.value.clone(),
+                id: account_id.value.clone(),
                 name: account.name.clone(),
                 email: account.email.clone(),
                 plan_id,
@@ -182,8 +192,12 @@ impl AccountService for AccountServiceDefault {
         account_id: &AccountId,
         auth: &AccountAuthorisation,
     ) -> Result<Account, AccountError> {
-        check_authorized(account_id, auth)?;
+        self.auth_service
+            .authorize_account_action(auth, account_id, &AccountAction::ViewAccount)
+            .await?;
+
         info!("Get account: {}", account_id);
+
         let result = self.account_repo.get(&account_id.value).await;
         match result {
             Ok(Some(account_record)) => Ok(account_record.into()),
@@ -201,14 +215,20 @@ impl AccountService for AccountServiceDefault {
         email: Option<&str>,
         auth: &AccountAuthorisation,
     ) -> Result<Vec<Account>, AccountError> {
-        let result = self
-            .account_repo
-            .find(&auth.token.account_id.value, email)
-            .await;
-        match result {
-            Ok(values) => Ok(values.into_iter().map(|v| v.into()).collect()),
-            Err(e) => Err(e.into()),
-        }
+        let visible_accounts = self.auth_service.viewable_accounts(auth).await?;
+
+        let results = match visible_accounts {
+            ViewableAccounts::All => self.account_repo.find_all(email).await?,
+            ViewableAccounts::Limited { account_ids } => {
+                let ids = account_ids
+                    .into_iter()
+                    .map(|ai| ai.value)
+                    .collect::<Vec<_>>();
+                self.account_repo.find(&ids, email).await?
+            }
+        };
+
+        Ok(results.into_iter().map(|v| v.into()).collect())
     }
 
     async fn get_plan(
@@ -216,7 +236,12 @@ impl AccountService for AccountServiceDefault {
         account_id: &AccountId,
         auth: &AccountAuthorisation,
     ) -> Result<Plan, AccountError> {
-        check_authorized(account_id, auth)?;
+        self.auth_service
+            .authorize_account_action(auth, account_id, &AccountAction::ViewPlan)
+            .await?;
+
+        info!("Get plan: {}", account_id);
+
         let result = self.account_repo.get(&account_id.value).await;
         match result {
             Ok(Some(account_record)) => {
@@ -246,7 +271,10 @@ impl AccountService for AccountServiceDefault {
         account_id: &AccountId,
         auth: &AccountAuthorisation,
     ) -> Result<(), AccountError> {
-        check_root(auth)?;
+        self.auth_service
+            .authorize_account_action(auth, account_id, &AccountAction::DeleteAccount)
+            .await?;
+
         if auth.token.account_id == *account_id {
             return Err(AccountError::ArgValidation(vec![
                 "Cannot delete current account.".to_string(),
@@ -260,64 +288,5 @@ impl AccountService for AccountServiceDefault {
                 Err(err.into())
             }
         }
-    }
-}
-
-fn check_authorized(
-    account_id: &AccountId,
-    auth: &AccountAuthorisation,
-) -> Result<(), AccountError> {
-    if auth.has_account_or_role(account_id, &Role::Admin) {
-        Ok(())
-    } else {
-        Err(AccountError::Unauthorized(
-            "Access to another account.".to_string(),
-        ))
-    }
-}
-
-fn check_root(auth: &AccountAuthorisation) -> Result<(), AccountError> {
-    if auth.has_role(&Role::Admin) {
-        Ok(())
-    } else {
-        Err(AccountError::Unauthorized(
-            "Admin role required.".to_string(),
-        ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use test_r::test;
-
-    use crate::auth::AccountAuthorisation;
-    use crate::service::account::{check_authorized, check_root};
-    use cloud_common::model::Role;
-    use golem_common::model::AccountId;
-
-    #[test]
-    pub fn test_check_authorized() {
-        let account_id = AccountId::from("1");
-        let account_id2 = AccountId::from("2");
-
-        let auth = AccountAuthorisation::new_test(&account_id, Role::all());
-        assert!(check_authorized(&account_id, &auth).is_ok());
-        assert!(check_authorized(&account_id2, &auth).is_ok());
-
-        let auth = AccountAuthorisation::new_test(&account_id, vec![Role::ViewProject]);
-        assert!(check_authorized(&account_id, &auth).is_ok());
-        assert!(check_authorized(&account_id2, &auth).is_err());
-    }
-
-    #[test]
-    pub fn test_check_root() {
-        let account_id = AccountId::from("1");
-
-        let auth = AccountAuthorisation::new_test(&account_id, Role::all());
-        assert!(check_root(&auth).is_ok());
-
-        let auth: AccountAuthorisation =
-            AccountAuthorisation::new_test(&account_id, vec![Role::ViewProject]);
-        assert!(check_root(&auth).is_err());
     }
 }

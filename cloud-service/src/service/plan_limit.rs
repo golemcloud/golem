@@ -1,5 +1,5 @@
 use crate::auth::AccountAuthorisation;
-use crate::model::{Plan, ResourceLimits};
+use crate::model::{AccountAction, Plan, ResourceLimits};
 use crate::repo::account::AccountRepo;
 use crate::repo::account_components::AccountComponentsRepo;
 use crate::repo::account_connections::AccountConnectionsRepo;
@@ -10,7 +10,6 @@ use crate::repo::account_workers::AccountWorkersRepo;
 use crate::repo::plan::PlanRepo;
 use crate::repo::project::ProjectRepo;
 use async_trait::async_trait;
-use cloud_common::model::Role;
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_common::SafeDisplay;
@@ -20,12 +19,12 @@ use std::fmt::Debug;
 use std::num::TryFromIntError;
 use std::sync::Arc;
 
+use super::auth::{AuthService, AuthServiceError};
+
 #[derive(Debug, thiserror::Error)]
 pub enum PlanLimitError {
     #[error("Limit Exceeded: {0}")]
     LimitExceeded(String),
-    #[error("Unauthorized: {0}")]
-    Unauthorized(String),
     #[error("Account Not Found: {0}")]
     AccountNotFound(AccountId),
     #[error("Project Not Found: {0}")]
@@ -34,13 +33,11 @@ pub enum PlanLimitError {
     Internal(String),
     #[error("Internal repository error: {0}")]
     InternalRepoError(#[from] RepoError),
+    #[error(transparent)]
+    AuthError(#[from] AuthServiceError),
 }
 
 impl PlanLimitError {
-    fn unauthorized(error: impl AsRef<str>) -> Self {
-        Self::Unauthorized(error.as_ref().to_string())
-    }
-
     fn limit_exceeded(error: impl AsRef<str>) -> Self {
         Self::LimitExceeded(error.as_ref().to_string())
     }
@@ -50,11 +47,11 @@ impl SafeDisplay for PlanLimitError {
     fn to_safe_string(&self) -> String {
         match self {
             PlanLimitError::LimitExceeded(_) => self.to_string(),
-            PlanLimitError::Unauthorized(_) => self.to_string(),
             PlanLimitError::AccountNotFound(_) => self.to_string(),
             PlanLimitError::ProjectNotFound(_) => self.to_string(),
             PlanLimitError::Internal(_) => self.to_string(),
             PlanLimitError::InternalRepoError(inner) => inner.to_safe_string(),
+            PlanLimitError::AuthError(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -155,6 +152,7 @@ pub trait PlanLimitService {
 }
 
 pub struct PlanLimitServiceDefault {
+    auth_service: Arc<dyn AuthService>,
     plan_repo: Arc<dyn PlanRepo + Sync + Send>,
     account_repo: Arc<dyn AccountRepo + Sync + Send>,
     account_workers_repo: Arc<dyn AccountWorkersRepo + Sync + Send>,
@@ -167,6 +165,7 @@ pub struct PlanLimitServiceDefault {
 }
 
 #[async_trait]
+// TODO: check auth
 impl PlanLimitService for PlanLimitServiceDefault {
     async fn get_account_limits(
         &self,
@@ -193,7 +192,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
         account_id: &AccountId,
     ) -> Result<CheckLimitResult, PlanLimitError> {
         let limits = self.get_account_limits(account_id).await?;
-        let num_projects = self.project_repo.get_own_count(&account_id.value).await?;
+        let num_projects = self.project_repo.get_owned_count(&account_id.value).await?;
         let count: i64 = num_projects.try_into().map_err(|e: TryFromIntError| {
             PlanLimitError::Internal(format!("Failed to convert projects count: {e}"))
         })?;
@@ -210,7 +209,10 @@ impl PlanLimitService for PlanLimitServiceDefault {
         account_id: &AccountId,
         auth: &AccountAuthorisation,
     ) -> Result<ResourceLimits, PlanLimitError> {
-        self.check_authorization(account_id, auth)?;
+        self.auth_service
+            .authorize_account_action(auth, account_id, &AccountAction::ViewLimits)
+            .await?;
+
         let plan = self.get_plan(account_id).await?;
         let fuel = self.account_fuel_repo.get(account_id).await?;
         let available_fuel = plan.plan_data.monthly_gas_limit - fuel;
@@ -227,7 +229,9 @@ impl PlanLimitService for PlanLimitServiceDefault {
     ) -> Result<(), PlanLimitError> {
         // TODO: Should we do this in parallel?
         for (account_id, update) in updates {
-            self.check_authorization(&account_id, auth)?;
+            self.auth_service
+                .authorize_account_action(auth, &account_id, &AccountAction::UpdateLimits)
+                .await?;
             self.get_plan(&account_id).await?;
             self.account_fuel_repo.update(&account_id, update).await?;
         }
@@ -241,7 +245,9 @@ impl PlanLimitService for PlanLimitServiceDefault {
         size: i64,
         auth: &AccountAuthorisation,
     ) -> Result<(), PlanLimitError> {
-        self.check_authorization(account_id, auth)?;
+        self.auth_service
+            .authorize_account_action(auth, account_id, &AccountAction::UpdateLimits)
+            .await?;
 
         if size > 50000000 {
             return Err(PlanLimitError::limit_exceeded(
@@ -316,7 +322,10 @@ impl PlanLimitService for PlanLimitServiceDefault {
         value: i32,
         auth: &AccountAuthorisation,
     ) -> Result<(), PlanLimitError> {
-        self.check_authorization(account_id, auth)?;
+        self.auth_service
+            .authorize_account_action(auth, account_id, &AccountAction::UpdateLimits)
+            .await?;
+
         let plan = self.get_plan(account_id).await?;
         let num_workers = self.account_workers_repo.get(account_id).await?;
 
@@ -348,7 +357,9 @@ impl PlanLimitService for PlanLimitServiceDefault {
         value: i32,
         auth: &AccountAuthorisation,
     ) -> Result<(), PlanLimitError> {
-        self.check_authorization(account_id, auth)?;
+        self.auth_service
+            .authorize_account_action(auth, account_id, &AccountAction::UpdateLimits)
+            .await?;
 
         let connections = self.account_connections_repo.get(account_id).await?;
 
@@ -382,6 +393,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
 // Helper functions.
 impl PlanLimitServiceDefault {
     pub fn new(
+        auth_service: Arc<dyn AuthService>,
         plan_repo: Arc<dyn PlanRepo + Sync + Send>,
         account_repo: Arc<dyn AccountRepo + Sync + Send>,
         account_workers_repo: Arc<dyn AccountWorkersRepo + Sync + Send>,
@@ -393,6 +405,7 @@ impl PlanLimitServiceDefault {
         account_fuel_repo: Arc<dyn AccountFuelRepo + Sync + Send>,
     ) -> Self {
         PlanLimitServiceDefault {
+            auth_service,
             plan_repo,
             account_repo,
             account_workers_repo,
@@ -424,18 +437,6 @@ impl PlanLimitServiceDefault {
             })
         } else {
             Err(PlanLimitError::ProjectNotFound(project_id.clone()))
-        }
-    }
-
-    fn check_authorization(
-        &self,
-        account_id: &AccountId,
-        auth: &AccountAuthorisation,
-    ) -> Result<(), PlanLimitError> {
-        if auth.has_account_or_role(account_id, &Role::Admin) {
-            Ok(())
-        } else {
-            Err(PlanLimitError::unauthorized("Insufficient privilege."))
         }
     }
 }

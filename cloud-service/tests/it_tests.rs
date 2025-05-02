@@ -21,7 +21,7 @@ use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_service_base::db;
 use golem_service_base::migration::{Migrations, MigrationsDir};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::vec;
@@ -109,7 +109,7 @@ async fn create_account(
         email: format!("{}@golem.cloud", account_id.value),
     };
 
-    let auth = create_auth(account_id, Role::all());
+    let auth = create_auth(account_id, vec![Role::Admin]);
 
     let create_result = account_service
         .create(account_id, &account_data, &auth)
@@ -161,7 +161,7 @@ async fn create_project(
             project_type: ProjectType::NonDefault,
         },
     };
-    let auth = create_auth(account_id, Role::all());
+    let auth = create_auth(account_id, vec![]);
     let create_result = project_service.create(&project, &auth).await;
 
     assert!(
@@ -187,18 +187,15 @@ async fn delete_project(
             project_type: ProjectType::NonDefault,
         },
     };
-    let auth = create_auth(account_id, Role::all());
+    let auth = create_auth(account_id, vec![]);
     let create_result = project_service.create(&project, &auth).await;
     let delete_result = project_service.delete(project_id, &auth).await;
 
-    println!("{create_result:?}");
     assert!(
         create_result.is_ok(),
         "Failed to create project: {:?}",
         project
     );
-
-    println!("{delete_result:?}");
 
     assert!(
         delete_result.is_ok(),
@@ -232,6 +229,7 @@ async fn create_project_policy(
 async fn create_project_grant(
     id: &ProjectGrantId,
     data: &ProjectGrantData,
+    auth: &AccountAuthorisation,
     project_grant_service: Arc<dyn ProjectGrantService + Sync + Send>,
 ) -> ProjectGrant {
     let grant = ProjectGrant {
@@ -239,104 +237,116 @@ async fn create_project_grant(
         data: data.clone(),
     };
 
-    let auth = create_auth(&data.grantee_account_id, Role::all());
+    project_grant_service.create(&grant, auth).await.unwrap();
 
-    let create_result = project_grant_service.create(&grant, &auth).await;
-
-    assert!(
-        create_result.is_ok(),
-        "Failed to create project grant: {:?}",
-        grant
-    );
     grant
 }
 
+// TODO: split these into separate, isolated tests
 async fn test_services(config: &CloudServiceConfig) {
+    unsafe { backtrace_on_stack_overflow::enable() };
     let services: Services = Services::new(config).await.unwrap();
 
-    let _ = services.plan_service.create_initial_plan().await;
+    // check that default plan gets created
+    {
+        let _ = services.plan_service.create_initial_plan().await;
 
-    let plan_by_id = services
-        .plan_service
-        .get(&PlanId(config.plans.default.plan_id))
-        .await
-        .unwrap();
+        let plan_by_id = services
+            .plan_service
+            .get(&PlanId(config.plans.default.plan_id))
+            .await
+            .unwrap();
 
-    let default_plan = services.plan_service.get_default_plan().await.unwrap();
+        let default_plan = services.plan_service.get_default_plan().await.unwrap();
 
-    assert!(plan_by_id.is_some_and(|p| p == default_plan));
+        assert!(plan_by_id.is_some_and(|p| p == default_plan));
+    }
 
-    let account_id = AccountId::from("1");
-    let account_id2 = AccountId::from("2");
-    let account_id3 = AccountId::from("3");
+    let admin_account_id = AccountId::from("1");
+    let account_id = AccountId::from("2");
+    let account_id2 = AccountId::from("3");
+    let account_id3 = AccountId::from("4");
 
-    let auth = create_auth(&account_id, Role::all());
-
+    let admin_account = create_account(&admin_account_id, services.account_service.clone()).await;
     let account = create_account(&account_id, services.account_service.clone()).await;
     let account2 = create_account(&account_id2, services.account_service.clone()).await;
-    create_account(&account_id3, services.account_service.clone()).await;
+    let account3 = create_account(&account_id3, services.account_service.clone()).await;
 
-    let account_by_id = services
-        .account_service
-        .get(&account.id, &auth)
-        .await
-        .unwrap();
+    let admin_auth = create_auth(&admin_account_id, vec![Role::Admin]);
+    let auth = create_auth(&account_id, vec![]);
+    let auth2 = create_auth(&account_id2, vec![]);
+    let auth3 = create_auth(&account_id3, vec![]);
 
-    assert_eq!(account_by_id, account);
+    // check user can get their own account
+    {
+        let account_by_id = services
+            .account_service
+            .get(&account.id, &auth)
+            .await
+            .unwrap();
 
-    let token = services
-        .token_service
-        .create(
-            &account.id,
-            &(chrono::Utc::now() + chrono::Duration::minutes(2)),
-            &auth,
-        )
-        .await
-        .unwrap();
+        assert_eq!(account_by_id, account);
+    }
 
-    let token_by_id = services
-        .token_service
-        .get(&token.data.id, &auth)
-        .await
-        .unwrap();
-    // assert!(token_by_id == token.data); // FIXME failing in CI - probably related to timestamps
-    assert_eq!(token_by_id.account_id, token.data.account_id);
+    // check that we can generate a token, get it and authorize with it
+    {
+        let token = services
+            .token_service
+            .create(
+                &account.id,
+                &(chrono::Utc::now() + chrono::Duration::minutes(2)),
+                &auth,
+            )
+            .await
+            .unwrap();
 
-    let token_by_secret = services
-        .token_service
-        .get_by_secret(&token.secret)
-        .await
-        .unwrap();
-    // assert!(token_by_secret.is_some_and(|t| t == token_by_id));  // FIXME failing in CI - probably related to timestamps
-    assert!(token_by_secret.is_some_and(|t| t.account_id == token_by_id.account_id));
+        let token_by_id = services
+            .token_service
+            .get(&token.data.id, &auth)
+            .await
+            .unwrap();
+        // assert!(token_by_id == token.data); // FIXME failing in CI - probably related to timestamps
+        assert_eq!(token_by_id.account_id, token.data.account_id);
 
-    let tokens_by_account = services
-        .token_service
-        .find(&token.data.account_id, &auth)
-        .await
-        .unwrap();
-    // assert!(tokens_by_account == vec![token.data]); // FIXME failing in CI - probably related to timestamps
+        let token_by_secret = services
+            .token_service
+            .get_by_secret(&token.secret)
+            .await
+            .unwrap();
+        // assert!(token_by_secret.is_some_and(|t| t == token_by_id));  // FIXME failing in CI - probably related to timestamps
+        assert!(token_by_secret.is_some_and(|t| t.account_id == token_by_id.account_id));
 
-    assert_eq!(tokens_by_account.len(), 1);
+        let tokens_by_account = services
+            .token_service
+            .find(&token.data.account_id, &auth)
+            .await
+            .unwrap();
+        // assert!(tokens_by_account == vec![token.data]); // FIXME failing in CI - probably related to timestamps
 
-    let auth = services
-        .auth_service
-        .authorization(&token.secret)
-        .await
-        .unwrap();
+        assert_eq!(tokens_by_account.len(), 1);
 
-    assert!(auth.token.account_id == token.data.account_id && auth.token.id == token.data.id);
+        let auth = services
+            .auth_service
+            .authorization(&token.secret)
+            .await
+            .unwrap();
 
-    let oauth2_token =
-        create_oauth2_token(&account.id, services.oauth2_token_service.clone()).await;
+        assert!(auth.token.account_id == token.data.account_id && auth.token.id == token.data.id);
+    }
 
-    let oauth2_token_by_id = services
-        .oauth2_token_service
-        .get(&oauth2_token.provider, oauth2_token.external_id.as_str())
-        .await
-        .unwrap();
+    // check that we can get oauth tokens
+    {
+        let oauth2_token =
+            create_oauth2_token(&account.id, services.oauth2_token_service.clone()).await;
 
-    assert!(oauth2_token_by_id.is_some_and(|p| p == oauth2_token));
+        let oauth2_token_by_id = services
+            .oauth2_token_service
+            .get(&oauth2_token.provider, oauth2_token.external_id.as_str())
+            .await
+            .unwrap();
+
+        assert!(oauth2_token_by_id.is_some_and(|p| p == oauth2_token));
+    }
 
     // Check that we can only search for our own account
     {
@@ -345,147 +355,168 @@ async fn test_services(config: &CloudServiceConfig) {
         assert_eq!(accounts, vec![account.clone()]);
     }
 
-    // let token_id = TokenId::new_v4();
+    // Check that admins can see all accounts
+    {
+        let mut accounts = services
+            .account_service
+            .find(None, &admin_auth)
+            .await
+            .unwrap();
+        accounts.sort();
+        assert_eq!(
+            accounts,
+            vec![
+                admin_account.clone(),
+                account.clone(),
+                account2.clone(),
+                account3.clone()
+            ]
+        );
+    }
 
-    let project_default = services
-        .project_service
-        .get_own_default(&auth)
-        .await
-        .unwrap();
-
-    let project_id = ProjectId::new_v4();
-    let project = create_project(&project_id, &account.id, services.project_service.clone()).await;
-
-    let projects = services.project_service.get_own(&auth).await.unwrap();
-
-    assert_eq!(
-        HashSet::from_iter(projects),
-        HashSet::from([project_default.clone(), project.clone()])
-    );
-
-    let count = services.project_service.get_own_count(&auth).await.unwrap();
-
-    assert_eq!(count, 2);
-
-    let project_by_id = services
-        .project_service
-        .get(&project_id, &auth)
-        .await
-        .unwrap();
-
-    assert!(project_by_id.is_some_and(|p| p == project));
-
-    let project_policy = create_project_policy(
-        &ProjectPolicyId::new_v4(),
-        ProjectActions::all(),
-        services.project_policy_service.clone(),
-    )
-    .await;
-
-    let project_policy_by_id = services
-        .project_policy_service
-        .get(&project_policy.id)
-        .await
-        .unwrap();
-
-    assert!(project_policy_by_id.is_some_and(|p| p == project_policy));
-
-    let project_grant = create_project_grant(
-        &ProjectGrantId::new_v4(),
-        &ProjectGrantData {
-            grantor_project_id: project_id.clone(),
-            grantee_account_id: account2.id.clone(),
-            project_policy_id: project_policy.id.clone(),
-        },
-        services.project_grant_service.clone(),
-    )
-    .await;
-
-    let auth = create_auth(&account_id, vec![]);
-    let auth2 = create_auth(&account_id2, vec![]);
-
-    let project_grant_by_id = services
-        .project_grant_service
-        .get(&project_id, &project_grant.id, &auth)
-        .await
-        .unwrap();
-
-    assert!(project_grant_by_id.is_some_and(|p| p == project_grant));
-
-    let project_grant_by_project = services
-        .project_grant_service
-        .get_by_project(&project_id, &auth)
-        .await
-        .unwrap();
-
-    assert_eq!(project_grant_by_project, vec![project_grant]);
-
-    let project_grant_by_account = services
-        .project_grant_service
-        .get_by_account(&account2.id, &auth2)
-        .await
-        .unwrap();
-
-    assert_eq!(project_grant_by_account, project_grant_by_project);
-
-    let project_actions = services
-        .project_auth_service
-        .get_by_project(&project_id, &auth)
-        .await
-        .unwrap();
-
-    let all_project_actions = ProjectAuthorisedActions {
-        actions: ProjectActions::all(),
-        owner_account_id: account.id.clone(),
-        project_id: project_id.clone(),
-    };
-
-    assert_eq!(project_actions, all_project_actions);
-
-    let project_actions = services
-        .project_auth_service
-        .get_by_project(&project_id, &auth2)
-        .await
-        .unwrap();
-
-    assert_eq!(project_actions, all_project_actions);
-
-    let project_actions = services.project_auth_service.get_all(&auth).await.unwrap();
-
-    let all_project_actions = HashMap::from([
-        (project_id.clone(), ProjectActions::all()),
-        (project_default.project_id, ProjectActions::all()),
-    ]);
-
-    assert_eq!(project_actions, all_project_actions);
-
-    let project_actions = services.project_auth_service.get_all(&auth2).await.unwrap();
-
-    let all_project_actions = HashMap::from([(project_id.clone(), ProjectActions::all())]);
-
-    assert_eq!(project_actions, all_project_actions);
-
-    let new_project_id = ProjectId::new_v4();
-
-    delete_project(
-        &new_project_id,
+    let project = create_project(
+        &ProjectId::new_v4(),
         &account.id,
         services.project_service.clone(),
     )
     .await;
+    let project_default = services.project_service.get_default(&auth).await.unwrap();
 
-    let auth = create_auth(&account.id, Role::all());
+    // Check that we can create and get projects
+    {
+        let projects = services.project_service.get_all(&auth).await.unwrap();
 
-    let account_summaries = services
-        .account_summary_service
-        .get(0, 10, &auth)
-        .await
-        .unwrap();
-    assert_eq!(account_summaries.len(), 1);
+        assert_eq!(
+            HashSet::from_iter(projects),
+            HashSet::from([project_default.clone(), project.clone()])
+        );
+
+        let project_by_id = services
+            .project_service
+            .get(&project.project_id, &auth)
+            .await
+            .unwrap();
+
+        assert!(project_by_id.is_some_and(|p| p == project));
+    }
+
+    // Check that we can create project grants
+    {
+        let project_policy = create_project_policy(
+            &ProjectPolicyId::new_v4(),
+            ProjectActions::all(),
+            services.project_policy_service.clone(),
+        )
+        .await;
+
+        let project_policy_by_id = services
+            .project_policy_service
+            .get(&project_policy.id)
+            .await
+            .unwrap();
+
+        assert!(project_policy_by_id.is_some_and(|p| p == project_policy));
+
+        let project_grant = create_project_grant(
+            &ProjectGrantId::new_v4(),
+            &ProjectGrantData {
+                grantor_project_id: project.project_id.clone(),
+                grantee_account_id: account2.id.clone(),
+                project_policy_id: project_policy.id.clone(),
+            },
+            &auth,
+            services.project_grant_service.clone(),
+        )
+        .await;
+
+        let project_grant_by_id = services
+            .project_grant_service
+            .get(&project.project_id, &project_grant.id, &auth2)
+            .await
+            .unwrap();
+
+        assert!(project_grant_by_id.is_some_and(|p| p == project_grant));
+
+        let project_grant_by_project = services
+            .project_grant_service
+            .get_by_project(&project.project_id, &auth2)
+            .await
+            .unwrap();
+
+        assert_eq!(project_grant_by_project, vec![project_grant]);
+
+        let project_actions = services
+            .auth_service
+            .get_project_actions(&auth, &project.project_id)
+            .await
+            .unwrap();
+
+        let all_project_actions = ProjectAuthorisedActions {
+            actions: ProjectActions::all(),
+            owner_account_id: account.id.clone(),
+            project_id: project.project_id.clone(),
+        };
+
+        assert_eq!(project_actions, all_project_actions);
+
+        let project_actions = services
+            .auth_service
+            .get_project_actions(&auth2, &project.project_id)
+            .await
+            .unwrap();
+
+        assert_eq!(project_actions, all_project_actions);
+    }
+
+    // check that we can list the shared project after getting a grant
+    {
+        let projects = services.project_service.get_all(&auth2).await.unwrap();
+
+        assert_eq!(projects, vec![project.clone()]);
+    }
+
+    // check that admin can see all projects
+    {
+        let projects = services.project_service.get_all(&admin_auth).await.unwrap();
+
+        assert_eq!(
+            HashSet::from_iter(projects),
+            HashSet::from([project_default.clone(), project.clone()])
+        );
+    }
+
+    // check that an unrelated user cannot see the projects
+    {
+        let projects = services.project_service.get_all(&auth3).await.unwrap();
+
+        assert_eq!(projects, vec![]);
+    }
+
+    // check we can delete projects
+    {
+        let new_project_id = ProjectId::new_v4();
+
+        delete_project(
+            &new_project_id,
+            &account.id,
+            services.project_service.clone(),
+        )
+        .await;
+    }
+
+    // check that admin can get account summaries
+    {
+        let account_summaries = services
+            .account_summary_service
+            .get(0, 10, &admin_auth)
+            .await
+            .unwrap();
+        assert_eq!(account_summaries.len(), 1);
+    }
 
     // Check that we can list accounts we have a grant from
     {
-        let auth = create_auth(&account2.id, Role::all());
+        let auth = create_auth(&account2.id, vec![]);
         let mut accounts = services.account_service.find(None, &auth).await.unwrap();
         accounts.sort();
         assert_eq!(accounts, vec![account.clone(), account2.clone()]);
@@ -493,7 +524,7 @@ async fn test_services(config: &CloudServiceConfig) {
 
     // Check that we can filter accounts by email
     {
-        let auth = create_auth(&account2.id, Role::all());
+        let auth = create_auth(&account2.id, vec![]);
         let mut accounts = services
             .account_service
             .find(Some(&account.email), &auth)
