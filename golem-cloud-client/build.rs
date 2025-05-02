@@ -50,8 +50,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::ComponentFilePathWithPermissionsList",
             ),
             (
-                "ComponentSearchParameter",
-                "golem_client::model::ComponentSearchParameter",
+                "ComponentSearchParameters",
+                "golem_client::model::ComponentSearchParameters",
             ),
             // (
             //     "CloudComponentOwner",
