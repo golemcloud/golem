@@ -12,12 +12,12 @@ harness = false
 
 [dependencies]
 # NOTE: these cannot be workspace (git) deps, as that breaks publishing
-golem-client = "=1.2.2-dev.13"
-golem-common = "=1.2.2-dev.13"
-golem-wasm-ast = { version = "=1.2.2-dev.13", default-features = false, features = [
+golem-client = "=1.2.2-dev.14"
+golem-common = "=1.2.2-dev.14"
+golem-wasm-ast = { version = "=1.2.2-dev.14", default-features = false, features = [
     "analysis",
 ] }
-golem-wasm-rpc = { version = "=1.2.2-dev.13", default-features = false }
+golem-wasm-rpc = { version = "=1.2.2-dev.14", default-features = false }
 
 async-trait = "^0.1"
 bytes = "^1.5"

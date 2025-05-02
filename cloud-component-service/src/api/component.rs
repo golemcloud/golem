@@ -1,5 +1,5 @@
 use crate::api::{ApiTags, ComponentError, Result};
-use crate::model::ComponentQuery;
+use crate::model::{ComponentQuery, ComponentSearch};
 use crate::service::component::CloudComponentService;
 use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
 use cloud_common::model::CloudComponentOwner;
@@ -463,6 +463,59 @@ impl ComponentApi {
             .then(|c| self.api_mapper.convert_component(c))
             .try_collect::<Vec<_>>()
             .await?;
+
+        Ok(Json(converted))
+    }
+
+    #[oai(path = "/search", method = "post", operation_id = "search_components")]
+    async fn search_components(
+        &self,
+        components_search: Json<ComponentSearch>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Vec<dto::Component>>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let record = recorded_http_api_request!(
+            "search_components",
+            search_components = components_search
+                .components
+                .iter()
+                .map(|query| query.name.0.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        let response = self
+            .search_components_internal(components_search.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn search_components_internal(
+        &self,
+        search_query: ComponentSearch,
+        auth: CloudAuthCtx,
+    ) -> Result<Json<Vec<dto::Component>>> {
+        let component_by_name_and_versions = search_query
+            .components
+            .into_iter()
+            .map(|query| query.into())
+            .collect::<Vec<_>>();
+
+        let components = self
+            .component_service
+            .find_by_project_and_names(
+                search_query.project_id,
+                component_by_name_and_versions,
+                &auth,
+            )
+            .await?;
+
+        let mut converted = Vec::new();
+        for component in components {
+            converted.push(self.api_mapper.convert_component(component).await?);
+        }
 
         Ok(Json(converted))
     }

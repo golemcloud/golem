@@ -22,7 +22,9 @@ use golem_common::SafeDisplay;
 use golem_component_service_base::model::{
     Component, ComponentConstraints, InitialComponentFilesArchiveAndPermissions,
 };
-use golem_component_service_base::service::component::{ComponentError, ComponentService};
+use golem_component_service_base::service::component::{
+    ComponentByNameAndVersion, ComponentError, ComponentService,
+};
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
 use golem_service_base::model::*;
 use std::collections::HashMap;
@@ -277,6 +279,22 @@ impl CloudComponentService {
         let result = self
             .base_component_service
             .find_by_name(component_name, &owner)
+            .await?;
+
+        Ok(result)
+    }
+
+    pub async fn find_by_project_and_names(
+        &self,
+        project_id: Option<ProjectId>,
+        component_names: Vec<ComponentByNameAndVersion>,
+        auth: &CloudAuthCtx,
+    ) -> Result<Vec<Component<CloudComponentOwner>>, CloudComponentError> {
+        let owner = self.get_owner(project_id, auth).await?;
+
+        let result = self
+            .base_component_service
+            .find_by_names(component_names, &owner)
             .await?;
 
         Ok(result)
