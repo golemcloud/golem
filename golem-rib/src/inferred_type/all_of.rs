@@ -293,11 +293,47 @@ pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
 
 mod tests {
     use test_r::test;
-
+    use crate::inferred_type::TypeOrigin;
     use super::*;
 
     #[test]
-    fn test_get_task_stack() {
+    fn test_get_task_stack_1() {
+        let inferred_types = vec![
+            InferredType::record(vec![
+                ("foo".to_string(), InferredType::s8()),
+                ("bar".to_string(), InferredType::u8()),
+            ]),
+            InferredType::record(vec![
+                ("foo".to_string(), InferredType::s8()),
+                ("bar".to_string(), InferredType::u8()),
+            ])
+        ];
+
+        let result = get_merge_task(inferred_types);
+
+        dbg!(&result);
+
+        let expected = MergeTaskStack {
+            tasks: vec![
+                MergeTask::RecordBuilder(RecordBuilder {
+                    task_index: 0,
+                    field_and_pointers: vec![
+                        ("foo".to_string(), vec![1, 3]),
+                        ("bar".to_string(), vec![2, 4]),
+                    ],
+                }),
+                MergeTask::Complete(1, InferredType::s8()),
+                MergeTask::Complete(2, InferredType::u8()),
+                MergeTask::Complete(3, InferredType::s8()),
+                MergeTask::Complete(4, InferredType::u8()),
+            ],
+        };
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_get_task_stack_2() {
         let inferred_types = vec![
             InferredType::record(vec![
                 ("foo".to_string(), InferredType::s8()),
@@ -307,6 +343,48 @@ mod tests {
         ];
 
         let result = get_merge_task(inferred_types);
+
+        let expected = MergeTaskStack {
+            tasks: vec![
+                MergeTask::RecordBuilder(RecordBuilder {
+                    task_index: 0,
+                    field_and_pointers: vec![
+                        ("foo".to_string(), vec![1]),
+                        ("bar".to_string(), vec![2]),
+                    ],
+                }),
+                MergeTask::Complete(1, InferredType::s8()),
+                MergeTask::Complete(2, InferredType::u8()),
+                MergeTask::RecordBuilder(RecordBuilder {
+                    task_index: 3,
+                    field_and_pointers: vec![("foo".to_string(), vec![4])],
+                }),
+                MergeTask::Complete(4, InferredType::string()),
+            ],
+        };
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_get_task_stack_3() {
+        let all_of_internal = TypeInternal::AllOf(vec![
+            InferredType::s8(),
+            InferredType::u8(),
+        ]);
+
+        let all_of = InferredType::new(all_of_internal, TypeOrigin::NoOrigin);
+
+        let inferred_types = vec![
+            InferredType::record(vec![
+                ("foo".to_string(), InferredType::s8()),
+            ]),
+            InferredType::record(vec![("foo".to_string(),  all_of)]),
+        ];
+
+        let result = get_merge_task(inferred_types);
+
+        dbg!(&result);
 
         let expected = MergeTaskStack {
             tasks: vec![
