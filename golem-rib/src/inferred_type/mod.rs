@@ -160,26 +160,18 @@ fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType>
             Task::Inspect(index, inferred_type) => {
                 match inferred_type.internal_type() {
                     TypeInternal::Record(fields) => {
-                        // Either an existing builder and it's current index
-                        // or a new builder, with the new index available in the stack
                         let mut new_builder = false;
 
                         let mut next_available_index = task_stack.next_index();
 
                         let builder = task_stack.last_record().unwrap_or_else(||{
-                            // it's a new builder and the next available index will be occupied later
-                            // by this build itself
                             new_builder = true;
                             RecordBuilder::new(next_available_index, &vec![])
                         });
 
-                        // in the task task, if there is a new build in the next slot.
-                        //
                         let mut field_task_index = if new_builder {
-                            next_available_index // this will be occupied by the builder itself, and `field_Task_index + 1` will be occupied fields
+                            next_available_index
                         } else {
-                            // if an old builder,
-                            // the new tasks can start from next_available_index
                             next_available_index - 1
                         };
 
@@ -204,22 +196,17 @@ fn process_inferred_type(inferred_types: Vec<InferredType>) -> Vec<InferredType>
                         let new_field_task_stack = TaskStack::init(tasks);
 
                         task_stack.extend(new_field_task_stack);
-
-                        dbg!(task_stack.clone());
                     }
 
                     TypeInternal::S8 => {
-                        dbg!(&index);
                         task_stack.update(&index, Task::Complete(index.clone(), inferred_type.clone()));
                     }
 
                     TypeInternal::Str => {
-                        dbg!(&index);
                         task_stack.update(&index, Task::Complete(index.clone(), inferred_type.clone()));
                     }
 
                     TypeInternal::U8 => {
-                        dbg!(&index);
                         task_stack.update(&index, Task::Complete(index.clone(), inferred_type.clone()));
                     }
 
