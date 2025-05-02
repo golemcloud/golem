@@ -3288,6 +3288,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "log",
  "poem-openapi",
  "poem-openapi-derive",
  "semver",
