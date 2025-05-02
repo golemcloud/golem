@@ -102,6 +102,10 @@ pub struct MergeTaskStack {
 }
 
 impl MergeTaskStack {
+    pub fn get(&self, task_index: TaskIndex) -> Option<&MergeTask> {
+        self.tasks.get(task_index)
+    }
+
     pub fn extend(&mut self, other: MergeTaskStack) {
         self.tasks.extend(other.tasks);
     }
@@ -214,27 +218,39 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                     }
 
                     TypeInternal::AllOf(inferred_types) => {
-                        let next_available_index = final_task_stack.next_index();
 
-                        let mut task_index = next_available_index;
+                        // was this part of an inspection task? if yes then we in-place update
+                        // the inspection task with all_of_builder
+                        let existing_or_old = final_task_stack.get(task_index);
+
+                        let all_of_builder_index = match existing_or_old {
+                            Some(_) => task_index,
+                            None => final_task_stack.next_index()
+                        };
+
+                        let mut task_index = match existing_or_old {
+                            // already exists
+                            Some(_) => final_task_stack.next_index() - 1,
+                            None => final_task_stack.next_index()
+                        };
 
                         let mut pointers = vec![];
                         let mut tasks_for_final_stack = vec![];
 
                         for inf in inferred_types.iter() {
                             task_index += 1;
-                            pointers.push(final_task_stack.next_index());
+                            pointers.push(task_index);
                             tasks_for_final_stack.push(MergeTask::Inspect(task_index, inf.clone()));
 
                             // We push the inspection task
                             temp_task_queue
-                                .push_back(MergeTask::Inspect(next_available_index, inf.clone()));
+                                .push_back(MergeTask::Inspect(task_index, inf.clone()));
                         }
 
-                        let new_all_of_builder = AllOfBuilder::new(next_available_index, pointers);
+                        let new_all_of_builder = AllOfBuilder::new(all_of_builder_index, pointers);
 
                         final_task_stack.update(
-                            &next_available_index,
+                            &all_of_builder_index,
                             MergeTask::AllOfBuilder(new_all_of_builder),
                         );
 
@@ -380,22 +396,22 @@ mod tests {
 
         let result = get_merge_task(inferred_types);
 
+        dbg!(&result);
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::RecordBuilder(RecordBuilder {
                     task_index: 0,
                     field_and_pointers: vec![
-                        ("foo".to_string(), vec![1]),
-                        ("bar".to_string(), vec![2]),
+                        ("foo".to_string(), vec![1, 2]),
                     ],
                 }),
                 MergeTask::Complete(1, InferredType::s8()),
-                MergeTask::Complete(2, InferredType::u8()),
-                MergeTask::RecordBuilder(RecordBuilder {
-                    task_index: 3,
-                    field_and_pointers: vec![("foo".to_string(), vec![4])],
+                MergeTask::AllOfBuilder(AllOfBuilder {
+                    task_index: 2,
+                    pointers: vec![3, 4],
                 }),
-                MergeTask::Complete(4, InferredType::string()),
+                MergeTask::Complete(3, InferredType::s8()),
+                MergeTask::Complete(4, InferredType::u8()),
             ],
         };
 
