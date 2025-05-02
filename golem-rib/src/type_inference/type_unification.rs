@@ -530,14 +530,9 @@ fn unify_inferred_type(
     match unification_result {
         Ok(unified_type) => Ok(unified_type),
         Err(e) => match e {
-            UnificationFailureInternal::TypeMisMatch { left, right } => {
-                Err(get_type_unification_error_from_mismatch(
-                    original_expr,
-                    &expr,
-                    left,
-                    right,
-                ))
-            }
+            UnificationFailureInternal::TypeMisMatch { left, right } => Err(
+                get_type_unification_error_from_mismatch(original_expr, &expr, left, right),
+            ),
 
             UnificationFailureInternal::ConflictingTypes {
                 conflicting_types,
@@ -605,24 +600,14 @@ fn get_type_unification_error_from_mismatch(
         }
 
         // Only the info on left is available
-        (Some((_, left_expr)), None) => TypeUnificationError::type_mismatch_error(
-            left_expr,
-            None,
-            right,
-            left,
-            vec![],
-        ),
+        (Some((_, left_expr)), None) => {
+            TypeUnificationError::type_mismatch_error(left_expr, None, right, left, vec![])
+        }
 
         // we have access to only the expression on the right
         // and we tag it as the wrong type
         (None, Some((_, right_expr))) => {
-            TypeUnificationError::type_mismatch_error(
-                right_expr,
-                None,
-                left,
-                right,
-                vec![],
-            )
+            TypeUnificationError::type_mismatch_error(right_expr, None, left, right, vec![])
         }
 
         (None, None) => {

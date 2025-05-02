@@ -40,7 +40,6 @@ pub struct InferredType {
     pub origin: TypeOrigin,
 }
 
-
 impl InferredType {
     pub fn total_origins(&self) -> usize {
         let mut visitor = VecDeque::new();
