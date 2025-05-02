@@ -590,9 +590,7 @@ mod tests {
         ];
 
         let result = get_merge_task(inferred_types);
-
-        dbg!(result.clone());
-
+        
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::ResultBuilder(ResultBuilder {
