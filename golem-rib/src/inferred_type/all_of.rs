@@ -578,27 +578,34 @@ mod tests {
 
     #[test]
     fn test_get_task_stack_4() {
-        let result_internal = TypeInternal::Result {
-            ok: Some(InferredType::s8()),
-            error: Some(InferredType::u8()),
-        };
+        let inferred_types = vec![
+            InferredType::result(
+                Some(InferredType::s8()),
+                Some(InferredType::u8()),
+            ),
+            InferredType::result(
+                Some(InferredType::string()),
+                Some(InferredType::s32()),
+            ),
+        ];
 
-        let inferred_type = InferredType::new(result_internal, TypeOrigin::NoOrigin);
+        let result = get_merge_task(inferred_types);
 
-        let result = get_merge_task(vec![inferred_type]);
+        dbg!(result.clone());
 
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::ResultBuilder(ResultBuilder {
                     task_index: 0,
-                    ok: Some(vec![1]),
-                    error: Some(vec![2]),
+                    ok: Some(vec![1, 3]),
+                    error: Some(vec![2, 4]),
                 }),
                 MergeTask::Complete(1, InferredType::s8()),
-                MergeTask::Complete(2, InferredType::u8())
+                MergeTask::Complete(2, InferredType::u8()),
+                MergeTask::Complete(3, InferredType::string()),
+                MergeTask::Complete(4, InferredType::s32()),
             ],
         };
-
         assert_eq!(result, expected);
     }
 }
