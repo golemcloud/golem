@@ -14,7 +14,6 @@
 
 use crate::{InferredType, TypeInternal};
 use std::collections::VecDeque;
-
 // This module is responsible to merge the types when constructing InferredType::AllOf, while
 // selecting the type with maximum `TypeOrigin` information. This gives two advantages. We save some memory footprint
 // (Ex: `{foo : string}` and `{foo: all_of(string, u8)}` will be merged to `{foo: all_of(string, u8)}`.)
@@ -34,34 +33,52 @@ use std::collections::VecDeque;
 pub enum MergeTask {
     RecordBuilder(RecordBuilder),
     Inspect(TaskIndex, InferredType),
-    AllOfBuilder(TaskIndex, Vec<TaskIndex>),
+    AllOfBuilder(AllOfBuilder),
     Complete(TaskIndex, InferredType),
 }
 
-pub struct Inspect(InferredType);
 pub type TaskIndex = usize;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AllOfBuilder {
+    task_index: TaskIndex,
+    pointers: Vec<TaskIndex>
+}
+
+impl AllOfBuilder {
+    pub fn new(index: TaskIndex, pointers: Vec<TaskIndex>) -> AllOfBuilder {
+        AllOfBuilder {
+            task_index: index,
+            pointers,
+        }
+    }
+
+    pub fn insert(&mut self, task_index: TaskIndex) {
+        self.pointers.push(task_index);
+    }
+}
 
 #[derive(Default, Clone, Debug, PartialEq)]
 pub struct RecordBuilder {
     task_index: TaskIndex, // The index in the task stack to which this builder belongs
-    field_and_tasks: Vec<(String, Vec<TaskIndex>)>,
+    field_and_pointers: Vec<(String, Vec<TaskIndex>)>,
 }
 
 impl RecordBuilder {
     pub fn field_names(&self) -> Vec<&String> {
-        self.field_and_tasks.iter().map(|(name, _)| name).collect()
+        self.field_and_pointers.iter().map(|(name, _)| name).collect()
     }
 
     pub fn new(index: TaskIndex, fields: Vec<(String, Vec<TaskIndex>)>) -> RecordBuilder {
         RecordBuilder {
             task_index: index,
-            field_and_tasks: fields,
+            field_and_pointers: fields,
         }
     }
 
     pub fn insert(&mut self, field_name: String, task_index: TaskIndex) {
         let mut found = false;
-        self.field_and_tasks
+        self.field_and_pointers
             .iter_mut()
             .find(|(name, _)| name == &field_name)
             .map(|(_, task_indices)| {
@@ -70,7 +87,7 @@ impl RecordBuilder {
             });
 
         if !found {
-            self.field_and_tasks.push((field_name, vec![task_index]));
+            self.field_and_pointers.push((field_name, vec![task_index]));
         }
     }
 }
@@ -190,6 +207,37 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                         task_stack.extend(new_field_task_stack);
                     }
 
+                    TypeInternal::AllOf(inferred_types) => {
+                        let next_available_index = task_stack.next_index();
+
+                        let mut task_index = next_available_index;
+
+                        let mut pointers = vec![];
+                        let mut tasks = vec![];
+
+
+                        for inf in inferred_types.iter() {
+                            task_index += 1;
+                            pointers.push(task_stack.next_index());
+                            tasks.push(MergeTask::Inspect(task_index, inf.clone()));
+
+                            // We push the inspection task
+                            temp_task_queue.push_back(MergeTask::Inspect(
+                                next_available_index,
+                                inf.clone(),
+                            ));
+                        }
+
+                        let new_all_of_builder = AllOfBuilder::new(next_available_index, pointers);
+
+                        task_stack.update(
+                            &next_available_index,
+                            MergeTask::AllOfBuilder(new_all_of_builder),
+                        );
+
+                        task_stack.extend(MergeTaskStack::init(tasks));
+                    }
+
                     // When it finds primitives it stop pushing more tasks into the ephemeral queue
                     // and only updates to the persistent task stack.
                     TypeInternal::Bool
@@ -213,7 +261,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
             }
 
             MergeTask::RecordBuilder(_) => {}
-            MergeTask::AllOfBuilder(_, _) => {}
+            MergeTask::AllOfBuilder(_) => {}
             MergeTask::Complete(index, task) => {
                 task_stack.update(&index, MergeTask::Complete(index.clone(), task.clone()));
             }
@@ -264,7 +312,7 @@ mod tests {
             tasks: vec![
                 MergeTask::RecordBuilder(RecordBuilder {
                     task_index: 0,
-                    field_and_tasks: vec![
+                    field_and_pointers: vec![
                         ("foo".to_string(), vec![1]),
                         ("bar".to_string(), vec![2]),
                     ],
@@ -273,7 +321,7 @@ mod tests {
                 MergeTask::Complete(2, InferredType::u8()),
                 MergeTask::RecordBuilder(RecordBuilder {
                     task_index: 3,
-                    field_and_tasks: vec![("foo".to_string(), vec![4])],
+                    field_and_pointers: vec![("foo".to_string(), vec![4])],
                 }),
                 MergeTask::Complete(4, InferredType::string()),
             ],
