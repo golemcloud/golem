@@ -15,7 +15,6 @@
 mod stream;
 mod stream_output;
 
-use crate::cloud::AccountId;
 use crate::command::shared_args::{
     NewWorkerArgument, StreamArgs, WorkerFunctionArgument, WorkerFunctionName, WorkerNameArg,
 };
@@ -1649,7 +1648,7 @@ impl WorkerCommandHandler {
                         }
 
                         Ok(WorkerNameMatch {
-                            account_id: None,
+                            account: None,
                             project: None,
                             component_name_match_kind: ComponentNameMatchKind::AppCurrentDir,
                             component_name: selected_component_names
@@ -1701,8 +1700,8 @@ impl WorkerCommandHandler {
                     empty_checked("worker", value)
                 }
 
-                let (account_id, project_name, component_name, worker_name): (
-                    Option<AccountId>,
+                let (account_email, project_name, component_name, worker_name): (
+                    Option<String>,
                     Option<ProjectName>,
                     ComponentName,
                     String,
@@ -1736,10 +1735,21 @@ impl WorkerCommandHandler {
                     bail!(NonSuccessfulExit);
                 }
 
+                let account = if let Some(account_email) = account_email {
+                    Some(
+                        self.ctx
+                            .cloud_account_handler()
+                            .select_account_by_email_or_error(&account_email)
+                            .await?,
+                    )
+                } else {
+                    None
+                };
+
                 let project = self
                     .ctx
                     .cloud_project_handler()
-                    .opt_select_project(account_id.as_ref(), project_name.as_ref())
+                    .opt_select_project(account.as_ref(), project_name.as_ref())
                     .await?;
 
                 self.ctx
@@ -1758,7 +1768,7 @@ impl WorkerCommandHandler {
                             Ok(match_) => {
                                 log_fuzzy_match(&match_);
                                 Ok(WorkerNameMatch {
-                                    account_id,
+                                    account,
                                     project,
                                     component_name_match_kind: ComponentNameMatchKind::App,
                                     component_name: match_.option.into(),
@@ -1793,7 +1803,7 @@ impl WorkerCommandHandler {
                                 Error::NotFound { .. } => {
                                     // Assuming non-app component
                                     Ok(WorkerNameMatch {
-                                        account_id,
+                                        account,
                                         project,
                                         component_name_match_kind: ComponentNameMatchKind::Unknown,
                                         component_name,
@@ -1804,7 +1814,7 @@ impl WorkerCommandHandler {
                         }
                     }
                     None => Ok(WorkerNameMatch {
-                        account_id,
+                        account,
                         project,
                         component_name_match_kind: ComponentNameMatchKind::Unknown,
                         component_name,

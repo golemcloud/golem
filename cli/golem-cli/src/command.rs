@@ -676,11 +676,11 @@ pub mod shared_args {
     #[derive(clap::Args, Debug, Clone)]
     pub struct PluginScopeArgs {
         /// Global scope (plugin available for all components)
-        #[arg(long, conflicts_with_all=["account_id", "project", "component"])]
+        #[arg(long, conflicts_with_all=["account", "project", "component"])]
         pub global: bool,
         /// Account id, optionally specifies the account id for the project name
         #[arg(long, conflicts_with_all = ["global"])]
-        pub account_id: Option<AccountId>,
+        pub account: Option<String>,
         /// Project name; Required when component name is used. Without a given component, it defines a project scope.
         #[arg(long, conflicts_with_all = ["global"])]
         pub project: Option<ProjectName>,
@@ -692,7 +692,7 @@ pub mod shared_args {
     impl PluginScopeArgs {
         pub fn is_global(&self) -> bool {
             self.global
-                || (self.account_id.is_none() && self.project.is_none() && self.component.is_none())
+                || (self.account.is_none() && self.project.is_none() && self.component.is_none())
         }
     }
 }

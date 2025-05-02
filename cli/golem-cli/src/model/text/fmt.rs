@@ -387,9 +387,9 @@ impl Drop for NestedTextViewIndent {
 pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
     format!(
         "{}{}{}/{}",
-        match &worker_name_match.account_id {
-            Some(account_id) => {
-                format!("{}/", account_id.0.blue().bold())
+        match &worker_name_match.account {
+            Some(account) => {
+                format!("{}/", account.email.blue().bold())
             }
             None => "".to_string(),
         },

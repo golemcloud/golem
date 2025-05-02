@@ -414,12 +414,25 @@ impl PluginCommandHandler {
         }
 
         let project = match &scope.project {
-            Some(project) => Some(
-                self.ctx
+            Some(project) => {
+                let account_details = if let Some(account) = &scope.account {
+                    Some(
+                        self.ctx
+                            .cloud_account_handler()
+                            .select_account_by_email_or_error(account)
+                            .await?,
+                    )
+                } else {
+                    None
+                };
+
+                let project = self
+                    .ctx
                     .cloud_project_handler()
-                    .select_project(scope.account_id.as_ref(), project)
-                    .await?,
-            ),
+                    .select_project(account_details.as_ref(), project)
+                    .await?;
+                Some(project)
+            }
             None => None,
         };
 

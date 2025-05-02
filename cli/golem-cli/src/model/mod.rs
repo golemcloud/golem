@@ -749,8 +749,23 @@ pub enum ComponentNameMatchKind {
     Unknown,
 }
 
+#[derive(Debug, Clone)]
+pub struct AccountDetails {
+    pub account_id: AccountId,
+    pub email: String,
+}
+
+impl From<golem_cloud_client::model::Account> for AccountDetails {
+    fn from(value: golem_cloud_client::model::Account) -> Self {
+        Self {
+            account_id: value.id.into(),
+            email: value.email,
+        }
+    }
+}
+
 pub struct WorkerNameMatch {
-    pub account_id: Option<AccountId>,
+    pub account: Option<AccountDetails>,
     pub project: Option<ProjectNameAndId>,
     pub component_name_match_kind: ComponentNameMatchKind,
     pub component_name: ComponentName,
@@ -758,7 +773,7 @@ pub struct WorkerNameMatch {
 }
 
 pub struct SelectedComponents {
-    pub account_id: Option<AccountId>,
+    pub account: Option<AccountDetails>,
     pub project: Option<ProjectNameAndId>,
     pub component_names: Vec<ComponentName>,
 }
