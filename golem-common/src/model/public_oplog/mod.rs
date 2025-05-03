@@ -68,6 +68,14 @@ pub struct WriteRemoteBatchedParameters {
     pub index: Option<OplogIndex>,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct WriteRemoteTransactionParameters {
+    pub index: Option<OplogIndex>,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
@@ -94,6 +102,7 @@ pub enum PublicDurableFunctionType {
     /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
     /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
     WriteRemoteBatched(WriteRemoteBatchedParameters),
+    WriteRemoteTransaction(WriteRemoteTransactionParameters),
 }
 
 impl From<DurableFunctionType> for PublicDurableFunctionType {
@@ -107,6 +116,19 @@ impl From<DurableFunctionType> for PublicDurableFunctionType {
                 PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
                     index,
                 })
+            }
+            DurableFunctionType::WriteRemoteTransaction(index) => {
+                PublicDurableFunctionType::WriteRemoteTransaction(
+                    WriteRemoteTransactionParameters { index },
+                )
+                // match params {
+                //     WriteRemoteTransaction::Begin(_) => PublicDurableFunctionType::WriteRemoteTransaction(WriteRemoteTransactionParameters::Begin(Empty {})),
+                //     WriteRemoteTransaction::PreCommit(_) => PublicDurableFunctionType::WriteRemoteTransaction(WriteRemoteTransactionParameters::PreCommit(Empty {})),
+                //     WriteRemoteTransaction::Commited(_) => PublicDurableFunctionType::WriteRemoteTransaction(WriteRemoteTransactionParameters::Commited(Empty {})),
+                //     WriteRemoteTransaction::PreRollback(_) => PublicDurableFunctionType::WriteRemoteTransaction(WriteRemoteTransactionParameters::PreRollback(Empty {})),
+                //     WriteRemoteTransaction::RolledBack(_) => PublicDurableFunctionType::WriteRemoteTransaction(WriteRemoteTransactionParameters::RolledBack(Empty {})),
+                //     WriteRemoteTransaction::Abort(_) => PublicDurableFunctionType::WriteRemoteTransaction(WriteRemoteTransactionParameters::Abort(Empty {})),
+                // }
             }
         }
     }
@@ -677,6 +699,12 @@ pub enum PublicOplogEntry {
     SetSpanAttribute(SetSpanAttributeParameters),
     /// Change the current persistence level
     ChangePersistenceLevel(ChangePersistenceLevelParameters),
+    BeginRemoteTransaction(TimestampParameter),
+    PreCommitRemoteTransaction(RemoteTransactionParameters),
+    PreRollbackRemoteTransaction(RemoteTransactionParameters),
+    CommitedRemoteTransaction(RemoteTransactionParameters),
+    RolledBackRemoteTransaction(RemoteTransactionParameters),
+    AbortedRemoteTransaction(RemoteTransactionParameters),
 }
 
 impl PublicOplogEntry {
@@ -979,6 +1007,30 @@ impl PublicOplogEntry {
                 Self::string_match("changepersistencelevel", &[], query_path, query)
                     || Self::string_match("change-persistence-level", &[], query_path, query)
                     || Self::string_match("persistence-level", &[], query_path, query)
+            }
+            PublicOplogEntry::BeginRemoteTransaction(_params) => {
+                Self::string_match("beginremotetransaction", &[], query_path, query)
+                    || Self::string_match("begin-remote-transaction", &[], query_path, query)
+            }
+            PublicOplogEntry::PreCommitRemoteTransaction(_params) => {
+                Self::string_match("precommitremotetransaction", &[], query_path, query)
+                    || Self::string_match("pre-commit-remote-transaction", &[], query_path, query)
+            }
+            PublicOplogEntry::PreRollbackRemoteTransaction(_params) => {
+                Self::string_match("prerollbackremotetransaction", &[], query_path, query)
+                    || Self::string_match("pre-rollback-remote-transaction", &[], query_path, query)
+            }
+            PublicOplogEntry::CommitedRemoteTransaction(_params) => {
+                Self::string_match("commitedremotetransaction", &[], query_path, query)
+                    || Self::string_match("commited-remote-transaction", &[], query_path, query)
+            }
+            PublicOplogEntry::RolledBackRemoteTransaction(_params) => {
+                Self::string_match("rolledbackremotetransaction", &[], query_path, query)
+                    || Self::string_match("rolled-back-remote-transaction", &[], query_path, query)
+            }
+            PublicOplogEntry::AbortedRemoteTransaction(_params) => {
+                Self::string_match("abortremotetransaction", &[], query_path, query)
+                    || Self::string_match("abort-remote-transaction", &[], query_path, query)
             }
         }
     }

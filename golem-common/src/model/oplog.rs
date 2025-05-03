@@ -312,7 +312,9 @@ pub enum OplogEntry {
         consumed_fuel: i64,
     },
     /// Worker suspended
-    Suspend { timestamp: Timestamp },
+    Suspend {
+        timestamp: Timestamp,
+    },
     /// Worker failed
     Error {
         timestamp: Timestamp,
@@ -320,7 +322,9 @@ pub enum OplogEntry {
     },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
     /// more predictable.
-    NoOp { timestamp: Timestamp },
+    NoOp {
+        timestamp: Timestamp,
+    },
     /// The worker needs to recover up to the given target oplog index and continue running from
     /// the source oplog index from there
     /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
@@ -331,9 +335,13 @@ pub enum OplogEntry {
     },
     /// Indicates that the worker has been interrupted at this point.
     /// Only used to recompute the worker's (cached) status, has no effect on execution.
-    Interrupted { timestamp: Timestamp },
+    Interrupted {
+        timestamp: Timestamp,
+    },
     /// Indicates that the worker has been exited using WASI's exit function.
-    Exited { timestamp: Timestamp },
+    Exited {
+        timestamp: Timestamp,
+    },
     /// Overrides the worker's retry policy
     ChangeRetryPolicy {
         timestamp: Timestamp,
@@ -341,7 +349,9 @@ pub enum OplogEntry {
     },
     /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
     /// recovery except if there is a corresponding `EndAtomicRegion` entry.
-    BeginAtomicRegion { timestamp: Timestamp },
+    BeginAtomicRegion {
+        timestamp: Timestamp,
+    },
     /// Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
     /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
     /// compaction.
@@ -352,7 +362,9 @@ pub enum OplogEntry {
     /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
     /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
     /// unfinished remote writes cannot be recovered.
-    BeginRemoteWrite { timestamp: Timestamp },
+    BeginRemoteWrite {
+        timestamp: Timestamp,
+    },
     /// Marks the end of a remote write operation. Only used when idempotence mode is off.
     EndRemoteWrite {
         timestamp: Timestamp,
@@ -384,7 +396,10 @@ pub enum OplogEntry {
         details: Option<String>,
     },
     /// Increased total linear memory size
-    GrowMemory { timestamp: Timestamp, delta: u64 },
+    GrowMemory {
+        timestamp: Timestamp,
+        delta: u64,
+    },
     /// Created a resource instance
     CreateResource {
         timestamp: Timestamp,
@@ -409,7 +424,9 @@ pub enum OplogEntry {
         message: String,
     },
     /// Marks the point where the worker was restarted from clean initial state
-    Restart { timestamp: Timestamp },
+    Restart {
+        timestamp: Timestamp,
+    },
     /// The worker invoked a host function
     ImportedFunctionInvoked {
         timestamp: Timestamp,
@@ -492,6 +509,29 @@ pub enum OplogEntry {
     ChangePersistenceLevel {
         timestamp: Timestamp,
         level: PersistenceLevel,
+    },
+    BeginRemoteTransaction {
+        timestamp: Timestamp,
+    },
+    PreCommitRemoteTransaction {
+        timestamp: Timestamp,
+        begin_index: OplogIndex,
+    },
+    PreRollbackRemoteTransaction {
+        timestamp: Timestamp,
+        begin_index: OplogIndex,
+    },
+    CommitedRemoteTransaction {
+        timestamp: Timestamp,
+        begin_index: OplogIndex,
+    },
+    RolledBackRemoteTransaction {
+        timestamp: Timestamp,
+        begin_index: OplogIndex,
+    },
+    AbortedRemoteTransaction {
+        timestamp: Timestamp,
+        begin_index: OplogIndex,
     },
 }
 
@@ -741,6 +781,47 @@ impl OplogEntry {
         }
     }
 
+    pub fn begin_remote_transaction() -> OplogEntry {
+        OplogEntry::BeginRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
+    pub fn pre_commit_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::PreCommitRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    pub fn pre_rollback_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::PreRollbackRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    pub fn commited_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::CommitedRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    pub fn rolled_back_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::RolledBackRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    pub fn abort_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::AbortedRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -836,7 +917,13 @@ impl OplogEntry {
             | OplogEntry::StartSpan { timestamp, .. }
             | OplogEntry::FinishSpan { timestamp, .. }
             | OplogEntry::SetSpanAttribute { timestamp, .. }
-            | OplogEntry::ChangePersistenceLevel { timestamp, .. } => *timestamp,
+            | OplogEntry::ChangePersistenceLevel { timestamp, .. }
+            | OplogEntry::BeginRemoteTransaction { timestamp, .. }
+            | OplogEntry::PreCommitRemoteTransaction { timestamp, .. }
+            | OplogEntry::PreRollbackRemoteTransaction { timestamp, .. }
+            | OplogEntry::CommitedRemoteTransaction { timestamp, .. }
+            | OplogEntry::RolledBackRemoteTransaction { timestamp, .. }
+            | OplogEntry::AbortedRemoteTransaction { timestamp, .. } => *timestamp,
         }
     }
 
@@ -965,7 +1052,19 @@ pub enum DurableFunctionType {
     /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
     /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
     WriteRemoteBatched(Option<OplogIndex>),
+
+    WriteRemoteTransaction(Option<OplogIndex>),
 }
+
+// #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+// pub enum WriteRemoteTransaction {
+//     Begin(Option<OplogIndex>),
+//     PreCommit(Option<OplogIndex>),
+//     Commited(Option<OplogIndex>),
+//     PreRollback(Option<OplogIndex>),
+//     RolledBack(Option<OplogIndex>),
+//     Abort(Option<OplogIndex>)
+// }
 
 /// Describes the error that occurred in the worker
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]

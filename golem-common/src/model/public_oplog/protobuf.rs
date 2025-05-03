@@ -24,10 +24,10 @@ use crate::model::public_oplog::{
     OplogCursor, PendingUpdateParameters, PendingWorkerInvocationParameters,
     PluginInstallationDescription, PublicAttribute, PublicAttributeValue,
     PublicDurableFunctionType, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry,
-    PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
+    PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation, RemoteTransactionParameters,
     ResourceParameters, RevertParameters, SetSpanAttributeParameters,
     SnapshotBasedUpdateParameters, StartSpanParameters, StringAttributeValue,
-    SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters,
+    SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters
 };
 use crate::model::regions::OplogRegion;
 use crate::model::Empty;
@@ -478,6 +478,42 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     persistence_level: change.persistence_level().into(),
                 },
             )),
+            oplog_entry::Entry::BeginRemoteTransaction(value) => Ok(
+                PublicOplogEntry::BeginRemoteTransaction(TimestampParameter {
+                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                }),
+            ),
+            oplog_entry::Entry::PreCommitRemoteTransaction(value) => Ok(
+                PublicOplogEntry::PreCommitRemoteTransaction(RemoteTransactionParameters {
+                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                    begin_index: OplogIndex::from_u64(value.begin_index),
+                }),
+            ),
+            oplog_entry::Entry::PreRollbackRemoteTransaction(value) => Ok(
+                PublicOplogEntry::PreRollbackRemoteTransaction(RemoteTransactionParameters {
+                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                    begin_index: OplogIndex::from_u64(value.begin_index),
+                }),
+            ),
+            oplog_entry::Entry::CommitedRemoteTransaction(value) => Ok(
+                PublicOplogEntry::CommitedRemoteTransaction(RemoteTransactionParameters {
+                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                    begin_index: OplogIndex::from_u64(value.begin_index),
+                }),
+            ),
+
+            oplog_entry::Entry::RolledBackRemoteTransaction(value) => Ok(
+                PublicOplogEntry::RolledBackRemoteTransaction(RemoteTransactionParameters {
+                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                    begin_index: OplogIndex::from_u64(value.begin_index),
+                }),
+            ),
+            oplog_entry::Entry::AbortedRemoteTransaction(value) => Ok(
+                PublicOplogEntry::AbortedRemoteTransaction(RemoteTransactionParameters {
+                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                    begin_index: OplogIndex::from_u64(value.begin_index),
+                }),
+            ),
         }
     }
 }
@@ -877,6 +913,65 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     ))
                 }
             }
+            PublicOplogEntry::BeginRemoteTransaction(begin_remote_write) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::BeginRemoteTransaction(
+                        golem_api_grpc::proto::golem::worker::TimestampParameter {
+                            timestamp: Some(begin_remote_write.timestamp.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::PreCommitRemoteTransaction(end_remote_write) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::PreCommitRemoteTransaction(
+                        golem_api_grpc::proto::golem::worker::RemoteTransactionParameters {
+                            timestamp: Some(end_remote_write.timestamp.into()),
+                            begin_index: end_remote_write.begin_index.into(),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::PreRollbackRemoteTransaction(end_remote_write) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::PreRollbackRemoteTransaction(
+                        golem_api_grpc::proto::golem::worker::RemoteTransactionParameters {
+                            timestamp: Some(end_remote_write.timestamp.into()),
+                            begin_index: end_remote_write.begin_index.into(),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CommitedRemoteTransaction(end_remote_write) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CommitedRemoteTransaction(
+                        golem_api_grpc::proto::golem::worker::RemoteTransactionParameters {
+                            timestamp: Some(end_remote_write.timestamp.into()),
+                            begin_index: end_remote_write.begin_index.into(),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::RolledBackRemoteTransaction(end_remote_write) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::RolledBackRemoteTransaction(
+                        golem_api_grpc::proto::golem::worker::RemoteTransactionParameters {
+                            timestamp: Some(end_remote_write.timestamp.into()),
+                            begin_index: end_remote_write.begin_index.into(),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::AbortedRemoteTransaction(end_remote_write) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::AbortedRemoteTransaction(
+                        golem_api_grpc::proto::golem::worker::RemoteTransactionParameters {
+                            timestamp: Some(end_remote_write.timestamp.into()),
+                            begin_index: end_remote_write.begin_index.into(),
+                        },
+                    )),
+                }
+            }
         })
     }
 }
@@ -907,6 +1002,13 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
                     index: value.oplog_index.map(OplogIndex::from_u64),
                 }),
             ),
+            wrapped_function_type::Type::WriteRemoteTransaction => {
+                Ok(PublicDurableFunctionType::WriteRemoteTransaction(
+                    WriteRemoteTransactionParameters {
+                        index: value.oplog_index.map(OplogIndex::from_u64),
+                    },
+                ))
+            }
         }
     }
 }
@@ -941,6 +1043,12 @@ impl From<PublicDurableFunctionType> for golem_api_grpc::proto::golem::worker::W
             PublicDurableFunctionType::WriteRemoteBatched(parameters) => {
                 golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                     r#type: wrapped_function_type::Type::WriteRemoteBatched as i32,
+                    oplog_index: parameters.index.map(|index| index.into()),
+                }
+            }
+            PublicDurableFunctionType::WriteRemoteTransaction(parameters) => {
+                golem_api_grpc::proto::golem::worker::WrappedFunctionType {
+                    r#type: wrapped_function_type::Type::WriteRemoteTransaction as i32,
                     oplog_index: parameters.index.map(|index| index.into()),
                 }
             }

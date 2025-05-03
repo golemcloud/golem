@@ -46,6 +46,12 @@ message OplogEntry {
     FinishSpanParameters FinishSpan = 31;
     SetSpanAttributeParameters SetSpanAttribute = 32;
     ChangePersistenceLevelParameters ChangePersistenceLevel = 33;
+    TimestampParameter BeginRemoteTransaction = 34;
+    RemoteTransactionParameters PreCommitRemoteTransaction = 35;
+    RemoteTransactionParameters PreRollbackRemoteTransaction = 36;
+    RemoteTransactionParameters CommitedRemoteTransaction = 37;
+    RemoteTransactionParameters RolledBackRemoteTransaction = 38;
+    RemoteTransactionParameters AbortedRemoteTransaction = 39;
   }
 }
 
@@ -56,6 +62,7 @@ message WrappedFunctionType {
     READ_REMOTE = 2;
     WRITE_REMOTE = 3;
     WRITE_REMOTE_BATCHED = 4;
+    WRITE_REMOTE_TRANSACTION = 5;
   }
   Type type = 1;
   optional uint64 oplog_index = 2;
@@ -148,6 +155,11 @@ message ExportedFunctionInvocationParameters {
   string trace_id = 5;
   repeated string trace_states = 6;
   repeated InvocationSpan invocation_context = 7;
+}
+
+message RemoteTransactionParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 begin_index = 2;
 }
 
 message WorkerInvocation {

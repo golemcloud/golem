@@ -23,8 +23,7 @@ use crate::services::rdbms::sqlx_common::{
     QueryParamsBinder, SqlxDbResultStream, SqlxDbTransaction, SqlxRdbms,
 };
 use crate::services::rdbms::{
-    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey,
-    RdbmsTransactionIdentifier,
+    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionIdentifier,
 };
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
@@ -34,9 +33,7 @@ use mac_address::MacAddress;
 use serde_json::json;
 use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
-use sqlx::{
-    Column, ConnectOptions, Pool, Row, TransactionManager, Type, TypeInfo, ValueRef,
-};
+use sqlx::{Column, ConnectOptions, Pool, Row, TransactionManager, Type, TypeInfo, ValueRef};
 use sqlx_core::executor::Executor;
 use std::fmt::Display;
 use std::net::IpAddr;

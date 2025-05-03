@@ -364,6 +364,35 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 &params.persistence_level,
             );
         }
+        PublicOplogEntry::BeginRemoteTransaction(params) => {
+            let _ = writeln!(result, "BEGIN REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+        }
+        PublicOplogEntry::PreCommitRemoteTransaction(params) => {
+            let _ = writeln!(result, "PRE COMMIT REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
+        }
+        PublicOplogEntry::PreRollbackRemoteTransaction(params) => {
+            let _ = writeln!(result, "PRE ROLLBACK REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
+        }
+        PublicOplogEntry::CommitedRemoteTransaction(params) => {
+            let _ = writeln!(result, "COMMITED REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
+        }
+        PublicOplogEntry::RolledBackRemoteTransaction(params) => {
+            let _ = writeln!(result, "ROLLED BACK REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
+        }
+        PublicOplogEntry::AbortedRemoteTransaction(params) => {
+            let _ = writeln!(result, "ABORTED REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
+        }
     }
 
     result

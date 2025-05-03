@@ -309,6 +309,12 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 timestamp: timestamp.into(),
                 persistence_level: persistence_level.into(),
             }),
+            PublicOplogEntry::BeginRemoteTransaction(_) => todo!(),
+            PublicOplogEntry::PreCommitRemoteTransaction(_) => todo!(),
+            PublicOplogEntry::PreRollbackRemoteTransaction(_) => todo!(),
+            PublicOplogEntry::CommitedRemoteTransaction(_) => todo!(),
+            PublicOplogEntry::RolledBackRemoteTransaction(_) => todo!(),
+            PublicOplogEntry::AbortedRemoteTransaction(_) => todo!(),
         }
     }
 }
@@ -333,6 +339,7 @@ impl From<PublicDurableFunctionType> for oplog::WrappedFunctionType {
             PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
                 index: idx,
             }) => Self::WriteRemoteBatched(idx.map(|idx| idx.into())),
+            PublicDurableFunctionType::WriteRemoteTransaction(_) => todo!(),
         }
     }
 }

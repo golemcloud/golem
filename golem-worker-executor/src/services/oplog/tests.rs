@@ -370,6 +370,44 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
                 level,
             }
         }
+        OplogEntry::BeginRemoteTransaction { timestamp } => OplogEntry::BeginRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+        },
+        OplogEntry::PreCommitRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => OplogEntry::PreCommitRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
+        },
+        OplogEntry::PreRollbackRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => OplogEntry::PreRollbackRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
+        },
+        OplogEntry::CommitedRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => OplogEntry::CommitedRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
+        },
+        OplogEntry::RolledBackRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => OplogEntry::RolledBackRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
+        },
+        OplogEntry::AbortedRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => OplogEntry::AbortedRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
+        },
     }
 }
 
