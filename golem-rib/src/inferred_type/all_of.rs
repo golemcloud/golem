@@ -568,8 +568,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                         let record_identifier: VariantIdentifier =
                             VariantIdentifier::from(variants);
 
-                        let builder =
-                            final_task_stack.get_variant_mut(&record_identifier);
+                        let builder = final_task_stack.get_variant_mut(&record_identifier);
 
                         let mut tasks_for_final_stack = vec![];
 
@@ -604,11 +603,9 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
 
                         let result_identifier: ResultIdentifier = ResultIdentifier::from(ok, error);
 
-                        let builder =
-                            final_task_stack.get_result_mut(&result_identifier);
+                        let builder = final_task_stack.get_result_mut(&result_identifier);
 
                         let mut tasks_for_final_stack = vec![];
-
 
                         if let Some(builder) = builder {
                             update_result_builder_and_update_tasks(
@@ -620,11 +617,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                                 &mut temp_task_queue,
                             );
                         } else {
-                            let mut builder = ResultBuilder::init(
-                                next_available_index,
-                                ok,
-                                error,
-                            );
+                            let mut builder = ResultBuilder::init(next_available_index, ok, error);
 
                             update_result_builder_and_update_tasks(
                                 next_available_index,
