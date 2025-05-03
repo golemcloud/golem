@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::{InferredType, TypeInternal};
-use poem_openapi::__private::poem::web::Field;
 use std::collections::VecDeque;
+
 // This module is responsible to merge the types when constructing InferredType::AllOf, while
 // selecting the type with maximum `TypeOrigin` information. This gives two advantages. We save some memory footprint
 // (Ex: `{foo : string}` and `{foo: all_of(string, u8)}` will be merged to `{foo: all_of(string, u8)}`.)
@@ -821,7 +821,7 @@ mod tests {
         ];
 
         let result = get_merge_task(inferred_types);
-        
+
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::VariantBuilder(VariantBuilder {
