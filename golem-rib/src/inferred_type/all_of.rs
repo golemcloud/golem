@@ -30,6 +30,10 @@ use std::collections::VecDeque;
 // However, we will merge `{foo: string}` and `{foo: u8}` to `{foo: (string, u8)}` or
 // `{foo: string, bar: u8}` and `{foo: string, bar: string}` to `{foo: all_of(string, string), bar: all_of(u8, string)}`.
 // We do not merge all_of(string, string) in the above example to `string` either.
+
+pub(crate) use internal::*;
+pub(crate) use type_identifiers::*;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum MergeTask {
     RecordBuilder(RecordBuilder),
@@ -292,7 +296,7 @@ impl MergeTaskStack {
         MergeTaskStack { tasks: stack }
     }
 
-    pub fn get_record_mut(&mut self, record_fields: &RecordKey) -> Option<&mut RecordBuilder> {
+    pub fn get_record_mut(&mut self, record_fields: &RecordIdentifier) -> Option<&mut RecordBuilder> {
         for task in self.tasks.iter_mut().rev() {
             match task {
                 MergeTask::RecordBuilder(builder) if builder.field_names() == record_fields.0 => {
@@ -378,145 +382,6 @@ impl MergeTaskStack {
     }
 }
 
-struct RecordKey(Vec<String>);
-
-impl RecordKey {
-    pub fn from(fields: &Vec<(String, InferredType)>) -> RecordKey {
-        let mut keys = vec![];
-
-        for (field, _) in fields.iter() {
-            keys.push(field.clone());
-        }
-
-        RecordKey(keys)
-    }
-}
-
-struct ResultIdentifier {
-    ok: bool,
-    error: bool,
-}
-
-impl ResultIdentifier {
-    pub fn from(ok: &Option<InferredType>, error: &Option<InferredType>) -> ResultIdentifier {
-        match (ok, error) {
-            (Some(_), Some(_)) => ResultIdentifier {
-                ok: true,
-                error: true,
-            },
-            (Some(_), None) => ResultIdentifier {
-                ok: true,
-                error: false,
-            },
-            (None, Some(_)) => ResultIdentifier {
-                ok: false,
-                error: true,
-            },
-            (None, None) => ResultIdentifier {
-                ok: false,
-                error: false,
-            },
-        }
-    }
-}
-
-struct VariantIdentifier {
-    variants: Vec<(String, VariantType)>,
-}
-
-impl VariantIdentifier {
-    pub fn from(variants: &Vec<(String, Option<InferredType>)>) -> VariantIdentifier {
-        let mut keys = vec![];
-
-        for (variant, inferred_type) in variants.iter() {
-            match inferred_type {
-                Some(_) => keys.push((variant.clone(), VariantType::WithArgs)),
-                None => keys.push((variant.clone(), VariantType::WithoutArgs)),
-            }
-        }
-
-        VariantIdentifier { variants: keys }
-    }
-}
-
-enum VariantType {
-    WithArgs,
-    WithoutArgs,
-}
-
-fn update_record_builder_and_update_tasks(
-    field_task_index: TaskIndex,
-    builder: &mut RecordBuilder,
-    fields: &Vec<(String, InferredType)>,
-    tasks_for_final_stack: &mut Vec<MergeTask>,
-    temp_task_queue: &mut VecDeque<MergeTask>,
-) {
-    let mut field_task_index = field_task_index;
-
-    for (field, inferred_type) in fields.into_iter() {
-        field_task_index += 1;
-
-        builder.insert(field.to_string(), field_task_index);
-
-        tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
-
-        temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
-    }
-}
-
-fn update_variant_builder_and_update_tasks(
-    field_task_index: TaskIndex,
-    builder: &mut VariantBuilder,
-    variants: &Vec<(String, Option<InferredType>)>,
-    tasks_for_final_stack: &mut Vec<MergeTask>,
-    temp_task_queue: &mut VecDeque<MergeTask>,
-) {
-    let mut field_task_index = field_task_index;
-
-    for (variant_name, inferred_type) in variants.into_iter() {
-        if let Some(inferred_type) = inferred_type {
-            field_task_index += 1;
-
-            builder.insert(variant_name.to_string(), field_task_index);
-
-            tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
-
-            temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
-        }
-    }
-}
-
-fn update_result_builder_and_update_tasks(
-    field_task_index: TaskIndex,
-    builder: &mut ResultBuilder,
-    ok: &Option<InferredType>,
-    error: &Option<InferredType>,
-    tasks_for_final_stack: &mut Vec<MergeTask>,
-    temp_task_queue: &mut VecDeque<MergeTask>,
-) {
-    let mut field_task_index = field_task_index;
-
-    if let Some(inferred_type) = ok {
-        field_task_index += 1;
-
-        builder.insert_ok(field_task_index);
-
-        tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
-
-        temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
-    }
-
-    if let Some(inferred_type) = error {
-        field_task_index += 1;
-
-        builder.insert_error(field_task_index);
-
-        tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
-
-        temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
-    }
-}
-
 fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
     let mut temp_task_queue = VecDeque::new();
 
@@ -537,7 +402,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                     TypeInternal::Record(fields) => {
                         let mut next_available_index = final_task_stack.next_index();
 
-                        let record_identifier: RecordKey = RecordKey::from(fields);
+                        let record_identifier: RecordIdentifier = RecordIdentifier::from(fields);
 
                         let builder = final_task_stack.get_record_mut(&record_identifier);
 
@@ -718,6 +583,77 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
     final_task_stack
 }
 
+mod type_identifiers {
+    use crate::InferredType;
+
+    pub struct RecordIdentifier(pub Vec<String>);
+
+    impl RecordIdentifier {
+        pub fn from(fields: &Vec<(String, InferredType)>) -> RecordIdentifier {
+            let mut keys = vec![];
+
+            for (field, _) in fields.iter() {
+                keys.push(field.clone());
+            }
+
+            RecordIdentifier(keys)
+        }
+    }
+
+    pub struct ResultIdentifier {
+        pub ok: bool,
+        pub error: bool,
+    }
+
+    impl ResultIdentifier {
+        pub fn from(ok: &Option<InferredType>, error: &Option<InferredType>) -> ResultIdentifier {
+            match (ok, error) {
+                (Some(_), Some(_)) => ResultIdentifier {
+                    ok: true,
+                    error: true,
+                },
+                (Some(_), None) => ResultIdentifier {
+                    ok: true,
+                    error: false,
+                },
+                (None, Some(_)) => ResultIdentifier {
+                    ok: false,
+                    error: true,
+                },
+                (None, None) => ResultIdentifier {
+                    ok: false,
+                    error: false,
+                },
+            }
+        }
+    }
+
+    pub struct VariantIdentifier {
+        pub variants: Vec<(String, VariantType)>,
+    }
+    impl VariantIdentifier {
+        pub fn from(variants: &Vec<(String, Option<InferredType>)>) -> VariantIdentifier {
+            let mut keys = vec![];
+
+            for (variant, inferred_type) in variants.iter() {
+                match inferred_type {
+                    Some(_) => keys.push((variant.clone(), VariantType::WithArgs)),
+                    None => keys.push((variant.clone(), VariantType::WithoutArgs)),
+                }
+            }
+
+            VariantIdentifier { variants: keys }
+        }
+    }
+
+    pub enum VariantType {
+        WithArgs,
+        WithoutArgs,
+    }
+
+
+}
+
 pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
     let mut all_of_types = vec![];
 
@@ -736,6 +672,86 @@ pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
     }
 
     all_of_types
+}
+
+mod internal {
+    use std::collections::VecDeque;
+    use crate::inferred_type::{MergeTask, RecordBuilder, ResultBuilder, TaskIndex, VariantBuilder};
+    use crate::InferredType;
+
+    pub fn update_record_builder_and_update_tasks(
+        field_task_index: TaskIndex,
+        builder: &mut RecordBuilder,
+        fields: &Vec<(String, InferredType)>,
+        tasks_for_final_stack: &mut Vec<MergeTask>,
+        temp_task_queue: &mut VecDeque<MergeTask>,
+    ) {
+        let mut field_task_index = field_task_index;
+
+        for (field, inferred_type) in fields.into_iter() {
+            field_task_index += 1;
+
+            builder.insert(field.to_string(), field_task_index);
+
+            tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+
+            temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+        }
+    }
+
+    pub fn update_variant_builder_and_update_tasks(
+        field_task_index: TaskIndex,
+        builder: &mut VariantBuilder,
+        variants: &Vec<(String, Option<InferredType>)>,
+        tasks_for_final_stack: &mut Vec<MergeTask>,
+        temp_task_queue: &mut VecDeque<MergeTask>,
+    ) {
+        let mut field_task_index = field_task_index;
+
+        for (variant_name, inferred_type) in variants.into_iter() {
+            if let Some(inferred_type) = inferred_type {
+                field_task_index += 1;
+
+                builder.insert(variant_name.to_string(), field_task_index);
+
+                tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+
+                temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+            }
+        }
+    }
+
+    pub fn update_result_builder_and_update_tasks(
+        field_task_index: TaskIndex,
+        builder: &mut ResultBuilder,
+        ok: &Option<InferredType>,
+        error: &Option<InferredType>,
+        tasks_for_final_stack: &mut Vec<MergeTask>,
+        temp_task_queue: &mut VecDeque<MergeTask>,
+    ) {
+        let mut field_task_index = field_task_index;
+
+        if let Some(inferred_type) = ok {
+            field_task_index += 1;
+
+            builder.insert_ok(field_task_index);
+
+            tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+
+            temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+        }
+
+        if let Some(inferred_type) = error {
+            field_task_index += 1;
+
+            builder.insert_error(field_task_index);
+
+            tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+
+            temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+        }
+    }
+
 }
 
 #[cfg(test)]
