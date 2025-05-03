@@ -281,10 +281,13 @@ impl MergeTaskStack {
         None
     }
 
-    pub fn get_variant(&self, variant_identifier: &VariantIdentifier) -> Option<VariantBuilder> {
+    pub fn get_variant_mut(
+        &mut self,
+        variant_identifier: &VariantIdentifier,
+    ) -> Option<&mut VariantBuilder> {
         let mut found = false;
 
-        for task in self.tasks.iter().rev() {
+        for task in self.tasks.iter_mut().rev() {
             match task {
                 MergeTask::VariantBuilder(builder) => {
                     let builder_variants = &builder.variants;
@@ -305,7 +308,7 @@ impl MergeTaskStack {
                         )
                     }
                     if found {
-                        return Some(builder.clone());
+                        return Some(builder);
                     }
                 }
 
@@ -416,12 +419,12 @@ enum VariantType {
     WithoutArgs,
 }
 
-fn update_stack_and_queue(
+fn update_record_builder_and_update_tasks(
     field_task_index: TaskIndex,
     builder: &mut RecordBuilder,
     fields: &Vec<(String, InferredType)>,
     tasks_for_final_stack: &mut Vec<MergeTask>,
-    temp_task_queue: &mut VecDeque<MergeTask>
+    temp_task_queue: &mut VecDeque<MergeTask>,
 ) {
     let mut field_task_index = field_task_index;
 
@@ -430,13 +433,31 @@ fn update_stack_and_queue(
 
         builder.insert(field.to_string(), field_task_index);
 
-        tasks_for_final_stack
-            .push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+        tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
 
-        temp_task_queue.push_back(MergeTask::Inspect(
-            field_task_index,
-            inferred_type.clone(),
-        ));
+        temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+    }
+}
+
+fn update_variant_builder_and_update_tasks(
+    field_task_index: TaskIndex,
+    builder: &mut VariantBuilder,
+    variants: &Vec<(String, Option<InferredType>)>,
+    tasks_for_final_stack: &mut Vec<MergeTask>,
+    temp_task_queue: &mut VecDeque<MergeTask>,
+) {
+    let mut field_task_index = field_task_index;
+
+    for (variant_name, inferred_type) in variants.into_iter() {
+        if let Some(inferred_type) = inferred_type {
+            field_task_index += 1;
+
+            builder.insert(variant_name.to_string(), field_task_index);
+
+            tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+
+            temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+        }
     }
 }
 
@@ -462,27 +483,28 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
 
                         let record_identifier: RecordKey = RecordKey::from(fields);
 
-                        let builder = final_task_stack
-                            .get_record_mut(&record_identifier);
+                        let builder = final_task_stack.get_record_mut(&record_identifier);
 
                         let mut tasks_for_final_stack = vec![];
 
                         if let Some(builder) = builder {
-                            update_stack_and_queue(
+                            update_record_builder_and_update_tasks(
                                 next_available_index - 1,
                                 builder,
                                 fields,
                                 &mut tasks_for_final_stack,
                                 &mut temp_task_queue,
                             );
-
                         } else {
                             let mut builder = RecordBuilder::new(
                                 next_available_index,
-                                fields.iter().map(|(field, _)| (field.clone(), vec![])).collect(),
+                                fields
+                                    .iter()
+                                    .map(|(field, _)| (field.clone(), vec![]))
+                                    .collect(),
                             );
 
-                            update_stack_and_queue(
+                            update_record_builder_and_update_tasks(
                                 next_available_index,
                                 &mut builder,
                                 fields,
@@ -493,58 +515,44 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                             final_task_stack.update_build_task(MergeTask::RecordBuilder(builder));
                         }
 
-
                         let new_field_task_stack = MergeTaskStack::init(tasks_for_final_stack);
-
                         final_task_stack.extend(new_field_task_stack);
                     }
 
                     TypeInternal::Variant(variants) => {
-                        let mut new_variant_builder = false;
-
                         let mut next_available_index = final_task_stack.next_index();
 
-                        let variant_identifier: VariantIdentifier =
+                        let record_identifier: VariantIdentifier =
                             VariantIdentifier::from(variants);
 
-                        let builder = final_task_stack
-                            .get_variant(&variant_identifier)
-                            .unwrap_or_else(|| {
-                                new_variant_builder = true;
-                                VariantBuilder::init(next_available_index, variants)
-                            });
+                        let builder =
+                            final_task_stack.get_variant_mut(&record_identifier);
 
-                        let mut field_task_index = if new_variant_builder {
-                            next_available_index
-                        } else {
-                            next_available_index - 1
-                        };
-
-                        let mut new_builder = builder.clone();
                         let mut tasks_for_final_stack = vec![];
 
-                        for (variant_name, inferred_type) in variants.iter() {
-                            if let Some(inferred_type) = inferred_type {
-                                field_task_index += 1;
+                        if let Some(builder) = builder {
+                            update_variant_builder_and_update_tasks(
+                                next_available_index - 1,
+                                builder,
+                                variants,
+                                &mut tasks_for_final_stack,
+                                &mut temp_task_queue,
+                            );
+                        } else {
+                            let mut builder = VariantBuilder::init(next_available_index, variants);
 
-                                new_builder.insert(variant_name.to_string(), field_task_index);
+                            update_variant_builder_and_update_tasks(
+                                next_available_index,
+                                &mut builder,
+                                variants,
+                                &mut tasks_for_final_stack,
+                                &mut temp_task_queue,
+                            );
 
-                                tasks_for_final_stack.push(MergeTask::Inspect(
-                                    field_task_index,
-                                    inferred_type.clone(),
-                                ));
-
-                                temp_task_queue.push_back(MergeTask::Inspect(
-                                    field_task_index,
-                                    inferred_type.clone(),
-                                ));
-                            }
+                            final_task_stack.update_build_task(MergeTask::VariantBuilder(builder));
                         }
 
-                        final_task_stack.update_build_task(MergeTask::VariantBuilder(new_builder));
-
                         let new_field_task_stack = MergeTaskStack::init(tasks_for_final_stack);
-
                         final_task_stack.extend(new_field_task_stack);
                     }
 
@@ -838,18 +846,14 @@ mod tests {
     #[test]
     fn test_get_task_stack_5() {
         let inferred_types = vec![
-            InferredType::variant(
-                vec![
-                    ("with_arg".to_string(), Some(InferredType::s8())),
-                    ("without_arg".to_string(), None),
-                ],
-            ),
-            InferredType::variant(
-                vec![
-                    ("with_arg".to_string(), Some(InferredType::string())),
-                    ("without_arg".to_string(), None),
-                ],
-            ),
+            InferredType::variant(vec![
+                ("with_arg".to_string(), Some(InferredType::s8())),
+                ("without_arg".to_string(), None),
+            ]),
+            InferredType::variant(vec![
+                ("with_arg".to_string(), Some(InferredType::string())),
+                ("without_arg".to_string(), None),
+            ]),
         ];
 
         let result = get_merge_task(inferred_types);
@@ -864,7 +868,7 @@ mod tests {
                     ],
                 }),
                 MergeTask::Complete(1, InferredType::s8()),
-                MergeTask::Complete(2, InferredType::string())
+                MergeTask::Complete(2, InferredType::string()),
             ],
         };
         assert_eq!(result, expected);
