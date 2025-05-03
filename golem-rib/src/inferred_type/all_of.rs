@@ -1029,7 +1029,6 @@ mod tests {
     use super::*;
     use crate::inferred_type::TypeOrigin;
     use crate::PathElem;
-    use combine::parser::choice::A::P;
     use test_r::test;
 
     #[test]
@@ -1165,7 +1164,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_task_stack_2() {
+    fn test_get_task_record_6() {
         let inferred_types = vec![
             InferredType::record(vec![
                 ("foo".to_string(), InferredType::s8()),
@@ -1201,7 +1200,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_task_stack_3() {
+    fn test_get_task_stack_record_7() {
         let all_of_internal = TypeInternal::AllOf(vec![InferredType::s8(), InferredType::u8()]);
 
         let all_of = InferredType::new(all_of_internal, TypeOrigin::NoOrigin);
@@ -1314,6 +1313,63 @@ mod tests {
                 MergeTask::Complete(2, InferredType::u8()),
                 MergeTask::Complete(3, InferredType::string()),
                 MergeTask::Complete(4, InferredType::s32()),
+            ],
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_get_stack_result_4() {
+       let result1 =
+            InferredType::result(Some(InferredType::string()), Some(InferredType::u8()));
+
+        let result2 =
+            InferredType::result(Some(InferredType::u8()), Some(InferredType::s32()));
+
+        let result3 = InferredType::result(
+            Some(InferredType::new(
+                TypeInternal::AllOf(vec![InferredType::u32(), InferredType::u64()]),
+                TypeOrigin::NoOrigin,
+            )),
+            Some(InferredType::u8()),
+        );
+
+        let result4 = InferredType::result(
+            Some(InferredType::s8()),
+            Some(InferredType::new(
+                TypeInternal::AllOf(vec![InferredType::u32(), InferredType::u64()]),
+                TypeOrigin::NoOrigin,
+            )),
+        );
+
+        let result = get_merge_task(vec![result1, result2, result3, result4]);
+
+        let expected = MergeTaskStack {
+            tasks: vec![
+                MergeTask::ResultBuilder(ResultBuilder {
+                    path: Path::default(),
+                    task_index: 0,
+                    ok: Some(vec![1, 3, 5, 7]),
+                    error: Some(vec![2, 4, 6, 8]),
+                }),
+                MergeTask::Complete(1, InferredType::string()),
+                MergeTask::Complete(2, InferredType::u8()),
+                MergeTask::Complete(3, InferredType::u8()),
+                MergeTask::Complete(4, InferredType::s32()),
+                MergeTask::AllOfBuilder(AllOfBuilder {
+                    task_index: 5,
+                    pointers: vec![9, 10],
+                }),
+                MergeTask::Complete(6, InferredType::u8()),
+                MergeTask::Complete(7, InferredType::s8()),
+                MergeTask::AllOfBuilder(AllOfBuilder {
+                    task_index: 8,
+                    pointers: vec![11, 12],
+                }),
+                MergeTask::Complete(9, InferredType::u32()),
+                MergeTask::Complete(10, InferredType::u64()),
+                MergeTask::Complete(11, InferredType::u32()),
+                MergeTask::Complete(12, InferredType::u64()),
             ],
         };
         assert_eq!(result, expected);
