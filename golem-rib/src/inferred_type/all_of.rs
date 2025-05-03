@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{InferredType, TypeInternal};
+use crate::{InferredType, Path, TypeInternal};
 use std::cmp::{max, min};
 use std::collections::VecDeque;
 
@@ -40,7 +40,7 @@ pub enum MergeTask {
     RecordBuilder(RecordBuilder),
     VariantBuilder(VariantBuilder),
     TupleBuilder(TupleBuilder),
-    Inspect(TaskIndex, InferredType),
+    Inspect(Path, TaskIndex, InferredType),
     AllOfBuilder(AllOfBuilder),
     ResultBuilder(ResultBuilder),
     Complete(TaskIndex, InferredType),
@@ -49,7 +49,7 @@ pub enum MergeTask {
 impl MergeTask {
     pub fn get_index_in_stack(&self) -> TaskIndex {
         match self {
-            MergeTask::Inspect(index, _) => *index,
+            MergeTask::Inspect(_, index, _) => *index,
             MergeTask::RecordBuilder(builder) => builder.task_index,
             MergeTask::AllOfBuilder(builder) => builder.task_index,
             MergeTask::ResultBuilder(builder) => builder.task_index,
@@ -154,6 +154,7 @@ impl VariantBuilder {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResultBuilder {
+    path: Path,
     task_index: TaskIndex,
     ok: Option<Vec<TaskIndex>>,
     error: Option<Vec<TaskIndex>>,
@@ -181,11 +182,13 @@ impl ResultBuilder {
     }
 
     pub fn init(
+        path: &Path,
         index: TaskIndex,
         ok: &Option<InferredType>,
         error: &Option<InferredType>,
     ) -> ResultBuilder {
         ResultBuilder::new(
+            path.clone(),
             index,
             ok.as_ref().map(|_| vec![]),
             error.as_ref().map(|_| vec![]),
@@ -193,11 +196,13 @@ impl ResultBuilder {
     }
 
     pub fn new(
+        path: Path,
         index: TaskIndex,
         ok: Option<Vec<TaskIndex>>,
         error: Option<Vec<TaskIndex>>,
     ) -> ResultBuilder {
         ResultBuilder {
+            path,
             task_index: index,
             ok,
             error,
@@ -226,6 +231,7 @@ impl AllOfBuilder {
 
 #[derive(Default, Clone, Debug, PartialEq)]
 pub struct RecordBuilder {
+    path: Path,
     task_index: TaskIndex, // The index in the task stack to which this builder belongs
     field_and_pointers: Vec<(String, Vec<TaskIndex>)>,
 }
@@ -238,7 +244,11 @@ impl RecordBuilder {
             .collect()
     }
 
-    pub fn init(index: TaskIndex, fields: &Vec<(String, InferredType)>) -> RecordBuilder {
+    pub fn init(
+        path: &Path,
+        task_index: TaskIndex,
+        fields: &Vec<(String, InferredType)>,
+    ) -> RecordBuilder {
         let mut default_values: Vec<(String, Vec<TaskIndex>)> = vec![];
 
         for (field, _) in fields.iter() {
@@ -246,13 +256,19 @@ impl RecordBuilder {
         }
 
         RecordBuilder {
-            task_index: index,
+            path: path.clone(),
+            task_index,
             field_and_pointers: default_values,
         }
     }
 
-    pub fn new(index: TaskIndex, fields: Vec<(String, Vec<TaskIndex>)>) -> RecordBuilder {
+    pub fn new(
+        path: Path,
+        index: TaskIndex,
+        fields: Vec<(String, Vec<TaskIndex>)>,
+    ) -> RecordBuilder {
         RecordBuilder {
+            path,
             task_index: index,
             field_and_pointers: fields,
         }
@@ -356,7 +372,10 @@ impl MergeTaskStack {
     ) -> Option<&mut RecordBuilder> {
         for task in self.tasks.iter_mut().rev() {
             match task {
-                MergeTask::RecordBuilder(builder) if builder.field_names() == record_fields.0 => {
+                MergeTask::RecordBuilder(builder)
+                    if builder.field_names() == record_fields.fields
+                        && builder.path == record_fields.path =>
+                {
                     return Some(builder);
                 }
 
@@ -405,27 +424,35 @@ impl MergeTaskStack {
         None
     }
 
-    pub fn get_result_mut(&mut self, result_key: &ResultIdentifier) -> Option<&mut ResultBuilder> {
+    pub fn get_result_mut(
+        &mut self,
+        path: &Path,
+        result_key: &ResultIdentifier,
+    ) -> Option<&mut ResultBuilder> {
         for task in self.tasks.iter_mut().rev() {
             match task {
                 MergeTask::ResultBuilder(builder) => match (result_key.ok, result_key.error) {
                     (true, true) => {
-                        if builder.ok.is_some() && builder.error.is_some() {
+                        if builder.ok.is_some() && builder.error.is_some() && &builder.path == path
+                        {
                             return Some(builder);
                         }
                     }
                     (true, false) => {
-                        if builder.ok.is_some() && builder.error.is_none() {
+                        if builder.ok.is_some() && builder.error.is_none() && &builder.path == path
+                        {
                             return Some(builder);
                         }
                     }
                     (false, true) => {
-                        if builder.ok.is_none() && builder.error.is_some() {
+                        if builder.ok.is_none() && builder.error.is_some() && &builder.path == path
+                        {
                             return Some(builder);
                         }
                     }
                     (false, false) => {
-                        if builder.ok.is_none() && builder.error.is_none() {
+                        if builder.ok.is_none() && builder.error.is_none() && &builder.path == path
+                        {
                             return Some(builder);
                         }
                     }
@@ -445,7 +472,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
     let merge_tasks = inferred_types
         .iter()
         .enumerate()
-        .map(|(i, inf)| MergeTask::Inspect(i, inf.clone()))
+        .map(|(i, inf)| MergeTask::Inspect(Path::default(), i, inf.clone()))
         .collect::<Vec<_>>();
 
     temp_task_queue.extend(merge_tasks.clone());
@@ -454,12 +481,13 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
 
     while let Some(task) = temp_task_queue.pop_front() {
         match &task {
-            MergeTask::Inspect(task_index, inferred_type) => {
+            MergeTask::Inspect(path, task_index, inferred_type) => {
                 match inferred_type.internal_type() {
                     TypeInternal::Record(fields) => {
                         let mut next_available_index = final_task_stack.next_index();
 
-                        let record_identifier: RecordIdentifier = RecordIdentifier::from(fields);
+                        let record_identifier: RecordIdentifier =
+                            RecordIdentifier::from(path, fields);
 
                         let builder = final_task_stack.get_record_mut(&record_identifier);
 
@@ -467,6 +495,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
 
                         if let Some(builder) = builder {
                             update_record_builder_and_update_tasks(
+                                path,
                                 next_available_index - 1,
                                 builder,
                                 fields,
@@ -481,9 +510,10 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                                     (next_available_index, next_available_index)
                                 };
 
-                            let mut builder = RecordBuilder::init(task_index, fields);
+                            let mut builder = RecordBuilder::init(path, task_index, fields);
 
                             update_record_builder_and_update_tasks(
+                                path,
                                 field_index,
                                 &mut builder,
                                 fields,
@@ -510,6 +540,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
 
                         if let Some(builder) = builder {
                             update_variant_builder_and_update_tasks(
+                                path,
                                 next_available_index - 1,
                                 builder,
                                 variants,
@@ -527,6 +558,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                             let mut builder = VariantBuilder::init(task_index, variants);
 
                             update_variant_builder_and_update_tasks(
+                                path,
                                 field_index,
                                 &mut builder,
                                 variants,
@@ -544,14 +576,16 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                     TypeInternal::Result { ok, error } => {
                         let mut next_available_index = final_task_stack.next_index();
 
-                        let result_identifier: ResultIdentifier = ResultIdentifier::from(ok, error);
+                        let result_identifier: ResultIdentifier =
+                            ResultIdentifier::from(path, ok, error);
 
-                        let builder = final_task_stack.get_result_mut(&result_identifier);
+                        let builder = final_task_stack.get_result_mut(path, &result_identifier);
 
                         let mut tasks_for_final_stack = vec![];
 
                         if let Some(builder) = builder {
                             update_result_builder_and_update_tasks(
+                                path,
                                 next_available_index - 1,
                                 builder,
                                 ok,
@@ -567,9 +601,10 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                                     (next_available_index, next_available_index)
                                 };
 
-                            let mut builder = ResultBuilder::init(task_index, ok, error);
+                            let mut builder = ResultBuilder::init(path, task_index, ok, error);
 
                             update_result_builder_and_update_tasks(
+                                path,
                                 field_index,
                                 &mut builder,
                                 ok,
@@ -596,6 +631,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
 
                         if let Some(builder) = builder {
                             update_tuple_builder_and_update_tasks(
+                                path,
                                 next_available_index - 1,
                                 builder,
                                 elems,
@@ -613,6 +649,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                             let mut builder = TupleBuilder::init(task_index, elems);
 
                             update_tuple_builder_and_update_tasks(
+                                path,
                                 field_index,
                                 &mut builder,
                                 elems,
@@ -649,10 +686,18 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                         for inf in inferred_types.iter() {
                             task_index += 1;
                             pointers.push(task_index);
-                            tasks_for_final_stack.push(MergeTask::Inspect(task_index, inf.clone()));
+                            tasks_for_final_stack.push(MergeTask::Inspect(
+                                path.clone(),
+                                task_index,
+                                inf.clone(),
+                            ));
 
                             // We push the inspection task
-                            temp_task_queue.push_back(MergeTask::Inspect(task_index, inf.clone()));
+                            temp_task_queue.push_back(MergeTask::Inspect(
+                                path.clone(),
+                                task_index,
+                                inf.clone(),
+                            ));
                         }
 
                         let new_all_of_builder = AllOfBuilder::new(all_of_builder_index, pointers);
@@ -705,7 +750,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
 }
 
 mod type_identifiers {
-    use crate::InferredType;
+    use crate::{InferredType, Path};
 
     pub struct TupleIdentifier(pub usize);
 
@@ -716,41 +761,56 @@ mod type_identifiers {
     }
 
     #[derive(Debug)]
-    pub struct RecordIdentifier(pub Vec<String>);
+    pub struct RecordIdentifier {
+        pub path: Path,
+        pub fields: Vec<String>,
+    }
 
     impl RecordIdentifier {
-        pub fn from(fields: &Vec<(String, InferredType)>) -> RecordIdentifier {
+        pub fn from(path: &Path, fields: &Vec<(String, InferredType)>) -> RecordIdentifier {
             let mut keys = vec![];
 
             for (field, _) in fields.iter() {
                 keys.push(field.clone());
             }
 
-            RecordIdentifier(keys)
+            RecordIdentifier {
+                path: path.clone(),
+                fields: keys,
+            }
         }
     }
 
     pub struct ResultIdentifier {
+        pub path: Path,
         pub ok: bool,
         pub error: bool,
     }
 
     impl ResultIdentifier {
-        pub fn from(ok: &Option<InferredType>, error: &Option<InferredType>) -> ResultIdentifier {
+        pub fn from(
+            path: &Path,
+            ok: &Option<InferredType>,
+            error: &Option<InferredType>,
+        ) -> ResultIdentifier {
             match (ok, error) {
                 (Some(_), Some(_)) => ResultIdentifier {
+                    path: path.clone(),
                     ok: true,
                     error: true,
                 },
                 (Some(_), None) => ResultIdentifier {
+                    path: path.clone(),
                     ok: true,
                     error: false,
                 },
                 (None, Some(_)) => ResultIdentifier {
+                    path: path.clone(),
                     ok: false,
                     error: true,
                 },
                 (None, None) => ResultIdentifier {
+                    path: path.clone(),
                     ok: false,
                     error: false,
                 },
@@ -806,10 +866,11 @@ mod internal {
     use crate::inferred_type::{
         MergeTask, RecordBuilder, ResultBuilder, TaskIndex, TupleBuilder, VariantBuilder,
     };
-    use crate::InferredType;
+    use crate::{InferredType, Path, PathElem};
     use std::collections::VecDeque;
 
     pub fn update_record_builder_and_update_tasks(
+        current_path: &Path,
         field_task_index: TaskIndex,
         builder: &mut RecordBuilder,
         fields: &Vec<(String, InferredType)>,
@@ -823,13 +884,25 @@ mod internal {
 
             builder.insert(field.to_string(), field_task_index);
 
-            tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+            let mut current_path = current_path.clone();
+            current_path.push_back(PathElem::Field(field.to_string()));
 
-            temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+            tasks_for_final_stack.push(MergeTask::Inspect(
+                current_path.clone(),
+                field_task_index,
+                inferred_type.clone(),
+            ));
+
+            temp_task_queue.push_back(MergeTask::Inspect(
+                current_path,
+                field_task_index,
+                inferred_type.clone(),
+            ));
         }
     }
 
     pub fn update_variant_builder_and_update_tasks(
+        path: &Path,
         field_task_index: TaskIndex,
         builder: &mut VariantBuilder,
         variants: &Vec<(String, Option<InferredType>)>,
@@ -842,18 +915,27 @@ mod internal {
             if let Some(inferred_type) = inferred_type {
                 field_task_index += 1;
 
+                let path = path.clone();
+
                 builder.insert(variant_name.to_string(), field_task_index);
 
-                tasks_for_final_stack
-                    .push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+                tasks_for_final_stack.push(MergeTask::Inspect(
+                    path.clone(),
+                    field_task_index,
+                    inferred_type.clone(),
+                ));
 
-                temp_task_queue
-                    .push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+                temp_task_queue.push_back(MergeTask::Inspect(
+                    path,
+                    field_task_index,
+                    inferred_type.clone(),
+                ));
             }
         }
     }
 
     pub fn update_result_builder_and_update_tasks(
+        path: &Path,
         field_task_index: TaskIndex,
         builder: &mut ResultBuilder,
         ok: &Option<InferredType>,
@@ -868,9 +950,21 @@ mod internal {
 
             builder.insert_ok(field_task_index);
 
-            tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+            let mut path = path.clone();
 
-            temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+            path.push_back(PathElem::Field("result::ok".to_string()));
+
+            tasks_for_final_stack.push(MergeTask::Inspect(
+                path.clone(),
+                field_task_index,
+                inferred_type.clone(),
+            ));
+
+            temp_task_queue.push_back(MergeTask::Inspect(
+                path.clone(),
+                field_task_index,
+                inferred_type.clone(),
+            ));
         }
 
         if let Some(inferred_type) = error {
@@ -878,13 +972,26 @@ mod internal {
 
             builder.insert_error(field_task_index);
 
-            tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+            let mut path = path.clone();
 
-            temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+            path.push_back(PathElem::Field("result::error".to_string()));
+
+            tasks_for_final_stack.push(MergeTask::Inspect(
+                path.clone(),
+                field_task_index,
+                inferred_type.clone(),
+            ));
+
+            temp_task_queue.push_back(MergeTask::Inspect(
+                path.clone(),
+                field_task_index,
+                inferred_type.clone(),
+            ));
         }
     }
 
     pub fn update_tuple_builder_and_update_tasks(
+        path: &Path,
         field_task_index: TaskIndex,
         builder: &mut TupleBuilder,
         inferred_types: &Vec<InferredType>,
@@ -900,9 +1007,17 @@ mod internal {
 
             indices.push(field_task_index);
 
-            tasks_for_final_stack.push(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+            tasks_for_final_stack.push(MergeTask::Inspect(
+                path.clone(),
+                field_task_index,
+                inferred_type.clone(),
+            ));
 
-            temp_task_queue.push_back(MergeTask::Inspect(field_task_index, inferred_type.clone()));
+            temp_task_queue.push_back(MergeTask::Inspect(
+                path.clone(),
+                field_task_index,
+                inferred_type.clone(),
+            ));
         }
 
         builder.insert(indices);
@@ -913,10 +1028,12 @@ mod internal {
 mod tests {
     use super::*;
     use crate::inferred_type::TypeOrigin;
+    use crate::PathElem;
+    use combine::parser::choice::A::P;
     use test_r::test;
 
     #[test]
-    fn test_get_task_stack_0() {
+    fn test_get_task_stack_record_1() {
         let inferred_types = vec![
             InferredType::record(vec![
                 ("foo".to_string(), InferredType::s8()),
@@ -930,11 +1047,10 @@ mod tests {
 
         let result = get_merge_task(inferred_types);
 
-        dbg!(&result);
-
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::RecordBuilder(RecordBuilder {
+                    path: Path::default(),
                     task_index: 0,
                     field_and_pointers: vec![
                         ("foo".to_string(), vec![1, 3]),
@@ -952,7 +1068,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_task_stack_1() {
+    fn test_get_task_stack_record_2() {
         let inferred_types = vec![InferredType::record(vec![(
             "foo".to_string(),
             InferredType::record(vec![("bar".to_string(), InferredType::s8())]),
@@ -963,14 +1079,85 @@ mod tests {
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::RecordBuilder(RecordBuilder {
+                    path: Path::default(),
                     task_index: 0,
                     field_and_pointers: vec![("foo".to_string(), vec![1])],
                 }),
                 MergeTask::RecordBuilder(RecordBuilder {
+                    path: Path::default(),
                     task_index: 1,
                     field_and_pointers: vec![("bar".to_string(), vec![2])],
                 }),
                 MergeTask::Complete(2, InferredType::s8()),
+            ],
+        };
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_get_task_stack_record_3() {
+        let inferred_types = vec![InferredType::record(vec![(
+            "foo".to_string(),
+            InferredType::record(vec![("foo".to_string(), InferredType::s8())]),
+        )])];
+
+        let result = get_merge_task(inferred_types);
+
+        let expected = MergeTaskStack {
+            tasks: vec![
+                MergeTask::RecordBuilder(RecordBuilder {
+                    path: Path::default(),
+                    task_index: 0,
+                    field_and_pointers: vec![("foo".to_string(), vec![1])],
+                }),
+                MergeTask::RecordBuilder(RecordBuilder {
+                    path: {
+                        let mut path = Path::default();
+                        path.push_back(PathElem::Field("foo".to_string()));
+                        path
+                    },
+                    task_index: 1,
+                    field_and_pointers: vec![("foo".to_string(), vec![2])],
+                }),
+                MergeTask::Complete(2, InferredType::s8()),
+            ],
+        };
+
+        assert_eq!(result, expected);
+    }
+    #[test]
+    fn test_get_task_stack_record_4() {
+        let inferred_type1 =
+            InferredType::record(vec![("foo".to_string(), InferredType::string())]);
+
+        let inferred_type2 = InferredType::record(vec![("foo".to_string(), InferredType::u8())]);
+
+        let inferred_type3 = InferredType::record(vec![(
+            "foo".to_string(),
+            InferredType::new(
+                TypeInternal::AllOf(vec![InferredType::string(), InferredType::u8()]),
+                TypeOrigin::NoOrigin,
+            ),
+        )]);
+
+        let result = get_merge_task(vec![inferred_type1, inferred_type2, inferred_type3]);
+
+        let expected = MergeTaskStack {
+            tasks: vec![
+                MergeTask::RecordBuilder(RecordBuilder {
+                    path: Path::default(),
+                    task_index: 0,
+                    field_and_pointers: vec![("foo".to_string(), vec![1, 2, 3])],
+                }),
+                MergeTask::Complete(1, InferredType::string()),
+                MergeTask::Complete(2, InferredType::u8()),
+                MergeTask::AllOfBuilder(AllOfBuilder {
+                    task_index: 3,
+                    pointers: vec![4, 5],
+                }),
+                MergeTask::Complete(4, InferredType::string()),
+                MergeTask::Complete(5, InferredType::u8()),
             ],
         };
 
@@ -989,10 +1176,10 @@ mod tests {
 
         let result = get_merge_task(inferred_types);
 
-        dbg!(&result);
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::RecordBuilder(RecordBuilder {
+                    path: Path::default(),
                     task_index: 0,
                     field_and_pointers: vec![
                         ("foo".to_string(), vec![1]),
@@ -1002,6 +1189,7 @@ mod tests {
                 MergeTask::Complete(1, InferredType::s8()),
                 MergeTask::Complete(2, InferredType::u8()),
                 MergeTask::RecordBuilder(RecordBuilder {
+                    path: Path::default(),
                     task_index: 3,
                     field_and_pointers: vec![("foo".to_string(), vec![4])],
                 }),
@@ -1028,6 +1216,7 @@ mod tests {
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::RecordBuilder(RecordBuilder {
+                    path: Path::default(),
                     task_index: 0,
                     field_and_pointers: vec![("foo".to_string(), vec![1, 2])],
                 }),
@@ -1045,7 +1234,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_task_stack_4() {
+    fn test_get_stack_result_1() {
         let inferred_types = vec![
             InferredType::result(Some(InferredType::s8()), Some(InferredType::u8())),
             InferredType::result(Some(InferredType::string()), Some(InferredType::s32())),
@@ -1056,6 +1245,74 @@ mod tests {
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::ResultBuilder(ResultBuilder {
+                    path: Path::default(),
+                    task_index: 0,
+                    ok: Some(vec![1, 3]),
+                    error: Some(vec![2, 4]),
+                }),
+                MergeTask::Complete(1, InferredType::s8()),
+                MergeTask::Complete(2, InferredType::u8()),
+                MergeTask::Complete(3, InferredType::string()),
+                MergeTask::Complete(4, InferredType::s32()),
+            ],
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_get_stack_result_2() {
+        // {
+        //    result: {
+        //        result : { result { ... }
+
+        //  } .
+        //    result: { result { ... } }
+        //  }
+        let inner_result =
+            InferredType::result(Some(InferredType::string()), Some(InferredType::u8()));
+
+        let inferred_types = vec![InferredType::result(
+            Some(inner_result),
+            Some(InferredType::u8()),
+        )];
+
+        let result = get_merge_task(inferred_types);
+        
+        let expected = MergeTaskStack {
+            tasks: vec![
+                MergeTask::ResultBuilder(ResultBuilder {
+                    path: Path::default(),
+                    task_index: 0,
+                    ok: Some(vec![1, 3]),
+                    error: Some(vec![2, 4]),
+                }),
+                MergeTask::Complete(1, InferredType::s8()),
+                MergeTask::Complete(2, InferredType::u8()),
+                MergeTask::Complete(3, InferredType::string()),
+                MergeTask::Complete(4, InferredType::s32()),
+            ],
+        };
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_get_stack_result_3() {
+        let inner_result =
+            InferredType::result(Some(InferredType::s32()), Some(InferredType::u64()));
+
+        let inner_result = InferredType::result(Some(inner_result), Some(InferredType::u8()));
+
+        let inferred_types = vec![InferredType::result(
+            Some(InferredType::u8()),
+            Some(inner_result),
+        )];
+
+        let result = get_merge_task(inferred_types);
+
+        let expected = MergeTaskStack {
+            tasks: vec![
+                MergeTask::ResultBuilder(ResultBuilder {
+                    path: Path::default(),
                     task_index: 0,
                     ok: Some(vec![1, 3]),
                     error: Some(vec![2, 4]),
