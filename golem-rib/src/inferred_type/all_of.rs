@@ -201,6 +201,19 @@ impl RecordBuilder {
             .collect()
     }
 
+    pub fn init(index: TaskIndex, fields: &Vec<(String, InferredType)>) -> RecordBuilder {
+        let mut default_values: Vec<(String, Vec<TaskIndex>)> = vec![];
+
+        for (field, _) in fields.iter() {
+            default_values.push((field.clone(), vec![]));
+        }
+
+        RecordBuilder {
+            task_index: index,
+            field_and_pointers: default_values,
+        }
+    }
+
     pub fn new(index: TaskIndex, fields: Vec<(String, Vec<TaskIndex>)>) -> RecordBuilder {
         RecordBuilder {
             task_index: index,
@@ -539,13 +552,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                                 &mut temp_task_queue,
                             );
                         } else {
-                            let mut builder = RecordBuilder::new(
-                                next_available_index,
-                                fields
-                                    .iter()
-                                    .map(|(field, _)| (field.clone(), vec![]))
-                                    .collect(),
-                            );
+                            let mut builder = RecordBuilder::init(next_available_index, fields);
 
                             update_record_builder_and_update_tasks(
                                 next_available_index,
@@ -689,9 +696,10 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
                     | TypeInternal::F32
                     | TypeInternal::F64
                     | TypeInternal::Chr
+                    | TypeInternal::Resource {..}
                     | TypeInternal::Str => final_task_stack.update(
                         &task_index,
-                        MergeTask::Complete(task_index.clone(), inferred_type.clone()),
+                        MergeTask::Complete(task_index, inferred_type),
                     ),
                     _ => {}
                 }
@@ -702,7 +710,7 @@ fn get_merge_task(inferred_types: Vec<InferredType>) -> MergeTaskStack {
             MergeTask::RecordBuilder(_) => {}
             MergeTask::AllOfBuilder(_) => {}
             MergeTask::Complete(index, task) => {
-                final_task_stack.update(&index, MergeTask::Complete(index.clone(), task.clone()));
+                final_task_stack.update(&index, MergeTask::Complete(index, task));
             }
         }
     }
