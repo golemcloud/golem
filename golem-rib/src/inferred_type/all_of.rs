@@ -1261,13 +1261,6 @@ mod tests {
 
     #[test]
     fn test_get_stack_result_2() {
-        // {
-        //    result: {
-        //        result : { result { ... }
-
-        //  } .
-        //    result: { result { ... } }
-        //  }
         let inner_result =
             InferredType::result(Some(InferredType::string()), Some(InferredType::u8()));
 
@@ -1277,7 +1270,7 @@ mod tests {
         )];
 
         let result = get_merge_task(inferred_types);
-        
+
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::ResultBuilder(ResultBuilder {
