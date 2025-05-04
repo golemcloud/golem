@@ -1119,6 +1119,7 @@ mod internal {
 mod tests {
     use super::*;
     use crate::inferred_type::TypeOrigin;
+    use crate::rib_source_span::SourceSpan;
     use crate::PathElem;
     use test_r::test;
 
@@ -1126,18 +1127,22 @@ mod tests {
     fn test_get_task_stack_record_1() {
         let inferred_types = vec![
             InferredType::record(vec![
-                ("foo".to_string(), InferredType::s8()),
+                (
+                    "foo".to_string(),
+                    InferredType::s8().add_origin(TypeOrigin::OriginatedAt(SourceSpan::default())),
+                ),
                 ("bar".to_string(), InferredType::u8()),
             ]),
             InferredType::record(vec![
                 ("foo".to_string(), InferredType::s8()),
-                ("bar".to_string(), InferredType::u8()),
+                (
+                    "bar".to_string(),
+                    InferredType::u8().add_origin(TypeOrigin::OriginatedAt(SourceSpan::default())),
+                ),
             ]),
         ];
 
-        let result = get_merge_task(inferred_types);
-
-        let complete = result.clone().complete();
+        let task_stack = get_merge_task(inferred_types);
 
         let expected = MergeTaskStack {
             tasks: vec![
@@ -1156,11 +1161,22 @@ mod tests {
             ],
         };
 
-        dbg!(complete);
+        assert_eq!(&task_stack, &expected);
 
-        assert!(false);
+        let completed_task = task_stack.complete();
 
-        // assert_eq!(result, expected);
+        let expected_type = InferredType::record(vec![
+            (
+                "foo".to_string(),
+                InferredType::s8().add_origin(TypeOrigin::OriginatedAt(SourceSpan::default())),
+            ),
+            (
+                "bar".to_string(),
+                InferredType::u8().add_origin(TypeOrigin::OriginatedAt(SourceSpan::default())),
+            ),
+        ]);
+
+        assert_eq!(completed_task, expected_type);
     }
 
     #[test]
@@ -1172,7 +1188,6 @@ mod tests {
 
         let result = get_merge_task(inferred_types);
 
-        dbg!(&result);
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::RecordBuilder(RecordBuilder {
