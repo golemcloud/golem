@@ -91,6 +91,97 @@ impl MergeTaskStack {
                         InferredType::new(TypeInternal::Record(fields), TypeOrigin::NoOrigin),
                     );
                 }
+
+                MergeTask::VariantBuilder(builder) => {
+                    let mut variants = vec![];
+
+                    for (variant_name, task_indices) in builder.variants {
+                        if let Some(task_indices) = task_indices {
+                            let mut variant_types = vec![];
+
+                            for task_index in task_indices {
+                                if let Some(typ) = types.get(&task_index) {
+                                    used_index.insert(task_index);
+                                    variant_types.push(typ.clone());
+                                }
+                            }
+
+                            let merged = flatten_all_of(variant_types);
+
+                            variants.push((variant_name, Some(merged)));
+                        }
+                    }
+
+                    types.insert(
+                        builder.task_index,
+                        InferredType::new(TypeInternal::Variant(variants), TypeOrigin::NoOrigin),
+                    );
+                }
+
+                MergeTask::TupleBuilder(tuple_builder) => {
+                    let mut tuple = vec![];
+
+                    for task_indices in tuple_builder.tuple {
+                        let mut tuple_types = vec![];
+
+                        for task_index in task_indices {
+                            if let Some(typ) = types.get(&task_index) {
+                                used_index.insert(task_index);
+                                tuple_types.push(typ.clone());
+                            }
+                        }
+
+                        let merged = flatten_all_of(tuple_types);
+
+                        tuple.push(merged);
+                    }
+
+                    types.insert(
+                        tuple_builder.task_index,
+                        InferredType::new(TypeInternal::Tuple(tuple), TypeOrigin::NoOrigin),
+                    );
+                }
+
+                MergeTask::ResultBuilder(result_builder) => {
+                    let mut ok: Option<InferredType> = None;
+                    let mut error: Option<InferredType> = None;
+
+                    if let Some(task_indices) = result_builder.ok {
+                        let mut ok_types = vec![];
+                        for task_index in task_indices {
+                            if let Some(typ) = types.get(&task_index) {
+                                used_index.insert(task_index);
+                                ok_types.push(typ.clone());
+                            }
+                        }
+
+                        let merged = flatten_all_of(ok_types);
+
+                        ok = Some(merged);
+                    }
+
+                    if let Some(task_indices) = result_builder.error {
+                        let mut error_types = vec![];
+
+                        for task_index in task_indices {
+                            if let Some(typ) = types.get(&task_index) {
+                                used_index.insert(task_index);
+                                error_types.push(typ.clone());
+                            }
+                        }
+
+                        let merged = flatten_all_of(error_types);
+
+                        error = Some(merged);
+                    }
+
+                    types.insert(
+                        result_builder.task_index,
+                        InferredType::new(TypeInternal::Result { ok, error }, TypeOrigin::NoOrigin),
+                    );
+                }
+
+                MergeTask::Inspect(_, _, _) => {}
                 _ => {}
             }
         }
