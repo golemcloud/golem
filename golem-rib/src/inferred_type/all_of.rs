@@ -1602,23 +1602,51 @@ mod tests {
             Some(inner_result),
         )];
 
-        let result = get_merge_task(inferred_types);
+        let merge_task_stack = get_merge_task(inferred_types);
 
-        let expected = MergeTaskStack {
+        let expected_stack = MergeTaskStack {
             tasks: vec![
                 MergeTask::ResultBuilder(ResultBuilder {
                     path: Path::default(),
                     task_index: 0,
-                    ok: Some(vec![1, 3]),
-                    error: Some(vec![2, 4]),
+                    ok: Some(vec![1]),
+                    error: Some(vec![2]),
                 }),
-                MergeTask::Complete(1, InferredType::s8()),
-                MergeTask::Complete(2, InferredType::u8()),
-                MergeTask::Complete(3, InferredType::string()),
-                MergeTask::Complete(4, InferredType::s32()),
+                MergeTask::Complete(1, InferredType::u8()),
+                MergeTask::ResultBuilder(ResultBuilder {
+                    path: Path::from_elems(vec!["result::error"]),
+                    task_index: 2,
+                    ok: Some(vec![3]),
+                    error: Some(vec![4]),
+                }),
+                MergeTask::ResultBuilder(ResultBuilder {
+                    path: Path::from_elems(vec!["result::error", "result::ok"]),
+                    task_index: 3,
+                    ok: Some(vec![5]),
+                    error: Some(vec![6]),
+                }),
+                MergeTask::Complete(4, InferredType::u8()),
+                MergeTask::Complete(5, InferredType::s32()),
+                MergeTask::Complete(6, InferredType::u64()),
             ],
         };
-        assert_eq!(result, expected);
+
+        assert_eq!(&merge_task_stack, &expected_stack);
+
+        let completed_task = merge_task_stack.complete();
+
+        let expected_type = InferredType::result(
+            Some(InferredType::u8()),
+            Some(InferredType::result(
+                Some(InferredType::result(
+                    Some(InferredType::s32()),
+                    Some(InferredType::u64()),
+                )),
+                Some(InferredType::u8()),
+            )),
+        );
+
+        assert_eq!(completed_task, expected_type);
     }
 
     #[test]
