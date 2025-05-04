@@ -2257,6 +2257,195 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         }
     }
 
+    pub async fn begin_transaction_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+    ) -> Result<OplogIndex, GolemError> {
+        if matches!(
+            *function_type,
+            DurableFunctionType::WriteRemoteTransaction(None)
+        ) {
+            if self.is_live() {
+                self.oplog
+                    .add_and_commit(OplogEntry::begin_remote_transaction())
+                    .await;
+                let begin_index = self.oplog.current_oplog_index().await;
+                Ok(begin_index)
+            } else {
+                let (begin_index, _) =
+                    crate::get_oplog_entry!(self.replay_state, OplogEntry::BeginRemoteTransaction)?;
+                if matches!(
+                    *function_type,
+                    DurableFunctionType::WriteRemoteTransaction(None)
+                ) {
+                    let end_index = self
+                        .replay_state
+                        .lookup_oplog_entry_with_condition(
+                            begin_index,
+                            OplogEntry::is_end_remote_transaction,
+                            OplogEntry::no_concurrent_side_effect,
+                        )
+                        .await;
+                    if end_index.is_none() {
+                        // We need to jump to the end of the oplog
+                        self.replay_state.switch_to_live();
+
+                        // But this is not enough, because if the retried batched write operation succeeds,
+                        // and later we replay it, we need to skip the first attempt and only replay the second.
+                        // Se we add a Jump entry to the oplog that registers a deleted region.
+                        let deleted_region = OplogRegion {
+                            start: begin_index.next(), // need to keep the BeginAtomicRegion entry
+                            end: self.replay_state.replay_target().next(), // skipping the Jump entry too
+                        };
+                        self.replay_state
+                            .add_skipped_region(deleted_region.clone())
+                            .await;
+                        self.oplog
+                            .add_and_commit(OplogEntry::jump(deleted_region))
+                            .await;
+                    }
+
+                    Ok(begin_index)
+                } else {
+                    Ok(begin_index)
+                }
+            }
+        } else {
+            let begin_index = self.oplog.current_oplog_index().await;
+            Ok(begin_index)
+        }
+    }
+
+    pub async fn pre_commit_transaction_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError> {
+        if matches!(
+            *function_type,
+            DurableFunctionType::WriteRemoteTransaction(None)
+        ) {
+            if self.is_live() {
+                self.oplog
+                    .add(OplogEntry::pre_commit_remote_transaction(begin_index))
+                    .await;
+                Ok(())
+            } else {
+                let (_, _) = crate::get_oplog_entry!(
+                    self.replay_state,
+                    OplogEntry::PreCommitRemoteTransaction
+                )?;
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn pre_rollback_transaction_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError> {
+        if matches!(
+            *function_type,
+            DurableFunctionType::WriteRemoteTransaction(None)
+        ) {
+            if self.is_live() {
+                self.oplog
+                    .add(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                    .await;
+                Ok(())
+            } else {
+                let (_, _) = crate::get_oplog_entry!(
+                    self.replay_state,
+                    OplogEntry::PreRollbackRemoteTransaction
+                )?;
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn commited_transaction_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError> {
+        if matches!(
+            *function_type,
+            DurableFunctionType::WriteRemoteTransaction(None)
+        ) {
+            if self.is_live() {
+                self.oplog
+                    .add(OplogEntry::commited_remote_transaction(begin_index))
+                    .await;
+                Ok(())
+            } else {
+                let (_, _) = crate::get_oplog_entry!(
+                    self.replay_state,
+                    OplogEntry::CommitedRemoteTransaction
+                )?;
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn rolled_back_transaction_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError> {
+        if matches!(
+            *function_type,
+            DurableFunctionType::WriteRemoteTransaction(None)
+        ) {
+            if self.is_live() {
+                self.oplog
+                    .add(OplogEntry::rolled_back_remote_transaction(begin_index))
+                    .await;
+                Ok(())
+            } else {
+                let (_, _) = crate::get_oplog_entry!(
+                    self.replay_state,
+                    OplogEntry::RolledBackRemoteTransaction
+                )?;
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn aborted_transaction_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError> {
+        if matches!(
+            *function_type,
+            DurableFunctionType::WriteRemoteTransaction(None)
+        ) {
+            if self.is_live() {
+                self.oplog
+                    .add(OplogEntry::abort_remote_transaction(begin_index))
+                    .await;
+                Ok(())
+            } else {
+                let (_, _) = crate::get_oplog_entry!(
+                    self.replay_state,
+                    OplogEntry::AbortedRemoteTransaction
+                )?;
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
     /// In live mode it returns the last oplog index (index of the entry last added).
     /// In replay mode it returns the current replay index (index of the entry last read).
     pub async fn current_oplog_index(&self) -> OplogIndex {

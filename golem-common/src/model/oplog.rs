@@ -830,6 +830,32 @@ impl OplogEntry {
         matches!(self, OplogEntry::EndRemoteWrite { begin_index, .. } if *begin_index == idx)
     }
 
+    pub fn is_pre_commit_remote_transaction(&self, idx: OplogIndex) -> bool {
+        matches!(self, OplogEntry::PreCommitRemoteTransaction { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_pre_rollback_remote_transaction(&self, idx: OplogIndex) -> bool {
+        matches!(self, OplogEntry::PreRollbackRemoteTransaction { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_committed_remote_transaction(&self, idx: OplogIndex) -> bool {
+        matches!(self, OplogEntry::CommitedRemoteTransaction { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_rolled_back_remote_transaction(&self, idx: OplogIndex) -> bool {
+        matches!(self, OplogEntry::RolledBackRemoteTransaction { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_aborted_remote_transaction(&self, idx: OplogIndex) -> bool {
+        matches!(self, OplogEntry::AbortedRemoteTransaction { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_end_remote_transaction(&self, idx: OplogIndex) -> bool {
+        self.is_aborted_remote_transaction(idx)
+            || self.is_committed_remote_transaction(idx)
+            || self.is_rolled_back_remote_transaction(idx)
+    }
+
     /// Checks that an "intermediate oplog entry" between a `BeginRemoteWrite` and an `EndRemoteWrite`
     /// is not a RemoteWrite entry which does not belong to the batched remote write started at `idx`.
     pub fn no_concurrent_side_effect(&self, idx: OplogIndex) -> bool {
