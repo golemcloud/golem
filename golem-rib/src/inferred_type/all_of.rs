@@ -337,7 +337,7 @@ impl<'a> MergeTaskStack<'a> {
                     if builder_variants.len() != variant_identifier.variants.len() {
                         continue;
                     } else {
-                        let found = variant_identifier.variants.iter().all(
+                        let found = variant_identifier.path == builder.path && variant_identifier.variants.iter().all(
                             |(variant_name, variant_type)| {
                                 builder_variants.iter().any(|(name, type_)| {
                                     name == variant_name
@@ -488,12 +488,14 @@ impl TupleBuilder {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct VariantBuilder {
+    path: Path,
     task_index: TaskIndex,
     variants: Vec<(String, Option<Vec<TaskIndex>>)>,
 }
 
 impl VariantBuilder {
     pub fn init(
+        path: Path,
         index: TaskIndex,
         variants: &Vec<(String, Option<InferredType>)>,
     ) -> VariantBuilder {
@@ -511,6 +513,7 @@ impl VariantBuilder {
         }
 
         VariantBuilder {
+            path: path.clone(),
             task_index: index,
             variants: default_values,
         }
@@ -768,7 +771,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                         let next_available_index = final_task_stack.next_index();
 
                         let record_identifier: VariantIdentifier =
-                            VariantIdentifier::from(variants);
+                            VariantIdentifier::from(path, variants);
 
                         let builder = final_task_stack.get_variant_mut(&record_identifier);
 
@@ -791,7 +794,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                                     (next_available_index, next_available_index)
                                 };
 
-                            let mut builder = VariantBuilder::init(task_index, variants);
+                            let mut builder = VariantBuilder::init(path.clone(), task_index, variants);
 
                             update_variant_builder_and_update_tasks(
                                 path,
@@ -1075,10 +1078,11 @@ mod type_identifiers {
     }
 
     pub struct VariantIdentifier {
+        pub path: Path,
         pub variants: Vec<(String, VariantType)>,
     }
     impl VariantIdentifier {
-        pub fn from(variants: &Vec<(String, Option<InferredType>)>) -> VariantIdentifier {
+        pub fn from(path: &Path, variants: &Vec<(String, Option<InferredType>)>) -> VariantIdentifier {
             let mut keys = vec![];
 
             for (variant, inferred_type) in variants.iter() {
@@ -1088,7 +1092,7 @@ mod type_identifiers {
                 }
             }
 
-            VariantIdentifier { variants: keys }
+            VariantIdentifier { path: path.clone(), variants: keys }
         }
     }
 
@@ -1234,7 +1238,8 @@ mod internal {
             if let Some(inferred_type) = inferred_type {
                 field_task_index += 1;
 
-                let path = path.clone();
+                let mut path = path.clone();
+                path.push_back(PathElem::Field(variant_name.to_string()));
 
                 builder.insert(variant_name.to_string(), field_task_index);
 
@@ -1901,6 +1906,7 @@ mod tests {
         let expected_stack = MergeTaskStack {
             tasks: vec![
                 MergeTask::VariantBuilder(VariantBuilder {
+                    path: Path::default(),
                     task_index: 0,
                     variants: vec![
                         ("with_arg".to_string(), Some(vec![1, 2])),
@@ -1920,6 +1926,47 @@ mod tests {
                 "with_arg".to_string(),
                 Some(InferredType::new(
                     TypeInternal::AllOf(vec![InferredType::string(), InferredType::s8()]),
+                    TypeOrigin::NoOrigin,
+                )),
+            ),
+            ("without_arg".to_string(), None),
+        ]);
+
+        assert_eq!(completed_task, expected_type);
+    }
+
+    #[test]
+    fn test_all_of_merge_variant_2() {
+        let variant1 = InferredType::variant(vec![
+            ("with_arg1".to_string(), Some(InferredType::s8())),
+            ("without_arg2".to_string(), None),
+        ]);
+
+        let variant2 = InferredType::variant(vec![
+            ("with_arg3".to_string(), Some(InferredType::string())),
+            ("without_arg4".to_string(), None),
+        ]);
+
+        let inferred_types = vec![
+            InferredType::variant(vec![
+                ("with_arg".to_string(), Some(variant1.clone())),
+                ("without_arg".to_string(), None),
+            ]),
+            InferredType::variant(vec![
+                ("with_arg".to_string(), Some(variant2.clone())),
+                ("without_arg".to_string(), None),
+            ]),
+        ];
+
+        let merge_task_stack = get_merge_task(&inferred_types);
+
+        let completed_task = merge_task_stack.complete();
+
+        let expected_type = InferredType::variant(vec![
+            (
+                "with_arg".to_string(),
+                Some(InferredType::new(
+                    TypeInternal::AllOf(vec![variant1, variant2]),
                     TypeOrigin::NoOrigin,
                 )),
             ),
