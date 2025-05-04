@@ -79,7 +79,7 @@ impl<'a> MergeTaskStack<'a> {
 
                         let merged = flatten_all_of(field_types);
 
-                        fields.push((field, merged));
+                        fields.push((field.to_string(), merged));
                     }
 
                     let inferred_type =
@@ -276,7 +276,7 @@ impl<'a> MergeTaskStack<'a> {
     pub fn get_record_mut(
         &mut self,
         record_fields: &RecordIdentifier,
-    ) -> Option<&mut RecordBuilder> {
+    ) -> Option<&mut RecordBuilder<'a>> {
         for task in self.tasks.iter_mut().rev() {
             match task {
                 MergeTask::RecordBuilder(builder)
@@ -378,7 +378,7 @@ impl<'a> MergeTaskStack<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MergeTask<'a> {
-    RecordBuilder(RecordBuilder),
+    RecordBuilder(RecordBuilder<'a>),
     VariantBuilder(VariantBuilder),
     TupleBuilder(TupleBuilder),
     Inspect(Path, TaskIndex, &'a InferredType),
@@ -559,29 +559,28 @@ impl AllOfBuilder {
 }
 
 #[derive(Default, Clone, Debug, PartialEq)]
-pub struct RecordBuilder {
+pub struct RecordBuilder<'a> {
     path: Path,
-    task_index: TaskIndex, // The index in the task stack to which this builder belongs
-    field_and_pointers: Vec<(String, Vec<TaskIndex>)>,
+    task_index: TaskIndex,
+    field_and_pointers: Vec<(&'a str, Vec<TaskIndex>)>,
 }
 
-impl RecordBuilder {
-    pub fn field_names(&self) -> Vec<String> {
+impl<'a> RecordBuilder<'a> {
+    pub fn field_names(&self) -> Vec<&str> {
         self.field_and_pointers
             .iter()
-            .map(|(name, _)| name.clone())
-            .collect()
+            .map(|(name, _)| *name).collect()
     }
 
     pub fn init(
         path: &Path,
         task_index: TaskIndex,
-        fields: &Vec<(String, InferredType)>,
-    ) -> RecordBuilder {
-        let mut default_values: Vec<(String, Vec<TaskIndex>)> = vec![];
+        fields: &'a Vec<(String, InferredType)>,
+    ) -> RecordBuilder<'a> {
+        let mut default_values: Vec<(&str, Vec<TaskIndex>)> = vec![];
 
         for (field, _) in fields.iter() {
-            default_values.push((field.clone(), vec![]));
+            default_values.push((field, vec![]));
         }
 
         RecordBuilder {
@@ -591,7 +590,7 @@ impl RecordBuilder {
         }
     }
 
-    pub fn insert(&mut self, field_name: String, task_index: TaskIndex) {
+    pub fn insert(&mut self, field_name: &'a str, task_index: TaskIndex) {
         let mut found = false;
         self.field_and_pointers
             .iter_mut()
@@ -1051,7 +1050,7 @@ mod internal {
     pub fn update_record_builder_and_update_tasks<'a>(
         current_path: &Path,
         field_task_index: TaskIndex,
-        builder: &mut RecordBuilder,
+        builder: &mut RecordBuilder<'a>,
         fields: &'a Vec<(String, InferredType)>,
         tasks_for_final_stack: &mut Vec<MergeTask<'a>>,
         temp_task_queue: &mut VecDeque<MergeTask<'a>>,
@@ -1061,7 +1060,7 @@ mod internal {
         for (field, inferred_type) in fields.into_iter() {
             field_task_index += 1;
 
-            builder.insert(field.to_string(), field_task_index);
+            builder.insert(field, field_task_index);
 
             let mut current_path = current_path.clone();
             current_path.push_back(PathElem::Field(field.to_string()));
@@ -1215,7 +1214,7 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn test_get_task_stack_record_1() {
+    fn test_all_of_merge_record_1() {
         let inferred_types = vec![
             InferredType::record(vec![
                 (
@@ -1244,8 +1243,8 @@ mod tests {
                     path: Path::default(),
                     task_index: 0,
                     field_and_pointers: vec![
-                        ("foo".to_string(), vec![1, 3]),
-                        ("bar".to_string(), vec![2, 4]),
+                        ("foo", vec![1, 3]),
+                        ("bar", vec![2, 4]),
                     ],
                 }),
                 MergeTask::Complete(1, &s8),
@@ -1274,7 +1273,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_task_stack_record_2() {
+    fn test_all_of_merge_record_2() {
         let inferred_types = vec![InferredType::record(vec![(
             "foo".to_string(),
             InferredType::record(vec![("bar".to_string(), InferredType::s8())]),
@@ -1289,12 +1288,12 @@ mod tests {
                 MergeTask::RecordBuilder(RecordBuilder {
                     path: Path::default(),
                     task_index: 0,
-                    field_and_pointers: vec![("foo".to_string(), vec![1])],
+                    field_and_pointers: vec![("foo", vec![1])],
                 }),
                 MergeTask::RecordBuilder(RecordBuilder {
                     path: Path::from_elems(vec!["foo"]),
                     task_index: 1,
-                    field_and_pointers: vec![("bar".to_string(), vec![2])],
+                    field_and_pointers: vec![("bar", vec![2])],
                 }),
                 MergeTask::Complete(2, &s8),
             ],
@@ -1313,7 +1312,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_task_stack_record_3() {
+    fn test_all_of_merge_record_3() {
         let inferred_types = vec![InferredType::record(vec![(
             "foo".to_string(),
             InferredType::record(vec![("foo".to_string(), InferredType::s8())]),
@@ -1328,7 +1327,7 @@ mod tests {
                 MergeTask::RecordBuilder(RecordBuilder {
                     path: Path::default(),
                     task_index: 0,
-                    field_and_pointers: vec![("foo".to_string(), vec![1])],
+                    field_and_pointers: vec![("foo", vec![1])],
                 }),
                 MergeTask::RecordBuilder(RecordBuilder {
                     path: {
@@ -1337,7 +1336,7 @@ mod tests {
                         path
                     },
                     task_index: 1,
-                    field_and_pointers: vec![("foo".to_string(), vec![2])],
+                    field_and_pointers: vec![("foo", vec![2])],
                 }),
                 MergeTask::Complete(2, &s8),
             ],
@@ -1355,7 +1354,7 @@ mod tests {
         assert_eq!(completed_stack, expected_type);
     }
     #[test]
-    fn test_get_task_stack_record_4() {
+    fn test_all_of_merge_record_4() {
         let inferred_type1 =
             InferredType::record(vec![("foo".to_string(), InferredType::string())]);
 
@@ -1380,7 +1379,7 @@ mod tests {
                 MergeTask::RecordBuilder(RecordBuilder {
                     path: Path::default(),
                     task_index: 0,
-                    field_and_pointers: vec![("foo".to_string(), vec![1, 2, 3])],
+                    field_and_pointers: vec![("foo", vec![1, 2, 3])],
                 }),
                 MergeTask::Complete(1, &string),
                 MergeTask::Complete(2, &u8),
@@ -1409,7 +1408,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_task_record_6() {
+    fn test_all_of_merge_record_6() {
         let inferred_types = vec![
             InferredType::record(vec![
                 ("foo".to_string(), InferredType::s8()),
@@ -1430,8 +1429,8 @@ mod tests {
                     path: Path::default(),
                     task_index: 0,
                     field_and_pointers: vec![
-                        ("foo".to_string(), vec![1]),
-                        ("bar".to_string(), vec![2]),
+                        ("foo", vec![1]),
+                        ("bar", vec![2]),
                     ],
                 }),
                 MergeTask::Complete(1, &s8),
@@ -1439,7 +1438,7 @@ mod tests {
                 MergeTask::RecordBuilder(RecordBuilder {
                     path: Path::default(),
                     task_index: 3,
-                    field_and_pointers: vec![("foo".to_string(), vec![4])],
+                    field_and_pointers: vec![("foo", vec![4])],
                 }),
                 MergeTask::Complete(4, &string),
             ],
@@ -1449,7 +1448,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_task_stack_record_7() {
+    fn test_all_of_merge_record_7() {
         let all_of_internal = TypeInternal::AllOf(vec![InferredType::s8(), InferredType::u8()]);
 
         let all_of = InferredType::new(all_of_internal, TypeOrigin::NoOrigin);
@@ -1469,7 +1468,7 @@ mod tests {
                 MergeTask::RecordBuilder(RecordBuilder {
                     path: Path::default(),
                     task_index: 0,
-                    field_and_pointers: vec![("foo".to_string(), vec![1, 2])],
+                    field_and_pointers: vec![("foo", vec![1, 2])],
                 }),
                 MergeTask::Complete(1, &s8),
                 MergeTask::AllOfBuilder(AllOfBuilder {
@@ -1497,7 +1496,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_stack_result_1() {
+    fn test_all_of_merge_result_1() {
         let inferred_types = vec![
             InferredType::result(Some(InferredType::s8()), Some(InferredType::u8())),
             InferredType::result(Some(InferredType::string()), Some(InferredType::s32())),
@@ -1543,7 +1542,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_stack_result_2() {
+    fn test_all_of_merge_result_2() {
         let inner_result =
             InferredType::result(Some(InferredType::string()), Some(InferredType::u8()));
 
@@ -1593,7 +1592,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_stack_result_3() {
+    fn test_all_of_merge_result_3() {
         let inner_result =
             InferredType::result(Some(InferredType::s32()), Some(InferredType::u64()));
 
@@ -1656,7 +1655,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_stack_result_4() {
+    fn test_all_of_merge_result_4() {
         let result1 = InferredType::result(Some(InferredType::string()), Some(InferredType::u8()));
 
         let result2 = InferredType::result(Some(InferredType::u8()), Some(InferredType::s32()));
@@ -1747,7 +1746,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_task_stack_variant_1() {
+    fn test_all_of_merge_variant_1() {
         let inferred_types = vec![
             InferredType::variant(vec![
                 ("with_arg".to_string(), Some(InferredType::s8())),
@@ -1796,7 +1795,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_task_stack_tuple_1() {
+    fn test_all_of_merge_tuple_1() {
         let inferred_types = vec![
             InferredType::tuple(vec![InferredType::s8(), InferredType::u8()]),
             InferredType::tuple(vec![InferredType::string(), InferredType::s8()]),
@@ -1807,8 +1806,6 @@ mod tests {
         let inferred_type_string = InferredType::string();
 
         let merge_task_stack = get_merge_task(&inferred_types);
-
-        dbg!(&merge_task_stack);
 
         let expected_stack = MergeTaskStack {
             tasks: vec![
@@ -1843,7 +1840,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_task_stack_tuple_2() {
+    fn test_all_of_merge_tuple_2() {
         let inferred_types = vec![InferredType::tuple(vec![
             InferredType::s8(),
             InferredType::tuple(vec![InferredType::s8()]),
@@ -1883,7 +1880,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ambiguous_1() {
+    fn test_all_of_merge_ambiguous() {
         let tuple1 = InferredType::tuple(vec![InferredType::s8(), InferredType::string()]);
 
         let tuple2 = InferredType::tuple(vec![InferredType::s8(), InferredType::string()]);
