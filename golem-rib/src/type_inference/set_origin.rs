@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::inferred_type::TypeOrigin;
 use crate::{Expr, ExprVisitor};
-use std::collections::VecDeque;
 
 pub fn set_pattern_match_origins(expr: &mut Expr) {
     let mut visitor = ExprVisitor::bottom_up(expr);

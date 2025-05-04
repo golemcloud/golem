@@ -29,7 +29,7 @@ use crate::type_inference::GetTypeHint;
 use crate::TypeName;
 use bigdecimal::BigDecimal;
 use golem_wasm_ast::analysis::*;
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -566,8 +566,7 @@ impl InferredType {
     pub fn all_of(types: Vec<InferredType>) -> Option<InferredType> {
         let flattened = InferredType::flatten_all_of_inferred_types(&types);
 
-        let mut types: Vec<InferredType> =
-            flattened.into_iter().filter(|t| !t.is_unknown()).collect();
+        let types: Vec<InferredType> = flattened.into_iter().filter(|t| !t.is_unknown()).collect();
 
         let mut type_map: std::collections::HashMap<InferredType, InferredType> =
             std::collections::HashMap::new();
@@ -591,7 +590,7 @@ impl InferredType {
             let mut unique_all_of_types: Vec<InferredType> = type_map.into_values().collect();
             unique_all_of_types.sort(); // Assuming InferredType implements Ord
 
-            let mut origin = TypeOrigin::NoOrigin;
+            let origin = TypeOrigin::NoOrigin;
 
             Some(InferredType {
                 inner: Box::new(TypeInternal::AllOf(unique_all_of_types)),

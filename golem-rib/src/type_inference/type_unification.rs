@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::inferred_type::{TypeOrigin, UnificationFailureInternal};
+use crate::inferred_type::UnificationFailureInternal;
 use crate::{Expr, ExprVisitor, InferredType, TypeUnificationError};
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {

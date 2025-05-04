@@ -51,10 +51,6 @@ pub struct MergeTaskStack<'a> {
 }
 
 impl<'a> MergeTaskStack<'a> {
-    pub fn len(&self) -> usize {
-        self.tasks.len()
-    }
-
     pub fn complete(self) -> InferredType {
         let mut types = HashMap::new();
 
@@ -237,16 +233,6 @@ impl<'a> MergeTaskStack<'a> {
         }
     }
 
-    pub fn update_build_record(&mut self, task: &mut RecordBuilder) {
-        // does it exist before
-        let index = task.task_index;
-
-        if let Some(_) = self.tasks.get(index) {
-        } else {
-            self.tasks.push(MergeTask::RecordBuilder(task.clone()));
-        }
-    }
-
     pub fn update(&mut self, index: &TaskIndex, task: MergeTask<'a>) {
         if index < &self.tasks.len() {
             self.tasks[*index] = task;
@@ -308,8 +294,6 @@ impl<'a> MergeTaskStack<'a> {
         &mut self,
         variant_identifier: &VariantIdentifier,
     ) -> Option<&mut VariantBuilder> {
-        let mut found = false;
-
         for task in self.tasks.iter_mut().rev() {
             match task {
                 MergeTask::VariantBuilder(builder) => {
@@ -318,7 +302,7 @@ impl<'a> MergeTaskStack<'a> {
                     if builder_variants.len() != variant_identifier.variants.len() {
                         continue;
                     } else {
-                        found = variant_identifier.variants.iter().all(
+                        let found = variant_identifier.variants.iter().all(
                             |(variant_name, variant_type)| {
                                 builder_variants.iter().any(|(name, type_)| {
                                     name == variant_name
@@ -328,10 +312,11 @@ impl<'a> MergeTaskStack<'a> {
                                         }
                                 })
                             },
-                        )
-                    }
-                    if found {
-                        return Some(builder);
+                        );
+
+                        if found {
+                            return Some(builder);
+                        }
                     }
                 }
 
@@ -342,34 +327,38 @@ impl<'a> MergeTaskStack<'a> {
         None
     }
 
-    pub fn get_result_mut(
-        &mut self,
-        path: &Path,
-        result_key: &ResultIdentifier,
-    ) -> Option<&mut ResultBuilder> {
+    pub fn get_result_mut(&mut self, result_key: &ResultIdentifier) -> Option<&mut ResultBuilder> {
         for task in self.tasks.iter_mut().rev() {
             match task {
                 MergeTask::ResultBuilder(builder) => match (result_key.ok, result_key.error) {
                     (true, true) => {
-                        if builder.ok.is_some() && builder.error.is_some() && &builder.path == path
+                        if builder.ok.is_some()
+                            && builder.error.is_some()
+                            && builder.path == result_key.path
                         {
                             return Some(builder);
                         }
                     }
                     (true, false) => {
-                        if builder.ok.is_some() && builder.error.is_none() && &builder.path == path
+                        if builder.ok.is_some()
+                            && builder.error.is_none()
+                            && builder.path == result_key.path
                         {
                             return Some(builder);
                         }
                     }
                     (false, true) => {
-                        if builder.ok.is_none() && builder.error.is_some() && &builder.path == path
+                        if builder.ok.is_none()
+                            && builder.error.is_some()
+                            && builder.path == result_key.path
                         {
                             return Some(builder);
                         }
                     }
                     (false, false) => {
-                        if builder.ok.is_none() && builder.error.is_none() && &builder.path == path
+                        if builder.ok.is_none()
+                            && builder.error.is_none()
+                            && builder.path == result_key.path
                         {
                             return Some(builder);
                         }
@@ -448,16 +437,6 @@ pub struct VariantBuilder {
 }
 
 impl VariantBuilder {
-    pub fn new(
-        index: TaskIndex,
-        variants: Vec<(String, Option<Vec<TaskIndex>>)>,
-    ) -> VariantBuilder {
-        VariantBuilder {
-            task_index: index,
-            variants,
-        }
-    }
-
     pub fn init(
         index: TaskIndex,
         variants: &Vec<(String, Option<InferredType>)>,
@@ -572,10 +551,6 @@ impl AllOfBuilder {
             pointers,
         }
     }
-
-    pub fn insert(&mut self, task_index: TaskIndex) {
-        self.pointers.push(task_index);
-    }
 }
 
 #[derive(Default, Clone, Debug, PartialEq)]
@@ -608,18 +583,6 @@ impl RecordBuilder {
             path: path.clone(),
             task_index,
             field_and_pointers: default_values,
-        }
-    }
-
-    pub fn new(
-        path: Path,
-        index: TaskIndex,
-        fields: Vec<(String, Vec<TaskIndex>)>,
-    ) -> RecordBuilder {
-        RecordBuilder {
-            path,
-            task_index: index,
-            field_and_pointers: fields,
         }
     }
 
@@ -752,7 +715,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                         let result_identifier: ResultIdentifier =
                             ResultIdentifier::from(path, ok, error);
 
-                        let builder = final_task_stack.get_result_mut(path, &result_identifier);
+                        let builder = final_task_stack.get_result_mut(&result_identifier);
 
                         let mut tasks_for_final_stack = vec![];
 
@@ -912,7 +875,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
             MergeTask::RecordBuilder(_) => {}
             MergeTask::AllOfBuilder(_) => {}
             MergeTask::Complete(index, task) => {
-                final_task_stack.update(&index, MergeTask::Complete(*index, task.clone()));
+                final_task_stack.update(&index, MergeTask::Complete(*index, task));
             }
         }
     }

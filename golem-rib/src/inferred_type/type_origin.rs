@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::rib_source_span::SourceSpan;
-use crate::{InferredNumber, InferredType};
 use bigdecimal::BigDecimal;
 use std::collections::VecDeque;
 use std::fmt::Debug;
@@ -67,7 +66,7 @@ impl DefaultType {
 }
 
 impl PartialEq for DefaultType {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(&self, _other: &Self) -> bool {
         true
     }
 }

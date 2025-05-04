@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::inferred_type::TypeOrigin;
 use crate::rib_type_error::RibTypeError;
 use crate::type_inference::type_hint::TypeHint;
 use crate::type_refinement::precise_types::{ListType, RecordType};
