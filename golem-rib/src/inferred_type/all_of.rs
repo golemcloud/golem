@@ -109,6 +109,8 @@ impl MergeTaskStack {
                             let merged = flatten_all_of(variant_types);
 
                             variants.push((variant_name, Some(merged)));
+                        } else {
+                            variants.push((variant_name, None));
                         }
                     }
 
@@ -1671,9 +1673,9 @@ mod tests {
             )),
         );
 
-        let result = get_merge_task(vec![result1, result2, result3, result4]);
+        let merge_task_stack = get_merge_task(vec![result1, result2, result3, result4]);
 
-        let expected = MergeTaskStack {
+        let expected_stack = MergeTaskStack {
             tasks: vec![
                 MergeTask::ResultBuilder(ResultBuilder {
                     path: Path::default(),
@@ -1701,7 +1703,34 @@ mod tests {
                 MergeTask::Complete(12, InferredType::u64()),
             ],
         };
-        assert_eq!(result, expected);
+
+        assert_eq!(&merge_task_stack, &expected_stack);
+
+        let completed_task = merge_task_stack.complete();
+
+        let expected_type = InferredType::result(
+            Some(InferredType::new(
+                TypeInternal::AllOf(vec![
+                    InferredType::string(),
+                    InferredType::u64(),
+                    InferredType::u32(),
+                    InferredType::u8(),
+                    InferredType::s8(),
+                ]),
+                TypeOrigin::NoOrigin,
+            )),
+            Some(InferredType::new(
+                TypeInternal::AllOf(vec![
+                    InferredType::s32(),
+                    InferredType::u32(),
+                    InferredType::u8(),
+                    InferredType::u64(),
+                ]),
+                TypeOrigin::NoOrigin,
+            )),
+        );
+
+        assert_eq!(completed_task, expected_type);
     }
 
     #[test]
@@ -1717,9 +1746,9 @@ mod tests {
             ]),
         ];
 
-        let result = get_merge_task(inferred_types);
+        let merge_task_stack = get_merge_task(inferred_types);
 
-        let expected = MergeTaskStack {
+        let expected_stack = MergeTaskStack {
             tasks: vec![
                 MergeTask::VariantBuilder(VariantBuilder {
                     task_index: 0,
@@ -1732,6 +1761,23 @@ mod tests {
                 MergeTask::Complete(2, InferredType::string()),
             ],
         };
-        assert_eq!(result, expected);
+        assert_eq!(&merge_task_stack, &expected_stack);
+
+        let completed_task = merge_task_stack.complete();
+
+        dbg!(&completed_task);
+
+        let expected_type = InferredType::variant(vec![
+            (
+                "with_arg".to_string(),
+                Some(InferredType::new(
+                    TypeInternal::AllOf(vec![InferredType::string(), InferredType::s8()]),
+                    TypeOrigin::NoOrigin,
+                )),
+            ),
+            ("without_arg".to_string(), None),
+        ]);
+
+        assert_eq!(completed_task, expected_type);
     }
 }
