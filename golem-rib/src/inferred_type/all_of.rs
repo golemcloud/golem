@@ -13,28 +13,269 @@
 // limitations under the License.
 
 use crate::{InferredType, Path, TypeInternal};
-use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet, VecDeque};
-
-// This module is responsible to merge the types when constructing InferredType::AllOf, while
-// selecting the type with maximum `TypeOrigin` information. This gives two advantages. We save some memory footprint
-// (Ex: `{foo : string}` and `{foo: all_of(string, u8)}` will be merged to `{foo: all_of(string, u8)}`.)
-// Secondly, this phase will choose to deduplicate the types based on maximum
-// `TypeOrigin` allowing descriptive compilation error messages at the end.
-
-// But this is done only if the types match exact. It doesn't do `unification` (its a separate phase)
-// keeping things orthogonal for maintainability. This merging shouldn't be confused with `unification`.
-
-// Example: We will not merge `{foo: string}` and `{foo: string, bar: u8}` to `{foo: all_of(string, string), bar: u8}`
-// as they are different record types.
-
-// However, we will merge `{foo: string}` and `{foo: u8}` to `{foo: (string, u8)}` or
-// `{foo: string, bar: u8}` and `{foo: string, bar: string}` to `{foo: all_of(string, string), bar: all_of(u8, string)}`.
-// We do not merge all_of(string, string) in the above example to `string` either.
 
 use crate::inferred_type::TypeOrigin;
 pub(crate) use internal::*;
 pub(crate) use type_identifiers::*;
+
+// This module is responsible to merge the types when constructing InferredType::AllOf, while
+// selecting the type with maximum `TypeOrigin` information. This gives two advantages.
+
+// We may have a better memory footprint with this phase as an added advantage
+// (Ex: `{foo : string}` and `{foo: all_of(string, u8)}` will be merged to `{foo: all_of(string, u8)}`).
+// More importantly, by doing such merge, this phase will/can choose to deduplicate the types based on maximum
+// `TypeOrigin` allowing descriptive compilation error messages at the end. Otherwise, we will have
+// types with less `TypeOrigin` information at the unification phase, forcing the compiler to fail
+// with less descriptive error messages.
+
+// Importantly, this merging is NOT unification. Merging is done only if types match exact.
+// It doesn't do `unification` (it's a separate phase)
+// keeping things orthogonal for maintainability. Also, such an early unification result in invariants to appear
+// in final unification resulting in invalid states. So it's better not to try even if it seems like a good idea.
+
+// Example:
+// In this phase, will not merge `{foo: string}` and `{foo: string, bar: u8}` to `{foo: all_of(string, string), bar: u8}`
+// as they are different record types.
+// However, we will merge `{foo: string}` and `{foo: u8}` to `{foo: (string, u8)}` or
+// `{foo: string, bar: u8}` and `{foo: string, bar: string}` to `{foo: all_of(string, string), bar: all_of(u8, string)}`.
+
+// High level Implementation detail:
+// MergeTaskStack is a set of build tasks to generate types where each builder simply have indices
+// pointing to another builder or a completed type. Stack may also have just a set of completed inferred-type.
+// `merge_task_stack.complete()` will finally do the job of converting indices to proper types
+// while also deduplicating leaf nodes by selecting the one with maximum `TypeOrigin` information.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeTaskStack {
+    tasks: Vec<MergeTask>,
+}
+
+impl MergeTaskStack {
+    pub fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
+    pub fn complete(self) -> InferredType {
+        let mut types = HashMap::new();
+
+        let mut used_index = HashSet::new();
+
+        let iter = self.tasks.into_iter().rev();
+
+        for task in iter {
+            match task {
+                MergeTask::Complete(index, task) => {
+                    types.insert(index, task);
+                }
+
+                MergeTask::RecordBuilder(builder) => {
+                    let mut fields = vec![];
+
+                    for (field, task_indices) in builder.field_and_pointers {
+                        let mut field_types = vec![];
+
+                        for task_index in task_indices {
+                            if let Some(typ) = types.get(&task_index) {
+                                used_index.insert(task_index);
+                                field_types.push(typ.clone());
+                            }
+                        }
+
+                        let merged = flatten_all_of(field_types);
+
+                        fields.push((field, merged));
+                    }
+
+                    types.insert(
+                        builder.task_index,
+                        InferredType::new(TypeInternal::Record(fields), TypeOrigin::NoOrigin),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        let mut final_types = vec![];
+        for (index, typ) in types.into_iter() {
+            if used_index.contains(&index) {
+                continue;
+            }
+
+            final_types.push(typ);
+        }
+
+        if final_types.len() == 1 {
+            final_types[0].clone()
+        } else {
+            InferredType::new(TypeInternal::AllOf(final_types), TypeOrigin::NoOrigin)
+        }
+    }
+
+    pub fn get(&self, task_index: &TaskIndex) -> Option<&MergeTask> {
+        self.tasks.get(*task_index)
+    }
+
+    pub fn extend(&mut self, other: MergeTaskStack) {
+        self.tasks.extend(other.tasks);
+    }
+
+    pub fn update_build_task(&mut self, task: MergeTask) {
+        // does it exist before
+        let index = task.get_index_in_stack();
+
+        if let Some(_) = self.tasks.get(index) {
+            self.tasks[index] = task;
+        } else {
+            self.tasks.push(task);
+        }
+    }
+
+    pub fn update_build_record(&mut self, task: &mut RecordBuilder) {
+        // does it exist before
+        let index = task.task_index;
+
+        if let Some(_) = self.tasks.get(index) {
+        } else {
+            self.tasks.push(MergeTask::RecordBuilder(task.clone()));
+        }
+    }
+
+    pub fn update(&mut self, index: &TaskIndex, task: MergeTask) {
+        if index < &self.tasks.len() {
+            self.tasks[*index] = task;
+        } else {
+            self.tasks.push(task);
+        }
+    }
+
+    pub fn next_index(&self) -> TaskIndex {
+        self.tasks.len()
+    }
+
+    pub fn new() -> MergeTaskStack {
+        MergeTaskStack { tasks: vec![] }
+    }
+
+    pub fn init(stack: Vec<MergeTask>) -> MergeTaskStack {
+        MergeTaskStack { tasks: stack }
+    }
+
+    pub fn get_tuple_mut(
+        &mut self,
+        tuple_identifier: &TupleIdentifier,
+    ) -> Option<&mut TupleBuilder> {
+        for task in self.tasks.iter_mut().rev() {
+            match task {
+                MergeTask::TupleBuilder(builder) if builder.tuple.len() == tuple_identifier.0 => {
+                    return Some(builder);
+                }
+
+                _ => {}
+            }
+        }
+
+        None
+    }
+
+    pub fn get_record_mut(
+        &mut self,
+        record_fields: &RecordIdentifier,
+    ) -> Option<&mut RecordBuilder> {
+        for task in self.tasks.iter_mut().rev() {
+            match task {
+                MergeTask::RecordBuilder(builder)
+                    if builder.field_names() == record_fields.fields
+                        && builder.path == record_fields.path =>
+                {
+                    return Some(builder);
+                }
+
+                _ => {}
+            }
+        }
+
+        None
+    }
+
+    pub fn get_variant_mut(
+        &mut self,
+        variant_identifier: &VariantIdentifier,
+    ) -> Option<&mut VariantBuilder> {
+        let mut found = false;
+
+        for task in self.tasks.iter_mut().rev() {
+            match task {
+                MergeTask::VariantBuilder(builder) => {
+                    let builder_variants = &builder.variants;
+
+                    if builder_variants.len() != variant_identifier.variants.len() {
+                        continue;
+                    } else {
+                        found = variant_identifier.variants.iter().all(
+                            |(variant_name, variant_type)| {
+                                builder_variants.iter().any(|(name, type_)| {
+                                    name == variant_name
+                                        && match variant_type {
+                                            VariantType::WithArgs => type_.is_some(),
+                                            VariantType::WithoutArgs => type_.is_none(),
+                                        }
+                                })
+                            },
+                        )
+                    }
+                    if found {
+                        return Some(builder);
+                    }
+                }
+
+                _ => {}
+            }
+        }
+
+        None
+    }
+
+    pub fn get_result_mut(
+        &mut self,
+        path: &Path,
+        result_key: &ResultIdentifier,
+    ) -> Option<&mut ResultBuilder> {
+        for task in self.tasks.iter_mut().rev() {
+            match task {
+                MergeTask::ResultBuilder(builder) => match (result_key.ok, result_key.error) {
+                    (true, true) => {
+                        if builder.ok.is_some() && builder.error.is_some() && &builder.path == path
+                        {
+                            return Some(builder);
+                        }
+                    }
+                    (true, false) => {
+                        if builder.ok.is_some() && builder.error.is_none() && &builder.path == path
+                        {
+                            return Some(builder);
+                        }
+                    }
+                    (false, true) => {
+                        if builder.ok.is_none() && builder.error.is_some() && &builder.path == path
+                        {
+                            return Some(builder);
+                        }
+                    }
+                    (false, false) => {
+                        if builder.ok.is_none() && builder.error.is_none() && &builder.path == path
+                        {
+                            return Some(builder);
+                        }
+                    }
+                },
+
+                _ => {}
+            }
+        }
+
+        None
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MergeTask {
@@ -288,238 +529,6 @@ impl RecordBuilder {
         if !found {
             self.field_and_pointers.push((field_name, vec![task_index]));
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct MergeTaskStack {
-    tasks: Vec<MergeTask>,
-}
-
-impl MergeTaskStack {
-    pub fn len(&self) -> usize {
-        self.tasks.len()
-    }
-
-    pub fn complete(self) -> InferredType {
-        let mut types = HashMap::new();
-
-        let mut used_index = HashSet::new();
-
-        let iter = self.tasks.into_iter().rev();
-
-        for task in iter {
-            match task {
-                MergeTask::Complete(index, task) => {
-                    types.insert(index, task);
-                }
-
-                MergeTask::RecordBuilder(builder) => {
-                    let mut fields = vec![];
-
-                    for (field, task_indices) in builder.field_and_pointers {
-                        let mut field_types = vec![];
-
-                        for task_index in task_indices {
-                            if let Some(typ) = types.get(&task_index) {
-                                used_index.insert(task_index);
-                                field_types.push(typ.clone());
-                            }
-                        }
-
-                        let merged = flatten_all_of(field_types);
-
-                        fields.push((field, merged));
-                    }
-
-                    types.insert(
-                        builder.task_index,
-                        InferredType::new(TypeInternal::Record(fields), TypeOrigin::NoOrigin),
-                    );
-                }
-                _ => {}
-            }
-        }
-
-        let mut final_types = vec![];
-        for (index, typ) in types.into_iter() {
-            if used_index.contains(&index) {
-                continue;
-            }
-
-            final_types.push(typ);
-        }
-
-        if final_types.len() == 1 {
-            final_types[0].clone()
-        } else {
-            InferredType::new(TypeInternal::AllOf(final_types), TypeOrigin::NoOrigin)
-        }
-    }
-
-    pub fn get(&self, task_index: &TaskIndex) -> Option<&MergeTask> {
-        self.tasks.get(*task_index)
-    }
-
-    pub fn extend(&mut self, other: MergeTaskStack) {
-        self.tasks.extend(other.tasks);
-    }
-
-    pub fn update_build_task(&mut self, task: MergeTask) {
-        // does it exist before
-        let index = task.get_index_in_stack();
-
-        if let Some(_) = self.tasks.get(index) {
-            self.tasks[index] = task;
-        } else {
-            self.tasks.push(task);
-        }
-    }
-
-    pub fn update_build_record(&mut self, task: &mut RecordBuilder) {
-        // does it exist before
-        let index = task.task_index;
-
-        if let Some(_) = self.tasks.get(index) {
-        } else {
-            self.tasks.push(MergeTask::RecordBuilder(task.clone()));
-        }
-    }
-
-    pub fn update(&mut self, index: &TaskIndex, task: MergeTask) {
-        if index < &self.tasks.len() {
-            self.tasks[*index] = task;
-        } else {
-            self.tasks.push(task);
-        }
-    }
-
-    pub fn next_index(&self) -> TaskIndex {
-        self.tasks.len()
-    }
-
-    pub fn new() -> MergeTaskStack {
-        MergeTaskStack { tasks: vec![] }
-    }
-
-    pub fn init(stack: Vec<MergeTask>) -> MergeTaskStack {
-        MergeTaskStack { tasks: stack }
-    }
-
-    pub fn get_tuple_mut(
-        &mut self,
-        tuple_identifier: &TupleIdentifier,
-    ) -> Option<&mut TupleBuilder> {
-        for task in self.tasks.iter_mut().rev() {
-            match task {
-                MergeTask::TupleBuilder(builder) if builder.tuple.len() == tuple_identifier.0 => {
-                    return Some(builder);
-                }
-
-                _ => {}
-            }
-        }
-
-        None
-    }
-
-    pub fn get_record_mut(
-        &mut self,
-        record_fields: &RecordIdentifier,
-    ) -> Option<&mut RecordBuilder> {
-        for task in self.tasks.iter_mut().rev() {
-            match task {
-                MergeTask::RecordBuilder(builder)
-                    if builder.field_names() == record_fields.fields
-                        && builder.path == record_fields.path =>
-                {
-                    return Some(builder);
-                }
-
-                _ => {}
-            }
-        }
-
-        None
-    }
-
-    pub fn get_variant_mut(
-        &mut self,
-        variant_identifier: &VariantIdentifier,
-    ) -> Option<&mut VariantBuilder> {
-        let mut found = false;
-
-        for task in self.tasks.iter_mut().rev() {
-            match task {
-                MergeTask::VariantBuilder(builder) => {
-                    let builder_variants = &builder.variants;
-
-                    if builder_variants.len() != variant_identifier.variants.len() {
-                        continue;
-                    } else {
-                        found = variant_identifier.variants.iter().all(
-                            |(variant_name, variant_type)| {
-                                builder_variants.iter().any(|(name, type_)| {
-                                    name == variant_name
-                                        && match variant_type {
-                                            VariantType::WithArgs => type_.is_some(),
-                                            VariantType::WithoutArgs => type_.is_none(),
-                                        }
-                                })
-                            },
-                        )
-                    }
-                    if found {
-                        return Some(builder);
-                    }
-                }
-
-                _ => {}
-            }
-        }
-
-        None
-    }
-
-    pub fn get_result_mut(
-        &mut self,
-        path: &Path,
-        result_key: &ResultIdentifier,
-    ) -> Option<&mut ResultBuilder> {
-        for task in self.tasks.iter_mut().rev() {
-            match task {
-                MergeTask::ResultBuilder(builder) => match (result_key.ok, result_key.error) {
-                    (true, true) => {
-                        if builder.ok.is_some() && builder.error.is_some() && &builder.path == path
-                        {
-                            return Some(builder);
-                        }
-                    }
-                    (true, false) => {
-                        if builder.ok.is_some() && builder.error.is_none() && &builder.path == path
-                        {
-                            return Some(builder);
-                        }
-                    }
-                    (false, true) => {
-                        if builder.ok.is_none() && builder.error.is_some() && &builder.path == path
-                        {
-                            return Some(builder);
-                        }
-                    }
-                    (false, false) => {
-                        if builder.ok.is_none() && builder.error.is_none() && &builder.path == path
-                        {
-                            return Some(builder);
-                        }
-                    }
-                },
-
-                _ => {}
-            }
-        }
-
-        None
     }
 }
 
