@@ -259,7 +259,10 @@ impl<'a> MergeTaskStack<'a> {
     ) -> Option<&mut TupleBuilder> {
         for task in self.tasks.iter_mut().rev() {
             match task {
-                MergeTask::TupleBuilder(builder) if builder.tuple.len() == tuple_identifier.0 => {
+                MergeTask::TupleBuilder(builder)
+                    if builder.tuple.len() == tuple_identifier.length
+                        && builder.path == tuple_identifier.path =>
+                {
                     return Some(builder);
                 }
 
@@ -402,12 +405,13 @@ pub type TaskIndex = usize;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TupleBuilder {
+    path: Path,
     task_index: TaskIndex,
     tuple: Vec<Vec<TaskIndex>>,
 }
 
 impl TupleBuilder {
-    pub fn init(index: TaskIndex, elems: &Vec<InferredType>) -> TupleBuilder {
+    pub fn init(path: &Path, index: TaskIndex, elems: &Vec<InferredType>) -> TupleBuilder {
         let mut tuple: Vec<Vec<TaskIndex>> = vec![];
 
         elems.iter().for_each(|_| {
@@ -415,6 +419,7 @@ impl TupleBuilder {
         });
 
         TupleBuilder {
+            path: path.clone(),
             task_index: index,
             tuple,
         }
@@ -759,7 +764,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                     TypeInternal::Tuple(elems) => {
                         let next_available_index = final_task_stack.next_index();
 
-                        let tuple_identifier: TupleIdentifier = TupleIdentifier::from(elems);
+                        let tuple_identifier: TupleIdentifier = TupleIdentifier::from(path, elems);
 
                         let builder = final_task_stack.get_tuple_mut(&tuple_identifier);
 
@@ -782,7 +787,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                                     (next_available_index, next_available_index)
                                 };
 
-                            let mut builder = TupleBuilder::init(task_index, elems);
+                            let mut builder = TupleBuilder::init(path, task_index, elems);
 
                             update_tuple_builder_and_update_tasks(
                                 path,
@@ -886,11 +891,17 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
 mod type_identifiers {
     use crate::{InferredType, Path};
 
-    pub struct TupleIdentifier(pub usize);
+    pub struct TupleIdentifier {
+        pub path: Path,
+        pub length: usize,
+    }
 
     impl TupleIdentifier {
-        pub fn from(tuple: &Vec<InferredType>) -> TupleIdentifier {
-            TupleIdentifier(tuple.len())
+        pub fn from(path: &Path, tuple: &Vec<InferredType>) -> TupleIdentifier {
+            TupleIdentifier {
+                path: path.clone(),
+                length: tuple.len(),
+            }
         }
     }
 
@@ -1170,10 +1181,13 @@ mod internal {
 
         let mut indices = vec![];
 
-        for inferred_type in inferred_types.into_iter() {
+        for (i, inferred_type) in inferred_types.into_iter().enumerate() {
             field_task_index += 1;
 
             indices.push(field_task_index);
+
+            let mut path = path.clone();
+            path.push_back(PathElem::Field(format!("tuple::{}", i)));
 
             tasks_for_final_stack.push(MergeTask::Inspect(
                 path.clone(),
@@ -1733,7 +1747,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_task_stack_5() {
+    fn test_get_task_stack_variant_1() {
         let inferred_types = vec![
             InferredType::variant(vec![
                 ("with_arg".to_string(), Some(InferredType::s8())),
@@ -1767,8 +1781,6 @@ mod tests {
 
         let completed_task = merge_task_stack.complete();
 
-        dbg!(&completed_task);
-
         let expected_type = InferredType::variant(vec![
             (
                 "with_arg".to_string(),
@@ -1781,5 +1793,92 @@ mod tests {
         ]);
 
         assert_eq!(completed_task, expected_type);
+    }
+
+    #[test]
+    fn test_get_task_stack_tuple_1() {
+        let inferred_types = vec![
+            InferredType::tuple(vec![InferredType::s8(), InferredType::u8()]),
+            InferredType::tuple(vec![InferredType::string(), InferredType::s8()]),
+        ];
+
+        let inferred_type_s8 = InferredType::s8();
+        let inferred_type_u8 = InferredType::u8();
+        let inferred_type_string = InferredType::string();
+
+        let merge_task_stack = get_merge_task(&inferred_types);
+
+        dbg!(&merge_task_stack);
+
+        let expected_stack = MergeTaskStack {
+            tasks: vec![
+                MergeTask::TupleBuilder(TupleBuilder {
+                    path: Path::default(),
+                    task_index: 0,
+                    tuple: vec![vec![1, 3], vec![2, 4]],
+                }),
+                MergeTask::Complete(1, &inferred_type_s8),
+                MergeTask::Complete(2, &inferred_type_u8),
+                MergeTask::Complete(3, &inferred_type_string),
+                MergeTask::Complete(4, &inferred_type_s8),
+            ],
+        };
+
+        assert_eq!(&merge_task_stack, &expected_stack);
+
+        let completed_task = merge_task_stack.complete();
+
+        let expected_type = InferredType::tuple(vec![
+            InferredType::new(
+                TypeInternal::AllOf(vec![InferredType::s8(), InferredType::string()]),
+                TypeOrigin::NoOrigin,
+            ),
+            InferredType::new(
+                TypeInternal::AllOf(vec![InferredType::u8(), InferredType::s8()]),
+                TypeOrigin::NoOrigin,
+            ),
+        ]);
+
+        assert_eq!(completed_task, expected_type);
+    }
+
+    #[test]
+    fn test_get_task_stack_tuple_2() {
+        let inferred_types = vec![InferredType::tuple(vec![
+            InferredType::s8(),
+            InferredType::tuple(vec![InferredType::s8()]),
+        ])];
+
+        let inferred_type_s8 = InferredType::s8();
+
+        let merge_task_stack = get_merge_task(&inferred_types);
+
+        let expected_stack = MergeTaskStack {
+            tasks: vec![
+                MergeTask::TupleBuilder(TupleBuilder {
+                    path: Path::default(),
+                    task_index: 0,
+                    tuple: vec![vec![1], vec![2]],
+                }),
+                MergeTask::Complete(1, &inferred_type_s8),
+                MergeTask::TupleBuilder(TupleBuilder {
+                    path: Path::from_elems(vec!["tuple::1"]),
+                    task_index: 2,
+                    tuple: vec![vec![3]],
+                }),
+                MergeTask::Complete(3, &inferred_type_s8),
+            ],
+        };
+
+        assert_eq!(&merge_task_stack, &expected_stack);
+
+        let completed_task = merge_task_stack.complete();
+
+        let expected = InferredType::tuple(vec![
+            inferred_type_s8,
+            InferredType::tuple(vec![InferredType::s8()]),
+        ]);
+
+        assert_eq!(completed_task, expected);
     }
 }
