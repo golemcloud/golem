@@ -1881,4 +1881,41 @@ mod tests {
 
         assert_eq!(completed_task, expected);
     }
+
+    #[test]
+    fn test_ambiguous_1() {
+        let tuple1 = InferredType::tuple(vec![InferredType::s8(), InferredType::string()]);
+
+        let tuple2 = InferredType::tuple(vec![InferredType::s8(), InferredType::string()]);
+
+        let record = InferredType::record(vec![
+            ("foo".to_string(), tuple1.clone()),
+            ("bar".to_string(), tuple2.clone()),
+        ]);
+
+        let inferred_types = vec![tuple1, tuple2, record];
+
+        let merge_task_stack = get_merge_task(&inferred_types);
+
+        let complete = merge_task_stack.complete();
+
+        let expected = InferredType::new(
+            TypeInternal::AllOf(vec![
+                InferredType::tuple(vec![InferredType::s8(), InferredType::string()]),
+                InferredType::record(vec![
+                    (
+                        "foo".to_string(),
+                        InferredType::tuple(vec![InferredType::s8(), InferredType::string()]),
+                    ),
+                    (
+                        "bar".to_string(),
+                        InferredType::tuple(vec![InferredType::s8(), InferredType::string()]),
+                    ),
+                ]),
+            ]),
+            TypeOrigin::NoOrigin,
+        );
+
+        assert_eq!(complete, expected)
+    }
 }
