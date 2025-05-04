@@ -181,6 +181,21 @@ impl MergeTaskStack {
                     );
                 }
 
+                MergeTask::AllOfBuilder(all_of_builder) => {
+                    let mut all_of_types = vec![];
+
+                    for task_index in all_of_builder.pointers {
+                        if let Some(typ) = types.get(&task_index) {
+                            used_index.insert(task_index);
+                            all_of_types.push(typ.clone());
+                        }
+                    }
+
+                    let merged = flatten_all_of(all_of_types);
+
+                    types.insert(all_of_builder.task_index, merged);
+                }
+
                 MergeTask::Inspect(_, _, _) => {}
                 _ => {}
             }
@@ -1286,9 +1301,9 @@ mod tests {
             InferredType::record(vec![("bar".to_string(), InferredType::s8())]),
         )])];
 
-        let result = get_merge_task(inferred_types);
+        let merge_task_stack = get_merge_task(inferred_types);
 
-        let expected = MergeTaskStack {
+        let expected_stack = MergeTaskStack {
             tasks: vec![
                 MergeTask::RecordBuilder(RecordBuilder {
                     path: Path::default(),
@@ -1296,7 +1311,7 @@ mod tests {
                     field_and_pointers: vec![("foo".to_string(), vec![1])],
                 }),
                 MergeTask::RecordBuilder(RecordBuilder {
-                    path: Path::default(),
+                    path: Path::from_elems(vec!["foo"]),
                     task_index: 1,
                     field_and_pointers: vec![("bar".to_string(), vec![2])],
                 }),
@@ -1304,7 +1319,16 @@ mod tests {
             ],
         };
 
-        assert_eq!(result, expected);
+        assert_eq!(&merge_task_stack, &expected_stack);
+
+        let completed_stack = merge_task_stack.complete();
+
+        let expected_type = InferredType::record(vec![(
+            "foo".to_string(),
+            InferredType::record(vec![("bar".to_string(), InferredType::s8())]),
+        )]);
+
+        assert_eq!(completed_stack, expected_type);
     }
 
     #[test]
@@ -1314,9 +1338,9 @@ mod tests {
             InferredType::record(vec![("foo".to_string(), InferredType::s8())]),
         )])];
 
-        let result = get_merge_task(inferred_types);
+        let merge_task_stack = get_merge_task(inferred_types);
 
-        let expected = MergeTaskStack {
+        let expected_stack = MergeTaskStack {
             tasks: vec![
                 MergeTask::RecordBuilder(RecordBuilder {
                     path: Path::default(),
@@ -1336,7 +1360,16 @@ mod tests {
             ],
         };
 
-        assert_eq!(result, expected);
+        assert_eq!(&merge_task_stack, &expected_stack);
+
+        let completed_stack = merge_task_stack.complete();
+
+        let expected_type = InferredType::record(vec![(
+            "foo".to_string(),
+            InferredType::record(vec![("foo".to_string(), InferredType::s8())]),
+        )]);
+
+        assert_eq!(completed_stack, expected_type);
     }
     #[test]
     fn test_get_task_stack_record_4() {
@@ -1353,7 +1386,7 @@ mod tests {
             ),
         )]);
 
-        let result = get_merge_task(vec![inferred_type1, inferred_type2, inferred_type3]);
+        let merge_task_stack = get_merge_task(vec![inferred_type1, inferred_type2, inferred_type3]);
 
         let expected = MergeTaskStack {
             tasks: vec![
@@ -1373,7 +1406,19 @@ mod tests {
             ],
         };
 
-        assert_eq!(result, expected);
+        assert_eq!(&merge_task_stack, &expected);
+
+        let completed = merge_task_stack.complete();
+
+        let expected_type = InferredType::record(vec![(
+            "foo".to_string(),
+            InferredType::new(
+                TypeInternal::AllOf(vec![InferredType::string(), InferredType::u8()]),
+                TypeOrigin::NoOrigin,
+            ),
+        )]);
+
+        assert_eq!(completed, expected_type);
     }
 
     #[test]
