@@ -337,17 +337,18 @@ impl<'a> MergeTaskStack<'a> {
                     if builder_variants.len() != variant_identifier.variants.len() {
                         continue;
                     } else {
-                        let found = variant_identifier.path == builder.path && variant_identifier.variants.iter().all(
-                            |(variant_name, variant_type)| {
-                                builder_variants.iter().any(|(name, type_)| {
-                                    name == variant_name
-                                        && match variant_type {
-                                            VariantType::WithArgs => type_.is_some(),
-                                            VariantType::WithoutArgs => type_.is_none(),
-                                        }
-                                })
-                            },
-                        );
+                        let found = variant_identifier.path == builder.path
+                            && variant_identifier.variants.iter().all(
+                                |(variant_name, variant_type)| {
+                                    builder_variants.iter().any(|(name, type_)| {
+                                        name == variant_name
+                                            && match variant_type {
+                                                VariantType::WithArgs => type_.is_some(),
+                                                VariantType::WithoutArgs => type_.is_none(),
+                                            }
+                                    })
+                                },
+                            );
 
                         if found {
                             return Some(builder);
@@ -794,7 +795,8 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                                     (next_available_index, next_available_index)
                                 };
 
-                            let mut builder = VariantBuilder::init(path.clone(), task_index, variants);
+                            let mut builder =
+                                VariantBuilder::init(path.clone(), task_index, variants);
 
                             update_variant_builder_and_update_tasks(
                                 path,
@@ -1082,7 +1084,10 @@ mod type_identifiers {
         pub variants: Vec<(String, VariantType)>,
     }
     impl VariantIdentifier {
-        pub fn from(path: &Path, variants: &Vec<(String, Option<InferredType>)>) -> VariantIdentifier {
+        pub fn from(
+            path: &Path,
+            variants: &Vec<(String, Option<InferredType>)>,
+        ) -> VariantIdentifier {
             let mut keys = vec![];
 
             for (variant, inferred_type) in variants.iter() {
@@ -1092,7 +1097,10 @@ mod type_identifiers {
                 }
             }
 
-            VariantIdentifier { path: path.clone(), variants: keys }
+            VariantIdentifier {
+                path: path.clone(),
+                variants: keys,
+            }
         }
     }
 
