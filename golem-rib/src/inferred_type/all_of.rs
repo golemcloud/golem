@@ -14,7 +14,7 @@
 
 use crate::{InferredType, Path, TypeInternal};
 use std::cmp::{max, min};
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 // This module is responsible to merge the types when constructing InferredType::AllOf, while
 // selecting the type with maximum `TypeOrigin` information. This gives two advantages. We save some memory footprint
@@ -32,6 +32,7 @@ use std::collections::VecDeque;
 // `{foo: string, bar: u8}` and `{foo: string, bar: string}` to `{foo: all_of(string, string), bar: all_of(u8, string)}`.
 // We do not merge all_of(string, string) in the above example to `string` either.
 
+use crate::inferred_type::TypeOrigin;
 pub(crate) use internal::*;
 pub(crate) use type_identifiers::*;
 
@@ -298,6 +299,62 @@ pub struct MergeTaskStack {
 impl MergeTaskStack {
     pub fn len(&self) -> usize {
         self.tasks.len()
+    }
+
+    pub fn complete(self) -> InferredType {
+        let mut types = HashMap::new();
+
+        let mut used_index = HashSet::new();
+
+        let iter = self.tasks.into_iter().rev();
+
+        for task in iter {
+            match task {
+                MergeTask::Complete(index, task) => {
+                    types.insert(index, task);
+                }
+
+                MergeTask::RecordBuilder(builder) => {
+                    let mut fields = vec![];
+
+                    for (field, task_indices) in builder.field_and_pointers {
+                        let mut field_types = vec![];
+
+                        for task_index in task_indices {
+                            if let Some(typ) = types.get(&task_index) {
+                                used_index.insert(task_index);
+                                field_types.push(typ.clone());
+                            }
+                        }
+
+                        let merged = flatten_all_of(field_types);
+
+                        fields.push((field, merged));
+                    }
+
+                    types.insert(
+                        builder.task_index,
+                        InferredType::new(TypeInternal::Record(fields), TypeOrigin::NoOrigin),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        let mut final_types = vec![];
+        for (index, typ) in types.into_iter() {
+            if used_index.contains(&index) {
+                continue;
+            }
+
+            final_types.push(typ);
+        }
+
+        if final_types.len() == 1 {
+            final_types[0].clone()
+        } else {
+            InferredType::new(TypeInternal::AllOf(final_types), TypeOrigin::NoOrigin)
+        }
     }
 
     pub fn get(&self, task_index: &TaskIndex) -> Option<&MergeTask> {
@@ -842,6 +899,40 @@ mod type_identifiers {
     }
 }
 
+pub fn flatten_all_of(types: Vec<InferredType>) -> InferredType {
+    let mut result_map: HashMap<InferredType, InferredType> = HashMap::new();
+    let mut queue: VecDeque<InferredType> = VecDeque::from(types);
+
+    while let Some(typ) = queue.pop_front() {
+        match typ.internal_type() {
+            TypeInternal::AllOf(nested) => {
+                queue.extend(nested.clone());
+            }
+            _ => {
+                let key = typ.clone();
+                let current_origins = typ.total_origins();
+
+                result_map
+                    .entry(key)
+                    .and_modify(|existing| {
+                        if current_origins > existing.total_origins() {
+                            *existing = typ.clone();
+                        }
+                    })
+                    .or_insert(typ);
+            }
+        }
+    }
+
+    let result = result_map.into_values().collect::<Vec<_>>();
+
+    if result.len() == 1 {
+        result[0].clone()
+    } else {
+        InferredType::new(TypeInternal::AllOf(result), TypeOrigin::NoOrigin)
+    }
+}
+
 pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
     let mut all_of_types = vec![];
 
@@ -1046,6 +1137,8 @@ mod tests {
 
         let result = get_merge_task(inferred_types);
 
+        let complete = result.clone().complete();
+
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::RecordBuilder(RecordBuilder {
@@ -1063,7 +1156,11 @@ mod tests {
             ],
         };
 
-        assert_eq!(result, expected);
+        dbg!(complete);
+
+        assert!(false);
+
+        // assert_eq!(result, expected);
     }
 
     #[test]
@@ -1075,6 +1172,7 @@ mod tests {
 
         let result = get_merge_task(inferred_types);
 
+        dbg!(&result);
         let expected = MergeTaskStack {
             tasks: vec![
                 MergeTask::RecordBuilder(RecordBuilder {
@@ -1320,11 +1418,9 @@ mod tests {
 
     #[test]
     fn test_get_stack_result_4() {
-       let result1 =
-            InferredType::result(Some(InferredType::string()), Some(InferredType::u8()));
+        let result1 = InferredType::result(Some(InferredType::string()), Some(InferredType::u8()));
 
-        let result2 =
-            InferredType::result(Some(InferredType::u8()), Some(InferredType::s32()));
+        let result2 = InferredType::result(Some(InferredType::u8()), Some(InferredType::s32()));
 
         let result3 = InferredType::result(
             Some(InferredType::new(
