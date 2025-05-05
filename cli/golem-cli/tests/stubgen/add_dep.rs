@@ -25,7 +25,8 @@ use golem_cli::wasm_rpc_stubgen::wit_generate::{
     add_client_as_dependency_to_wit_dir, AddClientAsDepConfig, UpdateCargoToml,
 };
 use golem_cli::wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
-use golem_wit::{WASI_POLL_WIT, WASI_WALL_CLOCKS_WIT, WASM_RPC_WIT};
+use golem_wit::{WASI_CLOCKS, WASI_IO, WASM_RPC_WIT};
+use itertools::Itertools;
 use semver::Version;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -665,6 +666,40 @@ impl WitSource for &[(&str, &str)] {
     }
 }
 
+impl WitSource for &[(&str, &[(&str, &str)])] {
+    fn resolve(&self) -> anyhow::Result<Resolve> {
+        let mut resolve = Resolve::new();
+        for (name, sources) in *self {
+            let mut sources: Vec<_> = sources.iter().collect();
+            sources.sort_by_key(|(name, _)| *name);
+
+            let split_sources = sources
+                .iter()
+                .map(|(_, source)| {
+                    let lines = source.lines().collect::<Vec<_>>();
+                    if lines[0].starts_with("package ") {
+                        (lines[0], lines[1..].join("\n"))
+                    } else {
+                        ("", lines.join("\n"))
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let mut merged_sources = split_sources
+                .iter()
+                .find(|(hdr, _)| !hdr.is_empty())
+                .unwrap()
+                .0
+                .to_string();
+            merged_sources.push('\n');
+            merged_sources.push_str(&split_sources.iter().map(|(_, source)| source).join("\n"));
+            merged_sources.push('\n');
+            let _ = resolve.push_str(name, &merged_sources)?;
+        }
+        Ok(resolve)
+    }
+}
+
 /// Asserts that both wit sources contains the same effective (encoded) wit package.
 fn assert_has_same_wit_package(
     package_name: &PackageName,
@@ -687,10 +722,10 @@ fn assert_has_package_by_name(package_name: &PackageName, wit_source: impl WitSo
 }
 
 fn assert_has_wasm_rpc_wit_deps(wit_dir: &Path) {
-    let deps = vec![
-        ("poll", WASI_POLL_WIT),
-        ("clocks", WASI_WALL_CLOCKS_WIT),
-        ("wasm-rpc", WASM_RPC_WIT),
+    let deps: Vec<(&str, &[(&str, &str)])> = vec![
+        ("wasi:io", WASI_IO),
+        ("wasi:clocks", WASI_CLOCKS),
+        ("wasm-rpc", &[("wasm-rpc.wit", WASM_RPC_WIT)]),
     ];
 
     assert_has_same_wit_package(

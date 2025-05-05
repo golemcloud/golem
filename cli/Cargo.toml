@@ -21,7 +21,7 @@ golem-rib-repl = "=1.2.2-dev.14"
 golem-service-base = "=1.2.2-dev.14"
 golem-wasm-ast = { version = "=1.2.2-dev.14", default-features = false, features = ["analysis", "wave"] }
 golem-wasm-rpc = { version = "=1.2.2-dev.14", default-features = false, features = ["host"] }
-golem-wit = "=1.2.2-dev.9"
+golem-wit = "=1.2.2-dev.10"
 
 # Golem cloud deps
 golem-cloud-client = "=1.2.2-dev.15"

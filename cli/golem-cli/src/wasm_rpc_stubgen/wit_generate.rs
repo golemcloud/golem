@@ -376,43 +376,36 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
     if !contains_golem_rpc {
         write_embedded_source(
             &target_deps.join("golem-rpc"),
-            "wasm-rpc.wit",
-            golem_wit::WASM_RPC_WIT,
+            &[("wasm-rpc.wit", golem_wit::WASM_RPC_WIT)],
         )?;
     }
 
     if !contains_wasi_io {
-        write_embedded_source(
-            &target_deps.join("io"),
-            "poll.wit",
-            golem_wit::WASI_POLL_WIT,
-        )?;
+        write_embedded_source(&target_deps.join("io"), golem_wit::WASI_IO)?;
     }
 
     if !contains_wasi_clocks {
-        write_embedded_source(
-            &target_deps.join("clocks"),
-            "wall-clock.wit",
-            golem_wit::WASI_WALL_CLOCKS_WIT,
-        )?;
+        write_embedded_source(&target_deps.join("clocks"), golem_wit::WASI_CLOCKS)?;
     }
 
     Ok(())
 }
 
-fn write_embedded_source(target_dir: &Path, file_name: &str, content: &str) -> anyhow::Result<()> {
+fn write_embedded_source(target_dir: &Path, contents: &[(&str, &str)]) -> anyhow::Result<()> {
     fs::create_dir_all(target_dir)?;
 
-    log_action(
-        "Writing",
-        format!(
-            "{} to {}",
-            file_name.log_color_highlight(),
-            target_dir.log_color_highlight()
-        ),
-    );
+    for (file_name, content) in contents {
+        log_action(
+            "Writing",
+            format!(
+                "{} to {}",
+                file_name.log_color_highlight(),
+                target_dir.log_color_highlight()
+            ),
+        );
 
-    fs::write(target_dir.join(file_name), content)?;
+        fs::write(target_dir.join(file_name), content)?;
+    }
 
     Ok(())
 }

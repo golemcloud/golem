@@ -4131,9 +4131,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "1.2.2-dev.9"
+version = "1.2.2-dev.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acaff9a0b8bd1ca657268bc8bcacd58bc59f9728b284e9e80edf8e93cfe36e4c"
+checksum = "2cf68f120e2ea2697167c8fb090e6e649ed07f3ac15ec8515dfef28f6b77423d"
 
 [[package]]
 name = "golem-worker-executor"
