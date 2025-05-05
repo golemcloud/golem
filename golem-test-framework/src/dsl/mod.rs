@@ -1927,7 +1927,7 @@ pub trait TestDslUnsafe {
         &self,
         component_id: &ComponentId,
         name: &str,
-        env: &HashMap<String, String>,
+        env: &Vec<(String, String)>,
     ) -> ComponentVersion;
 
     async fn add_initial_component_file(
