@@ -74,6 +74,7 @@ pub struct ComponentMetadataPoly<ComponentOwner> {
     pub plugin_installations: Vec<PluginInstallation>,
     pub component_owner: ComponentOwner,
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+    pub env: HashMap<String, String>,
 }
 
 pub type ComponentMetadata<T> = ComponentMetadataPoly<<T as GolemTypes>::ComponentOwner>;
@@ -90,6 +91,7 @@ impl From<LocalFileSystemComponentMetadata> for ComponentMetadata<DefaultGolemTy
             plugin_installations: vec![],
             component_owner: DefaultComponentOwner,
             dynamic_linking: value.dynamic_linking,
+            env: value.env,
         }
     }
 }
@@ -659,6 +661,10 @@ async fn get_metadata_via_grpc(
                             })?,
                     ),
                     component_owner: DefaultComponentOwner,
+                    env: component
+                        .env
+                        .map(|metadata| metadata.env)
+                        .unwrap_or_default(),
                 };
 
                 record_external_call_response_size_bytes("components", "get_metadata", len);
