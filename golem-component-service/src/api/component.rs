@@ -25,7 +25,10 @@ use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationI
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::api::dto;
 use golem_component_service_base::api::mapper::ApiMapper;
-use golem_component_service_base::model::{BatchPluginInstallationUpdates, ComponentEnv, ComponentSearch, DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload};
+use golem_component_service_base::model::{
+    BatchPluginInstallationUpdates, ComponentEnv, ComponentSearch, DynamicLinking,
+    InitialComponentFilesArchiveAndPermissions, UpdatePayload,
+};
 use golem_component_service_base::service::component::ComponentService;
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
 use golem_service_base::api_tags::ApiTags;

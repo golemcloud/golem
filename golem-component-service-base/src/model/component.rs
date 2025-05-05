@@ -80,7 +80,7 @@ impl<Owner: ComponentOwner> Component<Owner> {
             component_type,
             files,
             installed_plugins,
-            env
+            env,
         })
     }
 

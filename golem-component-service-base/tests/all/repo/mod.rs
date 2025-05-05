@@ -40,12 +40,12 @@ use poem_openapi::NewType;
 use poem_openapi::__private::serde_json;
 use serde::{Deserialize, Serialize};
 use sqlx::query_builder::Separated;
+use sqlx::types::Json;
 use sqlx::{Database, Encode, QueryBuilder};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 use std::sync::Arc;
-use sqlx::types::Json;
 use test_r::{inherit_test_dep, sequential_suite};
 use tracing::info;
 use uuid::{uuid, Uuid};
@@ -321,7 +321,7 @@ async fn test_repo_component_find_by_names(
                 .to_vec(),
             Some(0),
             None,
-            Json(HashMap::new())
+            Json(HashMap::new()),
         )
         .await
         .unwrap();

@@ -33,6 +33,7 @@ use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
 };
 use golem_service_base::repo::RepoError;
+use sqlx::types::Json;
 use sqlx::{Postgres, QueryBuilder, Row, Sqlite};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
@@ -42,8 +43,6 @@ use std::sync::Arc;
 use tracing::{debug, info_span, Span};
 use tracing_futures::Instrument;
 use uuid::Uuid;
-use sqlx::types::Json;
-
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ComponentRecord<Owner: ComponentOwner> {
@@ -67,7 +66,7 @@ pub struct ComponentRecord<Owner: ComponentOwner> {
         Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
-    pub env: Json<HashMap<String, String>>
+    pub env: Json<HashMap<String, String>>,
 }
 
 impl<Owner: ComponentOwner> ComponentRecord<Owner> {
