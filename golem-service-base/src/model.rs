@@ -535,6 +535,7 @@ pub struct Component {
     pub component_type: Option<ComponentType>,
     pub files: Vec<InitialComponentFile>,
     pub installed_plugins: Vec<PluginInstallation>,
+    pub env: HashMap<String, String>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
@@ -585,6 +586,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             component_type,
             files,
             installed_plugins,
+            env: value.env,
         })
     }
 }
@@ -611,6 +613,7 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
                 .into_iter()
                 .map(|p| p.into())
                 .collect(),
+            env: value.env,
         }
     }
 }

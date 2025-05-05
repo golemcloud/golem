@@ -661,10 +661,7 @@ async fn get_metadata_via_grpc(
                             })?,
                     ),
                     component_owner: DefaultComponentOwner,
-                    env: component
-                        .env
-                        .map(|metadata| metadata.env)
-                        .unwrap_or_default(),
+                    env: component.env,
                 };
 
                 record_external_call_response_size_bytes("components", "get_metadata", len);

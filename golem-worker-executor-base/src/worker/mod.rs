@@ -1253,29 +1253,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Self::start_if_needed_internal(this, oom_retry_count).await
     }
 
-    pub fn merge_worker_env_with_component_env(
-        primary_worker_env: Option<Vec<(String, String)>>,
-        component_fallback_env: HashMap<String, String>,
-    ) -> Vec<(String, String)> {
-        let mut seen_keys = HashSet::new();
-        let mut result = Vec::new();
-
-        if let Some(vec) = primary_worker_env {
-            for (key, value) in vec {
-                seen_keys.insert(key.clone());
-                result.push((key, value));
-            }
-        }
-
-        for (key, value) in component_fallback_env {
-            if !seen_keys.contains(&key) {
-                result.push((key, value));
-            }
-        }
-
-        result
-    }
-
     async fn get_or_create_worker_metadata<
         T: HasWorkerService + HasComponentService<Ctx::Types> + HasConfig + HasOplogService + Sync,
     >(
@@ -1296,11 +1273,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?;
 
-        let worker_env =
-            Self::merge_worker_env_with_component_env(
-                worker_env,
-                component_metadata.env
-            );
+        let worker_env = merge_worker_env_with_component_env(worker_env, component_metadata.env);
 
         match this.worker_service().get(owned_worker_id).await {
             None => {
@@ -1358,6 +1331,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
     }
+}
+
+pub fn merge_worker_env_with_component_env(
+    primary_worker_env: Option<Vec<(String, String)>>,
+    component_fallback_env: HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut seen_keys = HashSet::new();
+    let mut result = Vec::new();
+
+    if let Some(vec) = primary_worker_env {
+        for (key, value) in vec {
+            seen_keys.insert(key.clone());
+            result.push((key, value));
+        }
+    }
+
+    for (key, value) in component_fallback_env {
+        if !seen_keys.contains(&key) {
+            result.push((key, value));
+        }
+    }
+
+    result
 }
 
 enum WorkerInstance {
@@ -1584,10 +1580,8 @@ impl RunningWorker {
 
         let component_env = component_metadata.env.clone();
 
-        let worker_env = Worker::merge_worker_env_with_component_env(
-            Some(worker_metadata.env),
-            component_env,
-        );
+        let worker_env =
+            merge_worker_env_with_component_env(Some(worker_metadata.env), component_env);
 
         let context = Ctx::create(
             OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
