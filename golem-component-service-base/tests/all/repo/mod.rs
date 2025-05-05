@@ -45,6 +45,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 use std::sync::Arc;
+use sqlx::types::Json;
 use test_r::{inherit_test_dep, sequential_suite};
 use tracing::info;
 use uuid::{uuid, Uuid};
@@ -160,6 +161,7 @@ async fn test_repo_component_id_unique(
         vec![],
         HashMap::new(),
         owner1.clone(),
+        HashMap::new(),
     )
     .unwrap();
 
@@ -209,6 +211,7 @@ async fn test_repo_component_name_unique_in_namespace(
         vec![],
         HashMap::new(),
         owner1.clone(),
+        HashMap::new(),
     )
     .unwrap();
     let component2 = Component::new(
@@ -220,6 +223,7 @@ async fn test_repo_component_name_unique_in_namespace(
         vec![],
         HashMap::new(),
         owner2.clone(),
+        HashMap::new(),
     )
     .unwrap();
 
@@ -274,6 +278,7 @@ async fn test_repo_component_find_by_names(
         vec![],
         HashMap::new(),
         DefaultComponentOwner,
+        HashMap::new(),
     )
     .unwrap();
 
@@ -294,6 +299,7 @@ async fn test_repo_component_find_by_names(
         vec![],
         HashMap::new(),
         DefaultComponentOwner,
+        HashMap::new(),
     )
     .unwrap();
 
@@ -315,6 +321,7 @@ async fn test_repo_component_find_by_names(
                 .to_vec(),
             Some(0),
             None,
+            Json(HashMap::new())
         )
         .await
         .unwrap();
@@ -545,6 +552,7 @@ async fn test_repo_component_delete(
         vec![],
         HashMap::new(),
         DefaultComponentOwner,
+        HashMap::new(),
     )
     .unwrap();
 
@@ -605,6 +613,7 @@ async fn test_repo_component_constraints(
         vec![],
         HashMap::new(),
         owner1.clone(),
+        HashMap::new(),
     )
     .unwrap();
 
@@ -698,6 +707,7 @@ async fn test_default_plugin_repo(
         vec![],
         HashMap::new(),
         owner.clone(),
+        HashMap::new(),
     )
     .unwrap();
     let component2 = Component::new(
@@ -709,6 +719,7 @@ async fn test_default_plugin_repo(
         vec![],
         HashMap::new(),
         owner.clone(),
+        HashMap::new(),
     )
     .unwrap();
 
@@ -847,6 +858,7 @@ async fn test_default_component_plugin_installation(
         vec![],
         HashMap::new(),
         component_owner.clone(),
+        HashMap::new(),
     )
     .unwrap();
 
