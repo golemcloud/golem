@@ -664,3 +664,24 @@ impl RdbmsTransactionIdentifier {
         Self::new(uuid::Uuid::new_v4())
     }
 }
+
+impl IntoValue for RdbmsTransactionIdentifier {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.id.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![analysed_type::field("id", analysed_type::str())])
+    }
+}
+
+// impl RdbmsIntoValueAndType for RdbmsTransactionIdentifier {
+//
+//     fn into_value_and_type(self) -> ValueAndType {
+//         ValueAndType::new(Value::Record(vec![self.id.into_value()]), Self::get_base_type())
+//     }
+//
+//     fn get_base_type() -> AnalysedType {
+//         analysed_type::record(vec![analysed_type::field("id", analysed_type::str())])
+//     }
+// }

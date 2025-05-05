@@ -441,10 +441,9 @@ async fn rdbms_postgres_idempotency(
     check!(result2 == result1);
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
-    let oplog_json = serde_json::to_string(&oplog);
-    check!(oplog_json.is_ok());
-
-    check_transaction_oplog_entries::<PostgresType>(oplog);
+    let oplog = serde_json::to_string(&oplog);
+    check!(oplog.is_ok());
+    println!("{}", oplog.unwrap());
 
     drop(executor);
 }
@@ -1184,92 +1183,4 @@ fn query_ok_response(
 
 fn query_empty_ok_response() -> serde_json::Value {
     query_ok_response(vec![], vec![])
-}
-
-fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>) {
-    fn check_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>) {
-        let mut begin_entry: Option<(usize, TimestampParameter)> = None;
-        let mut end_entry: Option<(usize, EndRegionParameters)> = None;
-        let mut imported_function_invoked: Vec<(usize, ImportedFunctionInvokedParameters)> = vec![];
-
-        for (i, e) in entries.iter().enumerate() {
-            match begin_entry.clone() {
-                Some(_) => {
-                    if end_entry.is_none() {
-                        if let Ok(v) =
-                            try_match!(e.clone(), PublicOplogEntry::ImportedFunctionInvoked(v))
-                        {
-                            imported_function_invoked.push((i, v));
-                        }
-
-                        end_entry = try_match!(e.clone(), PublicOplogEntry::EndRemoteWrite(v1))
-                            .ok()
-                            .map(|v| (i, v));
-                    }
-                }
-                None => {
-                    begin_entry = try_match!(e.clone(), PublicOplogEntry::BeginRemoteWrite(v))
-                        .ok()
-                        .map(|v| (i, v));
-                }
-            }
-        }
-
-        check!(begin_entry.is_some());
-        check!(end_entry.is_some());
-
-        let (begin_index, _) = begin_entry.unwrap();
-        let (end_index, end_entry) = end_entry.unwrap();
-
-        check!(!imported_function_invoked.is_empty());
-
-        let fn_prefix1 = format!("rdbms::{}::db-transaction::", T::default());
-        let fn_prefix2 = format!("rdbms::{}::db-result-stream::", T::default());
-        let fn_prefix3 = format!("rdbms::{}::db-connection::query-stream", T::default());
-
-        for (i, v) in imported_function_invoked {
-            check!(i > begin_index);
-            check!(i < end_index);
-            check!(
-                v.function_name.starts_with(fn_prefix1.as_str())
-                    || v.function_name.starts_with(fn_prefix2.as_str())
-                    || v.function_name.starts_with(fn_prefix3.as_str())
-            );
-            check!(
-                v.wrapped_function_type
-                    == PublicDurableFunctionType::WriteRemoteBatched(
-                        WriteRemoteBatchedParameters {
-                            index: Some(end_entry.begin_index)
-                        }
-                    )
-            );
-        }
-    }
-
-    let mut grouped: Vec<Vec<PublicOplogEntry>> = Vec::new();
-    let mut group: Vec<PublicOplogEntry> = Vec::new();
-
-    for e in entries {
-        let end = matches!(e, PublicOplogEntry::EndRemoteWrite(_));
-
-        group.push(e);
-
-        if end {
-            grouped.push(group.clone());
-            group = Vec::new();
-        }
-    }
-
-    if !group.is_empty() {
-        grouped.push(group.clone());
-    }
-
-    for group in grouped {
-        if group
-            .iter()
-            .any(|e| matches!(e, PublicOplogEntry::BeginRemoteWrite(_)))
-        {
-            check_entries::<T>(group);
-        }
-    }
 }

@@ -15,7 +15,9 @@
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
-use crate::services::rdbms::{Error as RdbmsError, RdbmsService, RdbmsTypeService};
+use crate::services::rdbms::{
+    Error as RdbmsError, RdbmsService, RdbmsTransactionIdentifier, RdbmsTypeService,
+};
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsType};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
@@ -763,6 +765,14 @@ impl<T: RdbmsType + Clone + 'static> RdbmsTransactionEntry<T> {
     fn set_closed(&mut self) {
         self.state = RdbmsTransactionState::Closed;
     }
+
+    fn identifier(&self) -> Option<RdbmsTransactionIdentifier> {
+        match &self.state {
+            RdbmsTransactionState::New => None,
+            RdbmsTransactionState::Open(transaction) => Some(transaction.deref().identifier()),
+            RdbmsTransactionState::Closed => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -859,7 +869,7 @@ where
                     .query(&pool_key, &worker_id, &statement, params.clone())
                     .await;
                 (
-                    Some(RdbmsRequest::<T>::new(pool_key, statement, params)),
+                    Some(RdbmsRequest::<T>::new(pool_key, statement, params, None)),
                     result,
                 )
             }
@@ -900,7 +910,7 @@ where
                     .execute(&pool_key, &worker_id, &statement, params.clone())
                     .await;
                 (
-                    Some(RdbmsRequest::<T>::new(pool_key, statement, params)),
+                    Some(RdbmsRequest::<T>::new(pool_key, statement, params, None)),
                     result,
                 )
             }
@@ -930,7 +940,7 @@ where
         .clone();
 
     match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
-        Ok(params) => Ok(RdbmsRequest::<T>::new(pool_key, statement, params)),
+        Ok(params) => Ok(RdbmsRequest::<T>::new(pool_key, statement, params, None)),
         Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
     }
 }
@@ -957,7 +967,12 @@ where
                 Ok((pool_key, transaction)) => {
                     let result = transaction.query(&statement, params.clone()).await;
                     (
-                        Some(RdbmsRequest::<T>::new(pool_key, statement, params)),
+                        Some(RdbmsRequest::<T>::new(
+                            pool_key,
+                            statement,
+                            params,
+                            Some(transaction.identifier()),
+                        )),
                         result,
                     )
                 }
@@ -987,7 +1002,12 @@ where
                 Ok((pool_key, transaction)) => {
                     let result = transaction.execute(&statement, params.clone()).await;
                     (
-                        Some(RdbmsRequest::<T>::new(pool_key, statement, params)),
+                        Some(RdbmsRequest::<T>::new(
+                            pool_key,
+                            statement,
+                            params,
+                            Some(transaction.identifier()),
+                        )),
                         result,
                     )
                 }
@@ -1009,16 +1029,20 @@ where
     T: RdbmsType + Clone + 'static,
     T::DbValue: FromRdbmsValue<P>,
 {
-    let pool_key = ctx
+    let transaction = ctx
         .as_wasi_view()
         .table()
         .get::<RdbmsTransactionEntry<T>>(entry)
         .map_err(RdbmsError::other_response_failure)?
-        .pool_key
         .clone();
 
     match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
-        Ok(params) => Ok(RdbmsRequest::<T>::new(pool_key, statement, params)),
+        Ok(params) => Ok(RdbmsRequest::<T>::new(
+            transaction.pool_key.clone(),
+            statement,
+            params,
+            transaction.identifier(),
+        )),
         Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
     }
 }
