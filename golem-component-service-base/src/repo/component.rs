@@ -267,7 +267,7 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug + Send + Sync {
         metadata: Vec<u8>,
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
-        component_env: Json<HashMap<String, String>>,
+        env: Json<HashMap<String, String>>,
     ) -> Result<ComponentRecord<Owner>, RepoError>;
 
     /// Activates a component version previously created with `update`.
@@ -418,7 +418,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         metadata: Vec<u8>,
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
-        component_env: Json<HashMap<String, String>>,
+        env: Json<HashMap<String, String>>,
     ) -> Result<ComponentRecord<Owner>, RepoError> {
         self.repo
             .update(
@@ -429,7 +429,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
                 metadata,
                 component_type,
                 files,
-                component_env,
+                env,
             )
             .instrument(Self::span(component_id))
             .await
@@ -832,7 +832,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         metadata: Vec<u8>,
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
-        component_env: Json<HashMap<String, String>>,
+        env: Json<HashMap<String, String>>,
     ) -> Result<ComponentRecord<Owner>, RepoError> {
         let mut transaction = self.db_pool.with_rw("component", "update").begin().await?;
 
@@ -870,7 +870,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                         .bind(now)
                         .bind(metadata)
                         .bind(component_type)
-                        .bind(component_env);
+                        .bind(env);
 
                     transaction.fetch_one(query).await?.get("version")
                 } else {
@@ -889,7 +889,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                         .bind(data.len() as i32)
                         .bind(now)
                         .bind(metadata)
-                        .bind(component_env);
+                        .bind(env);
 
                     transaction.fetch_one(query).await?.get("version")
                 };
@@ -1055,7 +1055,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key as transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
-                    cv.root_package_version AS root_package_version
+                    cv.root_package_version AS root_package_version,
+                    cv.env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2
@@ -1096,7 +1097,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
-                    cv.root_package_version AS root_package_version
+                    cv.root_package_version AS root_package_version,
+                    cv.env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2
@@ -1136,7 +1138,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
-                    cv.root_package_version AS root_package_version
+                    cv.root_package_version AS root_package_version,
+                    cv.env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -1175,7 +1178,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
-                    cv.root_package_version AS root_package_version
+                    cv.root_package_version AS root_package_version,
+                    cv.env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -1215,7 +1219,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
-                    cv.root_package_version AS root_package_version
+                    cv.root_package_version AS root_package_version,
+                    cv.env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2 AND cv.available = TRUE
@@ -1259,7 +1264,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
-                    cv.root_package_version AS root_package_version
+                    cv.root_package_version AS root_package_version,
+                    cv.env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2 AND cv.available = TRUE
@@ -1304,7 +1310,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
-                    cv.root_package_version AS root_package_version
+                    cv.root_package_version AS root_package_version,
+                    cv.env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2 AND c.namespace = $3
@@ -1348,7 +1355,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
-                    cv.root_package_version AS root_package_version
+                    cv.root_package_version AS root_package_version,
+                    cv.env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2 AND c.namespace = $3
@@ -1391,7 +1399,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
-                    cv.root_package_version AS root_package_version
+                    cv.root_package_version AS root_package_version,
+                    cv.env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
@@ -1457,7 +1466,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                 cv.object_store_key,
                 cv.transformed_object_store_key,
                 cv.root_package_name,
-                cv.root_package_version
+                cv.root_package_version,
+                cv.env
             FROM components c
             JOIN component_versions cv ON c.component_id = cv.component_id
             JOIN input_components ic ON ic.name = c.name
@@ -1483,7 +1493,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                 cv.object_store_key,
                 cv.transformed_object_store_key,
                 cv.root_package_name,
-                cv.root_package_version
+                cv.root_package_version,
+                cv.env
             FROM components c
             JOIN component_versions cv ON c.component_id = cv.component_id
             JOIN input_components ic ON ic.name = c.name
@@ -1562,7 +1573,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                 cv.object_store_key,
                 cv.transformed_object_store_key,
                 cv.root_package_name,
-                cv.root_package_version
+                cv.root_package_version,
+                cv.env
             FROM components c
             JOIN component_versions cv ON c.component_id = cv.component_id
             JOIN input_components ic ON ic.name = c.name
@@ -1584,7 +1596,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                 cv.object_store_key,
                 cv.transformed_object_store_key,
                 cv.root_package_name,
-                cv.root_package_version
+                cv.root_package_version,
+                cv.env
             FROM component_versions cv
             JOIN components c ON c.component_id = cv.component_id
             JOIN input_components ic ON ic.name = c.name
@@ -1644,7 +1657,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                     cv.object_store_key AS object_store_key,
                     cv.transformed_object_store_key AS transformed_object_store_key,
                     cv.root_package_name AS root_package_name,
-                    cv.root_package_version AS root_package_version
+                    cv.root_package_version AS root_package_version,
+                    cv.env
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
@@ -1956,12 +1970,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
         let query = sqlx::query(
             r#"
-              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version
+              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version, env
                    FROM component_versions WHERE component_id = $1
                    ORDER BY version DESC
                    LIMIT 1)
               INSERT INTO component_versions
-              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version FROM prev
+              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version, prev.env FROM prev
               RETURNING *
               "#,
         ).bind(component_id).bind(Utc::now());

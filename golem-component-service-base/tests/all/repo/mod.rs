@@ -884,6 +884,7 @@ async fn test_default_component_plugin_installation(
     component_repo
         .create(&ComponentRecord::try_from_model(component1.clone(), true).unwrap())
         .await?;
+
     plugin_repo.create(&plugin1_row).await?;
 
     let target1 = ComponentPluginInstallationTarget {

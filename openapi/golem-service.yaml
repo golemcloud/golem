@@ -2607,9 +2607,7 @@ paths:
                 dynamicLinking:
                   $ref: '#/components/schemas/DynamicLinking'
                 env:
-                  type: object
-                  additionalProperties:
-                    type: string
+                  $ref: '#/components/schemas/ComponentEnv'
               required:
               - name
               - component
@@ -2768,9 +2766,7 @@ paths:
                 dynamicLinking:
                   $ref: '#/components/schemas/DynamicLinking'
                 env:
-                  type: object
-                  additionalProperties:
-                    type: string
+                  $ref: '#/components/schemas/ComponentEnv'
               required:
               - component
         required: true
@@ -7287,6 +7283,15 @@ components:
       - componentType
       - files
       - installedPlugins
+    ComponentEnv:
+      type: object
+      properties:
+        env:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - env
     ComponentFilePathWithPermissions:
       type: object
       properties:
