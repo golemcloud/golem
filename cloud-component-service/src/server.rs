@@ -113,9 +113,11 @@ async fn async_main(
     let http_services = services.clone();
     let grpc_services = services.clone();
 
+    let config = config.clone();
+
     let http_server = tokio::spawn(async move {
         let cors = Cors::new()
-            .allow_origin_regex("https://*.golem.cloud")
+            .allow_origin_regex(&config.cors_origin_regex)
             .allow_credentials(true);
 
         let app = api::combined_routes(&http_services)

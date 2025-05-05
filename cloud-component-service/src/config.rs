@@ -20,6 +20,7 @@ pub struct ComponentServiceConfig {
     pub cloud_service: RemoteCloudServiceConfig,
     pub blob_storage: BlobStorageConfig,
     pub plugin_transformations: PluginTransformationsConfig,
+    pub cors_origin_regex: String,
 }
 
 impl Default for ComponentServiceConfig {
@@ -35,6 +36,7 @@ impl Default for ComponentServiceConfig {
             cloud_service: RemoteCloudServiceConfig::default(),
             blob_storage: BlobStorageConfig::default(),
             plugin_transformations: PluginTransformationsConfig::default(),
+            cors_origin_regex: "https://*.golem.cloud".to_string(),
         }
     }
 }

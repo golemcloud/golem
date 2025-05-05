@@ -16,6 +16,7 @@ pub struct CloudSpecificWorkerServiceConfig {
     pub workspace: String,
     pub domain_records: DomainRecordsConfig,
     pub cloud_service: RemoteCloudServiceConfig,
+    pub cors_origin_regex: String,
 }
 
 impl Default for CloudSpecificWorkerServiceConfig {
@@ -24,6 +25,7 @@ impl Default for CloudSpecificWorkerServiceConfig {
             workspace: "release".to_string(),
             domain_records: DomainRecordsConfig::default(),
             cloud_service: RemoteCloudServiceConfig::default(),
+            cors_origin_regex: "https://*.golem.cloud".to_string(),
         }
     }
 }

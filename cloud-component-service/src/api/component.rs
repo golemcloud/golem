@@ -1,8 +1,9 @@
+use super::dto;
+use super::dto::CloudApiMapper;
 use crate::api::{ApiTags, ComponentError, Result};
 use crate::model::{ComponentQuery, ComponentSearch};
 use crate::service::component::CloudComponentService;
 use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
-use cloud_common::model::CloudComponentOwner;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
@@ -12,8 +13,6 @@ use golem_common::model::{
 };
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_http_api_request;
-use golem_component_service_base::api::dto;
-use golem_component_service_base::api::mapper::ApiMapper;
 use golem_component_service_base::model::{
     BatchPluginInstallationUpdates, DynamicLinking, InitialComponentFilesArchiveAndPermissions,
     UpdatePayload,
@@ -42,14 +41,14 @@ pub struct UploadPayload {
 
 pub struct ComponentApi {
     component_service: Arc<CloudComponentService>,
-    api_mapper: Arc<dyn ApiMapper<CloudComponentOwner> + Send + Sync>,
+    api_mapper: Arc<dyn CloudApiMapper>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
 impl ComponentApi {
     pub fn new(
         component_service: Arc<CloudComponentService>,
-        api_mapper: Arc<dyn ApiMapper<CloudComponentOwner> + Send + Sync>,
+        api_mapper: Arc<dyn CloudApiMapper>,
     ) -> Self {
         Self {
             component_service,

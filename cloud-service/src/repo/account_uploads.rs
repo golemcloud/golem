@@ -7,7 +7,7 @@ use golem_service_base::repo::RepoError;
 #[async_trait]
 pub trait AccountUploadsRepo {
     async fn get(&self, id: &AccountId) -> Result<i32, RepoError>;
-    async fn update(&self, id: &AccountId, value: i32) -> Result<i32, RepoError>;
+    async fn update(&self, id: &AccountId, value: i32) -> Result<(), RepoError>;
 }
 
 pub struct DbAccountUploadsRepo<DB: Pool> {
@@ -40,7 +40,7 @@ impl AccountUploadsRepo for DbAccountUploadsRepo<golem_service_base::db::postgre
                 and year = extract(year from get_current_date())
             ",
         )
-        .bind(id.value.clone());
+        .bind(&id.value);
 
         let result = self
             .db_pool
@@ -62,7 +62,7 @@ impl AccountUploadsRepo for DbAccountUploadsRepo<golem_service_base::db::postgre
               AND year = strftime('%Y', 'now')
             ",
         )
-        .bind(id.value.clone());
+        .bind(&id.value);
 
         let result = self
             .db_pool
@@ -74,100 +74,42 @@ impl AccountUploadsRepo for DbAccountUploadsRepo<golem_service_base::db::postgre
     }
 
     #[when(golem_service_base::db::postgres::PostgresPool -> update)]
-    async fn update_postgres(&self, id: &AccountId, value: i32) -> Result<i32, RepoError> {
-        let mut transaction = self
-            .db_pool
-            .with_rw("account_uploads", "update")
-            .begin()
-            .await?;
-
+    async fn update_postgres(&self, id: &AccountId, value: i32) -> Result<(), RepoError> {
         let query = sqlx::query(
             "
             insert into account_uploads (account_id, counter, month, year)
-            values ($1, 0, 1, 2000)
-            on conflict do nothing
+            VALUES ($1, $2, EXTRACT(MONTH FROM current_date), EXTRACT(YEAR FROM current_date))
+            ON CONFLICT DO UPDATE SET counter = counter + $2
         ",
         )
-        .bind(id.value.clone());
-
-        transaction.execute(query).await?;
-
-        let query = sqlx::query("
-            update account_uploads
-            set counter = case
-                when month = extract(month from get_current_date()) and year = extract(year from get_current_date())
-                    then counter + $2
-                else $2
-                end,
-            month = extract(month from get_current_date()),
-            year = extract(year from get_current_date())
-            where account_id = $1
-        ")
-        .bind(id.value.clone())
+        .bind(&id.value)
         .bind(value);
 
-        transaction.execute(query).await?;
-
-        // Why don't we use get function?
-        let query = sqlx::query_as::<_, AccountUploads>(
-            "
-            select counter
-            from account_uploads
-            where account_id = $1
-            ",
-        )
-        .bind(id.value.clone());
-
-        let new_counter = transaction.fetch_optional_as(query).await?;
-
         self.db_pool
-            .with("account_uploads", "update")
-            .commit(transaction)
+            .with_rw("account_uploads", "update")
+            .execute(query)
             .await?;
 
-        Ok(new_counter.map(|r| r.counter).unwrap_or_default())
+        Ok(())
     }
 
     #[when(golem_service_base::db::sqlite::SqlitePool -> update)]
-    async fn update_sqlite(&self, id: &AccountId, value: i32) -> Result<i32, RepoError> {
-        let mut transaction = self
-            .db_pool
+    async fn update_sqlite(&self, id: &AccountId, value: i32) -> Result<(), RepoError> {
+        let query = sqlx::query(
+            "
+            insert into account_uploads (account_id, counter, month, year)
+            VALUES ($1, $2, strftime('%m', 'now'), strftime('%Y', 'now'))
+            ON CONFLICT DO UPDATE SET counter = counter + $2
+        ",
+        )
+        .bind(&id.value)
+        .bind(value);
+
+        self.db_pool
             .with_rw("account_uploads", "update")
-            .begin()
+            .execute(query)
             .await?;
 
-        let query = sqlx::query("
-            UPDATE account_uploads
-            SET counter = CASE
-                WHEN month = strftime('%m', 'now') AND year = strftime('%Y', 'now')
-                THEN counter + $2
-                ELSE $2
-                END,
-                month = strftime('%m', 'now'),
-                year = strftime('%Y', 'now')
-            WHERE account_id = $1;
-
-            INSERT INTO account_uploads (account_id, counter, month, year)
-            SELECT $1, $2, strftime('%m', 'now'), strftime('%Y', 'now')
-            WHERE NOT EXISTS (SELECT 1 FROM account_uploads WHERE account_id = $1 AND month = strftime('%m', 'now') AND year = strftime('%Y', 'now'));
-        ")
-            .bind(id.value.clone())
-            .bind(value);
-
-        transaction.execute(query).await?;
-
-        // Why don't we use get function?
-        let query = sqlx::query_as::<_, AccountUploads>(
-            "
-            select counter
-            from account_uploads
-            where account_id = $1
-            ",
-        )
-        .bind(id.value.clone());
-
-        let new_counter = transaction.fetch_optional_as(query).await?;
-
-        Ok(new_counter.map(|r| r.counter).unwrap_or_default())
+        Ok(())
     }
 }

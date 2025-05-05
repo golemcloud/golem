@@ -1,4 +1,5 @@
 ## Generated from default config
+cors_origin_regex = "https://*.golem.cloud"
 environment = "dev"
 grpc_port = 8081
 http_port = 8080

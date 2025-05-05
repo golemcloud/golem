@@ -114,7 +114,7 @@ async fn async_main(
     let grpc_services = services.clone();
 
     let cors = Cors::new()
-        .allow_origin_regex("https://*.golem.cloud")
+        .allow_origin_regex(&config.cors_origin_regex)
         .allow_credentials(true);
 
     let http_server = tokio::spawn(async move {

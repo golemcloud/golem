@@ -25,6 +25,7 @@ pub struct CloudServiceConfig {
     pub accounts: AccountsConfig,
     pub oauth2: OAuth2Config,
     pub component_service: RemoteCloudServiceConfig,
+    pub cors_origin_regex: String,
 }
 
 impl Default for CloudServiceConfig {
@@ -41,6 +42,7 @@ impl Default for CloudServiceConfig {
             accounts: AccountsConfig::default(),
             oauth2: OAuth2Config::default(),
             component_service: RemoteCloudServiceConfig::default(),
+            cors_origin_regex: "https://*.golem.cloud".to_string(),
         }
     }
 }

@@ -34,6 +34,7 @@ pub async fn app(config: &WorkerServiceCloudConfig) -> std::io::Result<()> {
         .await
         .map_err(std::io::Error::other)?;
 
+    let cloud_specific_config = config.cloud_specific_config.clone();
     let config = config.base_config.clone();
 
     let http_service1 = services.clone();
@@ -57,7 +58,7 @@ pub async fn app(config: &WorkerServiceCloudConfig) -> std::io::Result<()> {
 
     let worker_server = tokio::spawn(async move {
         let cors = Cors::new()
-            .allow_origin_regex("https://*.golem.cloud")
+            .allow_origin_regex(&cloud_specific_config.cors_origin_regex)
             .allow_credentials(true);
 
         let app = Route::new()

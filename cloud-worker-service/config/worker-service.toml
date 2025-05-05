@@ -344,6 +344,7 @@ multiplier = 10.0
 # min_delay = "10ms"
 # multiplier = 10.0
 ## Generated from default config
+cors_origin_regex = "https://*.golem.cloud"
 workspace = "release"
 
 [cloud_service]

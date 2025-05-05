@@ -150,7 +150,7 @@ impl LoginServiceDefault {
         let fresh_account_id = AccountId::generate();
         let account = self
             .account_service
-            .update(
+            .create(
                 &fresh_account_id,
                 &AccountData { name, email },
                 authorisation,

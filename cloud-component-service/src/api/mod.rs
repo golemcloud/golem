@@ -10,6 +10,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, OpenApiService, Tags};
 
 pub mod component;
+pub mod dto;
 pub mod healthcheck;
 pub mod plugin;
 
