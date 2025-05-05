@@ -45,6 +45,7 @@ pub struct Component<Owner: ComponentOwner> {
     pub transformed_object_store_key: Option<String>,
     pub files: Vec<InitialComponentFile>,
     pub installed_plugins: Vec<PluginInstallation>,
+    pub env: HashMap<String, String>,
 }
 
 impl<Owner: ComponentOwner> Component<Owner> {
@@ -57,6 +58,7 @@ impl<Owner: ComponentOwner> Component<Owner> {
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: Owner,
+        env: HashMap<String, String>,
     ) -> Result<Component<Owner>, ComponentProcessingError> {
         let mut metadata = ComponentMetadata::analyse_component(data)?;
         metadata.dynamic_linking = dynamic_linking;
@@ -78,6 +80,7 @@ impl<Owner: ComponentOwner> Component<Owner> {
             component_type,
             files,
             installed_plugins,
+            env
         })
     }
 
@@ -115,6 +118,7 @@ impl<Owner: ComponentOwner> From<Component<Owner>> for golem_service_base::model
             component_type: Some(value.component_type),
             files: value.files,
             installed_plugins: value.installed_plugins,
+            env: value.env,
         }
     }
 }
@@ -140,6 +144,7 @@ impl From<Component<DefaultComponentOwner>> for golem_api_grpc::proto::golem::co
                 .into_iter()
                 .map(|plugin| plugin.into())
                 .collect(),
+            env: value.env,
         }
     }
 }

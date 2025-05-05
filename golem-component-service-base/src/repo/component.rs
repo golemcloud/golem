@@ -42,6 +42,8 @@ use std::sync::Arc;
 use tracing::{debug, info_span, Span};
 use tracing_futures::Instrument;
 use uuid::Uuid;
+use sqlx::types::Json;
+
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ComponentRecord<Owner: ComponentOwner> {
@@ -65,6 +67,7 @@ pub struct ComponentRecord<Owner: ComponentOwner> {
         Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
+    pub env: Json<HashMap<String, String>>
 }
 
 impl<Owner: ComponentOwner> ComponentRecord<Owner> {
@@ -122,6 +125,7 @@ impl<Owner: ComponentOwner> ComponentRecord<Owner> {
                 .collect::<Result<Vec<_>, _>>()?,
             root_package_name: value.metadata.root_package_name,
             root_package_version: value.metadata.root_package_version,
+            env: Json(value.env),
         })
     }
 }
@@ -158,6 +162,7 @@ impl<Owner: ComponentOwner> TryFrom<ComponentRecord<Owner>> for Component<Owner>
                 .into_iter()
                 .map(|record| record.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
+            env: value.env.0,
         })
     }
 }
@@ -262,6 +267,7 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug + Send + Sync {
         metadata: Vec<u8>,
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
+        component_env: Json<HashMap<String, String>>,
     ) -> Result<ComponentRecord<Owner>, RepoError>;
 
     /// Activates a component version previously created with `update`.
@@ -412,6 +418,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         metadata: Vec<u8>,
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
+        component_env: Json<HashMap<String, String>>,
     ) -> Result<ComponentRecord<Owner>, RepoError> {
         self.repo
             .update(
@@ -422,6 +429,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
                 metadata,
                 component_type,
                 files,
+                component_env,
             )
             .instrument(Self::span(component_id))
             .await
@@ -770,9 +778,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         let query = sqlx::query(
             r#"
               INSERT INTO component_versions
-                (component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version)
+                (component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version, env)
               VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                "#,
         )
             .bind(component.component_id)
@@ -785,7 +793,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
             .bind(&component.object_store_key)
             .bind(&component.transformed_object_store_key)
             .bind(&component.root_package_name)
-            .bind(&component.root_package_version);
+            .bind(&component.root_package_version)
+            .bind(&component.env);
 
         transaction.execute(query).await?;
 
@@ -823,6 +832,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         metadata: Vec<u8>,
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
+        component_env: Json<HashMap<String, String>>,
     ) -> Result<ComponentRecord<Owner>, RepoError> {
         let mut transaction = self.db_pool.with_rw("component", "update").begin().await?;
 
@@ -851,7 +861,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                                    ORDER BY version DESC
                                    LIMIT 1)
                               INSERT INTO component_versions
-                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, $5, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version FROM prev
+                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, $5, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version, $6 FROM prev
                               RETURNING *
                               "#,
                     )
@@ -859,7 +869,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                         .bind(data.len() as i32)
                         .bind(now)
                         .bind(metadata)
-                        .bind(component_type);
+                        .bind(component_type)
+                        .bind(component_env);
 
                     transaction.fetch_one(query).await?.get("version")
                 } else {
@@ -870,14 +881,16 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                                    ORDER BY version DESC
                                    LIMIT 1)
                               INSERT INTO component_versions
-                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version FROM prev
+                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version, $5 FROM prev
                               RETURNING *
                               "#,
                     )
                         .bind(component_id)
                         .bind(data.len() as i32)
                         .bind(now)
-                        .bind(metadata);
+                        .bind(metadata)
+                        .bind(component_env);
+
                     transaction.fetch_one(query).await?.get("version")
                 };
 

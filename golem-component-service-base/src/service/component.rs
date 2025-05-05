@@ -59,6 +59,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use std::vec;
+use sqlx::types::Json;
 use tap::TapFallible;
 use tempfile::NamedTempFile;
 use tokio::io::BufReader;
@@ -314,6 +315,7 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>,
     ) -> Result<Component<Owner>, ComponentError>;
 
     // Files must have been uploaded to the blob store before calling this method
@@ -327,6 +329,7 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>
     ) -> Result<Component<Owner>, ComponentError>;
 
     async fn update(
@@ -337,6 +340,7 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>,
     ) -> Result<Component<Owner>, ComponentError>;
 
     // Files must have been uploaded to the blob store before calling this method
@@ -349,6 +353,7 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>
     ) -> Result<Component<Owner>, ComponentError>;
 
     async fn download(
@@ -723,6 +728,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>,
     ) -> Result<Component<Owner>, ComponentError> {
         let component = Component::new(
             component_id.clone(),
@@ -733,6 +739,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             installed_plugins,
             dynamic_linking,
             owner.clone(),
+            env
         )?;
 
         info!(
@@ -787,6 +794,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>,
     ) -> Result<Component<Owner>, ComponentError> {
         let mut metadata = ComponentMetadata::analyse_component(&data)
             .map_err(ComponentError::ComponentProcessingError)?;
@@ -836,6 +844,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                     .to_vec(),
                 component_type.map(|ct| ct as i32),
                 files,
+                Json(env)
             )
             .await?;
         let mut component: Component<Owner> = component_record
@@ -1105,6 +1114,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>
     ) -> Result<Component<Owner>, ComponentError> {
         info!(owner = %owner, "Create component");
 
@@ -1129,6 +1139,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             installed_plugins,
             dynamic_linking,
             owner,
+            env
         )
         .await
     }
@@ -1143,6 +1154,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>
     ) -> Result<Component<Owner>, ComponentError> {
         info!(owner = %owner, "Create component");
 
@@ -1178,6 +1190,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             installed_plugins,
             dynamic_linking,
             owner,
+            env
         )
         .await
     }
@@ -1190,6 +1203,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>,
     ) -> Result<Component<Owner>, ComponentError> {
         info!(owner = %owner, "Update component");
 
@@ -1208,6 +1222,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             uploaded_files,
             dynamic_linking,
             owner,
+            env
         )
         .await
     }
@@ -1220,6 +1235,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>,
     ) -> Result<Component<Owner>, ComponentError> {
         info!(owner = %owner, "Update component");
 
@@ -1249,6 +1265,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             files,
             dynamic_linking,
             owner,
+            env
         )
         .await
     }
@@ -1874,6 +1891,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>
     ) -> Result<Component<Owner>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -1887,6 +1905,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
                 installed_plugins,
                 dynamic_linking,
                 owner,
+                env
             )
             .await
     }
@@ -1902,6 +1921,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>
     ) -> Result<Component<Owner>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -1915,6 +1935,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
                 installed_plugins,
                 dynamic_linking,
                 owner,
+                env
             )
             .await
     }
@@ -1927,6 +1948,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>
     ) -> Result<Component<Owner>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -1938,6 +1960,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
                 files,
                 dynamic_linking,
                 owner,
+                env
             )
             .await
     }
@@ -1952,6 +1975,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &Owner,
+        env: HashMap<String, String>
     ) -> Result<Component<Owner>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -1963,6 +1987,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
                 files,
                 dynamic_linking,
                 owner,
+                env
             )
             .await
     }
