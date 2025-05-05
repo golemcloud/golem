@@ -7274,6 +7274,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallation'
+        env:
+          type: object
+          additionalProperties:
+            type: string
       required:
       - versionedComponentId
       - componentName
@@ -7283,6 +7287,7 @@ components:
       - componentType
       - files
       - installedPlugins
+      - env
     ComponentEnv:
       type: object
       properties:

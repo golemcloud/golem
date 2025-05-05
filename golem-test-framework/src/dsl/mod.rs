@@ -77,6 +77,7 @@ pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     unverified: bool,
     files: Vec<(PathBuf, InitialComponentFile)>,
     dynamic_linking: Vec<(&'static str, DynamicLinkedInstance)>,
+    env: HashMap<String, String>,
 }
 
 impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
@@ -90,6 +91,7 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
             unverified: false,
             files: vec![],
             dynamic_linking: vec![],
+            env: HashMap::new(),
         }
     }
 
@@ -183,6 +185,7 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
                 self.unverified,
                 &self.files,
                 &self.dynamic_linking,
+                &self.env
             )
             .await
     }
@@ -201,6 +204,7 @@ pub trait TestDsl {
         unverified: bool,
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+        env: &HashMap<String, String>,
     ) -> (ComponentId, ComponentName);
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
@@ -465,6 +469,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         unverified: bool,
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+        env: &HashMap<String, String>,
     ) -> (ComponentId, ComponentName) {
         let source_path = self.component_directory().join(format!("{wasm_name}.wasm"));
         let component_name = if unique {
@@ -492,6 +497,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                         files,
                         &dynamic_linking,
                         unverified,
+                        env,
                     )
                     .await
                     .expect("Failed to add component")
@@ -504,6 +510,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                         files,
                         &dynamic_linking,
                         unverified,
+                        env,
                     )
                     .await
             }
@@ -589,6 +596,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
+        let component_env = HashMap::new();
         self.component_service()
             .update_component(
                 component_id,
@@ -596,6 +604,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 ComponentType::Durable,
                 None,
                 None,
+                &component_env,
             )
             .await
             .unwrap()
@@ -615,6 +624,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 ComponentType::Durable,
                 files,
                 None,
+                &HashMap::new(),
             )
             .await
             .unwrap()
@@ -1863,6 +1873,7 @@ pub trait TestDslUnsafe {
         unverified: bool,
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+        env: &HashMap<String, String>,
     ) -> (ComponentId, ComponentName);
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
@@ -2068,6 +2079,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         unverified: bool,
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
+        env: &HashMap<String, String>,
     ) -> (ComponentId, ComponentName) {
         <T as TestDsl>::store_component_with(
             self,
@@ -2078,6 +2090,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             unverified,
             files,
             dynamic_linking,
+            env
         )
         .await
     }

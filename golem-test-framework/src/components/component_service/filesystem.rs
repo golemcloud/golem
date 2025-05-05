@@ -67,6 +67,7 @@ impl FileSystemComponentService {
         files: &[InitialComponentFile],
         skip_analysis: bool,
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
+        env: &HashMap<String, String>,
     ) -> Result<Component, AddComponentError> {
         let target_dir = &self.root;
 
@@ -127,6 +128,7 @@ impl FileSystemComponentService {
             exports: exports.clone(),
             dynamic_linking: dynamic_linking.clone(),
             wasm_filename,
+            env: env.clone(),
         };
         write_metadata_to_file(
             metadata,
@@ -161,6 +163,7 @@ impl FileSystemComponentService {
             component_type: Some(component_type as i32),
             files: files.iter().map(|file| file.clone().into()).collect(),
             installed_plugins: vec![],
+            env: env.clone()
         })
     }
 
@@ -228,6 +231,7 @@ impl ComponentService for FileSystemComponentService {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
+        env: &HashMap<String, String>,
     ) -> Component {
         self.add_component(
             local_path,
@@ -236,6 +240,7 @@ impl ComponentService for FileSystemComponentService {
             files,
             dynamic_linking,
             unverified,
+            env
         )
         .await
         .expect("Failed to add component")
@@ -249,6 +254,7 @@ impl ComponentService for FileSystemComponentService {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
+        env: &HashMap<String, String>,
     ) -> Result<Component, AddComponentError> {
         self.write_component_to_filesystem(
             local_path,
@@ -262,6 +268,7 @@ impl ComponentService for FileSystemComponentService {
                 .collect::<Vec<_>>(),
             unverified,
             dynamic_linking,
+            env,
         )
         .await
     }
@@ -282,6 +289,7 @@ impl ComponentService for FileSystemComponentService {
             &[],
             false,
             &HashMap::new(),
+            &HashMap::new(),
         )
         .await?;
         Ok(())
@@ -294,6 +302,7 @@ impl ComponentService for FileSystemComponentService {
         component_type: ComponentType,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
+        env: &HashMap<String, String>,
     ) -> crate::Result<u64> {
         let target_dir = &self.root;
 
@@ -331,6 +340,7 @@ impl ComponentService for FileSystemComponentService {
             files.as_ref().unwrap_or(&old_metadata.files),
             false,
             dynamic_linking.unwrap_or(&old_metadata.dynamic_linking),
+            env,
         )
         .await
         .expect("Failed to write component to filesystem");

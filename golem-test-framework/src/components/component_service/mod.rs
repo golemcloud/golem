@@ -159,6 +159,7 @@ pub trait ComponentServiceInternal: Send + Sync {
                 })
                 .try_collect::<Vec<_>>()
                 .await?,
+            env: component.env
         };
         Ok(component)
     }
@@ -279,6 +280,7 @@ pub trait ComponentService: ComponentServiceInternal {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
+        env: &HashMap<String, String>,
     ) -> Component {
         let mut retries = 10;
         loop {
@@ -346,6 +348,7 @@ pub trait ComponentService: ComponentServiceInternal {
                     files,
                     dynamic_linking,
                     unverified,
+                    env
                 )
                 .await
             {
@@ -389,6 +392,7 @@ pub trait ComponentService: ComponentServiceInternal {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         _unverified: bool,
+        env: &HashMap<String, String>,
     ) -> Result<Component, AddComponentError> {
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
@@ -413,6 +417,7 @@ pub trait ComponentService: ComponentServiceInternal {
                                     .iter()
                                     .map(|(k, v)| (k.clone(), v.clone().into())),
                             ),
+                            env: env.clone(),
                         },
                     )),
                 }];
@@ -491,6 +496,9 @@ pub trait ComponentService: ComponentServiceInternal {
                         to_http_file_permissions(files).as_ref(),
                         archive_file,
                         to_http_dynamic_linking(Some(dynamic_linking)).as_ref(),
+                        Some(&golem_client::model::ComponentEnv {
+                            env: env.clone(),
+                        }),
                     )
                     .await
                 {
@@ -522,6 +530,7 @@ pub trait ComponentService: ComponentServiceInternal {
         component_type: ComponentType,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
+        env: &HashMap<String, String>,
     ) -> crate::Result<u64> {
         let mut file = File::open(local_path)
             .await
@@ -554,6 +563,7 @@ pub trait ComponentService: ComponentServiceInternal {
                                     .flatten()
                                     .map(|(k, v)| (k.clone(), v.clone().into())),
                             ),
+                            env: env.clone()
                         },
                     )),
                 }];
@@ -615,6 +625,8 @@ pub trait ComponentService: ComponentServiceInternal {
                     None => None,
                 };
 
+                let component_env =  golem_client::model::ComponentEnv { env: env.clone() };
+
                 match client
                     .update_component(
                         &component_id.0,
@@ -626,6 +638,7 @@ pub trait ComponentService: ComponentServiceInternal {
                             .as_ref(),
                         archive_file,
                         to_http_dynamic_linking(dynamic_linking).as_ref(),
+                        Some(&component_env),
                     )
                     .await
                 {
