@@ -185,7 +185,7 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
                 self.unverified,
                 &self.files,
                 &self.dynamic_linking,
-                &self.env
+                &self.env,
             )
             .await
     }
@@ -2090,7 +2090,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             unverified,
             files,
             dynamic_linking,
-            env
+            env,
         )
         .await
     }

@@ -163,7 +163,7 @@ impl FileSystemComponentService {
             component_type: Some(component_type as i32),
             files: files.iter().map(|file| file.clone().into()).collect(),
             installed_plugins: vec![],
-            env: env.clone()
+            env: env.clone(),
         })
     }
 
@@ -240,7 +240,7 @@ impl ComponentService for FileSystemComponentService {
             files,
             dynamic_linking,
             unverified,
-            env
+            env,
         )
         .await
         .expect("Failed to add component")

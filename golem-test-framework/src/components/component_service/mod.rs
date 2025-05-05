@@ -159,7 +159,7 @@ pub trait ComponentServiceInternal: Send + Sync {
                 })
                 .try_collect::<Vec<_>>()
                 .await?,
-            env: component.env
+            env: component.env,
         };
         Ok(component)
     }
@@ -348,7 +348,7 @@ pub trait ComponentService: ComponentServiceInternal {
                     files,
                     dynamic_linking,
                     unverified,
-                    env
+                    env,
                 )
                 .await
             {
@@ -496,9 +496,7 @@ pub trait ComponentService: ComponentServiceInternal {
                         to_http_file_permissions(files).as_ref(),
                         archive_file,
                         to_http_dynamic_linking(Some(dynamic_linking)).as_ref(),
-                        Some(&golem_client::model::ComponentEnv {
-                            env: env.clone(),
-                        }),
+                        Some(&golem_client::model::ComponentEnv { env: env.clone() }),
                     )
                     .await
                 {
@@ -563,7 +561,7 @@ pub trait ComponentService: ComponentServiceInternal {
                                     .flatten()
                                     .map(|(k, v)| (k.clone(), v.clone().into())),
                             ),
-                            env: env.clone()
+                            env: env.clone(),
                         },
                     )),
                 }];
@@ -625,7 +623,7 @@ pub trait ComponentService: ComponentServiceInternal {
                     None => None,
                 };
 
-                let component_env =  golem_client::model::ComponentEnv { env: env.clone() };
+                let component_env = golem_client::model::ComponentEnv { env: env.clone() };
 
                 match client
                     .update_component(
