@@ -83,6 +83,39 @@ pub trait DurabilityHost {
         forced_commit: bool,
     ) -> Result<(), GolemError>;
 
+    async fn begin_durable_transaction(
+        &mut self,
+        function_type: &DurableFunctionType,
+    ) -> Result<OplogIndex, GolemError>;
+
+    async fn pre_commit_durable_transaction(
+        &mut self,
+        function_type: &DurableFunctionType,
+    ) -> Result<(), GolemError>;
+
+    async fn pre_rollback_durable_transaction(
+        &mut self,
+        function_type: &DurableFunctionType,
+    ) -> Result<(), GolemError>;
+
+    async fn commited_durable_transaction(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError>;
+
+    async fn rolled_back_durable_transaction(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError>;
+
+    async fn aborted_durable_transaction(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError>;
+
     /// Gets the current durable execution state
     fn durable_execution_state(&self) -> DurableExecutionState;
 
@@ -349,6 +382,61 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             self.state.oplog.commit(CommitLevel::DurableOnly).await;
         }
         Ok(())
+    }
+
+    async fn begin_durable_transaction(
+        &mut self,
+        function_type: &DurableFunctionType,
+    ) -> Result<OplogIndex, GolemError> {
+        self.state.begin_transaction_function(function_type).await
+    }
+
+    async fn pre_commit_durable_transaction(
+        &mut self,
+        function_type: &DurableFunctionType,
+    ) -> Result<(), GolemError> {
+        self.state
+            .pre_commit_transaction_function(function_type)
+            .await
+    }
+
+    async fn pre_rollback_durable_transaction(
+        &mut self,
+        function_type: &DurableFunctionType,
+    ) -> Result<(), GolemError> {
+        self.state
+            .pre_commit_transaction_function(function_type)
+            .await
+    }
+
+    async fn commited_durable_transaction(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError> {
+        self.state
+            .commited_transaction_function(function_type, begin_index)
+            .await
+    }
+
+    async fn rolled_back_durable_transaction(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError> {
+        self.state
+            .rolled_back_transaction_function(function_type, begin_index)
+            .await
+    }
+
+    async fn aborted_durable_transaction(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError> {
+        self.state
+            .aborted_transaction_function(function_type, begin_index)
+            .await
     }
 
     fn durable_execution_state(&self) -> DurableExecutionState {

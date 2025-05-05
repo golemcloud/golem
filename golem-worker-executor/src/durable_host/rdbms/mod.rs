@@ -88,7 +88,7 @@ where
     ctx.observe_function_call(interface.as_str(), "begin-transaction");
 
     let begin_oplog_index = ctx
-        .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
+        .begin_durable_transaction(&DurableFunctionType::WriteRemoteTransaction(None))
         .await?;
 
     let pool_key = ctx
@@ -277,11 +277,18 @@ where
     let interface = get_db_result_stream_interface::<T>();
     let handle = entry.rep();
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
+
+    let durable_function_type = if is_db_query_stream_in_transaction(ctx, entry)? {
+        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx))
+    } else {
+        DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx))
+    };
+
     let durability = Durability::<Vec<T::DbColumn>, SerializableError>::new(
         ctx,
         interface.leak(),
         "get-columns",
-        DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        durable_function_type,
     )
     .await?;
 
@@ -322,15 +329,16 @@ where
     let interface = get_db_result_stream_interface::<T>();
     let handle = entry.rep();
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
+    let durable_function_type = if is_db_query_stream_in_transaction(ctx, entry)? {
+        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx))
+    } else {
+        DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx))
+    };
+
     let durability = Durability::<
         Option<Vec<crate::services::rdbms::DbRow<T::DbValue>>>,
         SerializableError,
-    >::new(
-        ctx,
-        interface.leak(),
-        "get-next",
-        DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
-    )
+    >::new(ctx, interface.leak(), "get-next", durable_function_type)
     .await?;
 
     let result = if durability.is_live() {
@@ -410,7 +418,7 @@ where
         ctx,
         interface.leak(),
         "query",
-        DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
     )
     .await?;
 
@@ -451,7 +459,7 @@ where
         ctx,
         interface.leak(),
         "execute",
-        DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
     )
     .await?;
 
@@ -484,7 +492,7 @@ where
         ctx,
         interface.leak(),
         "query-stream",
-        DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
     )
     .await?;
 
@@ -522,11 +530,17 @@ where
     let interface = get_db_transaction_interface::<T>();
     let handle = entry.rep();
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
+
+    ctx.pre_rollback_durable_transaction(&DurableFunctionType::WriteRemoteTransaction(Some(
+        begin_oplog_idx,
+    )))
+    .await?;
+
     let durability = Durability::<(), SerializableError>::new(
         ctx,
         interface.leak(),
         "rollback",
-        DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
     )
     .await?;
 
@@ -537,7 +551,7 @@ where
         durability.replay(ctx).await
     };
 
-    end_durable_function_if_open(ctx, handle).await?;
+    rolled_back_durable_transaction_if_open(ctx, handle).await?;
 
     Ok(result.map_err(|e| e.into()))
 }
@@ -554,11 +568,17 @@ where
     let interface = get_db_transaction_interface::<T>();
     let handle = entry.rep();
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
+
+    ctx.pre_commit_durable_transaction(&DurableFunctionType::WriteRemoteTransaction(Some(
+        begin_oplog_idx,
+    )))
+    .await?;
+
     let durability = Durability::<(), SerializableError>::new(
         ctx,
         interface.leak(),
         "commit",
-        DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx)),
+        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
     )
     .await?;
 
@@ -569,7 +589,7 @@ where
         durability.replay(ctx).await
     };
 
-    end_durable_function_if_open(ctx, handle).await?;
+    commited_durable_transaction_if_open(ctx, handle).await?;
 
     Ok(result.map_err(|e| e.into()))
 }
@@ -596,7 +616,7 @@ where
         let _ = transaction.rollback_if_open().await;
     }
 
-    end_durable_function_if_open(ctx, handle).await?;
+    rolled_back_durable_transaction_if_open(ctx, handle).await?;
 
     Ok(())
 }
@@ -647,6 +667,22 @@ impl<T: RdbmsType + Clone + 'static> RdbmsResultStreamEntry<T> {
 pub enum RdbmsResultStreamState<T: RdbmsType + Clone + 'static> {
     New,
     Open(Arc<dyn crate::services::rdbms::DbResultStream<T> + Send + Sync>),
+}
+
+fn is_db_query_stream_in_transaction<Ctx, T>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsResultStreamEntry<T>>,
+) -> anyhow::Result<bool>
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
+{
+    let transaction_handle = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsResultStreamEntry<T>>(entry)?
+        .transaction_handle;
+    Ok(transaction_handle.is_some())
 }
 
 async fn get_db_query_stream<Ctx, T>(
@@ -1078,6 +1114,50 @@ where
             &DurableFunctionType::WriteRemoteBatched(None),
             begin_oplog_idx,
             false,
+        )
+        .await?;
+        ctx.state.open_function_table.remove(&handle);
+
+        Ok(Some(begin_oplog_idx))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn commited_durable_transaction_if_open<Ctx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: u32,
+) -> anyhow::Result<Option<OplogIndex>>
+where
+    Ctx: WorkerCtx,
+{
+    let begin_oplog_idx = ctx.state.open_function_table.get(&handle).cloned();
+    if let Some(begin_oplog_idx) = begin_oplog_idx {
+        ctx.commited_durable_transaction(
+            &DurableFunctionType::WriteRemoteTransaction(None),
+            begin_oplog_idx,
+        )
+        .await?;
+        ctx.state.open_function_table.remove(&handle);
+
+        Ok(Some(begin_oplog_idx))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn rolled_back_durable_transaction_if_open<Ctx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: u32,
+) -> anyhow::Result<Option<OplogIndex>>
+where
+    Ctx: WorkerCtx,
+{
+    let begin_oplog_idx = ctx.state.open_function_table.get(&handle).cloned();
+    if let Some(begin_oplog_idx) = begin_oplog_idx {
+        ctx.rolled_back_durable_transaction(
+            &DurableFunctionType::WriteRemoteTransaction(None),
+            begin_oplog_idx,
         )
         .await?;
         ctx.state.open_function_table.remove(&handle);
