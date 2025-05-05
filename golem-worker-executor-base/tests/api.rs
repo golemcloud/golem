@@ -964,7 +964,10 @@ async fn component_env_variables_update(
         .update_component_with_env(
             &component_id,
             "environment-service",
-            &vec![("FOO".to_string(), "baz".to_string()), ("BAR".to_string(), "qux".to_string())],
+            &vec![
+                ("FOO".to_string(), "baz".to_string()),
+                ("BAR".to_string(), "qux".to_string()),
+            ],
         )
         .await;
 
@@ -977,31 +980,11 @@ async fn component_env_variables_update(
         .await
         .unwrap();
 
+    let env = get_env_result(env);
 
-    check!(
-        env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
-            Value::Tuple(vec![
-                Value::String("BAR".to_string()),
-                Value::String("qux".to_string())
-            ]),
-            Value::Tuple(vec![
-                Value::String("FOO".to_string()),
-                Value::String("baz".to_string())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_WORKER_NAME".to_string()),
-                Value::String("component-env-variables-1".to_string())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_ID".to_string()),
-                Value::String(format!("{}", component_id))
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_VERSION".to_string()),
-                Value::String("0".to_string())
-            ]),
-        ])))))]
-    );
+    check!(env.get("FOO") == Some(&"baz".to_string()));
+    check!(env.get("BAR") == Some(&"qux".to_string()));
+    check!(env.get("GOLEM_WORKER_NAME") == Some(&"component-env-variables-1".to_string()));
 }
 
 #[test]

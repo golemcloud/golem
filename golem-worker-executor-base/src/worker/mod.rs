@@ -160,7 +160,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_version,
             parent,
         )
-            .await?;
+        .await?;
         Self::start_if_needed(worker.clone()).await?;
         Ok(worker)
     }
@@ -180,7 +180,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     owned_worker_id,
                     &Some(previous_metadata.clone()),
                 )
-                    .await?,
+                .await?,
                 ..previous_metadata
             }))
         } else {
@@ -204,7 +204,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_env,
             parent,
         )
-            .await?;
+        .await?;
         let initial_component_metadata = deps
             .component_service()
             .get_metadata(
@@ -335,7 +335,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 permit,
                 oom_retry_count,
             )
-                .await,
+            .await,
         );
     }
 
@@ -423,7 +423,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             &self.owned_worker_id,
             &Some(previous_metadata.clone()),
         )
-            .await?;
+        .await?;
         let mut execution_status = self.execution_status.write().unwrap();
         execution_status.set_last_known_status(last_known_status);
         Ok(())
@@ -530,7 +530,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     function_input,
                     invocation_context,
                 )
-                    .await;
+                .await;
                 Ok(ResultOrSubscription::Pending(subscription))
             }
         }
@@ -651,10 +651,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let pending_updates = self.pending_updates.read().await.clone();
         let mut deleted_regions = DeletedRegionsBuilder::new();
         if let Some(TimestampedUpdateDescription {
-                        oplog_index,
-                        description: UpdateDescription::SnapshotBased { .. },
-                        ..
-                    }) = pending_updates.front()
+            oplog_index,
+            description: UpdateDescription::SnapshotBased { .. },
+            ..
+        }) = pending_updates.front()
         {
             deleted_regions.add(OplogRegion::from_index_range(
                 OplogIndex::INITIAL.next()..=*oplog_index,
@@ -714,7 +714,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .filter_map(|entry| entry.invocation.idempotency_key())
                 .collect(),
         ]
-            .concat();
+        .concat();
         let mut map = self.invocation_results.write().await;
         for key in keys_to_fail {
             let stderr = self.worker_event_service.get_last_invocation_errors();
@@ -1081,9 +1081,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 result,
                             } if *worker_id == self.owned_worker_id.worker_id
                                 && idempotency_key == key =>
-                                {
-                                    Some(LookupResult::Complete(result.clone()))
-                                }
+                            {
+                                Some(LookupResult::Complete(result.clone()))
+                            }
                             _ => None,
                         })
                         .await;
@@ -1111,7 +1111,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 } => LookupResult::Complete(Ok(values)),
                 InvocationResult::Cached {
                     result:
-                    Err(FailedInvocationResult {
+                        Err(FailedInvocationResult {
                             trap_type: TrapType::Interrupt(InterruptKind::Interrupt),
                             ..
                         }),
@@ -1119,7 +1119,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 } => LookupResult::Interrupted,
                 InvocationResult::Cached {
                     result:
-                    Err(FailedInvocationResult {
+                        Err(FailedInvocationResult {
                             trap_type: TrapType::Interrupt(_),
                             ..
                         }),
@@ -1127,7 +1127,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 } => LookupResult::Pending,
                 InvocationResult::Cached {
                     result:
-                    Err(FailedInvocationResult {
+                        Err(FailedInvocationResult {
                             trap_type: TrapType::Error(error),
                             stderr,
                         }),
@@ -1135,7 +1135,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 } => LookupResult::Complete(Err(GolemError::runtime(error.to_string(&stderr)))),
                 InvocationResult::Cached {
                     result:
-                    Err(FailedInvocationResult {
+                        Err(FailedInvocationResult {
                             trap_type: TrapType::Exit,
                             ..
                         }),
@@ -1176,7 +1176,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 called_from_invocation_loop,
                 fail_pending_invocations,
             )
-                .await;
+            .await;
         }
     }
 
@@ -1318,7 +1318,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         owned_worker_id,
                         &Some(previous_metadata.clone()),
                     )
-                        .await?,
+                    .await?,
                     ..previous_metadata
                 };
                 let execution_status =
@@ -1403,7 +1403,7 @@ impl WaitingWorker {
                 let permit = parent.active_workers().acquire(memory_requirement).await;
                 Worker::start_with_permit(parent, permit, oom_retry_count).await;
             }
-                .instrument(span),
+            .instrument(span),
         );
         WaitingWorker {
             handle: Some(handle),
@@ -1468,10 +1468,10 @@ impl RunningWorker {
                     waiting_for_command_clone,
                     oom_retry_count,
                 )
-                    .instrument(span)
-                    .await;
+                .instrument(span)
+                .await;
             }
-                .in_current_span(),
+            .in_current_span(),
         );
 
         RunningWorker {
@@ -1615,7 +1615,7 @@ impl RunningWorker {
             parent.file_loader(),
             parent.plugins(),
         )
-            .await?;
+        .await?;
 
         let engine = parent.engine();
         let mut store = Store::new(&engine, context);
