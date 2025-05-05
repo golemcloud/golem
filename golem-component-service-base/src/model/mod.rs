@@ -35,6 +35,7 @@ pub struct UpdatePayload {
     pub files_permissions: Option<ComponentFilePathWithPermissionsList>,
     pub files: Option<TempFileUpload>,
     pub dynamic_linking: Option<JsonField<DynamicLinking>>,
+    pub env: Option<JsonField<HashMap<String, String>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Object)]

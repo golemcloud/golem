@@ -2606,6 +2606,10 @@ paths:
                   format: binary
                 dynamicLinking:
                   $ref: '#/components/schemas/DynamicLinking'
+                env:
+                  type: object
+                  additionalProperties:
+                    type: string
               required:
               - name
               - component
@@ -2763,6 +2767,10 @@ paths:
                   format: binary
                 dynamicLinking:
                   $ref: '#/components/schemas/DynamicLinking'
+                env:
+                  type: object
+                  additionalProperties:
+                    type: string
               required:
               - component
         required: true
