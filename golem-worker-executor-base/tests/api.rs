@@ -908,15 +908,13 @@ async fn component_env_variables(
 
     let worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "dynamic-worker-creation-1".to_string(),
+        worker_name: "component-env-variables-1".to_string(),
     };
 
     let env = executor
         .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
         .await
         .unwrap();
-
-    drop(executor);
 
     check!(
         env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
@@ -938,6 +936,46 @@ async fn component_env_variables(
             ]),
         ])))))]
     );
+
+    let updated_component = executor
+        .update_component_with_env(
+            &component_id,
+            "environment-service",
+            &vec![("FOO".to_string(), "baz".to_string())],
+        )
+        .await;
+
+    executor
+        .auto_update_worker(&worker_id, updated_component)
+        .await;
+
+    let env = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
+        .await
+        .unwrap();
+
+    check!(
+        env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+            Value::Tuple(vec![
+                Value::String("FOO".to_string()),
+                Value::String("baz".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_WORKER_NAME".to_string()),
+                Value::String("dynamic-worker-creation-1".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_ID".to_string()),
+                Value::String(format!("{}", component_id))
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_VERSION".to_string()),
+                Value::String("0".to_string())
+            ]),
+        ])))))]
+    );
+
+    drop(executor);
 }
 
 #[test]

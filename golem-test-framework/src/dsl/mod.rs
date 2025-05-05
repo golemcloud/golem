@@ -229,6 +229,13 @@ pub trait TestDsl {
         files: Option<&[(PathBuf, InitialComponentFile)]>,
     ) -> ComponentVersion;
 
+    async fn update_component_with_env(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        files: &Vec<(String, String)>,
+    ) -> ComponentVersion;
+
     async fn add_initial_component_file(
         &self,
         account_id: &AccountId,
@@ -631,6 +638,28 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 files,
                 None,
                 &HashMap::new(),
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn update_component_with_env(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        env: &Vec<(String, String)>,
+    ) -> ComponentVersion {
+        let map = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        self.component_service()
+            .update_component(
+                component_id,
+                &source_path,
+                ComponentType::Durable,
+                None,
+                None,
+                &map,
             )
             .await
             .unwrap()
@@ -1894,6 +1923,13 @@ pub trait TestDslUnsafe {
         files: Option<&[(PathBuf, InitialComponentFile)]>,
     ) -> ComponentVersion;
 
+    async fn update_component_with_env(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        env: &HashMap<String, String>,
+    ) -> ComponentVersion;
+
     async fn add_initial_component_file(
         &self,
         account_id: &AccountId,
@@ -2128,6 +2164,15 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         files: Option<&[(PathBuf, InitialComponentFile)]>,
     ) -> ComponentVersion {
         <T as TestDsl>::update_component_with_files(self, component_id, name, files).await
+    }
+
+    async fn update_component_with_env(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        env: &Vec<(String, String)>,
+    ) -> ComponentVersion {
+        <T as TestDsl>::update_component_with_env(self, component_id, name, env).await
     }
 
     async fn add_initial_component_file(
