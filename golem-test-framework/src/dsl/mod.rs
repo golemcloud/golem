@@ -168,6 +168,12 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
         self
     }
 
+    pub fn with_env(mut self, env: Vec<(String, String)>) -> Self {
+        let map = env.into_iter().collect::<HashMap<_, _>>();
+        self.env = map;
+        self
+    }
+
     /// Stores the component
     pub async fn store(self) -> ComponentId {
         self.store_and_get_name().await.0

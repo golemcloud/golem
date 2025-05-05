@@ -893,6 +893,56 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
+async fn component_env_variables(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor
+        .component("environment-service")
+        .with_env(vec![("FOO".to_string(), "bar".to_string())])
+        .store()
+        .await;
+
+    let worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "dynamic-worker-creation-1".to_string(),
+    };
+
+    let env = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    check!(
+        env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+            Value::Tuple(vec![
+                Value::String("FOO".to_string()),
+                Value::String("bar".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_WORKER_NAME".to_string()),
+                Value::String("dynamic-worker-creation-1".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_ID".to_string()),
+                Value::String(format!("{}", component_id))
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_VERSION".to_string()),
+                Value::String("0".to_string())
+            ]),
+        ])))))]
+    );
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120_000)]
 async fn optional_parameters(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
