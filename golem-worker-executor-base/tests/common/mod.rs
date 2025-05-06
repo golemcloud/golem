@@ -99,7 +99,7 @@ use golem_worker_executor_base::services::rpc::{
 use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
-use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
+use golem_worker_executor_base::services::worker_fork::{DefaultWorkerFork, WorkerForkService};
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use tonic::transport::Channel;
@@ -681,6 +681,7 @@ impl WorkerCtx for TestWorkerCtx {
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
+        worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -704,6 +705,7 @@ impl WorkerCtx for TestWorkerCtx {
             execution_status,
             file_loader,
             plugins,
+            worker_fork,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -751,6 +753,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync> {
         self.durable_ctx.component_service()
+    }
+
+    fn worker_fork(&self) -> Arc<dyn WorkerForkService + Send + Sync> {
+        self.durable_ctx.worker_fork()
     }
 
     async fn generate_unique_local_worker_id(

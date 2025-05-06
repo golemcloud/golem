@@ -14,20 +14,17 @@
 
 use std::sync::RwLock;
 
+use super::file_loader::FileLoader;
+use crate::durable_host::serialized::SerializableError;
+use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
-use crate::services::oplog::CommitLevel;
-use crate::services::rpc::Rpc;
-use crate::services::{rdbms, rpc, HasOplog, HasRdbmsService, HasWorkerForkService};
-use golem_common::model::oplog::{OplogIndex, OplogIndexRange};
-use golem_common::model::{AccountId, Timestamp, WorkerMetadata, WorkerStatusRecord};
-use std::sync::Arc;
-
-use super::file_loader::FileLoader;
-use crate::error::GolemError;
+use crate::preview2::golem_api_1_x::host::ForkResult;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::plugins::Plugins;
+use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
@@ -39,10 +36,15 @@ use crate::services::{
     HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
     HasWorkerProxy, HasWorkerService,
 };
+use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::model::oplog::{DurableFunctionType, OplogIndex, OplogIndexRange};
+use golem_common::model::{AccountId, Timestamp, WorkerMetadata, WorkerStatusRecord};
 use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_common::serialization::serialize;
+use std::sync::Arc;
 use tokio::runtime::Handle;
 
 #[async_trait]
@@ -53,10 +55,17 @@ pub trait WorkerForkService {
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(), GolemError>;
+
+    async fn fork_and_write_fork_result(
+        &self,
+        source_worker_id: &OwnedWorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index_cut_off: OplogIndex,
+    ) -> Result<(), GolemError>;
 }
 
 pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
-    pub rpc: Arc<dyn rpc::Rpc + Send + Sync>,
+    pub rpc: Arc<dyn Rpc + Send + Sync>,
     pub active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
     pub engine: Arc<wasmtime::Engine>,
     pub linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -71,7 +80,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
         Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>,
     pub promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
     pub golem_config: Arc<golem_config::GolemConfig>,
-    pub shard_service: Arc<dyn shard::ShardService + Send + Sync>,
+    pub shard_service: Arc<dyn ShardService + Send + Sync>,
     pub key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     pub blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
     pub rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
@@ -371,16 +380,13 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         Ok((owned_source_worker_id, owned_target_worker_id))
     }
-}
 
-#[async_trait]
-impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
-    async fn fork(
+    async fn copy_source_oplog(
         &self,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-    ) -> Result<(), GolemError> {
+    ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError> {
         record_worker_call("fork");
 
         let (owned_source_worker_id, owned_target_worker_id) = self
@@ -445,6 +451,22 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             new_oplog.add(entry.clone()).await;
         }
 
+        Ok(new_oplog)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
+    async fn fork(
+        &self,
+        source_worker_id: &OwnedWorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index_cut_off: OplogIndex,
+    ) -> Result<(), GolemError> {
+        let new_oplog = self
+            .copy_source_oplog(source_worker_id, target_worker_id, oplog_index_cut_off)
+            .await?;
+
         new_oplog.commit(CommitLevel::Always).await;
 
         // We go through worker proxy to resume the worker
@@ -452,7 +474,59 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(&target_worker_id, true)
+            .resume(target_worker_id, true)
+            .await
+            .map_err(|err| {
+                GolemError::failed_to_resume_worker(target_worker_id.clone(), err.into())
+            })?;
+
+        Ok(())
+    }
+
+    async fn fork_and_write_fork_result(
+        &self,
+        source_worker_id: &OwnedWorkerId,
+        target_worker_id: &WorkerId,
+        oplog_index_cut_off: OplogIndex,
+    ) -> Result<(), GolemError> {
+        let new_oplog = self
+            .copy_source_oplog(source_worker_id, target_worker_id, oplog_index_cut_off)
+            .await?;
+
+        // durability.persist will write an ImportedFunctionInvoked entry persisting ForkResult::Original
+        // we write an alternative version of that entry to the new oplog, so it is going to return with
+        // ForkResult::Forked in the other worker
+        let serialized_input = serialize(&target_worker_id.worker_name).map_err(|err| {
+            GolemError::runtime(format!("failed to serialize worker name for persisting durable function invocation: {err}"))
+        })?.to_vec();
+
+        let forked: Result<ForkResult, SerializableError> = Ok(ForkResult::Forked);
+        let serialized_response = serialize(&forked).map_err(|err| {
+            GolemError::runtime(format!("failed to serialize fork result for persisting durable function invocation: {err}"))
+        })?.to_vec();
+
+        let _ = new_oplog
+            .add_raw_imported_function_invoked(
+                "golem::api::fork".to_string(),
+                &serialized_input,
+                &serialized_response,
+                DurableFunctionType::WriteRemote,
+            )
+            .await
+            .map_err(|err| {
+                GolemError::runtime(format!(
+                    "failed to serialize and store durable function invocation: {err}"
+                ))
+            });
+
+        new_oplog.commit(CommitLevel::Always).await;
+
+        // We go through worker proxy to resume the worker
+        // as we need to make sure as it may live in another worker executor,
+        // depending on sharding.
+        // This will replay until the fork point in the forked worker
+        self.worker_proxy
+            .resume(target_worker_id, true)
             .await
             .map_err(|err| {
                 GolemError::failed_to_resume_worker(target_worker_id.clone(), err.into())
