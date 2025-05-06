@@ -82,6 +82,7 @@ impl CloudComponentService {
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &CloudAuthCtx,
+        env: HashMap<String, String>,
     ) -> Result<Component<CloudComponentOwner>, CloudComponentError> {
         let component_id = ComponentId::new_v4();
 
@@ -113,6 +114,7 @@ impl CloudComponentService {
                 vec![],
                 dynamic_linking,
                 &owner,
+                env,
             )
             .await?;
 
@@ -128,6 +130,7 @@ impl CloudComponentService {
         files: Vec<InitialComponentFile>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &CloudAuthCtx,
+        env: HashMap<String, String>,
     ) -> Result<Component<CloudComponentOwner>, CloudComponentError> {
         let component_id = ComponentId::new_v4();
 
@@ -159,6 +162,7 @@ impl CloudComponentService {
                 vec![],
                 dynamic_linking,
                 &owner,
+                env,
             )
             .await?;
 
@@ -173,6 +177,7 @@ impl CloudComponentService {
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &CloudAuthCtx,
+        env: HashMap<String, String>,
     ) -> Result<Component<CloudComponentOwner>, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
@@ -193,6 +198,7 @@ impl CloudComponentService {
                 files,
                 dynamic_linking,
                 &owner,
+                env,
             )
             .await?;
 
@@ -207,6 +213,7 @@ impl CloudComponentService {
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &CloudAuthCtx,
+        env: HashMap<String, String>,
     ) -> Result<Component<CloudComponentOwner>, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
@@ -227,6 +234,7 @@ impl CloudComponentService {
                 files,
                 dynamic_linking,
                 &owner,
+                env,
             )
             .await?;
 

@@ -54,6 +54,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_client::model::ComponentSearchParameters",
             ),
             // (
+            //     "ComponentEnv",
+            //     "golem_client::model::ComponentEnv",
+            // ),
+            // (
             //     "CloudComponentOwner",
             //     "cloud_common::model::CloudComponentOwner",
             // ),

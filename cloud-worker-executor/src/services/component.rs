@@ -689,6 +689,7 @@ async fn get_metadata_via_grpc(
                                 .into(),
                         ),
                     },
+                    env: component.env,
                 };
 
                 record_external_call_response_size_bytes("components", "get_metadata", len);

@@ -56,6 +56,7 @@ impl RemoteCloudApiMapper {
             component_type: component.component_type,
             files: component.files,
             installed_plugins,
+            env: component.env,
         })
     }
 }

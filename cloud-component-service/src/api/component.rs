@@ -14,8 +14,8 @@ use golem_common::model::{
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::model::{
-    BatchPluginInstallationUpdates, DynamicLinking, InitialComponentFilesArchiveAndPermissions,
-    UpdatePayload,
+    BatchPluginInstallationUpdates, ComponentEnv, DynamicLinking,
+    InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use golem_service_base::model::ComponentName;
 use golem_service_base::poem::TempFileUpload;
@@ -37,6 +37,7 @@ pub struct UploadPayload {
     files_permissions: Option<ComponentFilePathWithPermissionsList>,
     files: Option<TempFileUpload>,
     dynamic_linking: Option<JsonField<DynamicLinking>>,
+    env: Option<JsonField<ComponentEnv>>,
 }
 
 pub struct ComponentApi {
@@ -148,6 +149,7 @@ impl ComponentApi {
                 None,
                 HashMap::new(),
                 &auth,
+                HashMap::new(),
             )
             .await?;
 
@@ -196,6 +198,8 @@ impl ComponentApi {
                 },
             );
 
+        let env = payload.env.map(|e| e.0.key_values).unwrap_or_default();
+
         let response = self
             .component_service
             .update(
@@ -209,6 +213,7 @@ impl ComponentApi {
                     .0
                     .dynamic_linking,
                 &auth,
+                env,
             )
             .await?;
 
@@ -258,6 +263,8 @@ impl ComponentApi {
                 },
             );
 
+        let env = payload.env.map(|e| e.0.key_values).unwrap_or_default();
+
         let response = self
             .component_service
             .create(
@@ -272,6 +279,7 @@ impl ComponentApi {
                     .0
                     .dynamic_linking,
                 &auth,
+                env,
             )
             .await?;
 

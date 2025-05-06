@@ -229,6 +229,7 @@ impl ComponentGrpcApi {
                 files,
                 dynamic_linking,
                 &auth,
+                request.env,
             )
             .await?;
         Ok(component_to_grpc(result))
@@ -274,7 +275,15 @@ impl ComponentGrpcApi {
 
         let result = self
             .component_service
-            .update_internal(&id, data, component_type, files, dynamic_linking, &auth)
+            .update_internal(
+                &id,
+                data,
+                component_type,
+                files,
+                dynamic_linking,
+                &auth,
+                request.env,
+            )
             .await?;
         Ok(component_to_grpc(result))
     }
@@ -1041,5 +1050,6 @@ fn component_to_grpc(
             .into_iter()
             .map(|plugin| plugin.into())
             .collect(),
+        env: value.env,
     }
 }

@@ -5,6 +5,7 @@ use golem_component_service_base::api::dto::PluginInstallation;
 use golem_service_base::model::ComponentName;
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -20,4 +21,5 @@ pub struct Component {
     pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
     pub installed_plugins: Vec<PluginInstallation>,
+    pub env: HashMap<String, String>,
 }
