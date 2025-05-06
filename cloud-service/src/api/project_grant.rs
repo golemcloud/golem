@@ -1,21 +1,25 @@
 use crate::api::{ApiTags, LimitedApiError, LimitedApiResult};
+use crate::auth::AccountAuthorisation;
 use crate::model::*;
+use crate::service::account::AccountService;
 use crate::service::auth::AuthService;
 use crate::service::project_grant::ProjectGrantService;
 use crate::service::project_policy::ProjectPolicyService;
 use cloud_common::auth::GolemSecurityScheme;
 use cloud_common::model::{ProjectActions, ProjectGrantId, ProjectPolicyId};
-use golem_common::model::error::ErrorBody;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::ProjectId;
 use golem_common::recorded_http_api_request;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::sync::Arc;
+use tracing::info;
 use tracing::Instrument;
 
 pub struct ProjectGrantApi {
     pub auth_service: Arc<dyn AuthService + Sync + Send>,
+    pub account_service: Arc<dyn AccountService>,
     pub project_grant_service: Arc<dyn ProjectGrantService + Sync + Send>,
     pub project_policy_service: Arc<dyn ProjectPolicyService + Sync + Send>,
 }
@@ -150,9 +154,30 @@ impl ProjectGrantApi {
     ) -> LimitedApiResult<Json<ProjectGrant>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
 
+        let account_id = match (request.grantee_account_id, request.grantee_email) {
+            (Some(account_id), _) => account_id,
+            (None, Some(email)) => {
+                info!("Looking up account by email {email}");
+                let mut accounts = self
+                    .account_service
+                    .find(Some(&email), &AccountAuthorisation::admin())
+                    .await?;
+                if accounts.len() == 1 {
+                    accounts.swap_remove(0).id
+                } else {
+                    Err(LimitedApiError::NotFound(Json(ErrorBody {
+                        error: "No matching account found".to_string(),
+                    })))?
+                }
+            }
+            (None, None) => Err(LimitedApiError::BadRequest(Json(ErrorsBody {
+                errors: vec!["Account id or email need to be provided".to_string()],
+            })))?,
+        };
+
         let data = match request.project_policy_id {
             Some(project_policy_id) => ProjectGrantData {
-                grantee_account_id: request.grantee_account_id,
+                grantee_account_id: account_id,
                 grantor_project_id: project_id,
                 project_policy_id,
             },
@@ -168,7 +193,7 @@ impl ProjectGrantApi {
                 self.project_policy_service.create(&policy).await?;
 
                 ProjectGrantData {
-                    grantee_account_id: request.grantee_account_id,
+                    grantee_account_id: account_id,
                     grantor_project_id: project_id,
                     project_policy_id: policy.id,
                 }

@@ -81,7 +81,8 @@ pub struct ComponentQuery {
 #[oai(rename_all = "camelCase")]
 // can't use enum here https://github.com/OpenAPITools/openapi-generator/issues/13257
 pub struct ProjectGrantDataRequest {
-    pub grantee_account_id: AccountId,
+    pub grantee_account_id: Option<AccountId>,
+    pub grantee_email: Option<String>,
     pub project_policy_id: Option<ProjectPolicyId>,
     pub project_actions: Vec<ProjectAction>,
     pub project_policy_name: Option<String>,

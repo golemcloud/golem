@@ -49,7 +49,7 @@ impl From<String> for AccountError {
 }
 
 #[async_trait]
-pub trait AccountService {
+pub trait AccountService: Send + Sync {
     async fn create(
         &self,
         id: &AccountId,

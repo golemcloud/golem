@@ -357,6 +357,27 @@ impl From<PluginError> for LimitedApiError {
     }
 }
 
+impl From<AccountError> for LimitedApiError {
+    fn from(value: AccountError) -> Self {
+        match value {
+            AccountError::Internal(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            AccountError::ArgValidation(errors) => Self::BadRequest(Json(ErrorsBody { errors })),
+            AccountError::AccountNotFound(_) => Self::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            AccountError::InternalRepoError(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            AccountError::InternalPlanError(_) => Self::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            AccountError::AuthError(inner) => inner.into(),
+        }
+    }
+}
+
 pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) -> Route {
     let api_service = make_open_api_service(services);
 
@@ -418,6 +439,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
                 auth_service: services.auth_service.clone(),
                 project_grant_service: services.project_grant_service.clone(),
                 project_policy_service: services.project_policy_service.clone(),
+                account_service: services.account_service.clone(),
             },
             project_policy::ProjectPolicyApi {
                 auth_service: services.auth_service.clone(),
