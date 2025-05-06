@@ -233,7 +233,7 @@ pub trait TestDsl {
         &self,
         component_id: &ComponentId,
         name: &str,
-        files: &Vec<(String, String)>,
+        files: &[(String, String)],
     ) -> ComponentVersion;
 
     async fn add_initial_component_file(
@@ -647,7 +647,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         &self,
         component_id: &ComponentId,
         name: &str,
-        env: &Vec<(String, String)>,
+        env: &[(String, String)],
     ) -> ComponentVersion {
         let map = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
@@ -1927,7 +1927,7 @@ pub trait TestDslUnsafe {
         &self,
         component_id: &ComponentId,
         name: &str,
-        env: &Vec<(String, String)>,
+        env: &[(String, String)],
     ) -> ComponentVersion;
 
     async fn add_initial_component_file(
@@ -2170,7 +2170,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         &self,
         component_id: &ComponentId,
         name: &str,
-        env: &Vec<(String, String)>,
+        env: &[(String, String)],
     ) -> ComponentVersion {
         <T as TestDsl>::update_component_with_env(self, component_id, name, env).await
     }

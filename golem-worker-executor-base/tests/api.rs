@@ -970,7 +970,7 @@ async fn component_env_variables_update(
         .update_component_with_env(
             &component_id,
             "environment-service",
-            &vec![("BAR".to_string(), "baz".to_string())],
+            &[("BAR".to_string(), "baz".to_string())],
         )
         .await;
 
