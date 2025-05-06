@@ -71,19 +71,48 @@ impl AccountFuelRepo for DbAccountFuelRepo<golem_service_base::db::postgres::Pos
 
     #[when(golem_service_base::db::postgres::PostgresPool -> update)]
     async fn update_postgres(&self, id: &AccountId, delta: i64) -> Result<(), RepoError> {
+        let mut transaction = self
+            .db_pool
+            .with_rw("account_fuel", "update")
+            .begin()
+            .await?;
+
+        // The logic here is very subtle. account_id is the primary key alone here,
+        // if we have a previous month's data the transaction will overwrite it.
+        //
+        // Ignore the weird 1, 2000 month and year, they will be overwritten by the second query.
         let query = sqlx::query(
             "
             INSERT INTO account_fuel (account_id, consumed, month, year)
-            VALUES ($1, $2, EXTRACT(MONTH FROM current_date), EXTRACT(YEAR FROM current_date))
-            ON CONFLICT DO UPDATE SET consumed = consumed + $2
+            VALUES ($1, 0, 1, 2000)
+            ON CONFLICT (account_id) DO NOTHING
+        ",
+        )
+        .bind(&id.value);
+
+        transaction.execute(query).await?;
+
+        let query = sqlx::query(
+            "
+            UPDATE account_fuel
+            SET consumed = CASE
+                WHEN month = EXTRACT(MONTH FROM current_date) AND year = EXTRACT(YEAR FROM current_date)
+                THEN consumed + $2
+                ELSE $2
+            END,
+            month = EXTRACT(MONTH FROM current_date),
+            year = EXTRACT(YEAR FROM current_date)
+            WHERE account_id = $1
             ",
         )
         .bind(&id.value)
         .bind(delta);
 
+        transaction.execute(query).await?;
+
         self.db_pool
             .with_rw("account_fuel", "update")
-            .execute(query)
+            .commit(transaction)
             .await?;
 
         Ok(())
@@ -91,19 +120,48 @@ impl AccountFuelRepo for DbAccountFuelRepo<golem_service_base::db::postgres::Pos
 
     #[when(golem_service_base::db::sqlite::SqlitePool -> update)]
     async fn update_sqlite(&self, id: &AccountId, delta: i64) -> Result<(), RepoError> {
+        let mut transaction = self
+            .db_pool
+            .with_rw("account_uploads", "update")
+            .begin()
+            .await?;
+
+        // The logic here is very subtle. account_id is the primary key alone here,
+        // if we have a previous month's data the transaction will overwrite it.
+        //
+        // Ignore the weird 1, 2000 month and year, they will be overwritten by the second query.
         let query = sqlx::query(
             "
             INSERT INTO account_fuel (account_id, consumed, month, year)
-            VALUES ($1, 0, strftime('%m', 'now'), strftime('%Y', 'now'))
-            ON CONFLICT DO UPDATE SET consumed = consumed + $2
+            VALUES ($1, 0, 1, 2000)
+            ON CONFLICT (account_id) DO NOTHING
+        ",
+        )
+        .bind(&id.value);
+
+        transaction.execute(query).await?;
+
+        let query = sqlx::query(
+            "
+            UPDATE account_fuel
+            SET consumed = CASE
+                WHEN month = strftime('%m', 'now') AND year = strftime('%Y', 'now')
+                THEN consumed + $2
+                ELSE $2
+            END,
+            month = strftime('%m', 'now'),
+            year = strftime('%Y', 'now')
+            WHERE account_id = $1
             ",
         )
         .bind(&id.value)
         .bind(delta);
 
+        transaction.execute(query).await?;
+
         self.db_pool
             .with_rw("account_fuel", "update")
-            .execute(query)
+            .commit(transaction)
             .await?;
 
         Ok(())

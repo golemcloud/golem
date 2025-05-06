@@ -165,7 +165,6 @@ pub struct PlanLimitServiceDefault {
 }
 
 #[async_trait]
-// TODO: check auth
 impl PlanLimitService for PlanLimitServiceDefault {
     async fn get_account_limits(
         &self,
