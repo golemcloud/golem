@@ -38,7 +38,7 @@ impl ProfileCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&mut self, subcommand: ProfileSubcommand) -> anyhow::Result<()> {
+    pub async fn handle_command(&self, subcommand: ProfileSubcommand) -> anyhow::Result<()> {
         match subcommand {
             ProfileSubcommand::New {
                 profile_kind,

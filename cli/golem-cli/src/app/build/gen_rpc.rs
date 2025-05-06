@@ -76,6 +76,11 @@ fn create_generated_base_wit(
     let component_source_wit = ctx
         .application
         .component_source_wit(component_name, ctx.profile());
+    let inputs = {
+        let mut inputs = ctx.application.wit_deps();
+        inputs.push(component_source_wit.clone());
+        inputs
+    };
     let component_generated_base_wit = ctx.application.component_generated_base_wit(component_name);
     let task_result_marker = TaskResultMarker::new(
         &ctx.application.task_result_marker_dir(),
@@ -89,7 +94,7 @@ fn create_generated_base_wit(
         ctx.config.skip_up_to_date_checks
             || !task_result_marker.is_up_to_date()
             || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
-        || [component_source_wit.clone()],
+        || inputs,
         || [component_generated_base_wit.clone()],
     ) {
         log_skipping_up_to_date(format!(

@@ -256,7 +256,9 @@ impl PackageName {
     pub fn from_string(s: impl AsRef<str>) -> Option<PackageName> {
         let parts: Vec<&str> = s.as_ref().split(':').collect();
         match parts.as_slice() {
-            &[n1, n2] => Some(PackageName((n1.to_string(), n2.to_string()))),
+            &[n1, n2] if !n1.is_empty() && !n2.is_empty() => {
+                Some(PackageName((n1.to_string(), n2.to_string())))
+            }
             _ => None,
         }
     }

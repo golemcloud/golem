@@ -2,6 +2,7 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::build_application;
 use crate::model::app_raw;
+use crate::model::app_raw::{HttpApiDefinition, HttpApiDeployment};
 use crate::model::component::AppComponentType;
 use crate::model::template::Template;
 use crate::validation::{ValidatedResult, ValidationBuilder};
@@ -9,7 +10,7 @@ use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::naming::wit::package_dep_dir_name_from_parser;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use golem_common::model::{ComponentFilePathWithPermissions, ComponentFilePermissions};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
@@ -17,6 +18,8 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 use url::Url;
 use wit_parser::PackageName;
 
@@ -76,9 +79,83 @@ impl ApplicationComponentSelectMode {
 
 #[derive(Debug, Clone)]
 pub struct DynamicHelpSections {
-    pub components: bool,
-    pub custom_commands: bool,
-    pub builtin_commands: BTreeSet<String>,
+    components: bool,
+    custom_commands: bool,
+    builtin_commands: BTreeSet<String>,
+    api_definitions: bool,
+    api_deployments: bool,
+}
+
+impl DynamicHelpSections {
+    pub fn show_all(builtin_commands: BTreeSet<String>) -> Self {
+        Self {
+            components: true,
+            custom_commands: true,
+            builtin_commands,
+            api_definitions: true,
+            api_deployments: true,
+        }
+    }
+
+    pub fn show_components() -> Self {
+        Self {
+            components: true,
+            custom_commands: false,
+            builtin_commands: Default::default(),
+            api_definitions: false,
+            api_deployments: false,
+        }
+    }
+
+    pub fn show_custom_commands(builtin_commands: BTreeSet<String>) -> Self {
+        Self {
+            components: false,
+            custom_commands: true,
+            builtin_commands,
+            api_definitions: false,
+            api_deployments: false,
+        }
+    }
+
+    pub fn show_api_definitions() -> Self {
+        Self {
+            components: false,
+            custom_commands: false,
+            builtin_commands: Default::default(),
+            api_definitions: true,
+            api_deployments: false,
+        }
+    }
+
+    pub fn show_api_deployments() -> Self {
+        Self {
+            components: true,
+            custom_commands: false,
+            builtin_commands: Default::default(),
+            api_definitions: true,
+            api_deployments: false,
+        }
+    }
+
+    pub fn components(&self) -> bool {
+        self.components
+    }
+
+    pub fn custom_commands(&self) -> bool {
+        self.custom_commands
+    }
+
+    pub fn builtin_commands(&self) -> &BTreeSet<String> {
+        &self.builtin_commands
+    }
+
+    pub fn api_definitions(&self) -> bool {
+        self.api_definitions
+    }
+
+    pub fn api_deployments(&self) -> bool {
+        self.api_deployments
+    }
 }
 
 #[derive(Debug)]
@@ -122,6 +199,48 @@ impl From<String> for AppComponentName {
 impl From<&str> for AppComponentName {
     fn from(value: &str) -> Self {
         Self(value.to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct HttpApiDefinitionName(String);
+
+impl HttpApiDefinitionName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Display for HttpApiDefinitionName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for HttpApiDefinitionName {
+    fn from(value: String) -> Self {
+        HttpApiDefinitionName(value)
+    }
+}
+
+impl From<&str> for HttpApiDefinitionName {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct HttpApiDeploymentSite {
+    pub host: String,
+    pub subdomain: Option<String>,
+}
+
+impl Display for HttpApiDeploymentSite {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match &self.subdomain {
+            Some(subdomain) => write!(f, "{}.{}", subdomain, self.host),
+            None => write!(f, "{}", self.host),
+        }
     }
 }
 
@@ -236,8 +355,9 @@ impl<T: Default> Default for WithSource<T> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, EnumIter)]
 pub enum DependencyType {
+    #[default]
     /// Dynamic ("stubless") wasm-rpc
     DynamicWasmRpc,
     /// Static (composed with compiled stub) wasm-rpc
@@ -273,18 +393,38 @@ impl DependencyType {
             DependencyType::DynamicWasmRpc | DependencyType::StaticWasmRpc
         )
     }
+
+    pub fn interactively_selectable_types() -> Vec<Self> {
+        Self::iter()
+            .filter(|dep_type| dep_type != &DependencyType::StaticWasmRpc)
+            .collect()
+    }
 }
 
 impl FromStr for DependencyType {
-    type Err = ();
+    type Err = String;
 
     fn from_str(str: &str) -> Result<Self, Self::Err> {
         match str {
             Self::WASM_RPC => Ok(Self::DynamicWasmRpc),
             Self::STATIC_WASM_RPC => Ok(Self::StaticWasmRpc),
             Self::WASM => Ok(Self::Wasm),
-            _ => Err(()),
+            _ => {
+                let all = DependencyType::iter()
+                    .map(|dt| format!("\"{dt}\""))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                Err(format!(
+                    "Unknown dependency type: {str}. Expected one of {all}"
+                ))
+            }
         }
+    }
+}
+
+impl Display for DependencyType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -308,18 +448,26 @@ impl Ord for DependentComponent {
 
 #[derive(Clone, Debug)]
 pub struct Application {
+    all_sources: BTreeSet<PathBuf>,
     temp_dir: Option<WithSource<String>>,
     wit_deps: WithSource<Vec<String>>,
     components: BTreeMap<AppComponentName, Component>,
     dependencies: BTreeMap<AppComponentName, BTreeSet<DependentComponent>>,
+    dependency_sources: BTreeMap<AppComponentName, BTreeMap<AppComponentName, PathBuf>>,
     no_dependencies: BTreeSet<DependentComponent>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
+    http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>>,
+    http_api_deployments: BTreeMap<HttpApiDeploymentSite, WithSource<HttpApiDeployment>>,
 }
 
 impl Application {
     pub fn from_raw_apps(apps: Vec<app_raw::ApplicationWithSource>) -> ValidatedResult<Self> {
         build_application(apps)
+    }
+
+    pub fn all_sources(&self) -> &BTreeSet<PathBuf> {
+        &self.all_sources
     }
 
     pub fn component_names(&self) -> impl Iterator<Item = &AppComponentName> {
@@ -344,8 +492,13 @@ impl Application {
         &self.clean
     }
 
-    pub fn wit_deps(&self) -> &WithSource<Vec<String>> {
-        &self.wit_deps
+    pub fn wit_deps(&self) -> Vec<PathBuf> {
+        self.wit_deps
+            .value
+            .iter()
+            .cloned()
+            .map(|path| self.wit_deps.source.join(path))
+            .collect()
     }
 
     pub fn all_dependencies(&self) -> BTreeSet<DependentComponent> {
@@ -446,6 +599,20 @@ impl Application {
         self.dependencies
             .get(component_name)
             .unwrap_or(&self.no_dependencies)
+    }
+
+    pub fn dependency_source(
+        &self,
+        component_name: &AppComponentName,
+        dependent_component_name: &AppComponentName,
+    ) -> Option<&Path> {
+        self.dependency_sources
+            .get(component_name)
+            .and_then(|sources| {
+                sources
+                    .get(dependent_component_name)
+                    .map(|source| source.as_path())
+            })
     }
 
     pub fn component_profiles(
@@ -644,6 +811,61 @@ impl Application {
         self.client_build_dir()
             .join(self.component_name_as_safe_path_elem(component_name))
             .join(naming::wit::WIT_DIR)
+    }
+
+    pub fn http_api_definitions(
+        &self,
+    ) -> &BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>> {
+        &self.http_api_definitions
+    }
+
+    pub fn http_api_definition_source(&self, name: &HttpApiDefinitionName) -> PathBuf {
+        self.http_api_definitions
+            .get(name)
+            .unwrap_or_else(|| panic!("HTTP API definition not found: {}", name.as_str()))
+            .source
+            .clone()
+    }
+
+    pub fn used_component_names_for_http_api_definition(
+        &self,
+        name: &HttpApiDefinitionName,
+    ) -> Vec<AppComponentName> {
+        self.http_api_definitions
+            .get(name)
+            .unwrap_or_else(|| panic!("HTTP API definition not found: {}", name.as_str()))
+            .value
+            .routes
+            .iter()
+            .filter_map(|route| {
+                route
+                    .binding
+                    .component_name
+                    .as_ref()
+                    .map(|component_name| AppComponentName::from(component_name.as_str()))
+            })
+            .collect()
+    }
+
+    pub fn used_component_names_for_all_http_api_definition(&self) -> Vec<AppComponentName> {
+        self.http_api_definitions
+            .values()
+            .flat_map(|def| {
+                def.value.routes.iter().filter_map(|route| {
+                    route
+                        .binding
+                        .component_name
+                        .as_ref()
+                        .map(|component_name| AppComponentName::from(component_name.as_str()))
+                })
+            })
+            .collect()
+    }
+
+    pub fn http_api_deployments(
+        &self,
+    ) -> &BTreeMap<HttpApiDeploymentSite, WithSource<HttpApiDeployment>> {
+        &self.http_api_deployments
     }
 }
 
@@ -938,20 +1160,31 @@ impl PluginInstallation {
 
 mod app_builder {
     use crate::fs::PathExtra;
+    use crate::fuzzy;
+    use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
+    use crate::model::api::to_method_pattern;
     use crate::model::app::{
         AppComponentName, Application, BuildProfileName, Component, ComponentProperties,
-        DependencyType, DependentComponent, ResolvedComponentProperties, TemplateName, WithSource,
+        DependencyType, DependentComponent, HttpApiDefinitionName, HttpApiDeploymentSite,
+        ResolvedComponentProperties, TemplateName, WithSource,
     };
     use crate::model::app_raw;
+    use crate::model::app_raw::{
+        HttpApiDefinition, HttpApiDefinitionBindingType, HttpApiDeployment,
+    };
+    use crate::model::deploy_diff::api_definition::normalize_http_api_binding_path;
+    use crate::model::text::fmt::format_rib_source_for_error;
     use crate::validation::{ValidatedResult, ValidationBuilder};
+    use colored::Colorize;
     use heck::{
         ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase,
         ToSnakeCase, ToTitleCase, ToTrainCase, ToUpperCamelCase,
     };
     use itertools::Itertools;
     use serde::Serialize;
-    use std::collections::{BTreeMap, BTreeSet, HashMap};
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+    use std::fmt::Debug;
     use std::path::{Path, PathBuf};
     use std::str::FromStr;
 
@@ -968,8 +1201,15 @@ mod app_builder {
         WitDeps,
         CustomCommand(String),
         Template(TemplateName),
-        WasmRpcDependency((AppComponentName, DependentComponent)),
+        Dependency((AppComponentName, DependentComponent)),
         Component(AppComponentName),
+        HttpApiDefinition(HttpApiDefinitionName),
+        HttpApiDefinitionRoute {
+            api: HttpApiDefinitionName,
+            method: String,
+            path: String,
+        },
+        HttpApiDeployment(HttpApiDeploymentSite),
     }
 
     impl UniqueSourceCheckedEntityKey {
@@ -981,8 +1221,13 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::WitDeps => property,
                 UniqueSourceCheckedEntityKey::CustomCommand(_) => "Custom command",
                 UniqueSourceCheckedEntityKey::Template(_) => "Template",
-                UniqueSourceCheckedEntityKey::WasmRpcDependency(_) => "WASM RPC dependency",
+                UniqueSourceCheckedEntityKey::Dependency(_) => "Dependency",
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
+                UniqueSourceCheckedEntityKey::HttpApiDefinition(_) => "HTTP API Definition",
+                UniqueSourceCheckedEntityKey::HttpApiDefinitionRoute { .. } => {
+                    "HTTP API Definition Route"
+                }
+                UniqueSourceCheckedEntityKey::HttpApiDeployment(_) => "HTTP API Deployment",
             }
         }
 
@@ -1003,10 +1248,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Template(template_name) => {
                     template_name.as_str().log_color_highlight().to_string()
                 }
-                UniqueSourceCheckedEntityKey::WasmRpcDependency((
-                    component_name,
-                    dependent_component,
-                )) => {
+                UniqueSourceCheckedEntityKey::Dependency((component_name, dependent_component)) => {
                     format!(
                         "{} - {} - {}",
                         component_name.as_str().log_color_highlight(),
@@ -1016,6 +1258,34 @@ mod app_builder {
                 }
                 UniqueSourceCheckedEntityKey::Component(component_name) => {
                     component_name.as_str().log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::HttpApiDefinition(api_definition_name) => {
+                    api_definition_name
+                        .as_str()
+                        .log_color_highlight()
+                        .to_string()
+                }
+                UniqueSourceCheckedEntityKey::HttpApiDefinitionRoute { api, method, path } => {
+                    format!(
+                        "{} - {} - {}",
+                        api.as_str().log_color_highlight(),
+                        method.log_color_highlight(),
+                        path.log_color_highlight(),
+                    )
+                }
+                UniqueSourceCheckedEntityKey::HttpApiDeployment(api_deployment_site) => {
+                    format!(
+                        "{}{}",
+                        match api_deployment_site.subdomain {
+                            Some(subdomain) => {
+                                format!("{}.", subdomain.as_str().log_color_highlight())
+                            }
+                            None => {
+                                "".to_string()
+                            }
+                        },
+                        api_deployment_site.host.as_str().log_color_highlight()
+                    )
                 }
             }
         }
@@ -1030,9 +1300,16 @@ mod app_builder {
         dependencies: BTreeMap<AppComponentName, BTreeSet<DependentComponent>>,
         custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
         clean: Vec<WithSource<String>>,
+        http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>>,
+        http_api_deployments: BTreeMap<HttpApiDeploymentSite, WithSource<HttpApiDeployment>>,
+
+        // NOTE: raw component names are available (for validation) even after component resolving
+        raw_component_names: HashSet<String>,
+        // NOTE: raw components are moved into resolved_components during resolving
         raw_components: HashMap<AppComponentName, (PathBuf, app_raw::Component)>,
         resolved_components: BTreeMap<AppComponentName, Component>,
 
+        all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
     }
 
@@ -1042,18 +1319,47 @@ mod app_builder {
             let mut validation = ValidationBuilder::default();
 
             builder.add_raw_apps(&mut validation, apps);
+            builder.resolve_components(&mut validation);
             builder.validate_dependency_targets(&mut validation);
             builder.validate_unique_sources(&mut validation);
-            builder.resolve_components(&mut validation);
+            builder.validate_http_api_definitions(&mut validation);
+            builder.validate_http_api_deployments(&mut validation);
+
+            let dependency_sources = {
+                let mut dependency_sources =
+                    BTreeMap::<AppComponentName, BTreeMap<AppComponentName, PathBuf>>::new();
+
+                for (key, mut sources) in builder.entity_sources {
+                    if let UniqueSourceCheckedEntityKey::Dependency((
+                        component,
+                        dependent_component,
+                    )) = key
+                    {
+                        if !dependency_sources.contains_key(&component) {
+                            dependency_sources.insert(component.clone(), BTreeMap::new());
+                        }
+                        dependency_sources
+                            .get_mut(&component)
+                            .unwrap()
+                            .insert(dependent_component.name, sources.pop().unwrap());
+                    }
+                }
+
+                dependency_sources
+            };
 
             validation.build(Application {
+                all_sources: builder.all_sources,
                 temp_dir: builder.temp_dir,
                 wit_deps: builder.wit_deps,
                 components: builder.resolved_components,
                 dependencies: builder.dependencies,
+                dependency_sources,
                 no_dependencies: BTreeSet::new(),
                 custom_commands: builder.custom_commands,
                 clean: builder.clean,
+                http_api_definitions: builder.http_api_definitions,
+                http_api_deployments: builder.http_api_deployments,
             })
         }
 
@@ -1084,6 +1390,7 @@ mod app_builder {
                 |validation| {
                     let app_source = PathExtra::new(&app.source);
                     let app_source_dir = app_source.parent().unwrap();
+                    self.all_sources.insert(app_source.to_path_buf());
 
                     if let Some(dir) = app.application.temp_dir {
                         if self
@@ -1114,12 +1421,13 @@ mod app_builder {
                     }
 
                     for (component_name, component) in app.application.components {
-                        let component_name = AppComponentName::from(component_name);
+                        let app_component_name = AppComponentName::from(component_name.clone());
                         let unique_key =
-                            UniqueSourceCheckedEntityKey::Component(component_name.clone());
+                            UniqueSourceCheckedEntityKey::Component(app_component_name.clone());
                         if self.add_entity_source(unique_key, &app.source) {
+                            self.raw_component_names.insert(component_name);
                             self.raw_components
-                                .insert(component_name, (app.source.to_path_buf(), component));
+                                .insert(app_component_name, (app.source.to_path_buf(), component));
                         }
                     }
 
@@ -1150,6 +1458,60 @@ mod app_builder {
                             .into_iter()
                             .map(|path| WithSource::new(app.source.to_path_buf(), path)),
                     );
+
+                    if let Some(http_api) = app.application.http_api {
+                        for (api_definition_name, api_definition) in http_api.definitions {
+                            let api_definition_name =
+                                HttpApiDefinitionName::from(api_definition_name);
+                            if self.add_entity_source(
+                                UniqueSourceCheckedEntityKey::HttpApiDefinition(
+                                    api_definition_name.clone(),
+                                ),
+                                &app.source,
+                            ) {
+                                for route in &api_definition.routes {
+                                    let Ok(method) = to_method_pattern(&route.method) else {
+                                        continue;
+                                    };
+
+                                    self.add_entity_source(
+                                        UniqueSourceCheckedEntityKey::HttpApiDefinitionRoute {
+                                            api: api_definition_name.clone(),
+                                            method: method.to_string(),
+                                            path: normalize_http_api_binding_path(&route.path),
+                                        },
+                                        &app.source,
+                                    );
+                                }
+
+                                self.http_api_definitions.insert(
+                                    api_definition_name,
+                                    WithSource::new(app.source.to_path_buf(), api_definition),
+                                );
+                            }
+                        }
+
+                        for api_deployment in http_api.deployments {
+                            let api_deployment_site = HttpApiDeploymentSite {
+                                host: api_deployment.host.clone(),
+                                subdomain: api_deployment.subdomain.clone(),
+                            };
+                            if self.add_entity_source(
+                                UniqueSourceCheckedEntityKey::HttpApiDeployment(
+                                    api_deployment_site.clone(),
+                                ),
+                                &app.source,
+                            ) {
+                                self.http_api_deployments.insert(
+                                    api_deployment_site,
+                                    WithSource::new(
+                                        app.source.to_path_buf(),
+                                        api_deployment.clone(),
+                                    ),
+                                );
+                            }
+                        }
+                    }
                 },
             );
         }
@@ -1222,7 +1584,7 @@ mod app_builder {
                                     dep_type,
                                 };
 
-                                let unique_key = UniqueSourceCheckedEntityKey::WasmRpcDependency((
+                                let unique_key = UniqueSourceCheckedEntityKey::Dependency((
                                     component_name.clone().into(),
                                     dependent_component.clone(),
                                 ));
@@ -1269,13 +1631,13 @@ mod app_builder {
         fn validate_dependency_targets(&mut self, validation: &mut ValidationBuilder) {
             for (component, deps) in &self.dependencies {
                 for target in deps {
-                    let invalid_source = !self.raw_components.contains_key(component);
-                    let invalid_target = !self.raw_components.contains_key(&target.name);
+                    let invalid_source = !self.raw_component_names.contains(&component.0);
+                    let invalid_target = !self.raw_component_names.contains(&target.name.0);
 
                     if invalid_source || invalid_target {
                         let source = self
                             .entity_sources
-                            .get(&UniqueSourceCheckedEntityKey::WasmRpcDependency((
+                            .get(&UniqueSourceCheckedEntityKey::Dependency((
                                 component.clone(),
                                 target.clone(),
                             )))
@@ -1288,18 +1650,22 @@ mod app_builder {
                             |validation| {
                                 if invalid_source {
                                     validation.add_error(format!(
-                                        "{} {} - {} references unknown component",
+                                        "{} {} - {} references unknown component: {}\n\n{}",
                                         target.dep_type.describe(),
+                                        component.as_str().log_color_highlight(),
+                                        target.name.as_str().log_color_highlight(),
                                         component.as_str().log_color_error_highlight(),
-                                        target.name.as_str().log_color_highlight()
+                                        self.available_components(component.as_str())
                                     ))
                                 }
                                 if invalid_target {
                                     validation.add_error(format!(
-                                        "{} {} - {} references unknown target component",
+                                        "{} {} - {} references unknown target component: {}\n\n{}",
                                         target.dep_type.describe(),
                                         component.as_str().log_color_highlight(),
-                                        target.name.as_str().log_color_error_highlight()
+                                        target.name.as_str().log_color_highlight(),
+                                        target.name.as_str().log_color_error_highlight(),
+                                        self.available_components(target.name.as_str())
                                     ))
                                 }
                             },
@@ -1383,8 +1749,9 @@ mod app_builder {
                                 ),
                                 None => {
                                     validation.add_error(format!(
-                                        "Component references unknown template: {}",
-                                        template_name.as_str().log_color_error_highlight()
+                                        "Component references unknown template: {}\n\n{}",
+                                        template_name.as_str().log_color_error_highlight(),
+                                        self.available_templates(template_name.as_str())
                                     ));
                                     None
                                 }
@@ -1754,5 +2121,290 @@ mod app_builder {
                 }
             }
         }
+
+        fn validate_http_api_definitions(&self, validation: &mut ValidationBuilder) {
+            for (name, api_definition) in &self.http_api_definitions {
+                validation.with_context(
+                    vec![
+                        (
+                            "source",
+                            api_definition.source.to_string_lossy().to_string(),
+                        ),
+                        ("HTTP API definition", name.0.to_string()),
+                    ],
+                    |validation| {
+                        let def = &api_definition.value;
+
+                        if let Some(project) = &def.project {
+                            check_not_empty(validation, "project", project);
+                        }
+                        check_not_empty(validation, "version", &def.version);
+
+                        for route in &def.routes {
+                            validation.with_context(
+                                vec![
+                                    ("method", route.method.clone()),
+                                    ("path", route.path.clone()),
+                                ],
+                                |validation| {
+                                    if check_not_empty(validation, "method", &route.method) {
+                                        if let Err(err) = to_method_pattern(&route.method) {
+                                            validation.add_error(err.to_string());
+                                        }
+                                    }
+                                    check_not_empty(validation, "path", &route.path);
+
+
+                                    let binding_type = route.binding.type_.unwrap_or_default();
+                                    let binding_type_as_string = serde_json::to_string(&binding_type).unwrap();
+
+                                    let check_not_allowed = |validation: &mut ValidationBuilder, property_name: &str,
+                                                             value: &Option<String>| {
+                                        if value.is_some() {
+                                            validation.add_error(
+                                                format!(
+                                                    "Property {} is not allowed with binding type {}",
+                                                    property_name.log_color_highlight(),
+                                                    binding_type_as_string.log_color_highlight(),
+                                                )
+                                            );
+                                        }
+                                    };
+
+                                    let check_component_name_and_version = |validation: &mut ValidationBuilder|
+                                        {
+                                            match route.binding.component_name.as_deref() {
+                                                Some(name) => {
+                                                    if !self.raw_component_names.contains(name) {
+                                                        validation.add_error(
+                                                            format!(
+                                                                "Property {} contains unknown component name: {}\n\n{}",
+                                                                "component_name".log_color_highlight(),
+                                                                name.log_color_error_highlight(),
+                                                                self.available_components(name)
+                                                            )
+                                                        )
+                                                    }
+                                                }
+                                                None => {
+                                                    validation.add_error(
+                                                        format!(
+                                                            "Property {} is required for binding type {}",
+                                                            "component_name".log_color_highlight(),
+                                                            binding_type_as_string.log_color_highlight(),
+                                                        )
+                                                    );
+                                                }
+                                            }
+                                        };
+
+                                    let check_rib = |validation: &mut ValidationBuilder, property_name: &str, rib_script: &Option<String>, required: bool| {
+                                        match rib_script.as_ref().map(|s| s.as_str()) {
+                                            Some(rib) => {
+                                                check_not_empty(validation, property_name, rib);
+                                                if let Some(err) = rib::from_string(rib).err() {
+                                                    validation.add_error(
+                                                        format!(
+                                                            "Failed to parse property {} as Rib:\n{}\n{}\n{}",
+                                                            property_name.log_color_highlight(),
+                                                            err.to_string().lines().map(|l| format!("  {}", l)).join("\n").log_color_warn(),
+                                                            "Rib source:".log_color_highlight(),
+                                                            format_rib_source_for_error(rib, &err),
+                                                        )
+                                                    );
+                                                }
+                                            }
+                                            None => {
+                                                if required {
+                                                    validation.add_error(
+                                                        format!(
+                                                            "Property {} is required for binding type {}",
+                                                            property_name.log_color_highlight(),
+                                                            binding_type_as_string.log_color_highlight(),
+                                                        )
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    };
+
+                                    match route.binding.type_.unwrap_or_default() {
+                                        HttpApiDefinitionBindingType::Default => {
+                                            check_component_name_and_version(validation);
+                                            check_rib(validation, "idempotency_key", &route.binding.idempotency_key, false);
+                                            check_rib(validation, "invocation_context", &route.binding.invocation_context, false);
+                                            check_rib(validation, "response", &route.binding.response, true);
+                                        }
+                                        HttpApiDefinitionBindingType::CorsPreflight => {
+                                            check_not_allowed(validation, "component_name", &route.binding.component_name);
+                                            check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
+                                            check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
+                                            check_rib(validation, "response", &route.binding.response, false);
+                                        }
+                                        HttpApiDefinitionBindingType::FileServer => {
+                                            check_component_name_and_version(validation);
+                                            check_rib(validation, "idempotency_key", &route.binding.idempotency_key, false);
+                                            check_rib(validation, "invocation_context", &route.binding.invocation_context, false);
+                                            check_rib(validation, "response", &route.binding.response, true);
+                                        }
+                                        HttpApiDefinitionBindingType::HttpHandler => {
+                                            check_component_name_and_version(validation);
+                                            check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
+                                            check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
+                                            check_not_allowed(validation, "response", &route.binding.response);
+                                        }
+                                    }
+                                },
+                            );
+                        }
+                    },
+                );
+            }
+        }
+
+        fn validate_http_api_deployments(&self, validation: &mut ValidationBuilder) {
+            for (site, api_deployment) in &self.http_api_deployments {
+                validation.with_context(
+                    vec![
+                        (
+                            "source",
+                            api_deployment.source.to_string_lossy().to_string(),
+                        ),
+                        ("HTTP API deployment site", site.to_string()),
+                    ],
+                    |validation| {
+                        for def_name in &api_deployment.value.definitions {
+                            let parts = def_name.split("@").collect::<Vec<_>>();
+                            let (name, version) = match parts.len() {
+                                1 => (HttpApiDefinitionName::from(def_name.as_str()), None),
+                                2 => (HttpApiDefinitionName::from(parts[0]), Some(parts[1])),
+                                _ => {
+                                    validation.add_error(
+                                        format!(
+                                            "Invalid definition name: {}, expected 'api-name', or 'api-name@version'",
+                                            def_name.log_color_error_highlight(),
+                                        ),
+                                    );
+                                    continue;
+                                }
+                            };
+                            if name.0.is_empty() {
+                                validation.add_error(
+                                    format!(
+                                        "Invalid definition name, empty API name part: {}, expected 'api-name', or 'api-name@version'",
+                                        def_name.log_color_error_highlight(),
+                                    ),
+                                );
+                            } else if !self.http_api_definitions.contains_key(&name) {
+                                validation.add_error(
+                                    format!(
+                                        "Unknown HTTP API definition name: {}\n\n{}",
+                                        def_name.as_str().log_color_error_highlight(),
+                                        self.available_http_api_definitions(def_name.as_str())
+                                    ),
+                                )
+                            }
+                            if let Some(version) = version {
+                                if version.is_empty() {
+                                    validation.add_error(
+                                        format!(
+                                            "Invalid definition name, empty version part: {}, expected 'api-name', or 'api-name@version'",
+                                            def_name.log_color_error_highlight(),
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                    },
+                );
+            }
+        }
+
+        fn available_templates(&self, unknown: &str) -> String {
+            self.available_options_help(
+                "templates",
+                "template names",
+                unknown,
+                self.templates.keys().map(|name| name.as_str()),
+            )
+        }
+
+        fn available_components(&self, unknown: &str) -> String {
+            self.available_options_help(
+                "components",
+                "component names",
+                unknown,
+                self.raw_component_names.iter().map(|name| name.as_str()),
+            )
+        }
+
+        fn available_http_api_definitions(&self, unknown: &str) -> String {
+            self.available_options_help(
+                "HTTP API definitions",
+                "HTTP API definition names",
+                unknown,
+                self.http_api_definitions.keys().map(|name| name.as_str()),
+            )
+        }
+
+        fn available_options_help<'a, I: Iterator<Item = &'a str>>(
+            &self,
+            entity_plural: &str,
+            entity_name_plural: &str,
+            unknown_option: &str,
+            name_options: I,
+        ) -> String {
+            let options = name_options.collect::<Vec<_>>();
+            if options.is_empty() {
+                return format!("No {} are defined", entity_plural);
+            }
+
+            let fuzzy_search = FuzzySearch::new(options.iter().copied());
+
+            let hint = match fuzzy_search.find(unknown_option) {
+                Err(fuzzy::Error::Ambiguous {
+                    highlighted_options,
+                    ..
+                }) => {
+                    if highlighted_options.len() == 1 {
+                        format!(
+                            "Did you mean {}?\n\n",
+                            highlighted_options[0].log_color_highlight()
+                        )
+                    } else {
+                        format!(
+                            "Did you mean one of {}?\n\n",
+                            highlighted_options
+                                .iter()
+                                .map(|option| option.bold())
+                                .join(",")
+                        )
+                    }
+                }
+                _ => "".to_string(),
+            };
+
+            format!(
+                "{}{}\n{}",
+                hint,
+                format!("Available {}:", entity_name_plural).log_color_help_group(),
+                options.iter().map(|name| format!("- {}", name)).join("\n")
+            )
+        }
+    }
+
+    fn check_not_empty(
+        validation: &mut ValidationBuilder,
+        property_name: &str,
+        value: &str,
+    ) -> bool {
+        let is_empty = value.is_empty();
+        if is_empty {
+            validation.add_error(format!(
+                "Property {} is empty",
+                property_name.log_color_highlight()
+            ));
+        }
+        !is_empty
     }
 }

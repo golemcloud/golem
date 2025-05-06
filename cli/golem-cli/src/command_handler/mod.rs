@@ -56,6 +56,8 @@ use clap::CommandFactory;
 use clap_complete::Shell;
 #[cfg(feature = "server-commands")]
 use clap_verbosity_flag::Verbosity;
+use futures_util::future::BoxFuture;
+use futures_util::FutureExt;
 use std::ffi::OsString;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -76,13 +78,17 @@ mod worker;
 // NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound
 // on the `handler_server_commands` method. Having a Send bound there causes "Send is not generic enough"
 // error which is possibly due to a compiler bug (https://github.com/rust-lang/rust/issues/64552).
-pub trait CommandHandlerHooks {
+pub trait CommandHandlerHooks: Sync + Send {
     #[cfg(feature = "server-commands")]
     fn handler_server_commands(
         &self,
         ctx: Arc<Context>,
         subcommand: ServerSubcommand,
     ) -> impl std::future::Future<Output = anyhow::Result<()>>;
+
+    // Used for auto starting the default server
+    #[cfg(feature = "server-commands")]
+    fn run_server() -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
 
     #[cfg(feature = "server-commands")]
     fn override_verbosity(verbosity: Verbosity) -> Verbosity;
@@ -99,7 +105,7 @@ pub struct CommandHandler<Hooks: CommandHandlerHooks> {
     hooks: Arc<Hooks>,
 }
 
-impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
+impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     fn new(global_flags: &GolemCliGlobalFlags, hooks: Arc<Hooks>) -> anyhow::Result<Self> {
         let profile_name = {
             if global_flags.local {
@@ -114,11 +120,44 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
         let ctx = Arc::new(Context::new(
             global_flags,
             Config::get_active_profile(&global_flags.config_dir(), profile_name)?,
+            Self::start_local_server_hook(global_flags.yes),
         ));
+
         Ok(Self {
             ctx: ctx.clone(),
             hooks,
         })
+    }
+
+    #[cfg(feature = "server-commands")]
+    fn start_local_server_hook(
+        yes: bool,
+    ) -> Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync> {
+        Box::new(move || {
+            async move {
+                if !InteractiveHandler::confirm_auto_start_local_server(yes)? {
+                    return Ok(());
+                }
+
+                // NOTE: using full path, so we can avoid unused imports for default features
+                crate::log::log_warn_action("Starting", "local server");
+
+                Hooks::run_server().await?;
+
+                // NOTE: using full path, so we can avoid unused imports for default features
+                crate::log::log_action("Started", "local server");
+
+                Ok(())
+            }
+            .boxed()
+        })
+    }
+
+    #[cfg(not(feature = "server-commands"))]
+    fn start_local_server_hook(
+        _yes: bool,
+    ) -> Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync> {
+        Box::new(|| async { Ok(()) }.boxed())
     }
 
     fn new_with_init_hint_error_handler(
@@ -167,7 +206,7 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
                 init_tracing(verbosity, pretty_mode);
 
                 match Self::new_with_init_hint_error_handler(&command.global_flags, hooks) {
-                    Ok(mut handler) => {
+                    Ok(handler) => {
                         let result = handler
                             .handle_command(command)
                             .await
@@ -256,7 +295,7 @@ impl<Hooks: CommandHandlerHooks> CommandHandler<Hooks> {
         })
     }
 
-    async fn handle_command(&mut self, command: GolemCliCommand) -> anyhow::Result<()> {
+    async fn handle_command(&self, command: GolemCliCommand) -> anyhow::Result<()> {
         match command.subcommand {
             GolemCliSubcommand::App { subcommand } => {
                 self.ctx.app_handler().handle_command(subcommand).await

@@ -50,6 +50,8 @@ pub struct Application {
     pub custom_commands: HashMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_api: Option<HttpApi>,
 }
 
 impl Application {
@@ -84,6 +86,72 @@ pub struct Component {
     pub profiles: HashMap<String, ComponentProperties>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HttpApi {
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub definitions: HashMap<String, HttpApiDefinition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deployments: Vec<HttpApiDeployment>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HttpApiDefinition {
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<HttpApiDefinitionRoute>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HttpApiDefinitionRoute {
+    pub method: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<String>,
+    pub binding: HttpApiDefinitionBinding,
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HttpApiDefinitionBindingType {
+    #[default]
+    Default,
+    CorsPreflight,
+    FileServer,
+    HttpHandler,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HttpApiDefinitionBinding {
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub type_: Option<HttpApiDefinitionBindingType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_version: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HttpApiDeployment {
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subdomain: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub definitions: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

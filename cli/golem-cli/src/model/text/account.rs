@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::log::logln;
 use crate::model::text::fmt::*;
 use golem_cloud_client::model::{Account, Role};
 use serde::{Deserialize, Serialize};
@@ -78,11 +79,11 @@ pub struct GrantGetView(pub Vec<Role>);
 impl TextView for GrantGetView {
     fn log(&self) {
         if self.0.is_empty() {
-            println!("No roles granted")
+            logln("No roles granted")
         } else {
-            println!("Granted roles:");
+            logln("Granted roles:");
             for role in &self.0 {
-                println!("  - {}", role);
+                logln(format!("  - {}", role));
             }
         }
     }

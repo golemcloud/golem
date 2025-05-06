@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod api;
 pub mod app;
 pub mod app_raw;
 pub mod component;
 pub mod deploy;
+pub mod deploy_diff;
 pub mod invoke_result_view;
 pub mod plugin_manifest;
 pub mod project;
@@ -27,7 +29,7 @@ pub mod wave;
 pub mod worker;
 
 use crate::cloud::{AccountId, ProjectId};
-use crate::command::shared_args::StreamArgs;
+use crate::command::shared_args::{ComponentTemplateName, StreamArgs};
 use crate::config::{
     CloudProfile, NamedProfile, OssProfile, Profile, ProfileConfig, ProfileKind, ProfileName,
 };
@@ -40,12 +42,13 @@ use clap::{Arg, Error};
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use golem_client::model::{
-    ApiDefinitionInfo, ApiSite, PluginDefinitionDefaultPluginOwnerDefaultPluginScope,
-    PluginTypeSpecificDefinition, Provider,
+    PluginDefinitionDefaultPluginOwnerDefaultPluginScope, PluginTypeSpecificDefinition,
 };
 use golem_cloud_client::model::PluginDefinitionCloudPluginOwnerCloudPluginScope;
 use golem_common::model::trim_date::TrimDateTime;
-use golem_templates::model::{GuestLanguage, GuestLanguageTier, Template, TemplateName};
+use golem_templates::model::{
+    GuestLanguage, GuestLanguageTier, PackageName, Template, TemplateName,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -119,7 +122,7 @@ impl From<String> for ProjectName {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub struct ComponentName(pub String);
 
 impl From<&str> for ComponentName {
@@ -196,125 +199,6 @@ impl IdempotencyKey {
 impl From<&str> for IdempotencyKey {
     fn from(value: &str) -> Self {
         IdempotencyKey(value.to_string())
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum IdentityProviderType {
-    Google,
-    Facebook,
-    Gitlab,
-    Microsoft,
-}
-
-impl Display for IdentityProviderType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Google => "google",
-            Self::Facebook => "facebook",
-            Self::Gitlab => "gitlab",
-            Self::Microsoft => "microsoft",
-        };
-        Display::fmt(&s, f)
-    }
-}
-
-impl FromStr for IdentityProviderType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "google" => Ok(IdentityProviderType::Google),
-            "facebook" => Ok(IdentityProviderType::Facebook),
-            "gitlab" => Ok(IdentityProviderType::Gitlab),
-            "microsoft" => Ok(IdentityProviderType::Microsoft),
-            _ => Err(format!(
-                "Unknown identity provider type: {s}. Expected one of \"google\", \"facebook\", \"gitlab\", \"microsoft\""
-            )),
-        }
-    }
-}
-
-impl From<IdentityProviderType> for Provider {
-    fn from(value: IdentityProviderType) -> Self {
-        match value {
-            IdentityProviderType::Google => Provider::Google,
-            IdentityProviderType::Facebook => Provider::Facebook,
-            IdentityProviderType::Gitlab => Provider::Gitlab,
-            IdentityProviderType::Microsoft => Provider::Microsoft,
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct ApiDefinitionIdWithVersion {
-    pub id: ApiDefinitionId,
-    pub version: ApiDefinitionVersion,
-}
-
-impl Display for ApiDefinitionIdWithVersion {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.id, self.version)
-    }
-}
-
-impl FromStr for ApiDefinitionIdWithVersion {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split('/').collect();
-        if parts.len() != 2 {
-            return Err(format!(
-                "Invalid api definition id with version: {s}. Expected format: <id>/<version>"
-            ));
-        }
-
-        let id = ApiDefinitionId(parts[0].to_string());
-        let version = ApiDefinitionVersion(parts[1].to_string());
-
-        Ok(ApiDefinitionIdWithVersion { id, version })
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct ApiDefinitionId(pub String);
-
-impl Display for ApiDefinitionId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<&str> for ApiDefinitionId {
-    fn from(id: &str) -> Self {
-        ApiDefinitionId(id.to_string())
-    }
-}
-
-impl From<String> for ApiDefinitionId {
-    fn from(id: String) -> Self {
-        ApiDefinitionId(id)
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct ApiDefinitionVersion(pub String);
-
-impl Display for ApiDefinitionVersion {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<&str> for ApiDefinitionVersion {
-    fn from(id: &str) -> Self {
-        ApiDefinitionVersion(id.to_string())
-    }
-}
-
-impl From<String> for ApiDefinitionVersion {
-    fn from(id: String) -> Self {
-        ApiDefinitionVersion(id)
     }
 }
 
@@ -583,78 +467,6 @@ impl TrimDateTime for WorkersMetadataResponseView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ApiDeployment {
-    #[serde(rename = "apiDefinitions")]
-    pub api_definitions: Vec<ApiDefinitionInfo>,
-    #[serde(rename = "projectId")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub project_id: Option<Uuid>,
-    pub site: ApiSite,
-    #[serde(rename = "createdAt")]
-    pub created_at: Option<DateTime<Utc>>,
-}
-
-impl From<golem_client::model::ApiDeployment> for ApiDeployment {
-    fn from(value: golem_client::model::ApiDeployment) -> Self {
-        ApiDeployment {
-            api_definitions: value.api_definitions,
-            project_id: None,
-            site: value.site,
-            created_at: value.created_at,
-        }
-    }
-}
-
-impl From<golem_cloud_client::model::ApiDeployment> for ApiDeployment {
-    fn from(value: golem_cloud_client::model::ApiDeployment) -> Self {
-        ApiDeployment {
-            api_definitions: value.api_definitions.to_oss(),
-            project_id: Some(value.project_id),
-            site: value.site.to_oss(),
-            created_at: value.created_at,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ApiSecurityScheme {
-    #[serde(rename = "schemeIdentifier")]
-    pub scheme_identifier: String,
-    #[serde(rename = "clientId")]
-    pub client_id: String,
-    #[serde(rename = "clientSecret")]
-    pub client_secret: String,
-    #[serde(rename = "redirectUrl")]
-    pub redirect_url: String,
-    pub scopes: Vec<String>,
-}
-
-impl From<golem_client::model::SecuritySchemeData> for ApiSecurityScheme {
-    fn from(value: golem_client::model::SecuritySchemeData) -> Self {
-        ApiSecurityScheme {
-            scheme_identifier: value.scheme_identifier,
-            client_id: value.client_id,
-            client_secret: value.client_secret,
-            redirect_url: value.redirect_url,
-            scopes: value.scopes,
-        }
-    }
-}
-
-impl From<golem_cloud_client::model::SecuritySchemeData> for ApiSecurityScheme {
-    fn from(value: golem_cloud_client::model::SecuritySchemeData) -> Self {
-        ApiSecurityScheme {
-            scheme_identifier: value.scheme_identifier,
-            client_id: value.client_id,
-            client_secret: value.client_secret,
-            redirect_url: value.redirect_url,
-            scopes: value.scopes,
-        }
-    }
-}
-
 pub trait HasVerbosity {
     fn verbosity(&self) -> Verbosity;
 }
@@ -778,7 +590,7 @@ pub struct SelectedComponents {
     pub component_names: Vec<ComponentName>,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TokenId(pub Uuid);
 
 impl FromStr for TokenId {
@@ -789,7 +601,7 @@ impl FromStr for TokenId {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ProjectPolicyId(pub Uuid);
 
 impl FromStr for ProjectPolicyId {
@@ -1076,4 +888,9 @@ impl From<PluginDefinitionCloudPluginOwnerCloudPluginScope> for PluginDefinition
 
         plugin_definition
     }
+}
+
+pub struct NewInteractiveApp {
+    pub app_name: String,
+    pub templated_component_names: Vec<(ComponentTemplateName, PackageName)>,
 }

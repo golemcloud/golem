@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::log::logln;
+use crate::model::api::ApiDeployment;
 use crate::model::text::fmt::*;
-use crate::model::ApiDeployment;
 use cli_table::Table;
 use golem_client::model::ApiDefinitionInfo;
-
-use indoc::printdoc;
 
 pub fn format_site(api_deployment: &ApiDeployment) -> String {
     match &api_deployment.site.subdomain {
@@ -29,14 +28,12 @@ pub fn format_site(api_deployment: &ApiDeployment) -> String {
 impl TextView for ApiDeployment {
     fn log(&self) {
         for api_defs in &self.api_definitions {
-            printdoc!(
-                "
-                    API {}/{} deployed at {}
-                    ",
+            logln(format!(
+                "API {}/{} deployed at {}",
                 format_message_highlight(&api_defs.id),
                 format_message_highlight(&api_defs.version),
                 format_message_highlight(&format_site(self)),
-            );
+            ));
         }
     }
 }

@@ -39,6 +39,11 @@ mod hooks {
         }
 
         #[cfg(feature = "server-commands")]
+        async fn run_server() -> anyhow::Result<()> {
+            unimplemented!()
+        }
+
+        #[cfg(feature = "server-commands")]
         fn override_verbosity(verbosity: Verbosity) -> Verbosity {
             verbosity
         }

@@ -108,10 +108,6 @@ impl MessageWithFields for ComponentUpdateView {
     fn fields(&self) -> Vec<(String, String)> {
         component_view_fields(&self.0)
     }
-
-    fn nest_ident_fields() -> bool {
-        true
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,10 +123,6 @@ impl MessageWithFields for ComponentGetView {
 
     fn fields(&self) -> Vec<(String, String)> {
         component_view_fields(&self.0)
-    }
-
-    fn nest_ident_fields() -> bool {
-        true
     }
 }
 
@@ -148,9 +140,5 @@ impl MessageWithFields for ComponentReplStartedView {
 
     fn fields(&self) -> Vec<(String, String)> {
         component_view_fields(&self.0)
-    }
-
-    fn nest_ident_fields() -> bool {
-        true
     }
 }

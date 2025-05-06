@@ -12,24 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::log::logln;
+use crate::model::api::ApiSecurityScheme;
 use crate::model::text::fmt::*;
-use crate::model::ApiSecurityScheme;
 use cli_table::Table;
 use golem_client::model::SecuritySchemeData;
-use indoc::printdoc;
 
 impl TextView for ApiSecurityScheme {
     fn log(&self) {
-        printdoc!(
-                    "
-                    API Security Scheme: ID: {}, scopes: {}, client ID: {}, client secret: {}, redirect URL: {}
-                    ",
-                    format_message_highlight(&self.scheme_identifier),
-                    &self.scopes.join(", "),
-                    format_message_highlight(&self.client_id),
-                    format_message_highlight(&self.client_secret),
-                    format_message_highlight(&self.redirect_url),
-                );
+        logln(format!(
+            "API Security Scheme: ID: {}, scopes: {}, client ID: {}, client secret: {}, redirect URL: {}",
+            format_message_highlight(&self.scheme_identifier),
+            &self.scopes.join(", "),
+            format_message_highlight(&self.client_id),
+            format_message_highlight(&self.client_secret),
+            format_message_highlight(&self.redirect_url),
+        ));
     }
 }
 

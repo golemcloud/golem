@@ -13,8 +13,14 @@
 // limitations under the License.
 
 use crate::command::api::ApiSubcommand;
+use crate::command::shared_args::UpdateOrRedeployArgs;
 use crate::command_handler::Handlers;
 use crate::context::Context;
+use crate::model::api::HttpApiDeployMode;
+use crate::model::app::ApplicationComponentSelectMode;
+use crate::model::component::Component;
+use crate::model::{ComponentName, ProjectNameAndId};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub mod cloud;
@@ -31,8 +37,11 @@ impl ApiCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&mut self, command: ApiSubcommand) -> anyhow::Result<()> {
+    pub async fn handle_command(&self, command: ApiSubcommand) -> anyhow::Result<()> {
         match command {
+            ApiSubcommand::Deploy { update_or_redeploy } => {
+                self.ctx.api_handler().cmd_deploy(update_or_redeploy).await
+            }
             ApiSubcommand::Definition { subcommand } => {
                 self.ctx
                     .api_definition_handler()
@@ -58,5 +67,76 @@ impl ApiCommandHandler {
                     .await
             }
         }
+    }
+
+    pub async fn cmd_deploy(&self, update_or_redeploy: UpdateOrRedeployArgs) -> anyhow::Result<()> {
+        let project = None::<ProjectNameAndId>; // TODO
+
+        let used_component_names = {
+            {
+                let app_ctx = self.ctx.app_context_lock().await;
+                let app_ctx = app_ctx.some_or_err()?;
+                app_ctx
+                    .application
+                    .used_component_names_for_all_http_api_definition()
+            }
+            .into_iter()
+            .map(|component_name| ComponentName::from(component_name.to_string()))
+            .collect::<Vec<_>>()
+        };
+
+        let components = {
+            if !used_component_names.is_empty() {
+                self.ctx
+                    .component_handler()
+                    .deploy(
+                        project.as_ref(),
+                        used_component_names,
+                        None,
+                        &ApplicationComponentSelectMode::All,
+                        &update_or_redeploy,
+                    )
+                    .await?
+                    .into_iter()
+                    .map(|component| (component.component_name.0.clone(), component))
+                    .collect::<BTreeMap<_, _>>()
+            } else {
+                BTreeMap::new()
+            }
+        };
+
+        self.deploy(
+            project.as_ref(),
+            HttpApiDeployMode::All,
+            &update_or_redeploy,
+            &components,
+        )
+        .await
+    }
+
+    pub async fn deploy(
+        &self,
+        project: Option<&ProjectNameAndId>,
+        deploy_mode: HttpApiDeployMode,
+        update_or_redeploy: &UpdateOrRedeployArgs,
+        latest_component_versions: &BTreeMap<String, Component>,
+    ) -> anyhow::Result<()> {
+        let latest_api_definition_versions = self
+            .ctx
+            .api_definition_handler()
+            .deploy(
+                project,
+                deploy_mode,
+                update_or_redeploy,
+                latest_component_versions,
+            )
+            .await?;
+
+        self.ctx
+            .api_deployment_handler()
+            .deploy(project, deploy_mode, &latest_api_definition_versions)
+            .await?;
+
+        Ok(())
     }
 }

@@ -270,6 +270,10 @@ impl<P: AsRef<Path>> PathExtra<P> {
         self.0.as_ref()
     }
 
+    pub fn to_path_buf(&self) -> PathBuf {
+        self.0.as_ref().into()
+    }
+
     pub fn display(&self) -> std::path::Display {
         self.as_path().display()
     }

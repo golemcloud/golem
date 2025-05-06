@@ -29,7 +29,7 @@ impl ApiCloudCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&mut self, command: ApiCloudSubcommand) -> anyhow::Result<()> {
+    pub async fn handle_command(&self, command: ApiCloudSubcommand) -> anyhow::Result<()> {
         match command {
             ApiCloudSubcommand::Domain { subcommand } => {
                 self.ctx

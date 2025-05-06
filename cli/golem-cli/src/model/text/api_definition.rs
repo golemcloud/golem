@@ -16,7 +16,6 @@ use crate::model::text::fmt::*;
 use crate::model::ComponentName;
 use cli_table::{format::Justify, Table};
 use golem_client::model::{HttpApiDefinitionResponseData, RouteResponseData};
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Table)]
@@ -27,6 +26,8 @@ struct RouteTableView {
     pub path: String,
     #[table(title = "Component Name")]
     pub component_name: ComponentName,
+    #[table(title = "Component Version")]
+    pub component_version: String,
     #[table(title = "Binding Type")]
     pub binding_type: String,
 }
@@ -36,13 +37,15 @@ impl From<&RouteResponseData> for RouteTableView {
         Self {
             method: value.method.to_string(),
             path: value.path.to_string(),
-            component_name: value
-                .binding
-                .clone()
-                .component
-                .map(|component| component.name)
-                .unwrap_or("<NA>".to_string())
-                .into(),
+            component_name: match &value.binding.component {
+                Some(component) => component.name.clone(),
+                None => "<NA>".to_string(),
+            }
+            .into(),
+            component_version: match &value.binding.component {
+                Some(component) => component.version.to_string(),
+                None => "<NA>".to_string(),
+            },
             binding_type: match &value.binding.binding_type {
                 Some(binding_type) => binding_type.to_string(),
                 None => "<NA>".to_string(),

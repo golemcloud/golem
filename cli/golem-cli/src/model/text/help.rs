@@ -16,7 +16,8 @@ use crate::log::{logln, LogColorize};
 use crate::model::app::AppComponentName;
 use crate::model::component::render_type;
 use crate::model::text::fmt::{
-    format_export, log_table, FieldsBuilder, MessageWithFields, TextView,
+    format_export, log_table, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode,
+    TextView,
 };
 use cli_table::Table;
 use colored::Colorize;
@@ -92,8 +93,8 @@ impl MessageWithFields for WorkerNameHelp {
         fields.build()
     }
 
-    fn indent_fields() -> bool {
-        true
+    fn indent_mode() -> MessageWithFieldsIndentMode {
+        MessageWithFieldsIndentMode::IdentFields
     }
 
     fn format_field_name(name: String) -> String {
@@ -157,8 +158,8 @@ impl MessageWithFields for ComponentNameHelp {
         fields.build()
     }
 
-    fn indent_fields() -> bool {
-        true
+    fn indent_mode() -> MessageWithFieldsIndentMode {
+        MessageWithFieldsIndentMode::IdentFields
     }
 
     fn format_field_name(name: String) -> String {

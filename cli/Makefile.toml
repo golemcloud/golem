@@ -118,14 +118,14 @@ dependencies = ["install-golem-cli-release", "install-golem-release"]
 description = "Install golem-cli (debug)"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo install --release --path golem-cli --bin golem-cli --target-dir target --locked --offline
+exec --fail-on-error cargo install --path golem-cli --bin golem-cli --target-dir target --locked --offline
 '''
 
 [tasks.install-golem-release]
 description = "Install golem (debug)"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo install --release --path golem --bin golem --target-dir target --locked --offline
+exec --fail-on-error cargo install --path golem --bin golem --target-dir target --locked --offline
 '''
 
 ## ** TEST **
@@ -243,7 +243,7 @@ args = [
     "--no-verify",
 ]
 
-## ** APP MANIFEST SCHEMA PUBLISHING **
+## ** APP MANIFEST SCHEMA **
 [tasks.publish-app-manifest-json-schema]
 description = "Publish application manifest schemas to S3 (https://schema.golem.cloud)"
 command = "aws"
@@ -253,3 +253,9 @@ args = [
     "schema.golem.cloud",
     "s3://schema.golem.cloud",
 ]
+
+[tasks.serve-app-manifest-json-schema]
+description = "Serve the schema.golem.cloud directory locally to help testing the schemas in editors"
+install_crate = "miniserve"
+command = "miniserve"
+args = ["--interfaces", "127.0.0.1", "--port", "41357", "schema.golem.cloud"]

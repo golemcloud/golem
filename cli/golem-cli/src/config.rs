@@ -64,6 +64,14 @@ impl ProfileName {
     pub fn is_builtin(&self) -> bool {
         matches!(self.0.as_str(), PROFILE_NAME_LOCAL | PROFILE_NAME_CLOUD)
     }
+
+    pub fn is_builtin_local(&self) -> bool {
+        self.0.as_str() == PROFILE_NAME_LOCAL
+    }
+
+    pub fn is_builtin_cloud(&self) -> bool {
+        self.0.as_str() == PROFILE_NAME_CLOUD
+    }
 }
 
 impl Display for ProfileName {
@@ -409,6 +417,7 @@ pub struct ClientConfig {
     pub service_http_client_config: HttpClientConfig,
     pub invoke_http_client_config: HttpClientConfig,
     pub health_check_http_client_config: HttpClientConfig,
+    pub local_health_check_http_client_config: HttpClientConfig,
     pub file_download_http_client_config: HttpClientConfig,
 }
 
@@ -432,6 +441,8 @@ impl From<&Profile> for ClientConfig {
                     health_check_http_client_config: HttpClientConfig::new_for_health_check(
                         allow_insecure,
                     ),
+                    local_health_check_http_client_config:
+                        HttpClientConfig::new_for_local_health_check(allow_insecure),
                     file_download_http_client_config: HttpClientConfig::new_for_file_download(
                         allow_insecure,
                     ),
@@ -463,6 +474,8 @@ impl From<&Profile> for ClientConfig {
                     health_check_http_client_config: HttpClientConfig::new_for_health_check(
                         allow_insecure,
                     ),
+                    local_health_check_http_client_config:
+                        HttpClientConfig::new_for_local_health_check(allow_insecure),
                     file_download_http_client_config: HttpClientConfig::new_for_file_download(
                         allow_insecure,
                     ),
@@ -509,6 +522,16 @@ impl HttpClientConfig {
             read_timeout: Some(Duration::from_secs(1)),
         }
         .with_env_overrides("GOLEM_HTTP_HEALTHCHECK")
+    }
+
+    pub fn new_for_local_health_check(allow_insecure: bool) -> Self {
+        Self {
+            allow_insecure,
+            timeout: Some(Duration::from_millis(200)),
+            connect_timeout: Some(Duration::from_millis(200)),
+            read_timeout: Some(Duration::from_millis(200)),
+        }
+        .with_env_overrides("GOLEM_HTTP_LOCAL_HEALTHCHECK")
     }
 
     pub fn new_for_file_download(allow_insecure: bool) -> Self {

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
-  "$id": "https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json",
+  "$id": "https://schema.golem.cloud/app/golem/1.2.1-dev.1/golem.schema.json",
   "title": "Golem Application Manifest",
   "description": "Golem Application Manifest.",
   "type": "object",
@@ -150,7 +150,8 @@
         "componentType": {
           "enum": [
             "durable",
-            "ephemeral"
+            "ephemeral",
+            "library"
           ],
           "description": "Optional component type, defaults to durable."
         },
@@ -221,7 +222,8 @@
         "componentType": {
           "enum": [
             "durable",
-            "ephemeral"
+            "ephemeral",
+            "library"
           ],
           "description": "Optional component type, defaults to durable."
         },
@@ -377,8 +379,8 @@
         {
           "properties": {
             "type": {
-              "const": "wasm-rpc",
-              "description": "WASM RPC dependency"
+              "enum": ["wasm-rpc", "wasm", "wasm-rpc-static"],
+              "description": "Type of the dependency"
             },
             "target": {
               "type": "string",

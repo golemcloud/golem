@@ -32,7 +32,7 @@ impl ProfileConfigCommandHandler {
     }
 
     pub async fn handler_subcommand(
-        &mut self,
+        &self,
         profile_name: ProfileName,
         subcommand: ProfileConfigSubcommand,
     ) -> anyhow::Result<()> {
@@ -43,7 +43,7 @@ impl ProfileConfigCommandHandler {
         }
     }
 
-    fn cmd_set_format(&mut self, profile_name: ProfileName, format: Format) -> anyhow::Result<()> {
+    fn cmd_set_format(&self, profile_name: ProfileName, format: Format) -> anyhow::Result<()> {
         match Config::get_profile(&profile_name, self.ctx.config_dir())? {
             Some(mut profile) => {
                 profile.get_config_mut().default_format = format;

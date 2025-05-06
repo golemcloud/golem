@@ -69,10 +69,6 @@ impl MessageWithFields for WorkerCreateView {
 
         fields.build()
     }
-
-    fn nest_ident_fields() -> bool {
-        true
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,10 +179,6 @@ impl MessageWithFields for WorkerGetView {
 
         fields.build()
     }
-
-    fn nest_ident_fields() -> bool {
-        true
-    }
 }
 
 #[derive(Table)]
@@ -293,7 +285,7 @@ impl TextView for InvokeResultView {
 impl TextView for Vec<(u64, PublicOplogEntry)> {
     fn log(&self) {
         for (idx, entry) in self {
-            print!("{}: ", format_main_id(&format!("#{idx:0>5}")));
+            logln(format!("{}: ", format_main_id(&format!("#{idx:0>5}"))));
             entry.log()
         }
     }

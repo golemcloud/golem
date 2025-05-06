@@ -257,53 +257,36 @@ impl ValidationBuilder {
     }
 
     fn format(&mut self, message: String) -> String {
-        let multiline = message.contains("\n");
+        if self.context.is_empty() {
+            message
+        } else {
+            let padding = self
+                .context
+                .iter()
+                .map(|c| c.name.len())
+                .max()
+                .unwrap_or_default()
+                + 1;
 
-        let message = {
-            if multiline {
+            let context = self
+                .context
+                .iter()
+                .map(|c| {
+                    format!(
+                        "  {:<padding$} {}",
+                        format!("{}:", c.name).log_color_highlight(),
+                        c.value
+                    )
+                })
+                .join("\n");
+            format!(
+                "{}\n{}\n{}\n{}",
+                "context:".log_color_highlight(),
+                context,
+                "message:".log_color_highlight(),
                 message.lines().map(|l| format!("  {}", l)).join("\n")
-            } else {
-                message
-            }
-        };
-
-        let context = {
-            if self.context.is_empty() {
-                "".to_string()
-            } else if multiline {
-                format!(
-                    "{}{}",
-                    if message.ends_with("\n") {
-                        "\n  "
-                    } else {
-                        "\n\n  "
-                    },
-                    self.context
-                        .iter()
-                        .map(|c| format!("{}: {}", c.name, c.value.log_color_highlight()))
-                        .join("\n")
-                )
-            } else {
-                format!(
-                    ", {}",
-                    self.context
-                        .iter()
-                        .map(|c| format!("{}: {}", c.name, c.value.log_color_highlight()))
-                        .join(", ")
-                )
-            }
-        };
-
-        format!(
-            "{}{}{}",
-            if multiline && !message.starts_with("\n") {
-                "\n"
-            } else {
-                ""
-            },
-            message,
-            context
-        )
+            )
+        }
     }
 
     pub fn add_error(&mut self, error: String) {

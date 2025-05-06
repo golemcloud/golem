@@ -26,7 +26,7 @@ use crate::{command_name, version};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use chrono::{DateTime, Utc};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
-use clap::{self, CommandFactory, Subcommand};
+use clap::{self, Command, CommandFactory, Subcommand};
 use clap::{Args, Parser};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
 use golem_client::model::ScanCursor;
@@ -39,6 +39,7 @@ use uuid::Uuid;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::ComponentOptionalComponentName;
+use crate::error::ShowClapHelpTarget;
 
 /// Golem Command Line Interface
 #[derive(Debug, Parser)]
@@ -100,11 +101,13 @@ pub struct GolemCliGlobalFlags {
     pub profile: Option<ProfileName>,
 
     /// Select builtin "local" profile, to use services provided by the "golem server" command
-    #[arg(long, short, global = true, conflicts_with_all = ["profile", "cloud"], display_order = 103)]
+    #[arg(long, short, global = true, conflicts_with_all = ["profile", "cloud"], display_order = 103
+    )]
     pub local: bool,
 
     /// Select builtin "cloud" profile to use Golem Cloud
-    #[arg(long, short, global = true, conflicts_with_all = ["profile", "local"], display_order = 104)]
+    #[arg(long, short, global = true, conflicts_with_all = ["profile", "local"], display_order = 104
+    )]
     pub cloud: bool,
 
     /// Custom path to the root application manifest (golem.yaml)
@@ -356,18 +359,6 @@ impl GolemCliCommand {
     fn invalid_arg_matchers() -> Vec<InvalidArgMatcher> {
         vec![
             InvalidArgMatcher {
-                subcommands: vec!["app", "new"],
-                found_positional_args: vec![],
-                missing_positional_arg: "language",
-                to_partial_match: |_| GolemCliCommandPartialMatch::AppNewMissingLanguage,
-            },
-            InvalidArgMatcher {
-                subcommands: vec!["component", "new"],
-                found_positional_args: vec![],
-                missing_positional_arg: "component_template",
-                to_partial_match: |_| GolemCliCommandPartialMatch::ComponentNewMissingTemplate,
-            },
-            InvalidArgMatcher {
                 subcommands: vec!["worker", "invoke"],
                 found_positional_args: vec![],
                 missing_positional_arg: "worker_name",
@@ -382,6 +373,12 @@ impl GolemCliCommand {
                         worker_name: args[0].clone().into(),
                     }
                 },
+            },
+            InvalidArgMatcher {
+                subcommands: vec!["profile", "switch"],
+                missing_positional_arg: "profile_name",
+                found_positional_args: vec![],
+                to_partial_match: |_| GolemCliCommandPartialMatch::ProfileSwitchMissingProfileName,
             },
         ]
     }
@@ -472,13 +469,12 @@ pub enum GolemCliCommandParseResult {
 pub enum GolemCliCommandPartialMatch {
     AppHelp,
     AppMissingSubcommandHelp,
-    AppNewMissingLanguage,
     ComponentHelp,
     ComponentMissingSubcommandHelp,
-    ComponentNewMissingTemplate,
     WorkerHelp,
     WorkerInvokeMissingFunctionName { worker_name: WorkerName },
     WorkerInvokeMissingWorkerName,
+    ProfileSwitchMissingProfileName,
 }
 
 #[derive(Debug, Subcommand)]
@@ -605,12 +601,6 @@ pub mod shared_args {
     }
 
     #[derive(Debug, Args)]
-    pub struct ComponentTemplatePositionalArg {
-        /// Component template name to be used for the component
-        pub component_template: ComponentTemplateName,
-    }
-
-    #[derive(Debug, Args)]
     pub struct ForceBuildArg {
         /// When set to true will skip modification time based up-to-date checks, defaults to false
         #[clap(long, default_value = "false")]
@@ -648,15 +638,41 @@ pub mod shared_args {
         pub stream_no_timestamp: bool,
     }
 
-    #[derive(Debug, Args, Default)]
-    pub struct WorkerUpdateOrRedeployArgs {
+    #[derive(Debug, Args)]
+    pub struct UpdateOrRedeployArgs {
         /// Update existing workers with auto or manual update mode
-        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_workers"], num_args = 0..=1
+        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_workers", "redeploy_all"], num_args = 0..=1
         )]
         pub update_workers: Option<WorkerUpdateMode>,
         /// Delete and recreate existing workers
-        #[clap(long, short, conflicts_with_all = ["update_workers"])]
+        #[clap(long, conflicts_with_all = ["update_workers"])]
         pub redeploy_workers: bool,
+        /// Delete and recreate HTTP API definitions and deployment
+        #[clap(long, conflicts_with_all = ["redeploy_all"])]
+        pub redeploy_http_api: bool,
+        /// Delete and recreate components and HTTP APIs
+        #[clap(long, short, conflicts_with_all = ["update_workers", "redeploy_workers", "redeploy_http_api"]
+        )]
+        pub redeploy_all: bool,
+    }
+
+    impl UpdateOrRedeployArgs {
+        pub fn none() -> Self {
+            UpdateOrRedeployArgs {
+                update_workers: None,
+                redeploy_workers: false,
+                redeploy_http_api: false,
+                redeploy_all: false,
+            }
+        }
+
+        pub fn redeploy_workers(&self) -> bool {
+            self.redeploy_all || self.redeploy_workers
+        }
+
+        pub fn redeploy_http_api(&self) -> bool {
+            self.redeploy_all || self.redeploy_http_api
+        }
     }
 
     #[derive(Debug, Args)]
@@ -699,7 +715,7 @@ pub mod shared_args {
 
 pub mod app {
     use crate::command::shared_args::{
-        AppOptionalComponentNames, BuildArgs, ForceBuildArg, WorkerUpdateOrRedeployArgs,
+        AppOptionalComponentNames, BuildArgs, ForceBuildArg, UpdateOrRedeployArgs,
     };
     use crate::model::WorkerUpdateMode;
     use clap::Subcommand;
@@ -710,9 +726,8 @@ pub mod app {
         /// Create new application
         New {
             /// Application folder name where the new application should be created
-            application_name: String,
+            application_name: Option<String>,
             /// Languages that the application should support
-            #[arg(required = true)]
             language: Vec<GuestLanguage>,
         },
         /// Build all or selected components in the application
@@ -722,14 +737,14 @@ pub mod app {
             #[command(flatten)]
             build: BuildArgs,
         },
-        /// Deploy all or selected components in the application, includes building
+        /// Deploy all or selected components and HTTP APIs in the application, includes building
         Deploy {
             #[command(flatten)]
             component_name: AppOptionalComponentNames,
             #[command(flatten)]
             force_build: ForceBuildArg,
             #[command(flatten)]
-            update_or_redeploy: WorkerUpdateOrRedeployArgs,
+            update_or_redeploy: UpdateOrRedeployArgs,
         },
         /// Clean all components in the application or by selection
         Clean {
@@ -764,9 +779,10 @@ pub mod component {
     use crate::command::component::plugin::ComponentPluginSubcommand;
     use crate::command::shared_args::{
         BuildArgs, ComponentOptionalComponentName, ComponentOptionalComponentNames,
-        ComponentTemplatePositionalArg, ForceBuildArg, WorkerUpdateOrRedeployArgs,
+        ComponentTemplateName, ForceBuildArg, UpdateOrRedeployArgs,
     };
-    use crate::model::WorkerUpdateMode;
+    use crate::model::app::DependencyType;
+    use crate::model::{ComponentName, WorkerUpdateMode};
     use clap::Subcommand;
     use golem_templates::model::PackageName;
 
@@ -774,10 +790,10 @@ pub mod component {
     pub enum ComponentSubcommand {
         /// Create new component in the current application
         New {
-            #[command(flatten)]
-            template: ComponentTemplatePositionalArg,
+            /// Template to be used for the new component
+            component_template: Option<ComponentTemplateName>,
             /// Name of the new component package in 'package:name' form
-            component_package_name: PackageName,
+            component_name: Option<PackageName>,
         },
         /// List or search component templates
         Templates {
@@ -791,19 +807,31 @@ pub mod component {
             #[command(flatten)]
             build: BuildArgs,
         },
-        /// Deploy component(s) based on the current directory or by selection
+        /// Deploy component(s) and dependent HTTP APIs based on the current directory or by selection
         Deploy {
             #[command(flatten)]
             component_name: ComponentOptionalComponentNames,
             #[command(flatten)]
             force_build: ForceBuildArg,
             #[command(flatten)]
-            update_or_redeploy: WorkerUpdateOrRedeployArgs,
+            update_or_redeploy: UpdateOrRedeployArgs,
         },
         /// Clean component(s) based on the current directory or by selection
         Clean {
             #[command(flatten)]
             component_name: ComponentOptionalComponentNames,
+        },
+        /// Add or update a component dependency
+        AddDependency {
+            /// The name of the component to which the dependency should be added
+            #[arg(long)]
+            component_name: Option<ComponentName>,
+            /// The name of the component that will be used as a component
+            #[arg(long)]
+            target_component_name: Option<ComponentName>,
+            /// The type of the dependency, defaults to wasm-rpc
+            #[arg(long)]
+            dependency_type: Option<DependencyType>,
         },
         /// List deployed component versions' metadata
         List {
@@ -1052,10 +1080,16 @@ pub mod api {
     use crate::command::api::definition::ApiDefinitionSubcommand;
     use crate::command::api::deployment::ApiDeploymentSubcommand;
     use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
+    use crate::command::shared_args::UpdateOrRedeployArgs;
     use clap::Subcommand;
 
     #[derive(Debug, Subcommand)]
     pub enum ApiSubcommand {
+        /// Deploy API Definitions and Deployments
+        Deploy {
+            #[command(flatten)]
+            update_or_redeploy: UpdateOrRedeployArgs,
+        },
         /// Manage API definitions
         Definition {
             #[clap(subcommand)]
@@ -1079,13 +1113,24 @@ pub mod api {
     }
 
     pub mod definition {
-        use crate::command::shared_args::ProjectNameOptionalArg;
-        use crate::model::{ApiDefinitionId, ApiDefinitionVersion, PathBufOrStdin};
+        use crate::command::shared_args::{ProjectNameOptionalArg, UpdateOrRedeployArgs};
+        use crate::model::api::{ApiDefinitionId, ApiDefinitionVersion};
+        use crate::model::app::HttpApiDefinitionName;
+        use crate::model::PathBufOrStdin;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
         pub enum ApiDefinitionSubcommand {
+            /// Deploy API Definitions and required components
+            Deploy {
+                /// API definition to deploy, if not specified, all definitions are deployed
+                http_api_definition_name: Option<HttpApiDefinitionName>,
+                #[command(flatten)]
+                update_or_redeploy: UpdateOrRedeployArgs,
+            },
+            // TODO: decide if we drop it from cli for now, or move the import logic into the CLI, hidden for now
             /// Import OpenAPI file as api definition
+            #[clap(hide = true)]
             Import {
                 #[command(flatten)]
                 project: ProjectNameOptionalArg,
@@ -1095,27 +1140,11 @@ pub mod api {
                 #[arg(value_hint = clap::ValueHint::FilePath)]
                 definition: PathBufOrStdin,
             },
-            /// Creates an API definition
-            New {
-                #[command(flatten)]
-                project: ProjectNameOptionalArg,
-                /// The Golem API definition file
-                #[arg(value_hint = clap::ValueHint::FilePath)]
-                definition: PathBufOrStdin,
-            },
-            /// Updates an api definition
-            Update {
-                #[command(flatten)]
-                project: ProjectNameOptionalArg,
-                /// The Golem API definition file
-                #[arg(value_hint = clap::ValueHint::FilePath)]
-                definition: PathBufOrStdin,
-            },
             /// Retrieves metadata about an existing API definition
             Get {
                 #[command(flatten)]
                 project: ProjectNameOptionalArg,
-                /// Api definition id
+                /// API definition id
                 #[arg(short, long)]
                 id: ApiDefinitionId,
                 /// Version of the api definition
@@ -1126,7 +1155,7 @@ pub mod api {
             List {
                 #[command(flatten)]
                 project: ProjectNameOptionalArg,
-                /// Api definition id to get all versions. Optional.
+                /// API definition id to get all versions. Optional.
                 #[arg(short, long)]
                 id: Option<ApiDefinitionId>,
             },
@@ -1134,7 +1163,7 @@ pub mod api {
             Delete {
                 #[command(flatten)]
                 project: ProjectNameOptionalArg,
-                /// Api definition id
+                /// API definition id
                 #[arg(short, long)]
                 id: ApiDefinitionId,
                 /// Version of the api definition
@@ -1145,25 +1174,18 @@ pub mod api {
     }
 
     pub mod deployment {
-        use crate::command::shared_args::ProjectNameOptionalArg;
-        use crate::model::{ApiDefinitionId, ApiDefinitionIdWithVersion};
+        use crate::command::shared_args::{ProjectNameOptionalArg, UpdateOrRedeployArgs};
+        use crate::model::api::ApiDefinitionId;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
         pub enum ApiDeploymentSubcommand {
-            /// Create or update deployment
+            /// Deploy API Deployments
             Deploy {
+                /// Host or site to deploy, if not defined, all deployments will be deployed
+                host_or_site: Option<String>,
                 #[command(flatten)]
-                project: ProjectNameOptionalArg,
-                /// API definition IDs with version
-                #[arg(required = true)]
-                definitions: Vec<ApiDefinitionIdWithVersion>,
-                #[arg(long)]
-                /// API definition host
-                host: Option<String>,
-                /// Optional API definition subdomain
-                #[arg(long)]
-                subdomain: Option<String>,
+                update_or_redeploy: UpdateOrRedeployArgs,
             },
             /// Get API deployment
             Get {
@@ -1193,7 +1215,7 @@ pub mod api {
 
     pub mod security_scheme {
         use crate::command::shared_args::ProjectNameOptionalArg;
-        use crate::model::IdentityProviderType;
+        use crate::model::api::IdentityProviderType;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
@@ -1694,32 +1716,52 @@ pub mod cloud {
 }
 
 pub mod server {
-    use clap::Subcommand;
+    use clap::{Args, Subcommand};
     use std::path::PathBuf;
+
+    #[derive(Debug, Args, Default)]
+    pub struct RunArgs {
+        /// Address to serve the main API on, defaults to 0.0.0.0
+        #[clap(long)]
+        pub router_addr: Option<String>,
+
+        /// Port to serve the main API on, defaults to 9881
+        #[clap(long)]
+        pub router_port: Option<u16>,
+
+        /// Port to serve custom requests on, defaults to 9006
+        #[clap(long)]
+        pub custom_request_port: Option<u16>,
+
+        /// Directory to store data in. Defaults to $XDG_STATE_HOME/golem
+        #[clap(long)]
+        pub data_dir: Option<PathBuf>,
+
+        /// Clean the data directory before starting
+        #[clap(long)]
+        pub clean: bool,
+    }
+
+    impl RunArgs {
+        pub fn router_addr(&self) -> &str {
+            self.router_addr.as_deref().unwrap_or("0.0.0.0")
+        }
+
+        pub fn router_port(&self) -> u16 {
+            self.router_port.unwrap_or(9881)
+        }
+
+        pub fn custom_request_port(&self) -> u16 {
+            self.custom_request_port.unwrap_or(9006)
+        }
+    }
 
     #[derive(Debug, Subcommand)]
     pub enum ServerSubcommand {
         /// Run golem server for local development
         Run {
-            /// Address to serve the main API on
-            #[clap(long, default_value = "0.0.0.0")]
-            router_addr: String,
-
-            /// Port to serve the main API on
-            #[clap(long, default_value_t = 9881)]
-            router_port: u16,
-
-            /// Port to serve custom requests on
-            #[clap(long, default_value_t = 9006)]
-            custom_request_port: u16,
-
-            /// Directory to store data in. Defaults to $XDG_STATE_HOME/golem
-            #[clap(long)]
-            data_dir: Option<PathBuf>,
-
-            /// Clean the data directory before starting
-            #[clap(long, default_value = "false")]
-            clean: bool,
+            #[clap(flatten)]
+            args: RunArgs,
         },
         /// Clean the local server data directory
         Clean,
@@ -1733,6 +1775,31 @@ pub fn builtin_app_subcommands() -> BTreeSet<String> {
         .get_subcommands()
         .map(|subcommand| subcommand.get_name().to_string())
         .collect()
+}
+
+fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static str> {
+    match target {
+        ShowClapHelpTarget::AppNew => {
+            vec!["app", "new"]
+        }
+        ShowClapHelpTarget::ComponentNew => {
+            vec!["component", "new"]
+        }
+        ShowClapHelpTarget::ComponentAddDependency => {
+            vec!["component", "add-dependency"]
+        }
+    }
+}
+
+pub fn help_target_to_command(target: ShowClapHelpTarget) -> Command {
+    let command = GolemCliCommand::command();
+    let mut command = &command;
+
+    for subcommand in help_target_to_subcommand_names(target) {
+        command = command.find_subcommand(subcommand).unwrap();
+    }
+
+    command.clone()
 }
 
 fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
@@ -1773,12 +1840,16 @@ fn parse_instant(
 
 #[cfg(test)]
 mod test {
-    use crate::command::{builtin_app_subcommands, GolemCliCommand};
+    use crate::command::{
+        builtin_app_subcommands, help_target_to_subcommand_names, GolemCliCommand,
+    };
+    use crate::error::ShowClapHelpTarget;
     use assert2::assert;
     use clap::builder::StyledStr;
     use clap::{Command, CommandFactory};
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet};
+    use strum::IntoEnumIterator;
     use test_r::test;
 
     #[test]
@@ -1993,5 +2064,25 @@ mod test {
     #[test]
     fn builtin_app_subcommands_no_panic() {
         println!("{:?}", builtin_app_subcommands())
+    }
+
+    #[test]
+    fn help_targets_to_subcommands_uses_valid_subcommands() {
+        for target in ShowClapHelpTarget::iter() {
+            let command = GolemCliCommand::command();
+            let mut command = &command;
+            let subcommands = help_target_to_subcommand_names(target);
+            for subcommand in &subcommands {
+                match command.find_subcommand(subcommand) {
+                    Some(subcommand) => command = subcommand,
+                    None => {
+                        panic!(
+                            "Invalid help target: {}, {:?}, {}",
+                            target, subcommands, subcommand
+                        );
+                    }
+                }
+            }
+        }
     }
 }

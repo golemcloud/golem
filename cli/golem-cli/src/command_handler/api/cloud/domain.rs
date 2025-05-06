@@ -33,7 +33,7 @@ impl ApiCloudDomainCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&mut self, command: ApiDomainSubcommand) -> anyhow::Result<()> {
+    pub async fn handle_command(&self, command: ApiDomainSubcommand) -> anyhow::Result<()> {
         match command {
             ApiDomainSubcommand::Get { project_name } => self.cmd_get(project_name).await,
             ApiDomainSubcommand::New {

@@ -1,7 +1,7 @@
 use crate::config::ProfileName;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
-use strum_macros::Display;
+use strum_macros::{Display, EnumIter};
 
 // NonSuccessfulExit is used to signal that an error got resolved with hints or error messages
 // already on the command line, thus nothing should be printed in the main error handler,
@@ -18,11 +18,19 @@ impl Display for NonSuccessfulExit {
 
 impl Error for NonSuccessfulExit {}
 
+#[derive(Clone, Copy, Debug, Display, EnumIter)]
+pub enum ShowClapHelpTarget {
+    AppNew,
+    ComponentNew,
+    ComponentAddDependency,
+}
+
 /// Errors that should be handled by the command handler with showing hints or error messages
 #[derive(Debug, Display)]
 pub enum HintError {
     NoApplicationManifestFound,
     ExpectedCloudProfile,
+    ShowClapHelp(ShowClapHelpTarget),
 }
 
 impl Error for HintError {}
@@ -107,7 +115,13 @@ pub mod service {
                         "{} - HTTP Client Error: {}",
                         service_name,
                         error.to_string().log_color_warn()
-                    )
+                    )?;
+
+                    if let Some(source) = error.source() {
+                        write!(f, ", caused by: {}", source.to_string().log_color_warn())?
+                    }
+
+                    Ok(())
                 }
                 ServiceErrorKind::ReqwestHeaderError(error) => {
                     write!(
@@ -115,7 +129,13 @@ pub mod service {
                         "{} - HTTP Header Error: {}",
                         service_name,
                         error.to_string().log_color_warn()
-                    )
+                    )?;
+
+                    if let Some(source) = error.source() {
+                        write!(f, ", caused by: {}", source.to_string().log_color_warn())?
+                    }
+
+                    Ok(())
                 }
                 ServiceErrorKind::SerdeError(error) => {
                     write!(
@@ -123,7 +143,13 @@ pub mod service {
                         "{} - Serialization Error: {}",
                         service_name,
                         error.to_string().log_color_warn()
-                    )
+                    )?;
+
+                    if let Some(source) = error.source() {
+                        write!(f, ", caused by: {}", source.to_string().log_color_warn())?
+                    }
+
+                    Ok(())
                 }
                 ServiceErrorKind::UnexpectedResponse {
                     status_code,

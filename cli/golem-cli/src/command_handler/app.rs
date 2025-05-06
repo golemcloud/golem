@@ -16,15 +16,16 @@ use crate::app::error::CustomCommandError;
 use crate::command::app::AppSubcommand;
 use crate::command::builtin_app_subcommands;
 use crate::command::shared_args::{
-    AppOptionalComponentNames, BuildArgs, ForceBuildArg, WorkerUpdateOrRedeployArgs,
+    AppOptionalComponentNames, BuildArgs, ForceBuildArg, UpdateOrRedeployArgs,
 };
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::diagnose::diagnose;
-use crate::error::{HintError, NonSuccessfulExit};
+use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
+use crate::model::api::HttpApiDeployMode;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::Component;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
@@ -37,6 +38,7 @@ use golem_templates::model::{
     ComposableAppGroupName, GuestLanguage, PackageName, Template, TemplateName,
 };
 use itertools::Itertools;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -50,12 +52,12 @@ impl AppCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&mut self, subcommand: AppSubcommand) -> anyhow::Result<()> {
+    pub async fn handle_command(&self, subcommand: AppSubcommand) -> anyhow::Result<()> {
         match subcommand {
             AppSubcommand::New {
                 application_name,
                 language,
-            } => self.cmd_new(&application_name, language).await,
+            } => self.cmd_new(application_name, language).await,
             AppSubcommand::Build {
                 component_name,
                 build: build_args,
@@ -86,8 +88,8 @@ impl AppCommandHandler {
     }
 
     async fn cmd_new(
-        &mut self,
-        application_name: &str,
+        &self,
+        application_name: Option<String>,
         languages: Vec<GuestLanguage>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
@@ -113,6 +115,29 @@ impl AppCommandHandler {
             }
         }
 
+        let Some((application_name, components)) = ({
+            match application_name {
+                Some(application_name) => Some((application_name, vec![])),
+                None => self
+                    .ctx
+                    .interactive_handler()
+                    .select_new_app_name_and_components()?
+                    .map(|new_app| (new_app.app_name, new_app.templated_component_names)),
+            }
+        }) else {
+            log_error("Both APPLICATION_NAME and LANGUAGES are required in non-interactive mode");
+            logln("");
+            bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+        };
+
+        if components.is_empty() && languages.is_empty() {
+            log_error("LANGUAGES are required in non-interactive mode");
+            logln("");
+            logln("Either specify languages or use the new command without APPLICATION_NAME to use the interactive wizard!");
+            logln("");
+            bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+        }
+
         let app_dir = PathBuf::from(&application_name);
         if app_dir.exists() {
             bail!(
@@ -130,36 +155,72 @@ impl AppCommandHandler {
             ),
         );
 
-        let common_templates = languages
-            .iter()
-            .map(|language| {
-                self.get_template(&language.id())
-                    .map(|(common, _component)| common)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        if components.is_empty() {
+            let common_templates = languages
+                .iter()
+                .map(|language| {
+                    self.get_template(&language.id())
+                        .map(|(common, _component)| common)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
-        {
-            let _indent = LogIndent::new();
-            // TODO: cleanup add_component_by_example, so we don't have to pass a dummy arg
-            let dummy_package_name = PackageName::from_string("app:comp").unwrap();
-            for common_template in common_templates.into_iter().flatten() {
+            {
+                let _indent = LogIndent::new();
+                // TODO: cleanup add_component_by_example, so we don't have to pass a dummy arg
+                let dummy_package_name = PackageName::from_string("app:comp").unwrap();
+                for common_template in common_templates.into_iter().flatten() {
+                    match add_component_by_template(
+                        Some(common_template),
+                        None,
+                        &app_dir,
+                        &dummy_package_name,
+                    ) {
+                        Ok(()) => {
+                            log_action(
+                                "Added",
+                                format!(
+                                    "common template for {}",
+                                    common_template.language.name().log_color_highlight()
+                                ),
+                            );
+                        }
+                        Err(error) => {
+                            bail!("Failed to add common template for new app: {}", error)
+                        }
+                    }
+                }
+            }
+        } else {
+            for (template, component_package_name) in &components {
+                log_action(
+                    "Adding",
+                    format!(
+                        "component {}",
+                        component_package_name
+                            .to_string_with_colon()
+                            .log_color_highlight()
+                    ),
+                );
+                let (common_template, component_template) = self.get_template(template)?;
                 match add_component_by_template(
-                    Some(common_template),
-                    None,
+                    common_template,
+                    Some(component_template),
                     &app_dir,
-                    &dummy_package_name,
+                    component_package_name,
                 ) {
                     Ok(()) => {
                         log_action(
                             "Added",
                             format!(
-                                "common template for {}",
-                                common_template.language.name().log_color_highlight()
+                                "new app component {}",
+                                component_package_name
+                                    .to_string_with_colon()
+                                    .log_color_highlight()
                             ),
                         );
                     }
                     Err(error) => {
-                        bail!("Failed to add common template for new app: {}", error)
+                        bail!("Failed to create new app component: {}", error)
                     }
                 }
             }
@@ -171,20 +232,39 @@ impl AppCommandHandler {
         );
 
         logln("");
-        logln(
-            format!(
-                "To add components to the application, switch to the {} directory, and use the `{}` command.",
-                application_name.log_color_highlight(),
-                "component new".log_color_highlight(),
-            )
-        );
-        logln("");
+
+        if components.is_empty() {
+            logln(
+                format!(
+                    "To add components to the application, switch to the {} directory, and use the `{}` command.",
+                    application_name.log_color_highlight(),
+                    "component new".log_color_highlight(),
+                )
+            );
+        } else {
+            // Unloading app context and switching dir, so we can reload the new app
+            self.ctx.unload_app_context().await;
+            std::env::set_current_dir(app_dir)?;
+
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.some_or_err()?;
+
+            app_ctx.log_dynamic_help(&DynamicHelpSections::show_components())?;
+            logln(
+                format!(
+                    "Switch to the {} directory, and use the `{}` or `{}` commands to use your new application!",
+                    application_name.log_color_highlight(),
+                    "app build".log_color_highlight(),
+                    "app deploy".log_color_highlight(),
+                )
+            );
+        }
 
         Ok(())
     }
 
     async fn cmd_build(
-        &mut self,
+        &self,
         component_name: AppOptionalComponentNames,
         build_args: BuildArgs,
     ) -> anyhow::Result<()> {
@@ -196,7 +276,7 @@ impl AppCommandHandler {
         .await
     }
 
-    async fn cmd_clean(&mut self, component_name: AppOptionalComponentNames) -> anyhow::Result<()> {
+    async fn cmd_clean(&self, component_name: AppOptionalComponentNames) -> anyhow::Result<()> {
         self.clean(
             component_name.component_name,
             &ApplicationComponentSelectMode::All,
@@ -205,28 +285,16 @@ impl AppCommandHandler {
     }
 
     async fn cmd_deploy(
-        &mut self,
+        &self,
         component_name: AppOptionalComponentNames,
         force_build: ForceBuildArg,
-        update_or_redeploy: WorkerUpdateOrRedeployArgs,
+        update_or_redeploy: UpdateOrRedeployArgs,
     ) -> anyhow::Result<()> {
-        self.ctx
-            .component_handler()
-            .deploy(
-                self.ctx
-                    .cloud_project_handler()
-                    .opt_select_project(None, None)
-                    .await?
-                    .as_ref(),
-                component_name.component_name,
-                Some(force_build),
-                &ApplicationComponentSelectMode::All,
-                update_or_redeploy,
-            )
+        self.deploy(component_name, force_build, update_or_redeploy)
             .await
     }
 
-    async fn cmd_custom_command(&mut self, command: Vec<String>) -> anyhow::Result<()> {
+    async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {
         if command.len() != 1 {
             bail!(
                 "Expected exactly one custom subcommand, got: {}",
@@ -248,11 +316,9 @@ impl AppCommandHandler {
                     ));
                     logln("");
 
-                    app_ctx.log_dynamic_help(&DynamicHelpSections {
-                        components: false,
-                        custom_commands: true,
-                        builtin_commands: builtin_app_subcommands(),
-                    })?;
+                    app_ctx.log_dynamic_help(&DynamicHelpSections::show_custom_commands(
+                        builtin_app_subcommands(),
+                    ))?;
 
                     logln(
                         "Available builtin commands:"
@@ -261,15 +327,7 @@ impl AppCommandHandler {
                     );
                     let app_subcommands = builtin_app_subcommands();
                     for subcommand in &app_subcommands {
-                        logln(format!(
-                            "  {}{}",
-                            if app_subcommands.contains(subcommand) || subcommand.starts_with(':') {
-                                ":"
-                            } else {
-                                ""
-                            },
-                            subcommand.bold()
-                        ));
+                        logln(format!("  {}", subcommand.bold()));
                     }
                     logln("");
 
@@ -288,7 +346,7 @@ impl AppCommandHandler {
     }
 
     async fn cmd_update_workers(
-        &mut self,
+        &self,
         component_names: Vec<ComponentName>,
         update_mode: WorkerUpdateMode,
     ) -> anyhow::Result<()> {
@@ -298,14 +356,14 @@ impl AppCommandHandler {
         let components = self.components_for_update_or_redeploy().await?;
         self.ctx
             .component_handler()
-            .update_workers_by_components(components, update_mode)
+            .update_workers_by_components(&components, update_mode)
             .await?;
 
         Ok(())
     }
 
     async fn cmd_redeploy_workers(
-        &mut self,
+        &self,
         component_names: Vec<ComponentName>,
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, &ApplicationComponentSelectMode::All)
@@ -314,16 +372,13 @@ impl AppCommandHandler {
         let components = self.components_for_update_or_redeploy().await?;
         self.ctx
             .component_handler()
-            .redeploy_workers_by_components(components)
+            .redeploy_workers_by_components(&components)
             .await?;
 
         Ok(())
     }
 
-    async fn cmd_diagnose(
-        &mut self,
-        component_names: AppOptionalComponentNames,
-    ) -> anyhow::Result<()> {
+    async fn cmd_diagnose(&self, component_names: AppOptionalComponentNames) -> anyhow::Result<()> {
         self.diagnose(
             component_names.component_name,
             &ApplicationComponentSelectMode::All,
@@ -331,8 +386,56 @@ impl AppCommandHandler {
         .await
     }
 
+    async fn deploy(
+        &self,
+        component_name: AppOptionalComponentNames,
+        force_build: ForceBuildArg,
+        update_or_redeploy: UpdateOrRedeployArgs,
+    ) -> anyhow::Result<()> {
+        let is_any_component_explicitly_selected = !component_name.component_name.is_empty();
+
+        let project = self
+            .ctx
+            .cloud_project_handler()
+            .opt_select_project(None, None) // TODO: project, account id
+            .await?;
+
+        let components = self
+            .ctx
+            .component_handler()
+            .deploy(
+                project.as_ref(),
+                component_name.component_name,
+                Some(force_build),
+                &ApplicationComponentSelectMode::All,
+                &update_or_redeploy,
+            )
+            .await?;
+
+        let components = components
+            .into_iter()
+            .map(|component| (component.component_name.0.clone(), component))
+            .collect::<BTreeMap<_, _>>();
+
+        self.ctx
+            .api_handler()
+            .deploy(
+                project.as_ref(),
+                if is_any_component_explicitly_selected {
+                    HttpApiDeployMode::Matching
+                } else {
+                    HttpApiDeployMode::All
+                },
+                &update_or_redeploy,
+                &components,
+            )
+            .await?;
+
+        Ok(())
+    }
+
     pub async fn build(
-        &mut self,
+        &self,
         component_names: Vec<ComponentName>,
         build: Option<BuildArgs>,
         default_component_select_mode: &ApplicationComponentSelectMode,
@@ -352,7 +455,7 @@ impl AppCommandHandler {
     }
 
     pub async fn clean(
-        &mut self,
+        &self,
         component_names: Vec<ComponentName>,
         default_component_select_mode: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<()> {
@@ -401,7 +504,7 @@ impl AppCommandHandler {
     }
 
     pub async fn must_select_components(
-        &mut self,
+        &self,
         component_names: Vec<ComponentName>,
         default: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<()> {
@@ -412,7 +515,7 @@ impl AppCommandHandler {
     }
 
     pub async fn opt_select_components(
-        &mut self,
+        &self,
         component_names: Vec<ComponentName>,
         default: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<bool> {
@@ -421,7 +524,7 @@ impl AppCommandHandler {
     }
 
     pub async fn opt_select_components_allow_not_found(
-        &mut self,
+        &self,
         component_names: Vec<ComponentName>,
         default: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<bool> {
@@ -431,8 +534,8 @@ impl AppCommandHandler {
 
     // TODO: forbid matching the same component multiple times
     // Returns false if there is no app
-    pub async fn opt_select_components_internal(
-        &mut self,
+    async fn opt_select_components_internal(
+        &self,
         component_names: Vec<ComponentName>,
         default: &ApplicationComponentSelectMode,
         allow_not_found: bool,
@@ -651,7 +754,7 @@ impl AppCommandHandler {
     }
 
     pub async fn diagnose(
-        &mut self,
+        &self,
         component_names: Vec<ComponentName>,
         default_component_select_mode: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<()> {

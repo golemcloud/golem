@@ -112,7 +112,18 @@ impl PluginInstallationHandler {
                 }
                 target.finish().await?;
 
-                let latest_component = self.get_latest_component(&component).await?;
+                let Some(latest_component) = self
+                    .ctx
+                    .component_handler()
+                    .latest_component_by_id(component.versioned_component_id.component_id)
+                    .await?
+                else {
+                    bail!(
+                        "Component {} not found, after plugin deployment",
+                        component.component_name.0.log_color_highlight()
+                    );
+                };
+
                 Ok(latest_component)
             } else {
                 bail!(NonSuccessfulExit);
@@ -302,24 +313,6 @@ impl PluginInstallationHandler {
 
         commands
     }
-
-    /// Gets the latest component metadata after all the plugin installation changes
-    async fn get_latest_component(&self, component: &Component) -> anyhow::Result<Component> {
-        Ok(match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .component
-                .get_latest_component_metadata(&component.versioned_component_id.component_id)
-                .await
-                .map_service_error()?
-                .into(),
-            GolemClients::Cloud(clients) => clients
-                .component
-                .get_latest_component_metadata(&component.versioned_component_id.component_id)
-                .await
-                .map_service_error()?
-                .into(),
-        })
-    }
 }
 
 enum Mapping {
@@ -363,7 +356,8 @@ impl Command {
                     )
                 } else {
                     format!(
-                        "Uninstalling plugin installation {}",
+                        "{} plugin installation {}",
+                        "Uninstalling".log_color_warn(),
                         id.to_string().log_color_highlight()
                     )
                 }

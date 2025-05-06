@@ -297,7 +297,7 @@ pub trait LogColorize {
     }
 
     fn log_color_warn(&self) -> ColoredString {
-        self.as_str().yellow()
+        self.as_str().yellow().bold()
     }
 
     fn log_color_error(&self) -> ColoredString {

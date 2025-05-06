@@ -33,6 +33,7 @@ use test_r::test;
 use tracing::info;
 
 mod cmd {
+    pub static ADD_DEPENDENCY: &str = "add-dependency";
     pub static APP: &str = "app";
     pub static BUILD: &str = "build";
     pub static COMPLETION: &str = "completion";
@@ -182,10 +183,10 @@ fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli([cmd::APP, cmd::NEW, "dummy-app-name"]);
     assert!(!outputs.success());
-    check!(outputs.stderr_contains("Available languages:"));
+    check!(outputs.stdout_contains("Available languages:"));
 
     let languages_without_templates = GuestLanguage::iter()
-        .filter(|language| !outputs.stderr_contains(format!("- {}", language)))
+        .filter(|language| !outputs.stdout_contains(format!("- {}", language)))
         .collect::<Vec<_>>();
 
     assert!(
@@ -314,6 +315,7 @@ fn basic_ifs_deploy(_tracing: &Tracing) {
 
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]);
     assert!(outputs.success());
+    check!(outputs.stdout_contains("Creating component app:rust"));
     check!(outputs.stdout_contains("ro /Cargo.toml"));
     check!(outputs.stdout_contains("rw /src/lib.rs"));
 
@@ -343,10 +345,15 @@ fn basic_ifs_deploy(_tracing: &Tracing) {
 
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]);
     assert!(outputs.success());
+    check!(outputs.stdout_contains("Updating component app:rust"));
     check!(!outputs.stdout_contains("ro /Cargo.toml"));
     check!(outputs.stdout_contains("ro /Cargo2.toml"));
     check!(!outputs.stdout_contains("rw /src/lib.rs"));
     check!(outputs.stdout_contains("ro /src/lib.rs"));
+
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]);
+    assert!(outputs.success());
+    assert!(outputs.stdout_contains("Skipping deploying component app:rust"));
 }
 
 #[test]
@@ -507,6 +514,244 @@ fn wasm_library_dependency_type() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn adding_and_changing_rpc_deps_retriggers_build() {
+    let mut ctx = TestContext::new();
+    let app_name = "test-app-name";
+
+    // Setup app
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]);
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust-a"]);
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust-b"]);
+    assert!(outputs.success());
+
+    // Build app
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    assert!(outputs.success());
+
+    // Add wasm-rpc dependencies
+    let outputs = ctx.cli([
+        cmd::COMPONENT,
+        cmd::ADD_DEPENDENCY,
+        "--component-name",
+        "app:rust-a",
+        "--target-component-name",
+        "app:rust-b",
+        "--dependency-type",
+        "wasm-rpc",
+    ]);
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([
+        cmd::COMPONENT,
+        cmd::ADD_DEPENDENCY,
+        "--component-name",
+        "app:rust-b",
+        "--target-component-name",
+        "app:rust-a",
+        "--dependency-type",
+        "wasm-rpc",
+    ]);
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([
+        cmd::COMPONENT,
+        cmd::ADD_DEPENDENCY,
+        "--component-name",
+        "app:rust-a",
+        "--target-component-name",
+        "app:rust-a",
+        "--dependency-type",
+        "wasm-rpc",
+    ]);
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([cmd::APP]);
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains_ordered([
+        "Application components:",
+        "  app:rust-a",
+        "    Dependencies:",
+        "      - app:rust-a (wasm-rpc)",
+        "      - app:rust-b (wasm-rpc)",
+        "  app:rust-b",
+        "    Dependencies:",
+        "      - app:rust-a (wasm-rpc)",
+    ]));
+
+    // Build with dynamic deps
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    assert!(outputs.success());
+    assert!(outputs.stdout_contains_ordered([
+        "Linking dependencies",
+        "  Found dynamic WASM RPC dependencies (app:rust-a, app:rust-b) for app:rust-a",
+        "  Copying app:rust-a without linking, no static dependencies were found",
+        "  Found dynamic WASM RPC dependencies (app:rust-a) for app:rust-b",
+        "  Copying app:rust-b without linking, no static dependencies were found",
+    ]));
+
+    // Build again with dynamic deps, now it should skip
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    assert!(outputs.success());
+    assert!(outputs.stdout_contains_ordered([
+        "Linking dependencies",
+        "  Found dynamic WASM RPC dependencies (app:rust-a, app:rust-b) for app:rust-a",
+        "  Skipping linking dependencies for app:rust-a, UP-TO-DATE",
+        "  Found dynamic WASM RPC dependencies (app:rust-a) for app:rust-b",
+        "  Skipping linking dependencies for app:rust-b, UP-TO-DATE",
+    ]));
+
+    // Update deps to static
+    let outputs = ctx.cli([
+        cmd::COMPONENT,
+        cmd::ADD_DEPENDENCY,
+        "--component-name",
+        "app:rust-a",
+        "--target-component-name",
+        "app:rust-b",
+        "--dependency-type",
+        "static-wasm-rpc",
+    ]);
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([
+        cmd::COMPONENT,
+        cmd::ADD_DEPENDENCY,
+        "--component-name",
+        "app:rust-b",
+        "--target-component-name",
+        "app:rust-a",
+        "--dependency-type",
+        "static-wasm-rpc",
+    ]);
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([
+        cmd::COMPONENT,
+        cmd::ADD_DEPENDENCY,
+        "--component-name",
+        "app:rust-a",
+        "--target-component-name",
+        "app:rust-a",
+        "--dependency-type",
+        "static-wasm-rpc",
+    ]);
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([cmd::APP]);
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains_ordered([
+        "Application components:",
+        "  app:rust-a",
+        "    Dependencies:",
+        "      - app:rust-a (static-wasm-rpc)",
+        "      - app:rust-b (static-wasm-rpc)",
+        "  app:rust-b",
+        "    Dependencies:",
+        "      - app:rust-a (static-wasm-rpc)",
+    ]));
+
+    // Build with static deps
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    assert!(outputs.success());
+    assert!(outputs.stdout_contains_ordered([
+        "Linking dependencies",
+        "  Found static WASM RPC dependencies (app:rust-a, app:rust-b) for app:rust-a",
+        "  Linking static dependencies (app:rust-a, app:rust-b) into app:rust-a",
+        "  Found static WASM RPC dependencies (app:rust-a) for app:rust-b",
+        "  Linking static dependencies (app:rust-a) into app:rust-b",
+    ]));
+
+    // Build with static deps again, should skip
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    assert!(outputs.success());
+    assert!(outputs.stdout_contains_ordered([
+        "Linking dependencies",
+        "  Found static WASM RPC dependencies (app:rust-a, app:rust-b) for app:rust-a",
+        "  Skipping linking dependencies for app:rust-a, UP-TO-DATE",
+        "  Found static WASM RPC dependencies (app:rust-a) for app:rust-b",
+        "  Skipping linking dependencies for app:rust-b, UP-TO-DATE",
+    ]));
+
+    // Switching back to dynamic deps
+    let outputs = ctx.cli([
+        cmd::COMPONENT,
+        cmd::ADD_DEPENDENCY,
+        "--component-name",
+        "app:rust-a",
+        "--target-component-name",
+        "app:rust-b",
+        "--dependency-type",
+        "wasm-rpc",
+    ]);
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([
+        cmd::COMPONENT,
+        cmd::ADD_DEPENDENCY,
+        "--component-name",
+        "app:rust-b",
+        "--target-component-name",
+        "app:rust-a",
+        "--dependency-type",
+        "wasm-rpc",
+    ]);
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([
+        cmd::COMPONENT,
+        cmd::ADD_DEPENDENCY,
+        "--component-name",
+        "app:rust-a",
+        "--target-component-name",
+        "app:rust-a",
+        "--dependency-type",
+        "wasm-rpc",
+    ]);
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([cmd::APP]);
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains_ordered([
+        "Application components:",
+        "  app:rust-a",
+        "    Dependencies:",
+        "      - app:rust-a (wasm-rpc)",
+        "      - app:rust-b (wasm-rpc)",
+        "  app:rust-b",
+        "    Dependencies:",
+        "      - app:rust-a (wasm-rpc)",
+    ]));
+
+    // Build with dynamic deps, should not skip
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    assert!(outputs.success());
+    assert!(outputs.stdout_contains_ordered([
+        "Linking dependencies",
+        "  Found dynamic WASM RPC dependencies (app:rust-a, app:rust-b) for app:rust-a",
+        "  Copying app:rust-a without linking, no static dependencies were found",
+        "  Found dynamic WASM RPC dependencies (app:rust-a) for app:rust-b",
+        "  Copying app:rust-b without linking, no static dependencies were found",
+    ]));
+
+    // Build again with dynamic deps, now it should skip again
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    assert!(outputs.success());
+    assert!(outputs.stdout_contains_ordered([
+        "Linking dependencies",
+        "  Found dynamic WASM RPC dependencies (app:rust-a, app:rust-b) for app:rust-a",
+        "  Skipping linking dependencies for app:rust-a, UP-TO-DATE",
+        "  Found dynamic WASM RPC dependencies (app:rust-a) for app:rust-b",
+        "  Skipping linking dependencies for app:rust-b, UP-TO-DATE",
+    ]));
+}
+
 pub struct Output {
     pub status: ExitStatus,
     pub stdout: Vec<String>,
@@ -514,10 +759,12 @@ pub struct Output {
 }
 
 impl Output {
+    #[must_use]
     fn success(&self) -> bool {
         self.status.success()
     }
 
+    #[must_use]
     fn stdout_contains<S: AsRef<str>>(&self, text: S) -> bool {
         self.stdout
             .iter()
@@ -535,6 +782,7 @@ impl Output {
             })
     }
 
+    #[must_use]
     fn stderr_contains<S: AsRef<str>>(&self, text: S) -> bool {
         self.stderr
             .iter()
@@ -542,6 +790,32 @@ impl Output {
             .any(|line| line.contains(text.as_ref()))
     }
 
+    #[must_use]
+    fn stdout_contains_ordered<S: AsRef<str>, I: IntoIterator<Item = S>>(
+        &self,
+        patterns: I,
+    ) -> bool {
+        contains_ordered(&self.stdout, patterns)
+    }
+
+    #[must_use]
+    fn stderr_contains_ordered<S: AsRef<str>, I: IntoIterator<Item = S>>(
+        &self,
+        patterns: I,
+    ) -> bool {
+        contains_ordered(&self.stderr, patterns)
+    }
+
+    #[allow(dead_code)]
+    #[must_use]
+    fn stdout_count_lines_containing<S: AsRef<str>>(&self, text: S) -> usize {
+        self.stdout
+            .iter()
+            .filter(|line| line.contains(text.as_ref()))
+            .count()
+    }
+
+    #[must_use]
     fn stderr_count_lines_containing<S: AsRef<str>>(&self, text: S) -> usize {
         self.stderr
             .iter()
@@ -609,6 +883,7 @@ impl TestContext {
         ctx
     }
 
+    #[must_use]
     fn cli<I, S>(&self, args: I) -> Output
     where
         I: IntoIterator<Item = S>,
@@ -682,7 +957,6 @@ impl TestContext {
                 .args([
                     "server",
                     "run",
-                    "-vvv",
                     "--config-dir",
                     self.config_dir.path().to_str().unwrap(),
                     "--data-dir",
@@ -725,4 +999,39 @@ fn check_component_metadata(
         metadata.version.as_ref().map(|v| v.to_string()),
         expected_version
     );
+}
+
+#[must_use]
+fn contains_ordered<S: AsRef<str>, I: IntoIterator<Item = S>>(
+    lines: &[String],
+    patterns: I,
+) -> bool {
+    let mut patterns = patterns.into_iter();
+    let mut pattern = patterns.next();
+    let mut pattern_str = pattern.as_ref().map(|s| s.as_ref());
+    for line in lines {
+        match pattern_str {
+            Some(p) => {
+                if line.contains(p) {
+                    pattern = patterns.next();
+                    pattern_str = pattern.as_ref().map(|s| s.as_ref());
+                }
+            }
+            None => {
+                break;
+            }
+        }
+    }
+    let remaining_patterns = pattern_str
+        .into_iter()
+        .map(|s| s.to_string())
+        .chain(patterns.map(|s| s.as_ref().to_string()))
+        .collect::<Vec<_>>();
+    if !remaining_patterns.is_empty() {
+        println!("{}", "Missing patterns:".red().underline());
+        for pattern in &remaining_patterns {
+            println!("{}", pattern);
+        }
+    }
+    remaining_patterns.is_empty()
 }

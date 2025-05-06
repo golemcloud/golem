@@ -26,7 +26,7 @@ pub struct CloudAuthenticationConfig {
     pub secret: AuthSecret,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct AuthSecret(pub Uuid);
 
 impl Debug for AuthSecret {

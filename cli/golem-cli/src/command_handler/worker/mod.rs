@@ -27,9 +27,7 @@ use crate::error::NonSuccessfulExit;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, log_error_action, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::ApplicationComponentSelectMode;
-use crate::model::component::{
-    function_params_types, show_exported_functions, AppComponentType, Component,
-};
+use crate::model::component::{function_params_types, show_exported_functions, Component};
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::{
@@ -48,17 +46,15 @@ use crate::model::{
 };
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use golem_client::api::{ComponentClient as ComponentClientOss, WorkerClient as WorkerClientOss};
+use golem_client::api::WorkerClient as WorkerClientOss;
 use golem_client::model::{
-    InvokeParameters as InvokeParametersOss, InvokeResult, PublicOplogEntry,
+    ComponentType, InvokeParameters as InvokeParametersOss, InvokeResult, PublicOplogEntry,
     RevertLastInvocations as RevertLastInvocationsOss, RevertToOplogIndex as RevertToOplogIndexOss,
     RevertWorkerTarget as RevertWorkerTargetOss, ScanCursor,
     UpdateWorkerRequest as UpdateWorkerRequestOss,
     WorkerCreationRequest as WorkerCreationRequestOss,
 };
-use golem_cloud_client::api::{
-    ComponentClient as ComponentClientCloud, WorkerClient as WorkerClientCloud,
-};
+use golem_cloud_client::api::WorkerClient as WorkerClientCloud;
 use golem_cloud_client::model::{
     InvokeParameters as InvokeParametersCloud, RevertLastInvocations as RevertLastInvocationsCloud,
     RevertToOplogIndex as RevertToOplogIndexCloud, RevertWorkerTarget as RevertWorkerTargetCloud,
@@ -66,8 +62,10 @@ use golem_cloud_client::model::{
     WorkerCreationRequest as WorkerCreationRequestCloud,
 };
 use golem_common::model::public_oplog::OplogCursor;
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use golem_wasm_rpc::parse_type_annotated_value;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use itertools::{EitherOrBoth, Itertools};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -84,7 +82,7 @@ impl WorkerCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&mut self, subcommand: WorkerSubcommand) -> anyhow::Result<()> {
+    pub async fn handle_command(&self, subcommand: WorkerSubcommand) -> anyhow::Result<()> {
         match subcommand {
             WorkerSubcommand::New {
                 worker_name,
@@ -174,7 +172,7 @@ impl WorkerCommandHandler {
     }
 
     async fn cmd_new(
-        &mut self,
+        &self,
         worker_name: WorkerNameArg,
         arguments: Vec<NewWorkerArgument>,
         env: Vec<(String, String)>,
@@ -194,7 +192,7 @@ impl WorkerCommandHandler {
             )
             .await?;
 
-        if component.component_type == AppComponentType::Ephemeral
+        if component.component_type == ComponentType::Ephemeral
             && worker_name_match.worker_name.is_some()
         {
             log_error("Cannot use explicit name for ephemeral worker!");
@@ -235,7 +233,7 @@ impl WorkerCommandHandler {
     }
 
     async fn cmd_invoke(
-        &mut self,
+        &self,
         worker_name: WorkerNameArg,
         function_name: &WorkerFunctionName,
         arguments: Vec<WorkerFunctionArgument>,
@@ -394,7 +392,7 @@ impl WorkerCommandHandler {
     }
 
     async fn cmd_stream(
-        &mut self,
+        &self,
         worker_name: WorkerNameArg,
         stream_args: StreamArgs,
     ) -> anyhow::Result<()> {
@@ -426,7 +424,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn cmd_simulate_crash(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+    async fn cmd_simulate_crash(&self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
         let (component, worker_name) = self
@@ -456,7 +454,7 @@ impl WorkerCommandHandler {
     }
 
     async fn cmd_oplog(
-        &mut self,
+        &self,
         worker_name: WorkerNameArg,
         from: Option<u64>,
         query: Option<String>,
@@ -530,7 +528,7 @@ impl WorkerCommandHandler {
     }
 
     async fn cmd_revert(
-        &mut self,
+        &self,
         worker_name: WorkerNameArg,
         last_oplog_index: Option<u64>,
         number_of_invocations: Option<u64>,
@@ -619,7 +617,7 @@ impl WorkerCommandHandler {
     }
 
     async fn cmd_cancel_invocation(
-        &mut self,
+        &self,
         worker_name: WorkerNameArg,
         idempotency_key: IdempotencyKey,
     ) -> anyhow::Result<()> {
@@ -682,7 +680,7 @@ impl WorkerCommandHandler {
         let selected_components = self
             .ctx
             .component_handler()
-            .must_select_components_by_app_or_name(component_name.as_ref())
+            .must_select_components_by_app_dir_or_name(component_name.as_ref())
             .await?;
 
         if scan_cursor.is_some() && selected_components.component_names.len() != 1 {
@@ -748,7 +746,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn cmd_interrupt(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+    async fn cmd_interrupt(&self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
         let (component, worker_name) = self
@@ -771,7 +769,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn cmd_resume(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+    async fn cmd_resume(&self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
         let (component, worker_name) = self
@@ -794,7 +792,7 @@ impl WorkerCommandHandler {
     }
 
     async fn cmd_update(
-        &mut self,
+        &self,
         worker_name: WorkerNameArg,
         mode: WorkerUpdateMode,
         target_version: Option<u64>,
@@ -808,25 +806,16 @@ impl WorkerCommandHandler {
         let target_version = match target_version {
             Some(target_version) => target_version,
             None => {
-                let latest_version = match self.ctx.golem_clients().await? {
-                    GolemClients::Oss(clients) => {
-                        let latest_component = clients
-                            .component
-                            .get_latest_component_metadata(
-                                &component.versioned_component_id.component_id,
-                            )
-                            .await?;
-                        latest_component.versioned_component_id.version
-                    }
-                    GolemClients::Cloud(clients) => {
-                        let latest_component = clients
-                            .component
-                            .get_latest_component_metadata(
-                                &component.versioned_component_id.component_id,
-                            )
-                            .await?;
-                        latest_component.versioned_component_id.version
-                    }
+                let Some(latest_version) = self
+                    .ctx
+                    .component_handler()
+                    .latest_component_version_by_id(component.versioned_component_id.component_id)
+                    .await?
+                else {
+                    bail!(
+                        "Component {} not found, while getting latest component version",
+                        component.component_name
+                    );
                 };
 
                 if !self.ctx.interactive_handler().confirm_update_to_latest(
@@ -853,7 +842,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn cmd_get(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+    async fn cmd_get(&self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
         let (component, worker_name) = self
@@ -894,7 +883,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn cmd_delete(&mut self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+    async fn cmd_delete(&self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
         let (component, worker_name) = self
@@ -958,7 +947,7 @@ impl WorkerCommandHandler {
     }
 
     pub async fn invoke_worker(
-        &mut self,
+        &self,
         component: &Component,
         worker_name: Option<&WorkerName>,
         function_name: &str,
@@ -1504,7 +1493,7 @@ impl WorkerCommandHandler {
     }
 
     async fn component_by_worker_name_match(
-        &mut self,
+        &self,
         worker_name_match: &WorkerNameMatch,
     ) -> anyhow::Result<(Component, WorkerName)> {
         let Some(worker_name) = &worker_name_match.worker_name else {
@@ -1541,7 +1530,7 @@ impl WorkerCommandHandler {
     }
 
     async fn resume_worker(
-        &mut self,
+        &self,
         component: &Component,
         worker_name: &WorkerName,
     ) -> anyhow::Result<()> {
@@ -1571,7 +1560,7 @@ impl WorkerCommandHandler {
     }
 
     async fn interrupt_worker(
-        &mut self,
+        &self,
         component: &Component,
         worker_name: &WorkerName,
         recover_immediately: bool,
@@ -1604,7 +1593,7 @@ impl WorkerCommandHandler {
     }
 
     pub async fn match_worker_name(
-        &mut self,
+        &self,
         worker_name: WorkerName,
     ) -> anyhow::Result<WorkerNameMatch> {
         fn to_opt_worker_name(worker_name: String) -> Option<WorkerName> {
@@ -1881,7 +1870,7 @@ fn wave_args_to_invoke_args(
     let type_annotated_values = wave_args
         .iter()
         .zip(types.iter())
-        .map(|(wave, typ)| parse_type_annotated_value(typ, wave))
+        .map(|(wave, typ)| lenient_parse_type_annotated_value(typ, wave))
         .collect::<Vec<_>>();
 
     if type_annotated_values
@@ -1918,6 +1907,20 @@ fn wave_args_to_invoke_args(
         .map(|tav| tav.try_into())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| anyhow!("Failed to convert type annotated value: {err}"))
+}
+
+pub fn lenient_parse_type_annotated_value(
+    analysed_type: &AnalysedType,
+    input: &str,
+) -> Result<TypeAnnotatedValue, String> {
+    let patched_input = match analysed_type {
+        AnalysedType::Chr(_) => (!input.starts_with('\'')).then(|| format!("'{}'", input)),
+        AnalysedType::Str(_) => (!input.starts_with('"')).then(|| format!("\"{}\"", input)),
+        _ => None,
+    };
+
+    let input = patched_input.as_deref().unwrap_or(input);
+    parse_type_annotated_value(analysed_type, input)
 }
 
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {

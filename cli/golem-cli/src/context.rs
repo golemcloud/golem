@@ -26,10 +26,12 @@ use crate::model::app::{ApplicationConfig, BuildProfileName as AppBuildProfileNa
 use crate::model::{Format, HasFormatConfig};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::anyhow;
+use futures_util::future::BoxFuture;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionClientOss;
 use golem_client::api::ApiDeploymentClientLive as ApiDeploymentClientOss;
 use golem_client::api::ApiSecurityClientLive as ApiSecurityClientOss;
 use golem_client::api::ComponentClientLive as ComponentClientOss;
+use golem_client::api::HealthCheckClientLive as HealthCheckClientOss;
 use golem_client::api::PluginClientLive as PluginClientOss;
 use golem_client::api::WorkerClientLive as WorkerClientOss;
 use golem_client::Context as ContextOss;
@@ -75,6 +77,8 @@ pub struct Context {
     auth_token_override: Option<Uuid>,
     client_config: ClientConfig,
     yes: bool,
+    #[allow(unused)]
+    start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
 
     // Lazy initialized
     clients: tokio::sync::OnceCell<Clients>,
@@ -88,7 +92,11 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new(global_flags: &GolemCliGlobalFlags, profile: NamedProfile) -> Self {
+    pub fn new(
+        global_flags: &GolemCliGlobalFlags,
+        profile: NamedProfile,
+        start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
+    ) -> Self {
         let format = global_flags
             .format
             .unwrap_or(profile.profile.format().unwrap_or(Format::Text));
@@ -123,6 +131,7 @@ impl Context {
             http_batch_size: global_flags.http_batch_size.unwrap_or(50),
             auth_token_override: global_flags.auth_token,
             yes: global_flags.yes,
+            start_local_server,
             client_config,
             clients: tokio::sync::OnceCell::new(),
             templates: std::sync::OnceLock::new(),
@@ -165,6 +174,10 @@ impl Context {
         self.profile_kind
     }
 
+    pub fn profile_name(&self) -> &ProfileName {
+        &self.profile_name
+    }
+
     pub fn build_profile(&self) -> Option<&AppBuildProfileName> {
         self.app_context_config.build_profile.as_ref()
     }
@@ -176,7 +189,7 @@ impl Context {
     pub async fn clients(&self) -> anyhow::Result<&Clients> {
         self.clients
             .get_or_try_init(|| async {
-                Clients::new(
+                let clients = Clients::new(
                     self.client_config.clone(),
                     self.auth_token_override,
                     &self.profile_name,
@@ -186,9 +199,42 @@ impl Context {
                     },
                     self.config_dir(),
                 )
-                .await
+                .await?;
+
+                self.start_local_server_if_needed(&clients).await?;
+
+                Ok(clients)
             })
             .await
+    }
+
+    #[cfg(feature = "server-commands")]
+    async fn start_local_server_if_needed(&self, clients: &Clients) -> anyhow::Result<()> {
+        if !self.profile_name.is_builtin_local() {
+            return Ok(());
+        };
+
+        let GolemClients::Oss(clients) = &clients.golem else {
+            return Ok(());
+        };
+
+        // NOTE: explicitly calling the trait method to avoid unused imports when compiling with
+        //       default features
+        if golem_client::api::HealthCheckClient::healthcheck(&clients.component_healthcheck)
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        (self.start_local_server)().await?;
+
+        Ok(())
+    }
+
+    #[cfg(not(feature = "server-commands"))]
+    async fn start_local_server_if_needed(&self, _clients: &Clients) -> anyhow::Result<()> {
+        Ok(())
     }
 
     pub async fn golem_clients(&self) -> anyhow::Result<&GolemClients> {
@@ -289,6 +335,12 @@ impl Context {
         .await;
     }
 
+    pub async fn task_result_marker_dir(&self) -> anyhow::Result<PathBuf> {
+        let app_ctx = self.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+        Ok(app_ctx.application.task_result_marker_dir())
+    }
+
     pub async fn set_rib_repl_dependencies(&self, dependencies: ReplDependencies) {
         let mut rib_repl_state = self.rib_repl_state.write().await;
         rib_repl_state.dependencies = dependencies;
@@ -309,7 +361,6 @@ impl Context {
     }
 }
 
-// TODO: add healthcheck clients
 pub struct Clients {
     pub golem: GolemClients,
     pub file_download: reqwest::Client,
@@ -323,6 +374,9 @@ impl Clients {
         auth_config: Option<&CloudAuthenticationConfig>,
         config_dir: &Path,
     ) -> anyhow::Result<Self> {
+        let healthcheck_http_client = new_reqwest_client(&config.health_check_http_client_config)?;
+        let local_healthcheck_http_client =
+            new_reqwest_client(&config.local_health_check_http_client_config)?;
         let service_http_client = new_reqwest_client(&config.service_http_client_config)?;
         let invoke_http_client = new_reqwest_client(&config.invoke_http_client_config)?;
         let file_download_http_client =
@@ -440,6 +494,17 @@ impl Clients {
                     base_url: config.component_url.clone(),
                 };
 
+                let component_healthcheck_context = || ContextOss {
+                    client: {
+                        if profile_name.is_builtin_local() {
+                            local_healthcheck_http_client.clone()
+                        } else {
+                            healthcheck_http_client.clone()
+                        }
+                    },
+                    base_url: config.component_url.clone(),
+                };
+
                 let worker_context = || ContextOss {
                     client: service_http_client.clone(),
                     base_url: config.worker_url.clone(),
@@ -463,6 +528,9 @@ impl Clients {
                         },
                         component: ComponentClientOss {
                             context: component_context(),
+                        },
+                        component_healthcheck: HealthCheckClientOss {
+                            context: component_healthcheck_context(),
                         },
                         plugin: PluginClientOss {
                             context: component_context(),
@@ -491,6 +559,7 @@ pub struct GolemClientsOss {
     pub api_deployment: ApiDeploymentClientOss,
     pub api_security: ApiSecurityClientOss,
     pub component: ComponentClientOss,
+    pub component_healthcheck: HealthCheckClientOss,
     pub plugin: PluginClientOss,
     pub worker: WorkerClientOss,
     pub worker_invoke: WorkerClientOss,

@@ -30,7 +30,7 @@ impl CloudCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&mut self, subcommand: CloudSubcommand) -> anyhow::Result<()> {
+    pub async fn handle_command(&self, subcommand: CloudSubcommand) -> anyhow::Result<()> {
         match subcommand {
             CloudSubcommand::Project { subcommand } => {
                 self.ctx

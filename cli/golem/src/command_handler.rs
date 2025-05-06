@@ -15,7 +15,7 @@
 use crate::launch::{launch_golem_services, LaunchArgs};
 use anyhow::anyhow;
 use clap_verbosity_flag::Verbosity;
-use golem_cli::command::server::ServerSubcommand;
+use golem_cli::command::server::{RunArgs, ServerSubcommand};
 use golem_cli::command_handler::CommandHandlerHooks;
 use golem_cli::context::Context;
 use std::path::{Path, PathBuf};
@@ -30,33 +30,51 @@ impl CommandHandlerHooks for ServerCommandHandler {
         subcommand: ServerSubcommand,
     ) -> anyhow::Result<()> {
         match subcommand {
-            ServerSubcommand::Run {
-                router_addr,
-                router_port,
-                custom_request_port,
-                data_dir,
-                clean,
-            } => {
-                let data_dir = match data_dir {
-                    Some(data_dir) => data_dir,
+            ServerSubcommand::Run { args } => {
+                let data_dir = match &args.data_dir {
+                    Some(data_dir) => data_dir.to_path_buf(),
                     None => default_data_dir()?,
                 };
-                if clean && tokio::fs::metadata(&data_dir).await.is_ok() {
+                if args.clean && tokio::fs::metadata(&data_dir).await.is_ok() {
                     clean_data_dir(&data_dir).await?;
                 };
 
-                launch_golem_services(&LaunchArgs {
-                    router_addr,
-                    router_port,
-                    custom_request_port,
+                let mut join_set = launch_golem_services(&LaunchArgs {
+                    router_addr: args.router_addr().to_string(),
+                    router_port: args.router_port(),
+                    custom_request_port: args.custom_request_port(),
                     data_dir,
                 })
                 .await?;
+
+                while let Some(res) = join_set.join_next().await {
+                    res??;
+                }
 
                 Ok(())
             }
             ServerSubcommand::Clean => clean_data_dir(&default_data_dir()?).await,
         }
+    }
+
+    async fn run_server() -> anyhow::Result<()> {
+        let args = RunArgs::default();
+
+        let mut join_set = launch_golem_services(&LaunchArgs {
+            router_addr: args.router_addr().to_string(),
+            router_port: args.router_port(),
+            custom_request_port: args.custom_request_port(),
+            data_dir: default_data_dir()?,
+        })
+        .await?;
+
+        tokio::spawn(async move {
+            while let Some(res) = join_set.join_next().await {
+                res.unwrap().unwrap();
+            }
+        });
+
+        Ok(())
     }
 
     fn override_verbosity(verbosity: Verbosity) -> Verbosity {

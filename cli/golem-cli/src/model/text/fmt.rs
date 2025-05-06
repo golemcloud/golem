@@ -14,29 +14,34 @@
 
 use crate::fuzzy::Match;
 use crate::log::{log_warn_action, logln, LogColorize, LogIndent};
+use crate::model::deploy_diff::DiffSerialize;
 use crate::model::{Format, WorkerNameMatch};
+use anyhow::Context;
 use cli_table::{Row, Title, WithTitle};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
 use golem_client::model::{InitialComponentFile, WorkerStatus};
 use itertools::Itertools;
 use regex::Regex;
+use similar::TextDiff;
 use std::collections::BTreeMap;
 
 pub trait TextView {
     fn log(&self);
 }
 
+pub enum MessageWithFieldsIndentMode {
+    None,
+    IdentFields,
+    NestedIdentAll,
+}
+
 pub trait MessageWithFields {
     fn message(&self) -> String;
     fn fields(&self) -> Vec<(String, String)>;
 
-    fn indent_fields() -> bool {
-        false
-    }
-
-    fn nest_ident_fields() -> bool {
-        false
+    fn indent_mode() -> MessageWithFieldsIndentMode {
+        MessageWithFieldsIndentMode::NestedIdentAll
     }
 
     fn format_field_name(name: String) -> String {
@@ -46,17 +51,25 @@ pub trait MessageWithFields {
 
 impl<T: MessageWithFields> TextView for T {
     fn log(&self) {
+        let _ident = match Self::indent_mode() {
+            MessageWithFieldsIndentMode::None => None,
+            MessageWithFieldsIndentMode::IdentFields => None,
+            MessageWithFieldsIndentMode::NestedIdentAll => {
+                Some(NestedTextViewIndent::new(Format::Text))
+            }
+        };
+
         logln(self.message());
-        if !Self::nest_ident_fields() {
-            logln("");
-        }
+        logln("");
 
         let fields = self.fields();
         let padding = fields.iter().map(|(name, _)| name.len()).max().unwrap_or(0) + 1;
 
-        let _indent = Self::indent_fields().then(LogIndent::new);
-        let _nest_indent =
-            Self::nest_ident_fields().then(|| NestedTextViewIndent::new(Format::Text));
+        let _indent = match Self::indent_mode() {
+            MessageWithFieldsIndentMode::None => None,
+            MessageWithFieldsIndentMode::IdentFields => Some(LogIndent::new()),
+            MessageWithFieldsIndentMode::NestedIdentAll => None,
+        };
 
         for (name, value) in self.fields() {
             let lines: Vec<_> = value.split("\n").collect();
@@ -347,25 +360,122 @@ pub fn log_fuzzy_match(m: &Match) {
     );
 }
 
+pub fn log_deploy_diff<T: DiffSerialize>(server: &T, manifest: &T) -> anyhow::Result<()> {
+    let server = server
+        .to_diffable_string()
+        .context("failed to serialize server entity")?;
+    let manifest = manifest
+        .to_diffable_string()
+        .context("failed to serialize manifest entity")?;
+
+    log_unified_diff(
+        &TextDiff::from_lines(&server, &manifest)
+            .unified_diff()
+            .context_radius(4)
+            .header("sever", "manifest")
+            .to_string(),
+    );
+
+    Ok(())
+}
+
+pub fn log_unified_diff(diff: &str) {
+    for line in diff.lines() {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            logln(line.green().bold().to_string());
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            logln(line.red().bold().to_string());
+        } else if line.starts_with("@@") {
+            logln(line.bold().to_string());
+        } else {
+            logln(line);
+        }
+    }
+}
+
+pub fn format_rib_source_for_error(source: &str, error: &str) -> String {
+    const CONTEXT_SIZE: usize = 3;
+    const LINE_COUNT_PADDING: usize = 4;
+
+    let parse_error_at_line_regex =
+        Regex::new("Parse error at line: (\\d+), column: (\\d+)").unwrap();
+
+    let source_info = match parse_error_at_line_regex.captures(error) {
+        Some(captures) => match (captures[1].parse::<usize>(), captures[2].parse::<usize>()) {
+            (Ok(line), Ok(column)) => Some((line, Some(column))),
+            _ => None,
+        },
+        None => None,
+    };
+
+    match source_info {
+        Some((err_line, err_column)) => {
+            let from = err_line.saturating_sub(CONTEXT_SIZE);
+            let to = err_line.saturating_add(CONTEXT_SIZE);
+
+            source
+                .lines()
+                .enumerate()
+                .filter_map(|(idx, line)| {
+                    let line_no = idx + 1;
+                    if from <= line_no && line_no <= to {
+                        Some(if line_no == err_line {
+                            let underline = format!(
+                                " {: >LINE_COUNT_PADDING$} | {}",
+                                "",
+                                match err_column {
+                                    Some(err_column) => {
+                                        let padding = err_column - 1;
+                                        format!("{: >padding$}^", "").red()
+                                    }
+                                    None => {
+                                        "^".repeat(line.len()).red().bold()
+                                    }
+                                }
+                            );
+                            format!(
+                                "{}{: >LINE_COUNT_PADDING$} | {}\n{}",
+                                ">".red().bold(),
+                                line_no,
+                                line.red().bold(),
+                                underline
+                            )
+                        } else {
+                            format!(" {: >LINE_COUNT_PADDING$} | {}", line_no, line)
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .join("\n")
+        }
+        None => source
+            .lines()
+            .enumerate()
+            .map(|(idx, line)| format!(" {: >LINE_COUNT_PADDING$} | {}", idx + 1, line))
+            .join("\n"),
+    }
+}
+
 pub struct NestedTextViewIndent {
-    format: Format,
+    decorated: bool,
     log_indent: Option<LogIndent>,
 }
 
 impl NestedTextViewIndent {
     pub fn new(format: Format) -> Self {
         match format {
-            Format::Json | Format::Yaml => Self {
-                format,
-                log_indent: Some(LogIndent::new()),
-            },
-            Format::Text => {
+            Format::Text if SHOULD_COLORIZE.should_colorize() => {
                 logln("╔═");
                 Self {
-                    format,
+                    decorated: true,
                     log_indent: Some(LogIndent::prefix("║ ")),
                 }
             }
+            _ => Self {
+                decorated: false,
+                log_indent: Some(LogIndent::new()),
+            },
         }
     }
 }
@@ -374,11 +484,8 @@ impl Drop for NestedTextViewIndent {
     fn drop(&mut self) {
         if let Some(ident) = self.log_indent.take() {
             drop(ident);
-            match self.format {
-                Format::Json | Format::Yaml => {
-                    // NOP
-                }
-                Format::Text => logln("╚═"),
+            if self.decorated {
+                logln("╚═");
             }
         }
     }

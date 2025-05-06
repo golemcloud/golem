@@ -42,19 +42,31 @@ impl Display for AppValidationError {
 impl std::error::Error for AppValidationError {}
 
 pub fn format_warns(warns: &[String]) -> String {
-    let label = "warning".yellow();
+    let label = "warning:".yellow().bold().to_string();
     warns
         .iter()
-        .map(|warn| format!("{}: {}", label, warn))
-        .join("\n")
+        .map(|msg| format_message_with_level(&label, msg))
+        .join("\n\n")
 }
 
 pub fn format_errors(errors: &[String]) -> String {
-    let label = "error".red();
+    let label = "error:".red().bold().to_string();
     errors
         .iter()
-        .map(|error| format!("{}: {}", label, error))
-        .join("\n")
+        .map(|msg| format_message_with_level(&label, msg))
+        .join("\n\n")
+}
+
+fn format_message_with_level(level: &str, message: &str) -> String {
+    if message.contains("\n") {
+        format!(
+            "{}\n{}",
+            level,
+            message.lines().map(|s| format!("  {}", s)).join("\n")
+        )
+    } else {
+        format!("{} {}", level, message)
+    }
 }
 
 pub enum CustomCommandError {

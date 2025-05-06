@@ -325,17 +325,10 @@ impl ApplicationContext {
             .common_wit_deps
             .get_or_init(|| {
                 let sources = self.application.wit_deps();
-                if sources.value.is_empty() {
+                if sources.is_empty() {
                     bail!("No common witDeps were defined in the application manifest")
                 }
-                WitDepsResolver::new(
-                    sources
-                        .value
-                        .iter()
-                        .cloned()
-                        .map(|path| sources.source.join(path))
-                        .collect(),
-                )
+                WitDepsResolver::new(sources)
             })
             .as_ref()
         {
@@ -528,7 +521,7 @@ impl ApplicationContext {
 
         let should_colorize = SHOULD_COLORIZE.should_colorize();
 
-        if config.components {
+        if config.components() {
             if self.application.has_any_component() {
                 logln(format!(
                     "{}",
@@ -604,11 +597,56 @@ impl ApplicationContext {
                 }
                 logln("\n")
             } else {
-                logln("No components found\n");
+                logln("No components found in the application.\n");
             }
         }
 
-        if config.custom_commands {
+        if config.api_definitions() {
+            if !self.application.http_api_definitions().is_empty() {
+                logln(format!(
+                    "{}",
+                    "Application API definitions:".log_color_help_group()
+                ));
+                for (name, def) in self.application.http_api_definitions() {
+                    logln(format!(
+                        "  {}@{}",
+                        name.as_str().log_color_highlight(),
+                        def.value.version.log_color_highlight(),
+                    ));
+                }
+                logln("");
+            } else {
+                logln("No API definitions found in the application.\n");
+            }
+        }
+
+        if config.api_deployments() {
+            if !self.application.http_api_deployments().is_empty() {
+                logln(format!(
+                    "{}",
+                    "Application API deployments:".log_color_help_group()
+                ));
+                for dep in self.application.http_api_deployments().values() {
+                    logln(format!(
+                        "  {}{}",
+                        match &dep.value.subdomain {
+                            Some(subdomain) => {
+                                format!("{}.", subdomain.log_color_highlight())
+                            }
+                            None => {
+                                "".to_string()
+                            }
+                        },
+                        dep.value.host.log_color_highlight(),
+                    ));
+                }
+                logln("");
+            } else {
+                logln("No API deployments found in the application.\n");
+            }
+        }
+
+        if config.custom_commands() {
             for (profile, commands) in self.application.all_custom_commands_for_all_profiles() {
                 if commands.is_empty() {
                     continue;
@@ -631,7 +669,7 @@ impl ApplicationContext {
                         "  {}",
                         format!(
                             "{}{}",
-                            if config.builtin_commands.contains(&command)
+                            if config.builtin_commands().contains(&command)
                                 || command.starts_with(':')
                             {
                                 ":"

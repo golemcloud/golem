@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::AccountId;
+use crate::cloud::{AccountId, ProjectId};
 use crate::command::cloud::project::{ProjectActionsOrPolicyId, ProjectSubcommand};
 use crate::command_handler::Handlers;
 use crate::config::ProfileKind;
@@ -23,7 +23,6 @@ use crate::error::NonSuccessfulExit;
 use crate::log::{logln, LogColorize};
 use crate::model::project::ProjectView;
 use crate::model::text::fmt::{log_error, log_text_view};
-use crate::model::text::help::ComponentNameHelp;
 use crate::model::text::project::{
     ProjectCreatedView, ProjectGetView, ProjectGrantView, ProjectListView,
 };
@@ -45,7 +44,7 @@ impl CloudProjectCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&mut self, subcommand: ProjectSubcommand) -> anyhow::Result<()> {
+    pub async fn handle_command(&self, subcommand: ProjectSubcommand) -> anyhow::Result<()> {
         match subcommand {
             ProjectSubcommand::New {
                 project_name,
@@ -81,7 +80,7 @@ impl CloudProjectCommandHandler {
     }
 
     async fn cmd_new(
-        &mut self,
+        &self,
         project_name: ProjectName,
         description: Option<String>,
     ) -> anyhow::Result<()> {
@@ -101,7 +100,7 @@ impl CloudProjectCommandHandler {
         Ok(())
     }
 
-    async fn cmd_list(&mut self, project_name: Option<ProjectName>) -> anyhow::Result<()> {
+    async fn cmd_list(&self, project_name: Option<ProjectName>) -> anyhow::Result<()> {
         let projects = self
             .ctx
             .golem_clients_cloud()
@@ -116,7 +115,7 @@ impl CloudProjectCommandHandler {
         Ok(())
     }
 
-    async fn cmd_get_default(&mut self) -> anyhow::Result<()> {
+    async fn cmd_get_default(&self) -> anyhow::Result<()> {
         let project = self
             .ctx
             .golem_clients_cloud()
@@ -193,8 +192,6 @@ impl CloudProjectCommandHandler {
             (ProfileKind::Oss, Some(_)) => {
                 log_error("Cannot use projects with OSS profile!");
                 logln("");
-                log_text_view(&ComponentNameHelp);
-                logln("");
                 bail!(HintError::ExpectedCloudProfile);
             }
             (ProfileKind::Oss, None) => Ok(None),
@@ -220,12 +217,13 @@ impl CloudProjectCommandHandler {
         }
     }
 
-    pub async fn selected_project_or_default(
+    pub async fn selected_project_id_or_default(
         &self,
-        project: Option<ProjectNameAndId>,
-    ) -> anyhow::Result<ProjectNameAndId> {
+        project: Option<&ProjectNameAndId>,
+    ) -> anyhow::Result<ProjectId> {
+        // TODO: cache default project
         match project {
-            Some(project_name) => Ok(project_name),
+            Some(project) => Ok(project.project_id),
             None => self
                 .ctx
                 .golem_clients_cloud()
@@ -234,10 +232,7 @@ impl CloudProjectCommandHandler {
                 .get_default_project()
                 .await
                 .map_service_error()
-                .map(|project| ProjectNameAndId {
-                    project_name: project.project_data.name.into(),
-                    project_id: project.project_id.into(),
-                }),
+                .map(|project| ProjectId(project.project_id)),
         }
     }
 
