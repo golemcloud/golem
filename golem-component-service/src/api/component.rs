@@ -117,7 +117,7 @@ impl ComponentApi {
                     .0
                     .dynamic_linking,
                 &DefaultComponentOwner,
-                payload.env.map(|x| x.0.env).unwrap_or_default(),
+                payload.env.map(|x| x.0.key_values).unwrap_or_default(),
             )
             .await?;
 
@@ -226,7 +226,7 @@ impl ComponentApi {
                     .0
                     .dynamic_linking,
                 &DefaultComponentOwner,
-                payload.env.map(|x| x.0.env).unwrap_or_default(),
+                payload.env.map(|x| x.0.key_values).unwrap_or_default(),
             )
             .await?;
 

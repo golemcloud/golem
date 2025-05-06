@@ -43,7 +43,7 @@ pub struct UpdatePayload {
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
 pub struct ComponentEnv {
-    pub env: HashMap<String, String>,
+    pub key_values: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Object)]

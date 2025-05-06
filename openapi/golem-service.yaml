@@ -7291,12 +7291,12 @@ components:
     ComponentEnv:
       type: object
       properties:
-        env:
+        keyValues:
           type: object
           additionalProperties:
             type: string
       required:
-      - env
+      - keyValues
     ComponentFilePathWithPermissions:
       type: object
       properties:

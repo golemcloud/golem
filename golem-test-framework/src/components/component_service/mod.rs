@@ -496,7 +496,9 @@ pub trait ComponentService: ComponentServiceInternal {
                         to_http_file_permissions(files).as_ref(),
                         archive_file,
                         to_http_dynamic_linking(Some(dynamic_linking)).as_ref(),
-                        Some(&golem_client::model::ComponentEnv { env: env.clone() }),
+                        Some(&golem_client::model::ComponentEnv {
+                            key_values: env.clone(),
+                        }),
                     )
                     .await
                 {
@@ -623,7 +625,9 @@ pub trait ComponentService: ComponentServiceInternal {
                     None => None,
                 };
 
-                let component_env = golem_client::model::ComponentEnv { env: env.clone() };
+                let component_env = golem_client::model::ComponentEnv {
+                    key_values: env.clone(),
+                };
 
                 match client
                     .update_component(
