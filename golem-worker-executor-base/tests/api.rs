@@ -893,6 +893,140 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
+async fn component_env_variables(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor
+        .component("environment-service")
+        .with_env(vec![("FOO".to_string(), "bar".to_string())])
+        .store()
+        .await;
+
+    let worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "component-env-variables-1".to_string(),
+    };
+
+    let env = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
+        .await
+        .unwrap();
+
+    check!(
+        env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+            Value::Tuple(vec![
+                Value::String("FOO".to_string()),
+                Value::String("bar".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_WORKER_NAME".to_string()),
+                Value::String("component-env-variables-1".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_ID".to_string()),
+                Value::String(format!("{}", component_id))
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_VERSION".to_string()),
+                Value::String("0".to_string())
+            ]),
+        ])))))]
+    );
+
+    drop(executor);
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120_000)]
+async fn component_env_variables_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor
+        .component("environment-service")
+        .with_env(vec![("FOO".to_string(), "bar".to_string())])
+        .store()
+        .await;
+
+    let worker_id = executor
+        .start_worker(&component_id, "component-env-variables-1")
+        .await;
+
+    let metadata = executor.get_worker_metadata(&worker_id).await;
+
+    let (WorkerMetadata { env, .. }, _) = metadata.expect("WorkerMetadata should be present");
+
+    assert_eq!(env, vec![("FOO".to_string(), "bar".to_string())]);
+
+    let updated_component = executor
+        .update_component_with_env(
+            &component_id,
+            "environment-service",
+            &[("BAR".to_string(), "baz".to_string())],
+        )
+        .await;
+
+    executor
+        .auto_update_worker(&worker_id, updated_component)
+        .await;
+
+    let env = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
+        .await
+        .unwrap();
+
+    let env = get_env_result(env);
+
+    check!(env.get("FOO") == Some(&"bar".to_string()));
+    check!(env.get("BAR") == Some(&"baz".to_string()));
+    check!(env.get("GOLEM_WORKER_NAME") == Some(&"component-env-variables-1".to_string()));
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120_000)]
+async fn component_env_and_worker_env_priority(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor
+        .component("environment-service")
+        .with_env(vec![("FOO".to_string(), "bar".to_string())])
+        .store()
+        .await;
+
+    let worker_env = HashMap::from_iter(vec![("FOO".to_string(), "baz".to_string())]);
+
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "component-env-variables-1",
+            vec![],
+            worker_env,
+        )
+        .await;
+
+    let metadata = executor.get_worker_metadata(&worker_id).await;
+
+    let (WorkerMetadata { env, .. }, _) = metadata.expect("WorkerMetadata should be present");
+
+    check!(env == vec![("FOO".to_string(), "baz".to_string())]);
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120_000)]
 async fn optional_parameters(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

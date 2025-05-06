@@ -17,7 +17,7 @@ pub mod invocation;
 mod invocation_loop;
 pub mod status;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -1272,6 +1272,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 component_version,
             )
             .await?;
+
+        let worker_env = merge_worker_env_with_component_env(worker_env, component_metadata.env);
+
         match this.worker_service().get(owned_worker_id).await {
             None => {
                 let initial_status =
@@ -1279,7 +1282,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let worker_metadata = WorkerMetadata {
                     worker_id: owned_worker_id.worker_id(),
                     args: worker_args.unwrap_or_default(),
-                    env: worker_env.unwrap_or_default(),
+                    env: worker_env,
                     account_id: owned_worker_id.account_id(),
                     created_at: Timestamp::now_utc(),
                     parent,
@@ -1328,6 +1331,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
     }
+}
+
+pub fn merge_worker_env_with_component_env(
+    worker_env: Option<Vec<(String, String)>>,
+    component_env: HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut seen_keys = HashSet::new();
+    let mut result = Vec::new();
+
+    if let Some(worker_env) = worker_env {
+        for (key, value) in worker_env {
+            seen_keys.insert(key.clone());
+            result.push((key, value));
+        }
+    }
+
+    for (key, value) in component_env {
+        // Prioritise per worker environment variables all the time
+        if !seen_keys.contains(&key) {
+            result.push((key, value));
+        }
+    }
+
+    result
 }
 
 enum WorkerInstance {
@@ -1552,6 +1579,11 @@ impl RunningWorker {
             )
             .await?;
 
+        let component_env = component_metadata.env.clone();
+
+        let worker_env =
+            merge_worker_env_with_component_env(Some(worker_metadata.env), component_env);
+
         let context = Ctx::create(
             OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
             component_metadata.clone(),
@@ -1576,7 +1608,7 @@ impl RunningWorker {
                 worker_metadata.worker_id.clone(),
                 worker_metadata.last_known_status.component_version,
                 worker_metadata.args.clone(),
-                worker_metadata.env.clone(),
+                worker_env,
                 worker_metadata.last_known_status.skipped_regions.clone(),
                 worker_metadata.last_known_status.total_linear_memory_size,
             ),

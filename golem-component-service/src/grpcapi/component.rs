@@ -212,6 +212,7 @@ impl ComponentGrpcApi {
                 vec![],
                 dynamic_linking,
                 &DefaultComponentOwner,
+                request.env,
             )
             .await?;
         Ok(result.into())
@@ -264,6 +265,7 @@ impl ComponentGrpcApi {
                 files,
                 dynamic_linking,
                 &DefaultComponentOwner,
+                request.env,
             )
             .await?;
         Ok(result.into())

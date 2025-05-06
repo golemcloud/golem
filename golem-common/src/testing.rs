@@ -35,4 +35,7 @@ pub struct LocalFileSystemComponentMetadata {
 
     #[serde(default)]
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
