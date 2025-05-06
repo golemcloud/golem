@@ -187,8 +187,8 @@ use bindings::golem::api::host::*;
 
 pub use golem_wasm_rpc as wasm_rpc;
 
-pub use bindings::golem::api::host::oplog_commit;
-pub use bindings::golem::api::host::PersistenceLevel;
+pub use bindings::golem::api::host::{fork, oplog_commit};
+pub use bindings::golem::api::host::{ForkResult, PersistenceLevel};
 
 pub use transaction::*;
 
