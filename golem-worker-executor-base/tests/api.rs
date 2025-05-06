@@ -960,14 +960,17 @@ async fn component_env_variables_update(
         .start_worker(&component_id, "component-env-variables-1")
         .await;
 
+    let metadata = executor.get_worker_metadata(&worker_id).await;
+
+    let (WorkerMetadata { env, .. }, _) = metadata.expect("WorkerMetadata should be present");
+
+    assert_eq!(env, vec![("FOO".to_string(), "bar".to_string())]);
+
     let updated_component = executor
         .update_component_with_env(
             &component_id,
             "environment-service",
-            &vec![
-                ("FOO".to_string(), "baz".to_string()),
-                ("BAR".to_string(), "qux".to_string()),
-            ],
+            &vec![("BAR".to_string(), "baz".to_string())],
         )
         .await;
 
@@ -982,8 +985,8 @@ async fn component_env_variables_update(
 
     let env = get_env_result(env);
 
-    check!(env.get("FOO") == Some(&"baz".to_string()));
-    check!(env.get("BAR") == Some(&"qux".to_string()));
+    check!(env.get("FOO") == Some(&"bar".to_string()));
+    check!(env.get("BAR") == Some(&"baz".to_string()));
     check!(env.get("GOLEM_WORKER_NAME") == Some(&"component-env-variables-1".to_string()));
 }
 

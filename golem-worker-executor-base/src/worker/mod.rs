@@ -1340,16 +1340,17 @@ pub fn merge_worker_env_with_component_env(
     let mut seen_keys = HashSet::new();
     let mut result = Vec::new();
 
-    for (key, value) in component_env {
-        seen_keys.insert(key.clone());
-        result.push((key, value));
-    }
-
     if let Some(worker_env) = worker_env {
         for (key, value) in worker_env {
-            if !seen_keys.contains(&key) {
-                result.push((key, value));
-            }
+            seen_keys.insert(key.clone());
+            result.push((key, value));
+        }
+    }
+
+    for (key, value) in component_env {
+        // Prioritise per worker environment variables all the time
+        if !seen_keys.contains(&key) {
+            result.push((key, value));
         }
     }
 
