@@ -993,6 +993,40 @@ async fn component_env_variables_update(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
+async fn component_env_and_worker_env_priority(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor
+        .component("environment-service")
+        .with_env(vec![("FOO".to_string(), "bar".to_string())])
+        .store()
+        .await;
+
+    let worker_env = HashMap::from_iter(vec![("FOO".to_string(), "baz".to_string())]);
+
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "component-env-variables-1",
+            vec![],
+            worker_env,
+        )
+        .await;
+
+    let metadata = executor.get_worker_metadata(&worker_id).await;
+
+    let (WorkerMetadata { env, .. }, _) = metadata.expect("WorkerMetadata should be present");
+
+    check!(env == vec![("FOO".to_string(), "baz".to_string())]);
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120_000)]
 async fn optional_parameters(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
