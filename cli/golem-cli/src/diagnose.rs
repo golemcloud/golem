@@ -71,6 +71,8 @@ impl SelectedLanguage {
     pub fn from_env(dir: &Path) -> Option<SelectedLanguage> {
         let ordered_language_project_hint_patterns: Vec<(&str, Language)> = vec![
             ("build.zig", Language::Zig),
+            ("*.scala", Language::ScalaJs),
+            ("build.sbt", Language::ScalaJs),
             ("Cargo.toml", Language::Rust),
             ("go.mod", Language::Go),
             ("package.json", Language::JsTs),
@@ -85,7 +87,6 @@ impl SelectedLanguage {
             ("*.py", Language::Python),
             ("*.rs", Language::Rust),
             ("*.zig", Language::Zig),
-            ("*.scala", Language::ScalaJs),
             ("*.mbt", Language::MoonBit),
         ];
 
@@ -170,57 +171,50 @@ impl SelectedLanguage {
 impl Language {
     pub fn tools(&self) -> Vec<Tool> {
         match self {
-            Language::CCcp => vec![Tool::WasiSdk, Tool::WitBindgen, Tool::WasmTools],
-            Language::Go => vec![
-                Tool::TinyGo,
+            Language::CCcp => vec![
+                Tool::WasiSdk,
                 Tool::WitBindgen,
                 Tool::WasmTools,
-                Tool::GolemSdkGo,
+                Tool::CMake,
             ],
+            Language::Go => vec![Tool::Go, Tool::TinyGo, Tool::WasmTools, Tool::GolemSdkGo],
             Language::JsTs => vec![
                 Tool::Npm,
                 Tool::Jco,
                 Tool::ComponentizeJs,
                 Tool::GolemSdkTypeScript,
             ],
-            Language::Python => vec![Tool::ComponentizePy],
+            Language::Python => vec![Tool::Uv, Tool::ComponentizePy],
             Language::Rust => vec![
                 Tool::RustTargetWasm32WasiP1,
                 Tool::CargoComponent,
                 Tool::GolemSdkRust,
             ],
             Language::Zig => vec![Tool::Zig, Tool::WitBindgen, Tool::WasmTools],
-            Language::ScalaJs => vec![
-                Tool::Npm,
-                Tool::Jco,
-                Tool::ComponentizeJs,
-                // TODO: sbt
-            ],
-            Language::MoonBit => vec![
-                // TODO: moon
-            ],
+            Language::ScalaJs => vec![Tool::Npm, Tool::Sbt, Tool::WitBindgenScalaJs],
+            Language::MoonBit => vec![Tool::WasmTools, Tool::WitBindgen, Tool::MoonBit],
         }
     }
 
     pub fn language_guide_setup_url(&self) -> Vec<&str> {
         match self {
-            Language::CCcp => vec!["https://learn.golem.cloud/docs/ccpp-language-guide/setup"],
-            Language::Go => vec!["https://learn.golem.cloud/docs/go-language-guide/setup"],
+            Language::CCcp => vec!["https://learn.golem.cloud/ccpp-language-guide/setup"],
+            Language::Go => vec!["https://learn.golem.cloud/go-language-guide/setup"],
             Language::JsTs => vec![
-                "https://learn.golem.cloud/docs/js-language-guide/setup",
-                "https://learn.golem.cloud/docs/ts-language-guide/setup",
+                "https://learn.golem.cloud/js-language-guide/setup",
+                "https://learn.golem.cloud/ts-language-guide/setup",
             ],
-            Language::Python => vec!["https://learn.golem.cloud/docs/python-language-guide/setup"],
-            Language::Rust => vec!["https://learn.golem.cloud/docs/rust-language-guide/setup"],
-            Language::Zig => vec![
-                "https://learn.golem.cloud/docs/experimental-languages/zig-language-guide/setup",
-            ],
+            Language::Python => vec!["https://learn.golem.cloud/python-language-guide/setup"],
+            Language::Rust => vec!["https://learn.golem.cloud/rust-language-guide/setup"],
+            Language::Zig => {
+                vec!["https://learn.golem.cloud/experimental-languages/zig-language-guide/setup"]
+            }
             Language::ScalaJs => vec![
-                "https://learn.golem.cloud/docs/experimental-languages/scalajs-language-guide/setup",
+                "https://learn.golem.cloud/experimental-languages/scalajs-language-guide/setup",
             ],
             Language::MoonBit => vec![
-                "https://learn.golem.cloud/docs/experimental-languages/moonbit-language-guide/setup",
-            ]
+                "https://learn.golem.cloud/experimental-languages/moonbit-language-guide/setup",
+            ],
         }
     }
 
@@ -311,6 +305,7 @@ struct ToolMetadata {
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
 enum Tool {
+    CMake,
     Cargo,
     CargoComponent,
     ComponentizeJs,
@@ -320,17 +315,20 @@ enum Tool {
     GolemSdkRust,
     GolemSdkTypeScript,
     Jco,
+    Jdk,
+    MoonBit,
     Node,
     Npm,
-    Pip,
-    Python,
+    RustTargetWasm32WasiP1,
     Rustc,
     Rustup,
-    RustTargetWasm32WasiP1,
+    Sbt,
     TinyGo,
+    Uv,
     WasiSdk,
     WasmTools,
     WitBindgen,
+    WitBindgenScalaJs,
     Zig,
 }
 
@@ -362,10 +360,10 @@ impl Tool {
                 short_name: "componentize-js",
                 description:
                     "Tool for converting JavaScript applications to WebAssembly components",
-                version_requirement: MinimumVersion("0.10.5-golem.3"),
+                version_requirement: MinimumVersion("0.18.0"),
                 instructions: indoc! {"
                     Add latest componentize-js as dependency:
-                        npm install --save-dev @golemcloud/componentize-js
+                        npm install --save-dev @bytecodealliance/componentize-js
 
                     For more information see:
                         JavaScript: https://learn.golem.cloud/docs/experimental-languages/js-language-guide/golem-js-sdk
@@ -378,7 +376,7 @@ impl Tool {
                 version_requirement: ExactVersion("0.16.0"),
                 instructions: indoc! {"
                     Install the following specific version:
-                        pip install componentize-py==0.16.0
+                        uv pip install componentize-py==0.16.0
 
                     For more information see:
                         https://github.com/bytecodealliance/componentize-py
@@ -387,7 +385,7 @@ impl Tool {
             Tool::Go => ToolMetadata {
                 short_name: "go",
                 description: "Go language tooling",
-                version_requirement: MinimumVersion("1.20.0"),
+                version_requirement: MinimumVersion("1.24.0"),
                 instructions: indoc! {"
                     Install the latest stable go tooling: https://go.dev/doc/install
                 "},
@@ -395,7 +393,7 @@ impl Tool {
             Tool::GolemSdkGo => ToolMetadata {
                 short_name: "golem-go",
                 description: "Golem SDK for Go",
-                version_requirement: MinimumVersion("1.1.0"),
+                version_requirement: MinimumVersion("1.3.1"),
                 instructions: indoc! {"
                     Add latest golem-go as dependency:
                         go get github.com/golemcloud/golem-go
@@ -407,7 +405,7 @@ impl Tool {
             Tool::GolemSdkRust => ToolMetadata {
                 short_name: "golem-rust",
                 description: "Golem SDK for Rust",
-                version_requirement: MinimumVersion("1.1.0"),
+                version_requirement: MinimumVersion("1.5.1"),
                 instructions: indoc! {"
                     Add latest golem-rust as dependency:
                         cargo add golem-rust
@@ -416,7 +414,7 @@ impl Tool {
             Tool::GolemSdkTypeScript => ToolMetadata {
                 short_name: "golem-ts",
                 description: "Golem SDK for JavaScript and TypeScript",
-                version_requirement: MinimumVersion("1.1.0"),
+                version_requirement: MinimumVersion("1.3.1"),
                 instructions: indoc! {"
                     Add latest golem-ts as dependency:
                         npm install --save-dev @golemcloud/golem-ts
@@ -429,10 +427,10 @@ impl Tool {
             Tool::Jco => ToolMetadata {
                 short_name: "jco",
                 description: "Toolchain for working with WebAssembly Components in JavaScript",
-                version_requirement: MinimumVersion("1.4.4-golem.1"),
+                version_requirement: MinimumVersion("1.10.2"),
                 instructions: indoc! {"
                     Add latest jco as dependency:
-                        npm install --save-dev @golemcloud/jco
+                        npm install --save-dev @bytecodealliance/jco
 
                     For more information see:
                         JavaScript: https://learn.golem.cloud/docs/experimental-languages/js-language-guide/golem-js-sdk
@@ -454,22 +452,6 @@ impl Tool {
                 version_requirement: MinimumVersion("10.8.2"),
                 instructions: indoc! {"
                     See node above (https://docs.npmjs.com/downloading-and-installing-node-js-and-npm)
-                "},
-            },
-            Tool::Pip => ToolMetadata {
-                short_name: "pip",
-                description: "Python package installer",
-                version_requirement: MinimumVersion("24.0"),
-                instructions: indoc! {"
-                    Install latest pip: https://pip.pypa.io/en/stable/installation/
-                "},
-            },
-            Tool::Python => ToolMetadata {
-                short_name: "python",
-                description: "Python interpreter",
-                version_requirement: MinimumVersion("3.10"),
-                instructions: indoc! {"
-                    Install python: https://www.python.org/
                 "},
             },
             Tool::Rustc => ToolMetadata {
@@ -508,7 +490,7 @@ impl Tool {
             Tool::TinyGo => ToolMetadata {
                 short_name: "tinygo",
                 description: "Go compiler for WebAssembly (and embedded systems)",
-                version_requirement: MinimumVersion("0.35"),
+                version_requirement: MinimumVersion("0.37"),
                 instructions: indoc! {"
                     Install latest TinyGo:
                         https://tinygo.org/getting-started/install/
@@ -532,7 +514,7 @@ impl Tool {
             Tool::WasmTools => ToolMetadata {
                 short_name: "wasm-tools",
                 description: "Tools for manipulation of WebAssembly modules",
-                version_requirement: ExactVersion("1.223.0"),
+                version_requirement: MinimumVersion("1.223.0"),
                 instructions: indoc! {"
                     Install the following specific version of wasm-tools:
                         cargo install --force --locked  wasm-tools@1.223.0
@@ -541,10 +523,10 @@ impl Tool {
             Tool::WitBindgen => ToolMetadata {
                 short_name: "wit-bindgen",
                 description: "Guest language bindings generator for WIT",
-                version_requirement: ExactVersion("0.37.0"),
+                version_requirement: ExactVersion("0.40.0"),
                 instructions: indoc! {"
                     Install the following specific version of wit-bindgen:
-                        cargo install --force --locked wit-bindgen-cli@0.37.0
+                        cargo install --force --locked wit-bindgen-cli@0.40.0
                 "},
             },
             Tool::Zig => ToolMetadata {
@@ -556,31 +538,98 @@ impl Tool {
                         https://ziglang.org/learn/getting-started/#installing-zig
                 "},
             },
+            Tool::CMake => ToolMetadata {
+                short_name: "cmake",
+                description: "CMake build system",
+                version_requirement: MinimumVersion("3.27.8"),
+                instructions: indoc! {"
+                    Install latest version of CMake:
+                        https://cmake.org/download/
+
+                    For macos use:
+                        brew install cmake
+                "},
+            },
+            Tool::Jdk => ToolMetadata {
+                short_name: "jdk",
+                description: "Java Development Kit",
+                version_requirement: MinimumVersion("17.0.0"),
+                instructions: indoc! {"
+                    Install the latest Java Development Kit:
+                        https://www.oracle.com/java/technologies/downloads/
+                "},
+            },
+            Tool::MoonBit => ToolMetadata {
+                short_name: "moonbit",
+                description: "MoonBit language",
+                version_requirement: MinimumVersion("0.1.20250310"),
+                instructions: indoc! {"
+                    Install latest version of MoonBit:
+                        https://www.moonbitlang.com/download/
+                "},
+            },
+            Tool::Sbt => ToolMetadata {
+                short_name: "sbt",
+                description: "Scala Build Tool",
+                version_requirement: MinimumVersion("1.10.7"),
+                instructions: indoc! {"
+                    Install latest version of SBT:
+                        https://www.scala-sbt.org/download/
+
+                    For macos use:
+                        brew install sbt
+                "},
+            },
+            Tool::Uv => ToolMetadata {
+                short_name: "uv",
+                description: "uv - a python package manager",
+                version_requirement: MinimumVersion("0.7.0"),
+                instructions: indoc! {"
+                    Install latest version of UV:
+                        https://github.com/astral-sh/uv
+
+                    For macos use:
+                        brew install uv
+                "},
+            },
+            Tool::WitBindgenScalaJs => ToolMetadata {
+                short_name: "wit-bindgen-scalajs",
+                description: "WIT binding generator for Scala.js",
+                version_requirement: ExactVersion("0.37.0"),
+                instructions: indoc! {"
+                        Install the latest version of wit-bindgen-scalajs:
+                            cargo install --git https://github.com/vigoo/wit-bindgen-scalajs wit-bindgen-cli --locked
+                    "},
+            },
         }
     }
 
     pub fn direct_dependencies(&self) -> Vec<Tool> {
         match self {
+            Tool::CMake => vec![],
             Tool::Cargo => vec![Tool::Rustup],
             Tool::CargoComponent => vec![Tool::Cargo],
             Tool::ComponentizeJs => vec![Tool::Npm],
-            Tool::ComponentizePy => vec![Tool::Pip],
+            Tool::ComponentizePy => vec![Tool::Uv],
             Tool::Go => vec![],
             Tool::GolemSdkGo => vec![Tool::Go],
             Tool::GolemSdkRust => vec![Tool::Cargo],
             Tool::GolemSdkTypeScript => vec![Tool::Npm],
             Tool::Jco => vec![Tool::Npm],
+            Tool::Jdk => vec![],
+            Tool::MoonBit => vec![],
             Tool::Node => vec![],
             Tool::Npm => vec![Tool::Node],
-            Tool::Pip => vec![Tool::Python],
-            Tool::Python => vec![],
+            Tool::RustTargetWasm32WasiP1 => vec![Tool::Rustc],
             Tool::Rustc => vec![Tool::Rustup],
             Tool::Rustup => vec![],
-            Tool::RustTargetWasm32WasiP1 => vec![Tool::Rustc],
+            Tool::Sbt => vec![Tool::Jdk],
             Tool::TinyGo => vec![Tool::Go],
+            Tool::Uv => vec![],
             Tool::WasiSdk => vec![],
             Tool::WasmTools => vec![Tool::Cargo],
             Tool::WitBindgen => vec![Tool::Cargo],
+            Tool::WitBindgenScalaJs => vec![Tool::Cargo],
             Tool::Zig => vec![],
         }
     }
@@ -618,19 +667,24 @@ impl Tool {
             Tool::CargoComponent => {
                 cmd_version(dir, "cargo-component", vec!["--version"], &version_regex)
             }
-            Tool::ComponentizeJs => npm_package_version(dir, "@golemcloud/componentize-js"),
-            Tool::ComponentizePy => {
-                cmd_version(dir, "componentize-py", vec!["--version"], &version_regex)
+            Tool::ComponentizeJs => {
+                npm_package_version(&find_node_modules(dir), "@bytecodealliance/componentize-js")
             }
+            Tool::ComponentizePy => cmd_version(
+                dir,
+                "uv",
+                vec!["run", "componentize-py", "--version"],
+                &version_regex,
+            ),
             Tool::Go => cmd_version(dir, "go", vec!["version"], &version_regex),
             Tool::GolemSdkGo => go_mod_version(dir, "github.com/golemcloud/golem-go"),
             Tool::GolemSdkRust => rust_package_version(dir, "golem-rust"),
-            Tool::GolemSdkTypeScript => npm_package_version(dir, "@golemcloud/golem-ts"),
-            Tool::Jco => npm_package_version(dir, "@golemcloud/jco"),
+            Tool::GolemSdkTypeScript => {
+                npm_package_version(&find_node_modules(dir), "@golemcloud/golem-ts")
+            }
+            Tool::Jco => npm_package_version(&find_node_modules(dir), "@bytecodealliance/jco"),
             Tool::Node => cmd_version(dir, "node", vec!["--version"], &version_regex),
             Tool::Npm => cmd_version(dir, "npm", vec!["--version"], &version_regex),
-            Tool::Pip => cmd_version(dir, "pip", vec!["--version"], &version_regex),
-            Tool::Python => cmd_version(dir, "python", vec!["--version"], &version_regex),
             Tool::Rustc => cmd_version(dir, "rustc", vec!["--version"], &version_regex),
             Tool::Rustup => cmd_version(dir, "rustup", vec!["--version"], &version_regex),
             Tool::RustTargetWasm32WasiP1 => rust_target(dir, "wasm32-wasip1"),
@@ -660,6 +714,17 @@ impl Tool {
             Tool::WasmTools => cmd_version(dir, "wasm-tools", vec!["--version"], &version_regex),
             Tool::WitBindgen => cmd_version(dir, "wit-bindgen", vec!["--version"], &version_regex),
             Tool::Zig => cmd_version(dir, "zig", vec!["version"], &version_regex),
+            Tool::CMake => cmd_version(dir, "cmake", vec!["--version"], &version_regex),
+            Tool::Jdk => cmd_version(dir, "javac", vec!["-version"], &version_regex),
+            Tool::MoonBit => cmd_version(dir, "moon", vec!["version"], &version_regex),
+            Tool::Sbt => cmd_version(dir, "sbt", vec!["--version"], &version_regex),
+            Tool::Uv => cmd_version(dir, "uv", vec!["--version"], &version_regex),
+            Tool::WitBindgenScalaJs => cmd_version(
+                dir,
+                "wit-bindgen-scalajs",
+                vec!["--version"],
+                &version_regex,
+            ),
         }
     }
 }
@@ -941,5 +1006,19 @@ where
                 .ok_or_else(|| "Dependency not found".to_string())
         }
         Err(err) => Err(err.to_string()),
+    }
+}
+
+fn find_node_modules(dir: &Path) -> PathBuf {
+    let node_modules = dir.join("node_modules");
+    if node_modules.exists() {
+        dir.to_path_buf()
+    } else {
+        let parent = dir.parent();
+        if let Some(parent) = parent {
+            find_node_modules(parent)
+        } else {
+            PathBuf::new()
+        }
     }
 }
