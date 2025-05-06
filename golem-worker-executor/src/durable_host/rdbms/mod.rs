@@ -84,6 +84,7 @@ async fn begin_db_transaction<Ctx, T, E>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + 'static,
+    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
     E: From<RdbmsError>,
 {
     let interface = get_db_connection_interface::<T>();
@@ -100,13 +101,35 @@ where
         .pool_key
         .clone();
 
-    let entry = RdbmsTransactionEntry::new(pool_key, RdbmsTransactionState::New);
-    let resource = ctx.as_wasi_view().table().push(entry)?;
-    let handle = resource.rep();
-    ctx.state
-        .open_function_table
-        .insert(handle, begin_oplog_index);
-    Ok(Ok(resource))
+    let transaction = ctx
+        .state
+        .rdbms_service
+        .deref()
+        .rdbms_type_service()
+        .begin_transaction(&pool_key, &ctx.state.owned_worker_id.worker_id)
+        .await;
+
+    match transaction {
+        Ok(transaction) => {
+            let entry =
+                RdbmsTransactionEntry::new(pool_key, RdbmsTransactionState::Open(transaction));
+            let resource = ctx.as_wasi_view().table().push(entry)?;
+            let handle = resource.rep();
+            ctx.state
+                .open_function_table
+                .insert(handle, begin_oplog_index);
+            Ok(Ok(resource))
+        }
+        Err(error) => {
+            ctx.aborted_durable_transaction(
+                &DurableFunctionType::WriteRemoteTransaction(None),
+                begin_oplog_index,
+            )
+            .await?;
+
+            Ok(Err(error.into()))
+        }
+    }
 }
 
 async fn db_connection_durable_execute<Ctx, T, P, E>(
@@ -708,7 +731,7 @@ where
             let query_stream = match query_stream_entry.transaction_handle {
                 Some(transaction_handle) => {
                     let (_, transaction) =
-                        get_db_transaction(ctx, &Resource::new_own(transaction_handle)).await?;
+                        get_db_transaction(ctx, &Resource::new_own(transaction_handle))?;
                     transaction
                         .query_stream(
                             &query_stream_entry.request.statement,
@@ -758,31 +781,30 @@ impl<T: RdbmsType + Clone + 'static> RdbmsTransactionEntry<T> {
         Self { pool_key, state }
     }
 
-    fn set_open(&mut self, value: Arc<dyn crate::services::rdbms::DbTransaction<T> + Send + Sync>) {
-        self.state = RdbmsTransactionState::Open(value);
-    }
-
     fn set_closed(&mut self) {
-        self.state = RdbmsTransactionState::Closed;
+        match &self.state {
+            RdbmsTransactionState::Open(transaction) => {
+                self.state = RdbmsTransactionState::Closed(transaction.deref().identifier())
+            }
+            RdbmsTransactionState::Closed(_) => (),
+        }
     }
 
-    fn identifier(&self) -> Option<RdbmsTransactionIdentifier> {
+    fn identifier(&self) -> RdbmsTransactionIdentifier {
         match &self.state {
-            RdbmsTransactionState::New => None,
-            RdbmsTransactionState::Open(transaction) => Some(transaction.deref().identifier()),
-            RdbmsTransactionState::Closed => None,
+            RdbmsTransactionState::Open(transaction) => transaction.deref().identifier(),
+            RdbmsTransactionState::Closed(identifier) => identifier.clone(),
         }
     }
 }
 
 #[derive(Clone)]
 pub enum RdbmsTransactionState<T: RdbmsType + Clone + 'static> {
-    New,
     Open(Arc<dyn crate::services::rdbms::DbTransaction<T> + Send + Sync>),
-    Closed,
+    Closed(RdbmsTransactionIdentifier),
 }
 
-async fn get_db_transaction<Ctx, T>(
+fn get_db_transaction<Ctx, T>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     entry: &Resource<RdbmsTransactionEntry<T>>,
 ) -> Result<
@@ -805,32 +827,8 @@ where
         .clone();
 
     match transaction_entry.state {
-        RdbmsTransactionState::New => {
-            let transaction = ctx
-                .state
-                .rdbms_service
-                .deref()
-                .rdbms_type_service()
-                .begin_transaction(
-                    &transaction_entry.pool_key,
-                    &ctx.state.owned_worker_id.worker_id,
-                )
-                .await;
-            match transaction {
-                Ok(transaction) => {
-                    ctx.as_wasi_view()
-                        .table()
-                        .get_mut::<RdbmsTransactionEntry<T>>(entry)
-                        .map_err(RdbmsError::other_response_failure)?
-                        .set_open(transaction.clone());
-
-                    Ok((transaction_entry.pool_key, transaction))
-                }
-                Err(error) => Err(error),
-            }
-        }
         RdbmsTransactionState::Open(transaction) => Ok((transaction_entry.pool_key, transaction)),
-        RdbmsTransactionState::Closed => {
+        RdbmsTransactionState::Closed(_) => {
             Err(RdbmsError::other_response_failure("Transaction is closed"))
         }
     }
@@ -962,7 +960,7 @@ where
 {
     match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
         Ok(params) => {
-            let transaction = get_db_transaction(ctx, entry).await;
+            let transaction = get_db_transaction(ctx, entry);
             match transaction {
                 Ok((pool_key, transaction)) => {
                     let result = transaction.query(&statement, params.clone()).await;
@@ -997,7 +995,7 @@ where
 {
     match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
         Ok(params) => {
-            let transaction = get_db_transaction(ctx, entry).await;
+            let transaction = get_db_transaction(ctx, entry);
             match transaction {
                 Ok((pool_key, transaction)) => {
                     let result = transaction.execute(&statement, params.clone()).await;
@@ -1029,20 +1027,16 @@ where
     T: RdbmsType + Clone + 'static,
     T::DbValue: FromRdbmsValue<P>,
 {
-    let transaction = ctx
-        .as_wasi_view()
-        .table()
-        .get::<RdbmsTransactionEntry<T>>(entry)
-        .map_err(RdbmsError::other_response_failure)?
-        .clone();
-
     match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
-        Ok(params) => Ok(RdbmsRequest::<T>::new(
-            transaction.pool_key.clone(),
-            statement,
-            params,
-            transaction.identifier(),
-        )),
+        Ok(params) => {
+            let (pool_key, transaction) = get_db_transaction(ctx, entry)?;
+            Ok(RdbmsRequest::<T>::new(
+                pool_key,
+                statement,
+                params,
+                Some(transaction.identifier()),
+            ))
+        }
         Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
     }
 }
