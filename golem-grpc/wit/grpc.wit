@@ -1,0 +1,5 @@
+package golem:grpc;
+
+world grpc {
+  import golem:grpc/types@0.1.0;
+}

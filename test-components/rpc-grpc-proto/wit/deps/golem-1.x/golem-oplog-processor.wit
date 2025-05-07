@@ -1,0 +1,33 @@
+package golem:api@1.1.6;
+
+interface oplog-processor {
+    use wasi:clocks/wall-clock@0.2.0.{datetime};
+    use golem:rpc/types@0.2.0.{wit-value};
+
+    use host.{account-id, oplog-index, worker-metadata};
+    use oplog.{oplog-entry};
+    use golem:rpc/types@0.2.0.{component-id, worker-id};
+
+    record account-info {
+        account-id: account-id
+    }
+
+    /// A processor resource is instantiated for each account having activated this oplog processor plugin.
+    /// There are no guarantees for the number of processors running at the same time, and different entries from the same worker
+    /// may be sent to different processor instances.
+    resource processor {
+        /// Initializes an oplog processor for a given component where the plugin was installed to.
+        /// The `account-info` parameters contains details of the account the installation belongs to.
+        /// The `component-id` parameter contains the identifier of the component the plugin was installed to.
+        /// The `config` parameter contains the configuration parameters for the plugin, as specified in the plugin installation
+        /// for the component.
+        constructor(account-info: account-info, component-id: component-id, config: list<tuple<string, string>>);
+
+        /// Called when one of the workers the plugin is activated on has written new entries to its oplog.
+        /// The `worker-id` parameter identifies the worker.
+        /// The `metadata` parameter contains the latest metadata of the worker.
+        /// The `first-entry-index` parameter contains the index of the first entry in the list of `entries`.
+        /// The `entries` parameteter always contains at least one element.
+        process: func(worker-id: worker-id, metadata: worker-metadata, first-entry-index: oplog-index, entries: list<oplog-entry>) -> result<_, string>;
+    }
+}
