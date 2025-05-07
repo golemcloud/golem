@@ -212,7 +212,7 @@ impl<'a> MergeTaskStack<'a> {
                     types.insert(list_builder.task_index, inferred_type);
                 }
 
-                MergeTask::Inspect(_, _, _) => {}
+                MergeTask::Inspect(_) => {}
             }
         }
 
@@ -289,6 +289,25 @@ impl<'a> MergeTaskStack<'a> {
         }
 
         None
+    }
+
+    pub fn get_all_inspects(
+        &mut self,
+        index: TaskIndex,
+        path: Path,
+        inferred_type: InferredType,
+    ) -> Vec<&mut MergeTask<'a>> {
+        self.tasks
+            .iter_mut()
+            .filter(|task| match task {
+                MergeTask::Inspect(inspect) => {
+                    inspect.task_index == index
+                        && inspect.path == path
+                        && inspect.inferred_type == &inferred_type
+                }
+                _ => false,
+            })
+            .collect::<Vec<_>>()
     }
 
     pub fn get_record_mut(
@@ -415,16 +434,24 @@ pub enum MergeTask<'a> {
     VariantBuilder(VariantBuilder),
     TupleBuilder(TupleBuilder),
     ListBuilder(ListBuilder),
-    Inspect(Path, TaskIndex, &'a InferredType),
+    Inspect(Inspect<'a>),
     AllOfBuilder(AllOfBuilder),
     ResultBuilder(ResultBuilder),
     Complete(TaskIndex, &'a InferredType),
 }
 
 impl MergeTask<'_> {
+    pub fn inspect(path: Path, task_index: TaskIndex, inferred_type: &InferredType) -> MergeTask {
+        MergeTask::Inspect(Inspect {
+            path,
+            task_index,
+            inferred_type,
+        })
+    }
+
     pub fn get_index_in_stack(&self) -> TaskIndex {
         match self {
-            MergeTask::Inspect(_, index, _) => *index,
+            MergeTask::Inspect(inspect) => inspect.task_index,
             MergeTask::RecordBuilder(builder) => builder.task_index,
             MergeTask::AllOfBuilder(builder) => builder.task_index,
             MergeTask::ResultBuilder(builder) => builder.task_index,
@@ -437,6 +464,13 @@ impl MergeTask<'_> {
 }
 
 pub type TaskIndex = usize;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Inspect<'a> {
+    path: Path,
+    task_index: TaskIndex,
+    inferred_type: &'a InferredType,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ListBuilder {
@@ -668,7 +702,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
     let merge_tasks: Vec<MergeTask<'a>> = inferred_types
         .iter()
         .enumerate()
-        .map(|(i, inf)| MergeTask::Inspect(Path::default(), i, inf))
+        .map(|(i, inf)| MergeTask::inspect(Path::default(), i, inf))
         .collect::<Vec<_>>();
 
     temp_task_queue.extend(merge_tasks.clone());
@@ -677,7 +711,11 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
 
     while let Some(ref task) = temp_task_queue.pop_front() {
         match task {
-            MergeTask::Inspect(path, task_index, inferred_type) => {
+            MergeTask::Inspect(Inspect {
+                path,
+                task_index,
+                inferred_type,
+            }) => {
                 match inferred_type.internal_type() {
                     TypeInternal::Record(fields) => {
                         let next_available_index = final_task_stack.next_index();
@@ -927,14 +965,14 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                         for inf in inferred_types.iter() {
                             task_index += 1;
                             pointers.push(task_index);
-                            tasks_for_final_stack.push(MergeTask::Inspect(
+                            tasks_for_final_stack.push(MergeTask::inspect(
                                 path.clone(),
                                 task_index,
                                 inf,
                             ));
 
                             // We push the inspection task
-                            temp_task_queue.push_back(MergeTask::Inspect(
+                            temp_task_queue.push_back(MergeTask::inspect(
                                 path.clone(),
                                 task_index,
                                 inf,
@@ -1190,13 +1228,13 @@ mod internal {
             let mut current_path = current_path.clone();
             current_path.push_back(PathElem::Field(field.to_string()));
 
-            tasks_for_final_stack.push(MergeTask::Inspect(
+            tasks_for_final_stack.push(MergeTask::inspect(
                 current_path.clone(),
                 field_task_index,
                 inferred_type,
             ));
 
-            temp_task_queue.push_back(MergeTask::Inspect(
+            temp_task_queue.push_back(MergeTask::inspect(
                 current_path,
                 field_task_index,
                 inferred_type,
@@ -1219,13 +1257,13 @@ mod internal {
         let mut current_path = current_path.clone();
         current_path.push_back(PathElem::Field("list".to_string()));
 
-        tasks_for_final_stack.push(MergeTask::Inspect(
+        tasks_for_final_stack.push(MergeTask::inspect(
             current_path.clone(),
             field_task_index,
             inferred_type,
         ));
 
-        temp_task_queue.push_back(MergeTask::Inspect(
+        temp_task_queue.push_back(MergeTask::inspect(
             current_path,
             field_task_index,
             inferred_type,
@@ -1251,13 +1289,13 @@ mod internal {
 
                 builder.insert(variant_name.to_string(), field_task_index);
 
-                tasks_for_final_stack.push(MergeTask::Inspect(
+                tasks_for_final_stack.push(MergeTask::inspect(
                     path.clone(),
                     field_task_index,
                     inferred_type,
                 ));
 
-                temp_task_queue.push_back(MergeTask::Inspect(
+                temp_task_queue.push_back(MergeTask::inspect(
                     path,
                     field_task_index,
                     inferred_type,
@@ -1286,13 +1324,13 @@ mod internal {
 
             path.push_back(PathElem::Field("result::ok".to_string()));
 
-            tasks_for_final_stack.push(MergeTask::Inspect(
+            tasks_for_final_stack.push(MergeTask::inspect(
                 path.clone(),
                 field_task_index,
                 inferred_type,
             ));
 
-            temp_task_queue.push_back(MergeTask::Inspect(
+            temp_task_queue.push_back(MergeTask::inspect(
                 path.clone(),
                 field_task_index,
                 inferred_type,
@@ -1308,13 +1346,13 @@ mod internal {
 
             path.push_back(PathElem::Field("result::error".to_string()));
 
-            tasks_for_final_stack.push(MergeTask::Inspect(
+            tasks_for_final_stack.push(MergeTask::inspect(
                 path.clone(),
                 field_task_index,
                 inferred_type,
             ));
 
-            temp_task_queue.push_back(MergeTask::Inspect(
+            temp_task_queue.push_back(MergeTask::inspect(
                 path.clone(),
                 field_task_index,
                 inferred_type,
@@ -1342,13 +1380,13 @@ mod internal {
             let mut path = path.clone();
             path.push_back(PathElem::Field(format!("tuple::{}", i)));
 
-            tasks_for_final_stack.push(MergeTask::Inspect(
+            tasks_for_final_stack.push(MergeTask::inspect(
                 path.clone(),
                 field_task_index,
                 inferred_type,
             ));
 
-            temp_task_queue.push_back(MergeTask::Inspect(
+            temp_task_queue.push_back(MergeTask::inspect(
                 path.clone(),
                 field_task_index,
                 inferred_type,
