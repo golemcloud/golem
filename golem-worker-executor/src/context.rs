@@ -52,6 +52,7 @@ use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
+use golem_worker_executor_base::services::worker_fork::WorkerForkService;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{
     worker_enumeration, HasAll, HasConfig, HasOplogService,
@@ -350,6 +351,7 @@ impl WorkerCtx for Context {
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
+        worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -373,6 +375,7 @@ impl WorkerCtx for Context {
             execution_status,
             file_loader,
             plugins,
+            worker_fork,
         )
         .await?;
         Ok(Self {
@@ -422,6 +425,10 @@ impl WorkerCtx for Context {
 
     fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync> {
         self.durable_ctx.component_service()
+    }
+
+    fn worker_fork(&self) -> Arc<dyn WorkerForkService + Send + Sync> {
+        self.durable_ctx.worker_fork()
     }
 
     async fn generate_unique_local_worker_id(

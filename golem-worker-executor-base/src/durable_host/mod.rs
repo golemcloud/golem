@@ -38,6 +38,7 @@ use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
+use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::services::{HasOplogService, HasPlugins};
@@ -165,6 +166,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<Ctx::Types>>,
+        worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
     ) -> Result<Self, GolemError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -236,6 +238,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 last_oplog_index,
                 component_metadata,
                 worker_config.total_linear_memory_size,
+                worker_fork,
             )
             .await,
             _temp_dir: temp_dir,
@@ -355,6 +358,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn component_service(&self) -> Arc<dyn ComponentService<Ctx::Types>> {
         self.state.component_service.clone()
+    }
+
+    pub fn worker_fork(&self) -> Arc<dyn WorkerForkService + Send + Sync> {
+        self.state.worker_fork.clone()
     }
 
     pub fn scheduler_service(&self) -> Arc<dyn SchedulerService + Send + Sync> {
@@ -2071,6 +2078,8 @@ struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     invocation_context: InvocationContext,
     current_span_id: SpanId,
     forward_trace_context_headers: bool,
+
+    worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
@@ -2096,6 +2105,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         last_oplog_index: OplogIndex,
         component_metadata: ComponentMetadata<Ctx::Types>,
         total_linear_memory_size: u64,
+        worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
     ) -> Self {
         let replay_state = ReplayState::new(
             owned_worker_id.clone(),
@@ -2139,6 +2149,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             invocation_context,
             current_span_id,
             forward_trace_context_headers: true,
+            worker_fork,
         }
     }
 

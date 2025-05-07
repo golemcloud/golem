@@ -9,6 +9,8 @@ interface api {
 
   fallible-transaction-test: func() -> u64;
   infallible-transaction-test: func() -> u64;
+
+  fork-test: func(input: string) -> string;
 }
 
 world golem-rust-tests {

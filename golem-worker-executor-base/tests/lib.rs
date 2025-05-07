@@ -20,6 +20,7 @@ use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
+use tempfile::TempDir;
 use test_r::{tag_suite, test_dep};
 use tracing::Level;
 
@@ -110,6 +111,7 @@ pub struct WorkerExecutorPerTestDependencies {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
+    component_temp_directory: Arc<TempDir>,
 }
 
 #[async_trait]
@@ -163,6 +165,10 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
     }
+
+    fn component_temp_directory(&self) -> &Path {
+        self.component_temp_directory.path()
+    }
 }
 
 pub struct WorkerExecutorTestDependencies {
@@ -173,6 +179,7 @@ pub struct WorkerExecutorTestDependencies {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
+    component_temp_directory: Arc<TempDir>,
 }
 
 impl Debug for WorkerExecutorTestDependencies {
@@ -220,6 +227,7 @@ impl WorkerExecutorTestDependencies {
             blob_storage,
             initial_component_files_service,
             plugin_wasm_files_service,
+            component_temp_directory: Arc::new(TempDir::new().unwrap()),
         }
     }
 
@@ -253,6 +261,7 @@ impl WorkerExecutorTestDependencies {
             blob_storage: self.blob_storage.clone(),
             initial_component_files_service: self.initial_component_files_service.clone(),
             plugin_wasm_files_service: self.plugin_wasm_files_service.clone(),
+            component_temp_directory: self.component_temp_directory.clone(),
         }
     }
 }
@@ -307,6 +316,10 @@ impl TestDependencies for WorkerExecutorTestDependencies {
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
+    }
+
+    fn component_temp_directory(&self) -> &Path {
+        self.component_temp_directory.path()
     }
 }
 

@@ -21,7 +21,9 @@ use crate::model::public_oplog::{
 };
 use crate::model::InterruptKind;
 use crate::preview2::golem_api_1_x;
-use crate::preview2::golem_api_1_x::host::{GetWorkers, Host, HostGetWorkers, WorkerAnyFilter};
+use crate::preview2::golem_api_1_x::host::{
+    ForkResult, GetWorkers, Host, HostGetWorkers, WorkerAnyFilter,
+};
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
@@ -30,6 +32,10 @@ use crate::services::{HasOplogService, HasPlugins, HasWorker};
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
+use bincode::de::Decoder;
+use bincode::enc::Encoder;
+use bincode::error::{DecodeError, EncodeError};
+use bincode::Decode;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
@@ -729,6 +735,39 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         Ok(result.map(|w| w.into()))
     }
+
+    async fn fork(&mut self, new_name: String) -> anyhow::Result<ForkResult> {
+        let durability = Durability::<ForkResult, SerializableError>::new(
+            self,
+            "golem::api",
+            "fork",
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        if durability.is_live() {
+            let target_worker_id = WorkerId {
+                component_id: self.owned_worker_id.component_id(),
+                worker_name: new_name.clone(),
+            };
+            let oplog_index_cut_off = self.state.current_oplog_index().await.previous();
+
+            let fork_result = self
+                .state
+                .worker_fork
+                .fork_and_write_fork_result(
+                    &self.owned_worker_id,
+                    &target_worker_id,
+                    oplog_index_cut_off,
+                )
+                .await
+                .map(|_| ForkResult::Original);
+
+            Ok(durability.persist(self, new_name, fork_result).await?)
+        } else {
+            durability.replay(self).await
+        }
+    }
 }
 
 #[async_trait]
@@ -1198,5 +1237,25 @@ impl GetWorkersEntry {
 
     fn set_next_cursor(&mut self, cursor: Option<ScanCursor>) {
         self.next_cursor = cursor;
+    }
+}
+
+impl bincode::Encode for ForkResult {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        match self {
+            ForkResult::Original => bincode::Encode::encode(&0u8, encoder),
+            ForkResult::Forked => bincode::Encode::encode(&1u8, encoder),
+        }
+    }
+}
+
+impl Decode for ForkResult {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let value = <u8 as Decode>::decode(decoder)?;
+        match value {
+            0 => Ok(ForkResult::Original),
+            1 => Ok(ForkResult::Forked),
+            _ => Err(DecodeError::Other("Invalid ForkResult")),
+        }
     }
 }

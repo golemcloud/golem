@@ -58,6 +58,32 @@ pub mod exports {
                     let result0 = T::infallible_transaction_test();
                     _rt::as_i64(result0)
                 }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_fork_test_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let result1 = T::fork_test(_rt::string_lift(bytes0));
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    let vec3 = (result1.into_bytes()).into_boxed_slice();
+                    let ptr3 = vec3.as_ptr().cast::<u8>();
+                    let len3 = vec3.len();
+                    ::core::mem::forget(vec3);
+                    *ptr2.add(4).cast::<usize>() = len3;
+                    *ptr2.add(0).cast::<*mut u8>() = ptr3.cast_mut();
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_fork_test<T: Guest>(arg0: *mut u8) {
+                    let l0 = *arg0.add(0).cast::<*mut u8>();
+                    let l1 = *arg0.add(4).cast::<usize>();
+                    _rt::cabi_dealloc(l0, l1, 1);
+                }
                 pub trait Guest {
                     fn fail_with_custom_max_retries(max_retries: u64);
                     fn explicit_commit(replicas: u8);
@@ -66,6 +92,7 @@ pub mod exports {
                     fn persist_nothing();
                     fn fallible_transaction_test() -> u64;
                     fn infallible_transaction_test() -> u64;
+                    fn fork_test(input: _rt::String) -> _rt::String;
                 }
                 #[doc(hidden)]
                 macro_rules! __export_golem_it_api_cabi {
@@ -93,11 +120,22 @@ pub mod exports {
                         = "golem:it/api#infallible-transaction-test"] unsafe extern "C"
                         fn export_infallible_transaction_test() -> i64 {
                         $($path_to_types)*::
-                        _export_infallible_transaction_test_cabi::<$ty > () } };
+                        _export_infallible_transaction_test_cabi::<$ty > () }
+                        #[export_name = "golem:it/api#fork-test"] unsafe extern "C" fn
+                        export_fork_test(arg0 : * mut u8, arg1 : usize,) -> * mut u8 {
+                        $($path_to_types)*:: _export_fork_test_cabi::<$ty > (arg0, arg1)
+                        } #[export_name = "cabi_post_golem:it/api#fork-test"] unsafe
+                        extern "C" fn _post_return_fork_test(arg0 : * mut u8,) {
+                        $($path_to_types)*:: __post_return_fork_test::<$ty > (arg0) } };
                     };
                 }
                 #[doc(hidden)]
                 pub(crate) use __export_golem_it_api_cabi;
+                #[repr(align(4))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 8],
+                );
             }
         }
     }
@@ -142,6 +180,24 @@ mod _rt {
             self as i64
         }
     }
+    pub use alloc_crate::vec::Vec;
+    pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
+        if cfg!(debug_assertions) {
+            String::from_utf8(bytes).unwrap()
+        } else {
+            String::from_utf8_unchecked(bytes)
+        }
+    }
+    pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
+        if size == 0 {
+            return;
+        }
+        let layout = alloc::Layout::from_size_align_unchecked(size, align);
+        alloc::dealloc(ptr, layout);
+    }
+    pub use alloc_crate::string::String;
+    extern crate alloc as alloc_crate;
+    pub use alloc_crate::alloc;
 }
 /// Generates `#[no_mangle]` functions to export the specified type as the
 /// root implementation of all generated traits.
@@ -176,16 +232,17 @@ pub(crate) use __export_golem_rust_tests_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.36.0:golem:it:golem-rust-tests:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 422] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x9f\x02\x01A\x02\x01\
-A\x02\x01B\x0c\x01@\x01\x0bmax-retriesw\x01\0\x04\0\x1cfail-with-custom-max-retr\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 448] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb9\x02\x01A\x02\x01\
+A\x02\x01B\x0e\x01@\x01\x0bmax-retriesw\x01\0\x04\0\x1cfail-with-custom-max-retr\
 ies\x01\0\x01@\x01\x08replicas}\x01\0\x04\0\x0fexplicit-commit\x01\x01\x01@\0\x01\
 \0\x04\0\x0datomic-region\x01\x02\x01@\x01\x07enabled\x7f\x01\0\x04\0\x10idempot\
 ence-flag\x01\x03\x04\0\x0fpersist-nothing\x01\x02\x01@\0\0w\x04\0\x19fallible-t\
-ransaction-test\x01\x04\x04\0\x1binfallible-transaction-test\x01\x04\x04\0\x0cgo\
-lem:it/api\x05\0\x04\0\x19golem:it/golem-rust-tests\x04\0\x0b\x16\x01\0\x10golem\
--rust-tests\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x07\
-0.220.0\x10wit-bindgen-rust\x060.36.0";
+ransaction-test\x01\x04\x04\0\x1binfallible-transaction-test\x01\x04\x01@\x01\x05\
+inputs\0s\x04\0\x09fork-test\x01\x05\x04\0\x0cgolem:it/api\x05\0\x04\0\x19golem:\
+it/golem-rust-tests\x04\0\x0b\x16\x01\0\x10golem-rust-tests\x03\0\0\0G\x09produc\
+ers\x01\x0cprocessed-by\x02\x0dwit-component\x070.220.0\x10wit-bindgen-rust\x060\
+.36.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

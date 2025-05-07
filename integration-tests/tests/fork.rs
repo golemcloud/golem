@@ -12,24 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::Tracing;
+use axum::extract::Path;
 use axum::routing::get;
-use axum::Router;
+use axum::{Json, Router};
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::public_oplog::PublicOplogEntry;
+use golem_common::model::{IdempotencyKey, WorkerId, WorkerStatus};
+use golem_test_framework::config::EnvBasedTestDependencies;
+use golem_test_framework::dsl::TestDslUnsafe;
+use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{flaky, inherit_test_dep, test, timeout};
-use tracing::Instrument;
-
-use crate::Tracing;
-use golem_common::model::oplog::OplogIndex;
-use golem_common::model::public_oplog::PublicOplogEntry;
-use golem_common::model::{WorkerId, WorkerStatus};
-
-use golem_test_framework::config::EnvBasedTestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
-
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use tracing::{info, Instrument};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -592,4 +590,91 @@ fn run_http_server(
         }
         .in_current_span(),
     )
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.component("golem-rust-tests").store().await;
+
+    let (port_tx, port_rx) = tokio::sync::oneshot::channel::<u16>();
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new()
+                .route(
+                    "/fork-test/step1/:name/:input",
+                    get(move |args: Path<(String, String)>| async move {
+                        Json(format!("{}-{}", args.0 .0, args.0 .1))
+                    }),
+                )
+                .route(
+                    "/fork-test/step2/:name/:fork/:input",
+                    get(move |args: Path<(String, String, String)>| async move {
+                        Json(format!("{}-{}-{}", args.0 .0, args.0 .1, args.0 .2))
+                    }),
+                );
+
+            let listener =
+                tokio::net::TcpListener::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap())
+                    .await
+                    .unwrap();
+
+            port_tx.send(listener.local_addr().unwrap().port()).unwrap();
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let port = port_rx.await.unwrap();
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    info!("Using environment: {:?}", env);
+
+    let worker_id = deps
+        .start_worker_with(&component_id, "source-worker", vec![], env)
+        .await;
+
+    let _ = deps.log_output(&worker_id).await;
+
+    let idempotency_key = IdempotencyKey::fresh();
+    let source_result = deps
+        .invoke_and_await_with_key(
+            &worker_id,
+            &idempotency_key,
+            "golem:it/api.{fork-test}",
+            vec!["hello".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    let target_worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: "forked-worker".to_string(),
+    };
+    let target_result = deps
+        .invoke_and_await_with_key(
+            &target_worker_id,
+            &idempotency_key,
+            "golem:it/api.{fork-test}",
+            vec!["hello".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    http_server.abort();
+
+    assert_eq!(
+        source_result,
+        vec![Value::String(
+            "source-worker-hello::source-worker-original-hello".to_string()
+        )]
+    );
+    assert_eq!(
+        target_result,
+        vec![Value::String(
+            "source-worker-hello::forked-worker-forked-hello".to_string()
+        )]
+    );
 }

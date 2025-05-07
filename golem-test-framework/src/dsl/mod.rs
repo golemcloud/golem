@@ -62,11 +62,13 @@ use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use tempfile::Builder;
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
 use tracing::{debug, info, Instrument};
 use uuid::Uuid;
+use wasm_metadata::AddMetadata;
 
 pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     dsl: &'a DSL,
@@ -499,6 +501,17 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.clone())),
         );
+
+        let source_path = if !unverified {
+            rename_component_if_needed(
+                self.component_temp_directory(),
+                &source_path,
+                &component_name,
+            )
+            .expect("Failed to verify and change component metadata")
+        } else {
+            source_path
+        };
 
         let component = {
             if unique {
@@ -2524,5 +2537,37 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         idempotency_key: &IdempotencyKey,
     ) -> crate::Result<bool> {
         <T as TestDsl>::cancel_invocation(self, worker_id, idempotency_key).await
+    }
+}
+
+fn rename_component_if_needed(temp_dir: &Path, path: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    // Check metadata
+    let source = std::fs::read(path)?;
+    let metadata = ComponentMetadata::analyse_component(&source)?;
+    if metadata.root_package_name.is_none() || metadata.root_package_name == Some(name.to_string())
+    {
+        info!(
+            "Name in metadata is {:?}, used component name is {}, using the original WASM: {:?}",
+            metadata.root_package_name, name, path
+        );
+        Ok(path.to_path_buf())
+    } else {
+        let new_path = Builder::new().keep(true).tempfile_in(temp_dir)?;
+        let add_metadata = AddMetadata {
+            name: Some(name.to_string()),
+            version: metadata
+                .root_package_version
+                .map(|v| wasm_metadata::Version::new(v.to_string())),
+            ..Default::default()
+        };
+
+        info!(
+            "Name in metadata is {:?}, used component name is {}, using an updated WASM: {:?}",
+            metadata.root_package_name, name, new_path
+        );
+
+        let updated_wasm = add_metadata.to_wasm(&source)?;
+        std::fs::write(&new_path, updated_wasm)?;
+        Ok(new_path.path().to_path_buf())
     }
 }
