@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::{RdbmsTransactionIdentifier, RdbmsIntoValueAndType, RdbmsPoolKey, RdbmsType};
+use crate::services::rdbms::{
+    RdbmsIntoValueAndType, RdbmsPoolKey, RdbmsTransactionIdentifier, RdbmsType,
+};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
@@ -22,7 +24,7 @@ pub struct RdbmsRequest<T: RdbmsType + 'static> {
     pub pool_key: RdbmsPoolKey,
     pub statement: String,
     pub params: Vec<T::DbValue>,
-    pub transaction_identifier: Option<RdbmsTransactionIdentifier>,
+    pub transaction_id: Option<RdbmsTransactionId>,
 }
 
 impl<T: RdbmsType + 'static> bincode::Decode<()> for RdbmsRequest<T>
@@ -36,7 +38,7 @@ where
             pool_key: bincode::Decode::decode(decoder)?,
             statement: bincode::Decode::decode(decoder)?,
             params: bincode::Decode::decode(decoder)?,
-            transaction_identifier: bincode::Decode::decode(decoder)?,
+            transaction_id: bincode::Decode::decode(decoder)?,
         })
     }
 }
@@ -51,7 +53,7 @@ where
             pool_key: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
             statement: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
             params: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
-            transaction_identifier: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
+            transaction_id: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
         })
     }
 }
@@ -61,13 +63,13 @@ impl<T: RdbmsType> RdbmsRequest<T> {
         pool_key: RdbmsPoolKey,
         statement: String,
         params: Vec<T::DbValue>,
-        transaction_identifier: Option<RdbmsTransactionIdentifier>,
+        transaction_id: Option<RdbmsTransactionId>,
     ) -> Self {
         Self {
             pool_key,
             statement,
             params,
-            transaction_identifier,
+            transaction_id,
         }
     }
 
@@ -77,8 +79,8 @@ impl<T: RdbmsType> RdbmsRequest<T> {
             analysed_type::field("statement", analysed_type::str()),
             analysed_type::field("params", params_type),
             analysed_type::field(
-                "transaction-identifier",
-                analysed_type::option(RdbmsTransactionIdentifier::get_type()),
+                "transaction-id",
+                analysed_type::option(RdbmsTransactionId::get_type()),
             ),
         ])
     }
@@ -96,7 +98,7 @@ where
             self.pool_key.into_value(),
             self.statement.into_value(),
             v.value,
-            self.transaction_identifier.into_value(),
+            self.transaction_id.into_value(),
         ]);
         ValueAndType::new(v, t)
     }

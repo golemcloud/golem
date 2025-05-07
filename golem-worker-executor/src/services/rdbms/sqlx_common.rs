@@ -16,7 +16,7 @@ use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig, RdbmsQueryConf
 use crate::services::rdbms::metrics::record_rdbms_metrics;
 use crate::services::rdbms::{
     DbResult, DbResultStream, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey, RdbmsStatus,
-    RdbmsTransactionIdentifier, RdbmsType,
+    RdbmsTransactionId, RdbmsType,
 };
 use async_dropper_simple::AsyncDrop;
 use async_trait::async_trait;
@@ -434,7 +434,7 @@ impl<DB: Database> Debug for SqlxDbTransactionConnection<DB> {
 #[derive(Clone)]
 pub struct SqlxDbTransaction<T: RdbmsType, DB: Database> {
     rdbms_type: T,
-    identifier: RdbmsTransactionIdentifier,
+    transaction_id: RdbmsTransactionId,
     pool_key: RdbmsPoolKey,
     tx_connection: SqlxDbTransactionConnection<DB>,
     query_config: RdbmsQueryConfig,
@@ -444,7 +444,7 @@ impl<T: RdbmsType, DB: Database> Debug for SqlxDbTransaction<T, DB> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SqlxDbTransaction")
             .field("rdbms_type", &self.rdbms_type)
-            .field("identifier", &self.identifier)
+            .field("transaction_id", &self.transaction_id)
             .field("pool_key", &self.pool_key)
             .field("query_config", &self.query_config)
             .finish()
@@ -457,7 +457,7 @@ where
     DB: Database,
 {
     pub(crate) fn new(
-        identifier: RdbmsTransactionIdentifier,
+        transaction_id: RdbmsTransactionId,
         pool_key: RdbmsPoolKey,
         connection: PoolConnection<DB>,
         query_config: RdbmsQueryConfig,
@@ -465,7 +465,7 @@ where
         let rdbms_type = T::default();
         Self {
             rdbms_type,
-            identifier,
+            transaction_id,
             pool_key,
             tx_connection: SqlxDbTransactionConnection::new(connection, true),
             query_config,
@@ -566,8 +566,8 @@ where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
 {
-    fn identifier(&self) -> RdbmsTransactionIdentifier {
-        self.identifier.clone()
+    fn transaction_id(&self) -> RdbmsTransactionId {
+        self.transaction_id.clone()
     }
 
     async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>
@@ -943,14 +943,10 @@ pub(crate) trait DbTransactionSupport<T: RdbmsType, DB: Database> {
     async fn get_status(
         &self,
         pool: Arc<Pool<DB>>,
-        identifier: RdbmsTransactionIdentifier,
+        id: RdbmsTransactionId,
     ) -> Result<DbTransactionStatus, Error>;
 
-    async fn cleanup(
-        &self,
-        pool: Arc<Pool<DB>>,
-        identifier: RdbmsTransactionIdentifier,
-    ) -> Result<(), Error>;
+    async fn cleanup(&self, pool: Arc<Pool<DB>>, id: RdbmsTransactionId) -> Result<(), Error>;
 }
 
 pub(crate) struct TableDbTransactionSupport {
@@ -981,16 +977,16 @@ where
             .await
             .map_err(Error::connection_failure)?;
 
-        let identifier = RdbmsTransactionIdentifier::generate();
+        let id = RdbmsTransactionId::generate();
 
-        T::create_transaction(identifier.id.clone(), pool.deref()).await?;
+        T::create_transaction(id.0.clone(), pool.deref()).await?;
 
         DB::TransactionManager::begin(&mut connection)
             .await
             .map_err(Error::query_execution_failure)?;
 
         let db_transaction: Arc<SqlxDbTransaction<T, DB>> = Arc::new(SqlxDbTransaction::new(
-            identifier,
+            id,
             key.clone(),
             connection,
             self.query_config,
@@ -1004,9 +1000,9 @@ where
         _pool: Arc<Pool<DB>>,
         db_transaction: Arc<SqlxDbTransaction<T, DB>>,
     ) -> Result<(), Error> {
-        let identifier = db_transaction.identifier();
+        let id = db_transaction.transaction_id();
         let _res = T::update_transaction_status(
-            identifier.id,
+            id.0,
             DbTransactionStatus::Committed,
             db_transaction.tx_connection.clone(),
         )
@@ -1019,30 +1015,23 @@ where
         pool: Arc<Pool<DB>>,
         db_transaction: Arc<SqlxDbTransaction<T, DB>>,
     ) -> Result<(), Error> {
-        let identifier = db_transaction.identifier();
-        let _res = T::update_transaction_status(
-            identifier.id,
-            DbTransactionStatus::RolledBack,
-            pool.deref(),
-        )
-        .await?;
+        let id = db_transaction.transaction_id();
+        let _res =
+            T::update_transaction_status(id.0, DbTransactionStatus::RolledBack, pool.deref())
+                .await?;
         Ok(())
     }
 
     async fn get_status(
         &self,
         pool: Arc<Pool<DB>>,
-        identifier: RdbmsTransactionIdentifier,
+        id: RdbmsTransactionId,
     ) -> Result<DbTransactionStatus, Error> {
-        T::get_transaction_status(identifier.id, pool.deref()).await
+        T::get_transaction_status(id.0, pool.deref()).await
     }
 
-    async fn cleanup(
-        &self,
-        pool: Arc<Pool<DB>>,
-        identifier: RdbmsTransactionIdentifier,
-    ) -> Result<(), Error> {
-        T::delete_transaction(identifier.id, pool.deref()).await?;
+    async fn cleanup(&self, pool: Arc<Pool<DB>>, id: RdbmsTransactionId) -> Result<(), Error> {
+        T::delete_transaction(id.0, pool.deref()).await?;
         Ok(())
     }
 }

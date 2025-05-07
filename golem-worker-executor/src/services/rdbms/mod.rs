@@ -75,7 +75,7 @@ impl Display for RdbmsStatus {
 
 #[async_trait]
 pub trait DbTransaction<T: RdbmsType> {
-    fn identifier(&self) -> RdbmsTransactionIdentifier;
+    fn transaction_id(&self) -> RdbmsTransactionId;
 
     async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>
     where
@@ -651,13 +651,11 @@ fn get_bound_analysed_type(base_type: AnalysedType) -> AnalysedType {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode)]
-pub struct RdbmsTransactionIdentifier {
-    pub id: String,
-}
+pub struct RdbmsTransactionId(String);
 
-impl RdbmsTransactionIdentifier {
+impl RdbmsTransactionId {
     pub fn new<Id: Display>(id: Id) -> Self {
-        Self { id: id.to_string() }
+        Self(id.to_string())
     }
 
     pub fn generate() -> Self {
@@ -665,23 +663,12 @@ impl RdbmsTransactionIdentifier {
     }
 }
 
-impl IntoValue for RdbmsTransactionIdentifier {
+impl IntoValue for RdbmsTransactionId {
     fn into_value(self) -> Value {
-        Value::Record(vec![self.id.into_value()])
+        Value::String(self.0)
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::record(vec![analysed_type::field("id", analysed_type::str())])
+        analysed_type::str()
     }
 }
-
-// impl RdbmsIntoValueAndType for RdbmsTransactionIdentifier {
-//
-//     fn into_value_and_type(self) -> ValueAndType {
-//         ValueAndType::new(Value::Record(vec![self.id.into_value()]), Self::get_base_type())
-//     }
-//
-//     fn get_base_type() -> AnalysedType {
-//         analysed_type::record(vec![analysed_type::field("id", analysed_type::str())])
-//     }
-// }

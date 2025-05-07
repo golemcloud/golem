@@ -23,7 +23,7 @@ use crate::services::rdbms::sqlx_common::{
     QueryParamsBinder, SqlxDbResultStream, SqlxDbTransaction, SqlxRdbms,
 };
 use crate::services::rdbms::{
-    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionIdentifier,
+    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionId,
 };
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
@@ -100,10 +100,10 @@ impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactio
             .await
             .map_err(Error::query_execution_failure)?;
         let id: i64 = row.try_get(0).map_err(Error::query_response_failure)?;
-        let identifier = RdbmsTransactionIdentifier::new(id);
+        let transaction_id = RdbmsTransactionId::new(id);
 
         let db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>> = Arc::new(
-            SqlxDbTransaction::new(identifier, key.clone(), connection, self.query_config),
+            SqlxDbTransaction::new(transaction_id, key.clone(), connection, self.query_config),
         );
 
         Ok(db_transaction)
@@ -128,9 +128,9 @@ impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactio
     async fn get_status(
         &self,
         pool: Arc<Pool<sqlx::Postgres>>,
-        identifier: RdbmsTransactionIdentifier,
+        id: RdbmsTransactionId,
     ) -> Result<DbTransactionStatus, Error> {
-        let query = sqlx::query("SELECT txid_status($1::bigint)").bind(identifier.id);
+        let query = sqlx::query("SELECT txid_status($1::bigint)").bind(id.0);
         let row = pool
             .fetch_optional(query)
             .await
@@ -154,7 +154,7 @@ impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactio
     async fn cleanup(
         &self,
         _pool: Arc<Pool<sqlx::Postgres>>,
-        _identifier: RdbmsTransactionIdentifier,
+        _id: RdbmsTransactionId,
     ) -> Result<(), Error> {
         Ok(())
     }

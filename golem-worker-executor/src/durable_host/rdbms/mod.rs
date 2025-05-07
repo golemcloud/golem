@@ -16,7 +16,7 @@ use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::services::rdbms::{
-    Error as RdbmsError, RdbmsService, RdbmsTransactionIdentifier, RdbmsTypeService,
+    Error as RdbmsError, RdbmsService, RdbmsTransactionId, RdbmsTypeService,
 };
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsType};
 use crate::workerctx::WorkerCtx;
@@ -45,6 +45,17 @@ fn get_db_transaction_interface<T: RdbmsType>() -> String {
 fn get_db_result_stream_interface<T: RdbmsType>() -> String {
     format!("rdbms::{}::db-result-stream", T::default())
 }
+
+// fn get_transaction_resource<T: RdbmsType>(
+//     pool_key: RdbmsPoolKey,
+//     id: RdbmsTransactionIdentifier,
+// ) -> TransactionResource {
+//     TransactionResource {
+//         url: pool_key.address.to_string(),
+//         id: id.id,
+//         rdbms_type: T::default().to_string(),
+//     }
+// }
 
 async fn open_db_connection<Ctx, T, E>(
     address: String,
@@ -90,16 +101,16 @@ where
     let interface = get_db_connection_interface::<T>();
     ctx.observe_function_call(interface.as_str(), "begin-transaction");
 
-    let begin_oplog_index = ctx
-        .begin_durable_transaction(&DurableFunctionType::WriteRemoteTransaction(None))
-        .await?;
-
     let pool_key = ctx
         .as_wasi_view()
         .table()
         .get::<RdbmsConnection<T>>(entry)?
         .pool_key
         .clone();
+
+    let begin_oplog_index = ctx
+        .begin_durable_transaction(&DurableFunctionType::WriteRemoteTransaction(None))
+        .await?;
 
     let transaction = ctx
         .state
@@ -354,6 +365,7 @@ where
     let interface = get_db_result_stream_interface::<T>();
     let handle = entry.rep();
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
+
     let durable_function_type = if is_db_query_stream_in_transaction(ctx, entry)? {
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx))
     } else {
@@ -784,16 +796,16 @@ impl<T: RdbmsType + Clone + 'static> RdbmsTransactionEntry<T> {
     fn set_closed(&mut self) {
         match &self.state {
             RdbmsTransactionState::Open(transaction) => {
-                self.state = RdbmsTransactionState::Closed(transaction.deref().identifier())
+                self.state = RdbmsTransactionState::Closed(transaction.deref().transaction_id())
             }
             RdbmsTransactionState::Closed(_) => (),
         }
     }
 
-    fn identifier(&self) -> RdbmsTransactionIdentifier {
+    fn transaction_id(&self) -> RdbmsTransactionId {
         match &self.state {
-            RdbmsTransactionState::Open(transaction) => transaction.deref().identifier(),
-            RdbmsTransactionState::Closed(identifier) => identifier.clone(),
+            RdbmsTransactionState::Open(transaction) => transaction.deref().transaction_id(),
+            RdbmsTransactionState::Closed(id) => id.clone(),
         }
     }
 }
@@ -801,7 +813,7 @@ impl<T: RdbmsType + Clone + 'static> RdbmsTransactionEntry<T> {
 #[derive(Clone)]
 pub enum RdbmsTransactionState<T: RdbmsType + Clone + 'static> {
     Open(Arc<dyn crate::services::rdbms::DbTransaction<T> + Send + Sync>),
-    Closed(RdbmsTransactionIdentifier),
+    Closed(RdbmsTransactionId),
 }
 
 fn get_db_transaction<Ctx, T>(
@@ -969,7 +981,7 @@ where
                             pool_key,
                             statement,
                             params,
-                            Some(transaction.identifier()),
+                            Some(transaction.transaction_id()),
                         )),
                         result,
                     )
@@ -1004,7 +1016,7 @@ where
                             pool_key,
                             statement,
                             params,
-                            Some(transaction.identifier()),
+                            Some(transaction.transaction_id()),
                         )),
                         result,
                     )
@@ -1034,7 +1046,7 @@ where
                 pool_key,
                 statement,
                 params,
-                Some(transaction.identifier()),
+                Some(transaction.transaction_id()),
             ))
         }
         Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
