@@ -232,6 +232,10 @@ impl TestDependencies for TestWorkerExecutor {
         self.deps.component_directory()
     }
 
+    fn component_temp_directory(&self) -> &Path {
+        self.deps.component_temp_directory()
+    }
+
     fn component_service(
         &self,
     ) -> Arc<dyn golem_test_framework::components::component_service::ComponentService> {
