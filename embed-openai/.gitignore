@@ -1,0 +1,17 @@
+# Ignore environment variables file
+.env
+.env.example
+
+# Rust artifacts
+/target/
+**/*.rs.bk
+**/*.wasm
+
+# Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS specific
+.DS_Store

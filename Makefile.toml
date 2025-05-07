@@ -5,6 +5,7 @@
 # - `cargo make check-wit`: deletes then fetches the WIT dependencies based on wit/deps.toml, then checks if it's up-to-date
 # - `cargo make build`: builds everything in debug mode
 # - `cargo make build-release`: builds everything in release mode. customizable with PLATFORM_OVERRIDE env variable for docker builds
+# - `cargo make build-embed-providers`: builds the embedding providers
 # - `cargo make check`: runs rustfmt and clippy checks without applying any fix
 # - `cargo make fix`: runs rustfmt and clippy checks and applies fixes
 # - `cargo make unit-tests`: runs unit tests only
@@ -40,6 +41,10 @@ JUNIT_OPTS = "--format junit --logfile target/report.xml"
 [tasks.default]
 description = "This is the task that gets executed by 'cargo make' when no task is specified"
 run_task = "dev-flow"
+
+[tasks.build-embed-providers]
+description = "Builds the embedding providers"
+script = "./build.sh"
 
 [tasks.dev]
 description = "Alias to the dev-flow task"

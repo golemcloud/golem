@@ -1,0 +1,32 @@
+[workspace]
+members = [
+    "crates/embed-common",
+    "crates/embed-openai",
+    "crates/embed-cohere",
+    "crates/embed-huggingface",
+    "crates/embed-voyageai",
+    "."
+]
+
+[package]
+name = "embed-providers"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "server"
+path = "src/server.rs"
+
+[workspace.dependencies]
+async-trait = "0.1"
+anyhow = "1.0"
+golem-api-1-x = "0.1"
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+axum = "0.7"
+tower-http = { version = "0.5", features = ["fs"] }
+thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+wit-bindgen = { version = "0.16", default-features = false, features = ["realloc"] }

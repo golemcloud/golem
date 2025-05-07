@@ -1,0 +1,10 @@
+[package]
+name = "test_openai"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+embed_common = { path = "../crates/embed-common" }
+embed_openai = { path = "../crates/embed-openai" }
+dotenv = "0.15.0"
+tokio = { version = "1.0", features = ["full"] }

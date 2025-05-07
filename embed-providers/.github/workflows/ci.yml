@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          target: wasm32-wasi
+      
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Run tests
+        run: cargo test --workspace
+        env:
+          RUST_BACKTRACE: 1
+  
+  build:
+    name: Build WASM Components
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          target: wasm32-wasi
+      
+      - name: Install wasm-tools
+        run: cargo install wasm-tools
+      
+      - name: Download WASI adapter
+        run: curl -sSL https://github.com/bytecodealliance/wasmtime/releases/download/v16.0.0/wasi_snapshot_preview1.reactor.wasm -o wasi_snapshot_preview1.wasm
+      
+      - name: Build components
+        run: ./build.sh
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: wasm-components
+          path: target/wasm/*.wasm
