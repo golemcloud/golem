@@ -17,7 +17,7 @@ use crate::fs::{OverwriteSafeAction, OverwriteSafeActions, PathExtra};
 use crate::log::{log_action, log_action_plan, log_warn_action, LogColorize, LogIndent};
 use crate::wasm_rpc_stubgen::naming::wit::package_dep_dir_name_from_encoder;
 use crate::wasm_rpc_stubgen::stub::{
-    FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition,
+    FunctionParamStub, FunctionResultStub, FunctionStub, StubDefinition,
 };
 use crate::wasm_rpc_stubgen::wit_encode::EncodedWitDir;
 use crate::wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
@@ -35,6 +35,8 @@ use wit_encoder::{
     WorldItem,
 };
 use wit_parser::{PackageId, Resolve, UnresolvedPackageGroup};
+
+use super::stub::StubbedEntity;
 
 pub fn generate_client_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
     log_action(
@@ -101,25 +103,22 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
         }
 
         // Async return types
-        for interface in def.stub_imported_interfaces() {
-            for (function, _) in interface.all_functions() {
+        for entity in def.stubbed_entities() {
+            for (function, _) in entity.all_functions() {
                 if !function.results.is_empty() {
-                    add_async_return_type(def, &mut stub_interface, function, interface)?;
+                    add_async_return_type(def, &mut stub_interface, function, entity)?;
                 }
             }
         }
 
         // Function definitions
-        for interface in def.stub_imported_interfaces() {
+        for entity in def.stubbed_entities() {
             let mut stub_functions = Vec::<ResourceFunc>::new();
 
             // Constructors
             {
                 let mut constructor = ResourceFunc::constructor();
-                let mut params = match &interface.constructor_params {
-                    Some(constructor_params) => constructor_params.to_encoder(def)?,
-                    None => Params::empty(),
-                };
+                let mut params = entity.constructor_params().to_encoder(def)?;
 
                 if !def.config.is_ephemeral {
                     params
@@ -132,10 +131,7 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
 
             {
                 let mut custom_constructor = ResourceFunc::static_("custom", false);
-                let mut params = match &interface.constructor_params {
-                    Some(constructor_params) => constructor_params.to_encoder(def)?,
-                    None => Params::empty(),
-                };
+                let mut params = entity.constructor_params().to_encoder(def)?;
                 params.items_mut().insert(
                     0,
                     (
@@ -153,12 +149,12 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
                 );
                 custom_constructor.set_params(params);
                 custom_constructor
-                    .set_result(Some(Type::Named(Ident::new(interface.name.clone()))));
+                    .set_result(Some(Type::Named(Ident::new(entity.name().to_string()))));
                 stub_functions.push(custom_constructor);
             }
 
             // Functions
-            for (function, is_static) in interface.all_functions() {
+            for (function, is_static) in entity.all_functions() {
                 // Blocking
                 {
                     let mut blocking_function = {
@@ -188,7 +184,7 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
                     async_function.set_params(function.params.to_encoder(def)?);
                     if !function.results.is_empty() {
                         async_function.set_result(Some(Type::Named(Ident::new(
-                            function.async_result_type(interface),
+                            function.async_result_type(entity),
                         ))));
                     }
                     stub_functions.push(async_function);
@@ -219,7 +215,7 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
                 }
             }
 
-            stub_interface.type_def(TypeDef::resource(interface.name.clone(), stub_functions));
+            stub_interface.type_def(TypeDef::resource(entity.name().to_string(), stub_functions));
         }
 
         package.interface(stub_interface);
@@ -239,15 +235,15 @@ fn add_async_return_type(
     def: &StubDefinition,
     stub_interface: &mut Interface,
     function: &FunctionStub,
-    owner_interface: &InterfaceStub,
+    owner_entity: &StubbedEntity,
 ) -> anyhow::Result<()> {
     let context = || {
         anyhow!(
-            "Failed to add async return type to stub, stub interface: {}, owner interface: {}, function: {:?}", stub_interface.name(), owner_interface.name, function.name)
+            "Failed to add async return type to stub, stub interface: {}, owner interface: {}, function: {:?}", stub_interface.name(), owner_entity.name(), function.name)
     };
 
     stub_interface.type_def(TypeDef::resource(
-        function.async_result_type(owner_interface),
+        function.async_result_type(owner_entity),
         [
             {
                 let mut subscribe = ResourceFunc::method("subscribe", false);

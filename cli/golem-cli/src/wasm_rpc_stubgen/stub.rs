@@ -56,7 +56,7 @@ pub struct StubDefinition {
     source_world_id: WorldId,
     package_sources: IndexMap<PackageId, PackageSource>,
 
-    stub_imported_interfaces: OnceLock<Vec<InterfaceStub>>,
+    stubbed_entities: OnceLock<Vec<StubbedEntity>>,
     stub_used_type_defs: OnceLock<Vec<InterfaceStubTypeDef>>,
     stub_dep_package_ids: OnceLock<HashSet<PackageId>>,
 
@@ -97,7 +97,7 @@ impl StubDefinition {
             resolve: resolved_source.resolve,
             source_world_id,
             package_sources: resolved_source.package_sources,
-            stub_imported_interfaces: OnceLock::new(),
+            stubbed_entities: OnceLock::new(),
             stub_used_type_defs: OnceLock::new(),
             stub_dep_package_ids: OnceLock::new(),
             source_package_id: resolved_source.package_id,
@@ -213,29 +213,41 @@ impl StubDefinition {
         ResolvedWitDir::new(&self.client_wit_root())
     }
 
-    pub fn stub_imported_interfaces(&self) -> &Vec<InterfaceStub> {
-        self.stub_imported_interfaces.get_or_init(|| {
+    pub fn stubbed_entities(&self) -> &Vec<StubbedEntity> {
+        self.stubbed_entities.get_or_init(|| {
             let WorldItemsByType {
                 types,
                 functions,
                 interfaces,
             } = self.partition_world_items(&self.source_world().exports);
 
-            interfaces
-                .into_iter()
-                .flat_map(|(name, interface)| self.interface_to_stub_interfaces(name, interface))
-                .chain(self.global_stub_interface(types, functions))
-                .collect::<Vec<_>>()
+            let mut stubs = Vec::new();
+            for (name, interface) in interfaces {
+                let (stubbed_interface, stubbed_resources) =
+                    self.interface_to_stubs(name, interface);
+                stubs.push(StubbedEntity::Interface(stubbed_interface));
+                for stubbed_resource in stubbed_resources {
+                    stubs.push(StubbedEntity::Resource(stubbed_resource))
+                }
+            }
+            if let Some((stubbed_world, stubbed_resources)) = self.world_to_stubs(types, functions)
+            {
+                stubs.push(StubbedEntity::WorldFunctions(stubbed_world));
+                for stubbed_resource in stubbed_resources {
+                    stubs.push(StubbedEntity::Resource(stubbed_resource))
+                }
+            };
+
+            stubs
         })
     }
 
     pub fn stub_used_type_defs(&self) -> &Vec<InterfaceStubTypeDef> {
         self.stub_used_type_defs.get_or_init(|| {
-            let imported_type_ids = self
-                .stub_imported_interfaces()
+
+            let imported_type_ids = self.stubbed_entities()
                 .iter()
-                .flat_map(|interface| &interface.used_types)
-                .cloned()
+                .flat_map(|se| se.used_types())
                 .collect::<HashSet<_>>();
 
             let imported_type_names = {
@@ -434,11 +446,11 @@ impl StubDefinition {
         functions.map(Self::function_to_stub).collect()
     }
 
-    fn global_stub_interface(
+    fn world_to_stubs(
         &self,
         types: Vec<(String, TypeId)>,
         functions: Vec<&Function>,
-    ) -> Option<InterfaceStub> {
+    ) -> Option<(StubbedWorldFunctions, Vec<StubbedResource>)> {
         if functions.is_empty() {
             return None;
         }
@@ -451,24 +463,21 @@ impl StubDefinition {
                 .filter(|function| function.kind == FunctionKind::Freestanding),
         );
 
-        let (used_types, _) = self.extract_resource_interface_stubs_from_types(types.into_iter());
-
-        Some(InterfaceStub {
+        let (stubbed_resources, used_types) =
+            self.extract_resource_stubs_from_types(types.into_iter());
+        let stubbed_world = StubbedWorldFunctions {
             name: name.to_string(),
             functions,
             used_types,
-            global: true,
-            constructor_params: None,
-            static_functions: vec![],
-            owner_interface: None,
-        })
+        };
+        Some((stubbed_world, stubbed_resources))
     }
 
-    fn interface_to_stub_interfaces(
+    fn interface_to_stubs(
         &self,
         name: String,
         interface: &Interface,
-    ) -> Vec<InterfaceStub> {
+    ) -> (StubbedInterface, Vec<StubbedResource>) {
         let package = interface
             .package
             .map(|package_id| self.resolve.packages.get(package_id).unwrap());
@@ -484,35 +493,29 @@ impl StubDefinition {
                 .filter(|function| function.kind == FunctionKind::Freestanding),
         );
 
-        let (used_types, resource_interfaces) = self.extract_resource_interface_stubs_from_types(
+        let (stubbed_resources, used_types) = self.extract_resource_stubs_from_types(
             interface
                 .types
                 .iter()
                 .map(|(name, typ)| (name.clone(), *typ)),
         );
 
-        let mut interface_stubs = Vec::with_capacity(1 + resource_interfaces.len());
-
-        interface_stubs.push(InterfaceStub {
+        let stubbed_interface = StubbedInterface {
             name,
             functions,
             used_types,
-            global: false,
-            constructor_params: None,
-            static_functions: vec![],
-            owner_interface,
-        });
-        interface_stubs.extend(resource_interfaces);
+            interface_name: owner_interface,
+        };
 
-        interface_stubs
+        (stubbed_interface, stubbed_resources)
     }
 
-    fn extract_resource_interface_stubs_from_types(
+    fn extract_resource_stubs_from_types(
         &self,
         types: impl Iterator<Item = (String, TypeId)>,
-    ) -> (Vec<TypeId>, Vec<InterfaceStub>) {
-        let mut used_types = Vec::<TypeId>::new();
-        let mut resource_interfaces = Vec::<InterfaceStub>::new();
+    ) -> (Vec<StubbedResource>, Vec<TypeId>) {
+        let mut used_types = Vec::new();
+        let mut resource_interfaces = Vec::new();
 
         for (type_name, type_id) in types {
             let type_def = self
@@ -529,7 +532,7 @@ impl StubDefinition {
                     .unwrap_or_else(|| panic!("interface {owner_interface_id:?} not found"));
 
                 if type_def.kind == TypeDefKind::Resource {
-                    resource_interfaces.push(self.resource_interface_stub(
+                    resource_interfaces.push(self.resource_to_stub(
                         owner_interface,
                         type_name,
                         type_id,
@@ -540,15 +543,15 @@ impl StubDefinition {
             }
         }
 
-        (used_types, resource_interfaces)
+        (resource_interfaces, used_types)
     }
 
-    fn resource_interface_stub(
+    fn resource_to_stub(
         &self,
         owner_interface: &Interface,
         type_name: String,
         type_id: TypeId,
-    ) -> InterfaceStub {
+    ) -> StubbedResource {
         let package = owner_interface
             .package
             .map(|package_id| self.resolve.packages.get(package_id).unwrap());
@@ -589,16 +592,6 @@ impl StubDefinition {
             }
         };
 
-        let (used_types, _) = self.extract_resource_interface_stubs_from_types(
-            owner_interface
-                .types
-                .iter()
-                // TODO: this is just a quick workaround filter for "self", but there could be
-                //       other cases for this code path going into infinite recursion
-                .filter(|(_, &id)| id != type_id)
-                .map(|(name, type_id)| (name.clone(), *type_id)),
-        );
-
         let constructor_params = functions_by_kind(FunctionKind::Constructor(type_id))
             .next()
             .map(|c| {
@@ -611,12 +604,10 @@ impl StubDefinition {
                     .collect::<Vec<_>>()
             });
 
-        InterfaceStub {
+        StubbedResource {
             name: type_name,
-            functions: function_stubs_by_kind(FunctionKind::Method(type_id)),
-            used_types,
-            global: false,
             constructor_params,
+            functions: function_stubs_by_kind(FunctionKind::Method(type_id)),
             static_functions: function_stubs_by_kind(FunctionKind::Static(type_id)),
             owner_interface: owner_interface_name,
         }
@@ -668,48 +659,116 @@ struct WorldItemsByType<'a> {
     pub interfaces: Vec<(String, &'a Interface)>,
 }
 
-#[derive(Debug, Clone)]
-pub struct InterfaceStub {
+pub struct StubbedWorldFunctions {
+    pub name: String,
+    pub functions: Vec<FunctionStub>,
+    pub used_types: Vec<TypeId>,
+}
+
+pub struct StubbedInterface {
+    pub name: String,
+    pub functions: Vec<FunctionStub>,
+    // name of the interface in case its not an inline interface
+    pub interface_name: Option<String>,
+    pub used_types: Vec<TypeId>,
+}
+
+pub struct StubbedResource {
     pub name: String,
     pub constructor_params: Option<Vec<FunctionParamStub>>,
     pub functions: Vec<FunctionStub>,
     pub static_functions: Vec<FunctionStub>,
-    pub used_types: Vec<TypeId>,
-    pub global: bool,
     pub owner_interface: Option<String>,
 }
 
-impl InterfaceStub {
-    // The returned bool is true if the function is static
-    pub fn all_functions(&self) -> impl Iterator<Item = (&FunctionStub, bool)> {
-        self.static_functions
-            .iter()
-            .map(|f| (f, true))
-            .chain(self.functions.iter().map(|f| (f, false)))
-    }
+pub enum StubbedEntity {
+    WorldFunctions(StubbedWorldFunctions),
+    Interface(StubbedInterface),
+    Resource(StubbedResource),
 }
 
-impl InterfaceStub {
-    pub fn is_resource(&self) -> bool {
-        self.constructor_params.is_some()
-    }
-
-    pub fn interface_name(&self) -> Option<&str> {
-        if self.global {
-            None
-        } else {
-            match &self.owner_interface {
-                Some(iface) => Some(iface),
-                None => Some(&self.name),
-            }
+impl StubbedEntity {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::WorldFunctions(inner) => &inner.name,
+            Self::Interface(inner) => &inner.name,
+            Self::Resource(inner) => &inner.name,
         }
     }
 
-    pub fn resource_name(&self) -> Option<&str> {
-        if self.is_resource() {
-            Some(&self.name)
-        } else {
-            None
+    pub fn used_types(&self) -> Vec<TypeId> {
+        match self {
+            Self::WorldFunctions(inner) => inner.used_types.clone(),
+            Self::Interface(inner) => inner.used_types.clone(),
+            Self::Resource(_) => vec![],
+        }
+    }
+
+    pub fn constructor_params(&self) -> Vec<FunctionParamStub> {
+        match self {
+            Self::WorldFunctions(_) => vec![],
+            Self::Interface(_) => vec![],
+            Self::Resource(inner) => inner.constructor_params.clone().unwrap_or_default(),
+        }
+    }
+
+    pub fn functions(&self) -> impl Iterator<Item = &FunctionStub> {
+        match self {
+            Self::WorldFunctions(inner) => inner.functions.iter(),
+            Self::Interface(inner) => inner.functions.iter(),
+            Self::Resource(inner) => inner.functions.iter(),
+        }
+    }
+
+    pub fn static_functions(&self) -> Box<dyn Iterator<Item = &FunctionStub> + '_> {
+        match self {
+            Self::WorldFunctions(_) => Box::new(std::iter::empty()),
+            Self::Interface(_) => Box::new(std::iter::empty()),
+            Self::Resource(inner) => Box::new(inner.static_functions.iter()),
+        }
+    }
+
+    pub fn all_functions(&self) -> Box<dyn Iterator<Item = (&FunctionStub, bool)> + '_> {
+        match self {
+            Self::WorldFunctions(inner) => Box::new(inner.functions.iter().map(|f| (f, false))),
+            Self::Interface(inner) => Box::new(inner.functions.iter().map(|f| (f, false))),
+            Self::Resource(inner) => Box::new(
+                inner
+                    .static_functions
+                    .iter()
+                    .map(|f| (f, true))
+                    .chain(inner.functions.iter().map(|f| (f, false))),
+            ),
+        }
+    }
+
+    pub fn is_resource(&self) -> bool {
+        match self {
+            Self::WorldFunctions(_) => false,
+            Self::Interface(_) => false,
+            Self::Resource(_) => true,
+        }
+    }
+
+    pub fn owner_interface(&self) -> Option<&str> {
+        match self {
+            Self::WorldFunctions(_) => None,
+            Self::Interface(inner) => inner.interface_name.as_deref(),
+            Self::Resource(inner) => inner.owner_interface.as_deref(),
+        }
+    }
+
+    pub fn interface_name(&self) -> Option<&str> {
+        match self {
+            Self::WorldFunctions(_) => None,
+            Self::Interface(inner) => inner
+                .interface_name
+                .as_deref()
+                .or_else(|| Some(self.name())),
+            Self::Resource(inner) => inner
+                .owner_interface
+                .as_deref()
+                .or_else(|| Some(self.name())),
         }
     }
 }
@@ -766,9 +825,9 @@ impl FunctionStub {
         })
     }
 
-    pub fn async_result_type(&self, owner: &InterfaceStub) -> String {
+    pub fn async_result_type(&self, owner: &StubbedEntity) -> String {
         if owner.is_resource() {
-            format!("future-{}-{}-result", owner.name, self.name)
+            format!("future-{}-{}-result", owner.name(), self.name)
         } else {
             format!("future-{}-result", self.name)
         }

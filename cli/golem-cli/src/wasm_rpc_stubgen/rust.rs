@@ -16,9 +16,7 @@ use crate::fs;
 use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize};
 use crate::wasm_rpc_stubgen::naming;
-use crate::wasm_rpc_stubgen::stub::{
-    FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition,
-};
+use crate::wasm_rpc_stubgen::stub::{FunctionResultStub, FunctionStub, StubDefinition};
 use crate::wasm_rpc_stubgen::{GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION};
 use anyhow::anyhow;
 use heck::{ToShoutySnakeCase, ToUpperCamelCase};
@@ -32,6 +30,8 @@ use wit_parser::{
     TypeOwner, Variant,
 };
 
+use super::stub::StubbedEntity;
+
 pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let root_ns = def.rust_root_namespace();
     let root_name = def.rust_client_root_name();
@@ -41,11 +41,11 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let mut exports = Vec::new();
     let mut resource_type_aliases = Vec::new();
 
-    for interface in def.stub_imported_interfaces() {
-        let interface_ident = to_rust_ident(&interface.name).to_upper_camel_case();
+    for entity in def.stubbed_entities() {
+        let interface_ident = to_rust_ident(entity.name()).to_upper_camel_case();
         let interface_name = Ident::new(&interface_ident, Span::call_site());
 
-        let additional_fields = if interface.is_resource() {
+        let additional_fields = if entity.is_resource() {
             vec![quote! {
                 id: u64,
                 uri: golem_rust::wasm_rpc::Uri
@@ -53,7 +53,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         } else {
             vec![]
         };
-        let struct_fns: Vec<TokenStream> = if interface.is_resource() {
+        let struct_fns: Vec<TokenStream> = if entity.is_resource() {
             vec![quote! {
                 pub fn from_remote_handle(uri: golem_rust::wasm_rpc::Uri, id: u64) -> Self {
                     let worker_id: golem_rust::wasm_rpc::WorkerId = uri.clone().try_into().expect(
@@ -85,9 +85,9 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             type #interface_name = crate::#interface_name;
         });
 
-        for function in &interface.functions {
+        for function in entity.functions() {
             if !function.results.is_empty() {
-                let result_wrapper = naming::rust::result_wrapper_ident(function, interface);
+                let result_wrapper = naming::rust::result_wrapper_ident(function, entity);
                 struct_defs.push(quote! {
                     pub struct #result_wrapper {
                         pub future_invoke_result: FutureInvokeResult
@@ -99,9 +99,9 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                 });
             }
         }
-        for function in &interface.static_functions {
+        for function in entity.static_functions() {
             if !function.results.is_empty() {
-                let result_wrapper = naming::rust::result_wrapper_ident(function, interface);
+                let result_wrapper = naming::rust::result_wrapper_ident(function, entity);
                 struct_defs.push(quote! {
                     pub struct #result_wrapper {
                         pub future_invoke_result: FutureInvokeResult
@@ -116,15 +116,15 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     }
 
     let mut interface_impls = Vec::new();
-    for interface in def.stub_imported_interfaces() {
-        let interface_ident = to_rust_ident(&interface.name).to_upper_camel_case();
+    for entity in def.stubbed_entities() {
+        let interface_ident = to_rust_ident(entity.name()).to_upper_camel_case();
         let interface_name = Ident::new(&interface_ident, Span::call_site());
         let guest_interface_name =
             Ident::new(&format!("Guest{}", interface_ident), Span::call_site());
 
         let mut fn_impls = Vec::new();
-        for function in &interface.functions {
-            let mode = if interface.is_resource() {
+        for function in entity.functions() {
+            let mode = if entity.is_resource() {
                 FunctionMode::Method
             } else {
                 FunctionMode::Global
@@ -132,15 +132,15 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             fn_impls.push(generate_function_stub_source(
                 def,
                 function,
-                interface,
+                entity,
                 &interface_name,
                 mode,
             )?);
 
             if !function.results.is_empty() {
-                let result_wrapper = naming::rust::result_wrapper_ident(function, interface);
+                let result_wrapper = naming::rust::result_wrapper_ident(function, entity);
                 let result_wrapper_interface =
-                    naming::rust::result_wrapper_interface_ident(function, interface);
+                    naming::rust::result_wrapper_interface_ident(function, entity);
 
                 let subscribe = quote! {
                     fn subscribe(&self) -> golem_rust::wasm_rpc::Pollable {
@@ -156,7 +156,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
 
                 let get = generate_result_wrapper_get_source(
                     def,
-                    interface,
+                    entity,
                     function,
                     &interface_name,
                     mode,
@@ -172,19 +172,19 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             }
         }
 
-        for function in &interface.static_functions {
+        for function in entity.static_functions() {
             fn_impls.push(generate_function_stub_source(
                 def,
                 function,
-                interface,
+                entity,
                 &interface_name,
                 FunctionMode::Static,
             )?);
 
             if !function.results.is_empty() {
-                let result_wrapper = naming::rust::result_wrapper_ident(function, interface);
+                let result_wrapper = naming::rust::result_wrapper_ident(function, entity);
                 let result_wrapper_interface =
-                    naming::rust::result_wrapper_interface_ident(function, interface);
+                    naming::rust::result_wrapper_interface_ident(function, entity);
 
                 let subscribe = quote! {
                     fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
@@ -200,7 +200,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
 
                 let get = generate_result_wrapper_get_source(
                     def,
-                    interface,
+                    entity,
                     function,
                     &interface_name,
                     FunctionMode::Static,
@@ -216,16 +216,16 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             }
         }
 
-        let constructor = if interface.is_resource() {
+        let constructor = if entity.is_resource() {
             let constructor_stub = FunctionStub {
                 name: "new".to_string(),
-                params: interface.constructor_params.clone().unwrap_or_default(),
+                params: entity.constructor_params(),
                 results: FunctionResultStub::SelfType,
             };
             let default_constructor = generate_function_stub_source(
                 def,
                 &constructor_stub,
-                interface,
+                entity,
                 &interface_name,
                 FunctionMode::Constructor,
             )?;
@@ -235,7 +235,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             let custom_constructor = generate_function_stub_source(
                 def,
                 &custom_constructor_stub,
-                interface,
+                entity,
                 &interface_name,
                 FunctionMode::CustomConstructor,
             )?;
@@ -297,12 +297,9 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             }
         });
 
-        let remote_function_name = get_remote_function_name(
-            interface.interface_name(),
-            interface.resource_name(),
-            "drop",
-        );
-        if interface.is_resource() {
+        if entity.is_resource() {
+            let remote_function_name = get_remote_function_name(entity, "drop");
+
             interface_impls.push(quote! {
                 impl Drop for #interface_name {
                     fn drop(&mut self) {
@@ -353,6 +350,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         "Generating",
         format!("stub source to {}", target_rust_path.log_color_highlight()),
     );
+    println!("target: {:?}", target_rust_path.as_path());
     fs::create_dir_all(target_rust_path.parent()?)?;
     fs::write(def.client_rust_path(), src)?;
     Ok(())
@@ -369,7 +367,7 @@ enum FunctionMode {
 
 fn generate_result_wrapper_get_source(
     def: &StubDefinition,
-    interface: &InterfaceStub,
+    entity: &StubbedEntity,
     function: &FunctionStub,
     interface_name: &Ident,
     mode: FunctionMode,
@@ -377,11 +375,7 @@ fn generate_result_wrapper_get_source(
     let result_type = get_result_type_source(def, function, interface_name, mode)?;
     let output_values = get_output_values_source(def, function, interface_name, mode)?;
 
-    let remote_function_name = get_remote_function_name(
-        interface.interface_name(),
-        interface.resource_name(),
-        &function.name,
-    );
+    let remote_function_name = get_remote_function_name(entity, &function.name);
 
     Ok(quote! {
         fn get(&self) -> Option<#result_type> {
@@ -396,7 +390,7 @@ fn generate_result_wrapper_get_source(
 fn generate_function_stub_source(
     def: &StubDefinition,
     function: &FunctionStub,
-    owner: &InterfaceStub,
+    owner: &StubbedEntity,
     interface_name: &Ident,
     mode: FunctionMode,
 ) -> anyhow::Result<TokenStream> {
@@ -450,8 +444,7 @@ fn generate_function_stub_source(
     let output_values = get_output_values_source(def, function, interface_name, mode)?;
 
     let remote_function_name = get_remote_function_name(
-        owner.interface_name(),
-        owner.resource_name(),
+        owner,
         if mode == FunctionMode::CustomConstructor {
             "new" // custom constructors still have to call the real remote constructor
         } else {
@@ -730,22 +723,14 @@ fn get_result_type_source(
     Ok(result_type)
 }
 
-fn get_remote_function_name(
-    interface_name: Option<&str>,
-    resource_name: Option<&str>,
-    function_name: &str,
-) -> String {
-    match (interface_name, resource_name) {
-        (Some(remote_interface), None) => {
-            format!("{}.{{{}}}", remote_interface, function_name)
-        }
-        (Some(remote_interface), Some(resource)) => {
-            format!("{}.{{{}.{}}}", remote_interface, resource, function_name)
-        }
-        (None, Some(resource)) => {
-            format!("{}.{}", resource, function_name)
-        }
-        (None, None) => function_name.to_string(),
+fn get_remote_function_name(entity: &StubbedEntity, function_name: &str) -> String {
+    match entity {
+        StubbedEntity::WorldFunctions(_) => function_name.to_string(),
+        StubbedEntity::Interface(inner) => format!("{}.{{{}}}", inner.name, function_name),
+        StubbedEntity::Resource(inner) => match &inner.owner_interface {
+            Some(owner) => format!("{}.{{{}.{}}}", owner, inner.name, function_name),
+            None => format!("{}.{}", inner.name, function_name),
+        },
     }
 }
 

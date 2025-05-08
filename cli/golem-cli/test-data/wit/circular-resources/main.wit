@@ -1,0 +1,18 @@
+// Example of exported resources with constructors, methods and static methods
+
+package test:main;
+
+interface iface {
+  resource resource1 {
+    constructor(name: string);
+    func1: func() -> resource2;
+  }
+  resource resource2 {
+   constructor(name: string);
+   func2: func() -> resource1;
+ }
+}
+
+world api {
+  export iface;
+}

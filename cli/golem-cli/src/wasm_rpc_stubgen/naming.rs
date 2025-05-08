@@ -157,7 +157,7 @@ pub mod wit {
 }
 
 pub mod rust {
-    use crate::wasm_rpc_stubgen::stub::{FunctionStub, InterfaceStub};
+    use crate::wasm_rpc_stubgen::stub::{FunctionStub, StubbedEntity};
     use heck::{ToSnakeCase, ToUpperCamelCase};
     use proc_macro2::{Ident, Span};
     use wit_bindgen_rust::to_rust_ident;
@@ -185,14 +185,14 @@ pub mod rust {
         format!("wasm-rpc-client-{}", source_world.name)
     }
 
-    pub fn result_wrapper_ident(function: &FunctionStub, owner: &InterfaceStub) -> Ident {
+    pub fn result_wrapper_ident(function: &FunctionStub, owner: &StubbedEntity) -> Ident {
         Ident::new(
             &to_rust_ident(&function.async_result_type(owner)).to_upper_camel_case(),
             Span::call_site(),
         )
     }
 
-    pub fn result_wrapper_interface_ident(function: &FunctionStub, owner: &InterfaceStub) -> Ident {
+    pub fn result_wrapper_interface_ident(function: &FunctionStub, owner: &StubbedEntity) -> Ident {
         Ident::new(
             &to_rust_ident(&format!("guest-{}", function.async_result_type(owner)))
                 .to_upper_camel_case(),
