@@ -564,39 +564,40 @@ impl InferredType {
     }
 
     pub fn all_of(types: Vec<InferredType>) -> Option<InferredType> {
-        let flattened = InferredType::flatten_all_of_inferred_types(&types);
-
-        let types: Vec<InferredType> = flattened.into_iter().filter(|t| !t.is_unknown()).collect();
-
-        let mut type_map: std::collections::HashMap<InferredType, InferredType> =
-            std::collections::HashMap::new();
-
-        for t in types {
-            type_map
-                .entry(t.clone())
-                .and_modify(|existing| {
-                    if t.total_origins() > existing.total_origins() {
-                        *existing = t.clone();
-                    }
-                })
-                .or_insert(t);
-        }
-
-        if type_map.is_empty() {
-            None
-        } else if type_map.len() == 1 {
-            type_map.into_iter().next().map(|(_, t)| t)
-        } else {
-            let mut unique_all_of_types: Vec<InferredType> = type_map.into_values().collect();
-            unique_all_of_types.sort(); // Assuming InferredType implements Ord
-
-            let origin = TypeOrigin::NoOrigin;
-
-            Some(InferredType {
-                inner: Box::new(TypeInternal::AllOf(unique_all_of_types)),
-                origin,
-            })
-        }
+        Some(merge(&types))
+        // let flattened = InferredType::flatten_all_of_inferred_types(&types);
+        //
+        // let types: Vec<InferredType> = flattened.into_iter().filter(|t| !t.is_unknown()).collect();
+        //
+        // let mut type_map: std::collections::HashMap<InferredType, InferredType> =
+        //     std::collections::HashMap::new();
+        //
+        // for t in types {
+        //     type_map
+        //         .entry(t.clone())
+        //         .and_modify(|existing| {
+        //             if t.total_origins() > existing.total_origins() {
+        //                 *existing = t.clone();
+        //             }
+        //         })
+        //         .or_insert(t);
+        // }
+        //
+        // if type_map.is_empty() {
+        //     None
+        // } else if type_map.len() == 1 {
+        //     type_map.into_iter().next().map(|(_, t)| t)
+        // } else {
+        //     let mut unique_all_of_types: Vec<InferredType> = type_map.into_values().collect();
+        //     unique_all_of_types.sort(); // Assuming InferredType implements Ord
+        //
+        //     let origin = TypeOrigin::NoOrigin;
+        //
+        //     Some(InferredType {
+        //         inner: Box::new(TypeInternal::AllOf(unique_all_of_types)),
+        //         origin,
+        //     })
+        // }
     }
 
     pub fn is_unit(&self) -> bool {

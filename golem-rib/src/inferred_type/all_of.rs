@@ -19,6 +19,11 @@ use crate::inferred_type::TypeOrigin;
 pub(crate) use internal::*;
 pub(crate) use type_identifiers::*;
 
+
+pub fn merge(inferred_types: &Vec<InferredType>) -> InferredType {
+    get_merge_task(inferred_types).complete()
+}
+
 // This module is responsible to merge the types when constructing InferredType::AllOf, while
 // selecting the type with maximum `TypeOrigin` information. This gives two advantages.
 
@@ -225,7 +230,7 @@ impl<'a> MergeTaskStack<'a> {
                     let merged = flatten_all_of(list_types);
 
                     let inferred_type =
-                        InferredType::new(TypeInternal::List(merged), TypeOrigin::NoOrigin);
+                        InferredType::new(TypeInternal::Option(merged), TypeOrigin::NoOrigin);
 
                     types.insert(option_builder.task_index, inferred_type);
                 }
@@ -730,6 +735,8 @@ impl<'a> RecordBuilder<'a> {
         }
     }
 }
+
+
 
 fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'a> {
     let mut temp_task_queue = VecDeque::new();
@@ -1261,13 +1268,18 @@ pub fn flatten_all_of(types: Vec<InferredType>) -> InferredType {
         }
     }
 
-    let mut result = result_map.into_values().collect::<Vec<_>>();
+    let mut result =
+        result_map.into_values().collect::<Vec<_>>();
 
     if result.len() == 1 {
         result[0].clone()
     } else {
-        result.sort();
-        InferredType::new(TypeInternal::AllOf(result), TypeOrigin::NoOrigin)
+        let mut filtered =
+            result.into_iter().filter(|x| !x.is_unknown()).collect::<Vec<_>>();
+
+        filtered.sort();
+
+        InferredType::new(TypeInternal::AllOf(filtered), TypeOrigin::NoOrigin)
     }
 }
 
@@ -1928,8 +1940,6 @@ mod tests {
             ],
         };
 
-        dbg!(&merge_task_stack);
-
         assert_eq!(&merge_task_stack, &expected);
 
         let completed_task = merge_task_stack.complete();
@@ -2079,8 +2089,6 @@ mod tests {
                 MergeTask::Complete(6, &u64),
             ],
         };
-
-        dbg!(&merge_task_stack);
 
         assert_eq!(&merge_task_stack, &expected_stack);
 
@@ -2483,8 +2491,6 @@ mod tests {
                 ),
             ),
         ])]);
-
-        dbg!(&completed_task);
 
         let expected_tuple = InferredType::new(
             TypeInternal::AllOf(vec![tuple1, tuple2]),
