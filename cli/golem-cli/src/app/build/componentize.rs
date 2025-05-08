@@ -72,9 +72,13 @@ fn components_to_build(ctx: &ApplicationContext) -> BTreeSet<AppComponentName> {
         components_to_build.insert(component_name.clone());
 
         for dep in ctx.application.component_dependencies(&component_name) {
-            if dep.dep_type == DependencyType::Wasm && !components_to_build.contains(&dep.name) {
-                components_to_build.insert(dep.name.clone());
-                remaining.push(dep.name.clone());
+            if dep.dep_type == DependencyType::Wasm {
+                if let Some(dep) = dep.as_dependent_app_component() {
+                    if !components_to_build.contains(&dep.name) {
+                        components_to_build.insert(dep.name.clone());
+                        remaining.push(dep.name.clone());
+                    }
+                }
             }
         }
     }

@@ -16,12 +16,14 @@ use crate::app::build::build_app;
 use crate::app::build::clean::clean_app;
 use crate::app::build::external_command::execute_custom_command;
 use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
+use crate::app::remote_components::RemoteComponents;
+use crate::context::Clients;
 use crate::fs::{compile_and_collect_globs, PathExtra};
 use crate::log::{log_action, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::{
     includes_from_yaml_file, AppComponentName, Application, ApplicationComponentSelectMode,
-    ApplicationConfig, ApplicationSourceMode, BuildProfileName, ComponentStubInterfaces,
-    DynamicHelpSections, DEFAULT_CONFIG_FILE_NAME,
+    ApplicationConfig, ApplicationSourceMode, BinaryComponentSource, BuildProfileName,
+    ComponentStubInterfaces, DependentComponent, DynamicHelpSections, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
 use crate::validation::{ValidatedResult, ValidationBuilder};
@@ -46,10 +48,14 @@ pub struct ApplicationContext {
     common_wit_deps: OnceLock<anyhow::Result<WitDepsResolver>>,
     component_generated_base_wit_deps: HashMap<AppComponentName, WitDepsResolver>,
     selected_component_names: BTreeSet<AppComponentName>,
+    remote_components: RemoteComponents,
 }
 
 impl ApplicationContext {
-    pub fn new(config: ApplicationConfig) -> anyhow::Result<Option<ApplicationContext>> {
+    pub fn new(
+        config: ApplicationConfig,
+        clients: &Clients,
+    ) -> anyhow::Result<Option<ApplicationContext>> {
         let Some(app_and_calling_working_dir) = load_app(&config) else {
             return Ok(None);
         };
@@ -58,6 +64,8 @@ impl ApplicationContext {
             "Failed to create application context, see problems above",
             app_and_calling_working_dir.and_then(|(application, calling_working_dir)| {
                 ResolvedWitApplication::new(&application, config.profile.as_ref()).map(|wit| {
+                    let temp_dir = application.temp_dir();
+                    let offline = config.offline;
                     ApplicationContext {
                         config,
                         application,
@@ -67,6 +75,11 @@ impl ApplicationContext {
                         common_wit_deps: OnceLock::new(),
                         component_generated_base_wit_deps: HashMap::new(),
                         selected_component_names: BTreeSet::new(),
+                        remote_components: RemoteComponents::new(
+                            clients.file_download.clone(),
+                            temp_dir,
+                            offline,
+                        ),
                     }
                 })
             }),
@@ -483,6 +496,23 @@ impl ApplicationContext {
         clean_app(self)
     }
 
+    pub async fn resolve_binary_component_source(
+        &self,
+        dep: &DependentComponent,
+    ) -> anyhow::Result<PathBuf> {
+        match &dep.source {
+            BinaryComponentSource::AppComponent { name } => {
+                if dep.dep_type.is_wasm_rpc() {
+                    Ok(self.application.client_wasm(name))
+                } else {
+                    Ok(self.application.component_wasm(name, self.profile()))
+                }
+            }
+            BinaryComponentSource::LocalFile { path } => Ok(path.clone()),
+            BinaryComponentSource::Url { url } => self.remote_components.get_from_url(url).await,
+        }
+    }
+
     pub fn log_dynamic_help(&self, config: &DynamicHelpSections) -> anyhow::Result<()> {
         static LABEL_SOURCE: &str = "Source";
         static LABEL_SELECTED: &str = "Selected";
@@ -585,7 +615,7 @@ impl ApplicationContext {
                         for dependency in dependencies {
                             logln(format!(
                                 "      - {} ({})",
-                                dependency.name.as_str().bold(),
+                                dependency.source.to_string().bold(),
                                 dependency.dep_type.as_str(),
                             ))
                         }

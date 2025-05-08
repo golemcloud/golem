@@ -252,7 +252,12 @@ pub struct ExternalCommand {
 pub struct Dependency {
     #[serde(rename = "type")]
     pub type_: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::context::check_http_response_success;
 use crate::log::{log_action, LogColorize, LogIndent};
 use crate::model::app::InitialComponentFile;
 use anyhow::{anyhow, bail, Context};
@@ -20,7 +21,6 @@ use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use golem_common::model::{ComponentFilePathWithPermissions, ComponentFilePathWithPermissionsList};
 use itertools::Itertools;
-use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -304,7 +304,7 @@ impl FileProcessor<LoadedFile> for FileLoader {
             .await
             .with_context(|| anyhow!("Failed to download remote IFS file: {}", url))?;
 
-        let response = check_response_success(response).await?;
+        let response = check_http_response_success(response).await?;
 
         let bytes = response
             .bytes()
@@ -370,7 +370,7 @@ impl FileProcessor<HashedFile> for FileHasher {
             .await
             .with_context(|| anyhow!("Failed to stream remote IFS file: {}", url))?;
 
-        let response = check_response_success(response).await?;
+        let response = check_http_response_success(response).await?;
 
         let mut hasher = blake3::Hasher::new();
         let mut stream = response.bytes_stream();
@@ -385,26 +385,6 @@ impl FileProcessor<HashedFile> for FileHasher {
             target: target.clone(),
         })
     }
-}
-
-async fn check_response_success(response: reqwest::Response) -> anyhow::Result<reqwest::Response> {
-    if !response.status().is_success() {
-        let url = response.url().clone();
-        let status = response.status();
-        let bytes = response.bytes().await.ok();
-        let error_payload = bytes
-            .as_ref()
-            .map(|bytes| String::from_utf8_lossy(bytes.as_ref()))
-            .unwrap_or_else(|| Cow::from(""));
-
-        bail!(
-            "Received unexpected response for {}: {}\n{}",
-            url,
-            status,
-            error_payload
-        );
-    }
-    Ok(response)
 }
 
 // TODO: add this to manifest validation (too or instead of doing it here)?

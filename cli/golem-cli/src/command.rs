@@ -799,6 +799,8 @@ pub mod component {
     use crate::model::{ComponentName, WorkerUpdateMode};
     use clap::Subcommand;
     use golem_templates::model::PackageName;
+    use std::path::PathBuf;
+    use url::Url;
 
     #[derive(Debug, Subcommand)]
     pub enum ComponentSubcommand {
@@ -840,9 +842,15 @@ pub mod component {
             /// The name of the component to which the dependency should be added
             #[arg(long)]
             component_name: Option<ComponentName>,
-            /// The name of the component that will be used as a component
-            #[arg(long)]
+            /// The name of the component that will be used as the target component
+            #[arg(long, conflicts_with_all = ["target_component_path", "target_component_url"])]
             target_component_name: Option<ComponentName>,
+            /// The path to the local component WASM that will be used as the target
+            #[arg(long, conflicts_with_all = ["target_component_name", "target_component_url"])]
+            target_component_path: Option<PathBuf>,
+            /// The URL to the remote component WASM that will be used as the target
+            #[arg(long, conflicts_with_all = ["target_component_name", "target_component_path"])]
+            target_component_url: Option<Url>,
             /// The type of the dependency, defaults to wasm-rpc
             #[arg(long)]
             dependency_type: Option<DependencyType>,

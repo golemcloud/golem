@@ -133,7 +133,7 @@ impl TaskResultMarkerHashSource for LinkRpcMarkerHash<'_> {
             self.component_name,
             self.dependencies
                 .iter()
-                .map(|s| format!("{}#{}", s.name.as_str(), s.dep_type.as_str()))
+                .map(|s| format!("{}#{}", s.source, s.dep_type.as_str()))
                 .join(",")
         )))
     }

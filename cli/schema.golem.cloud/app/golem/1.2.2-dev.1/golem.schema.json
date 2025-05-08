@@ -392,6 +392,40 @@
             "target"
           ],
           "additionalProperties": false
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": ["wasm-rpc", "wasm", "wasm-rpc-static"],
+              "description": "Type of the dependency"
+            },
+            "path": {
+              "type": "string",
+              "description": "Target component WASM path."
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": ["wasm-rpc", "wasm", "wasm-rpc-static"],
+              "description": "Type of the dependency"
+            },
+            "url": {
+              "type": "string",
+              "description": "Target component remote URL."
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "additionalProperties": false
         }
       ]
     },

@@ -25,7 +25,7 @@ use crate::model::app::{AppBuildStep, ApplicationSourceMode};
 use crate::model::app::{ApplicationConfig, BuildProfileName as AppBuildProfileName};
 use crate::model::{Format, HasFormatConfig};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use futures_util::future::BoxFuture;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionClientOss;
 use golem_client::api::ApiDeploymentClientLive as ApiDeploymentClientOss;
@@ -56,6 +56,7 @@ use golem_cloud_client::{Context as ContextCloud, Security};
 use golem_rib_repl::ReplDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
 use golem_templates::ComposableAppTemplate;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -286,10 +287,10 @@ impl Context {
 
     pub async fn app_context_lock_mut(
         &self,
-    ) -> tokio::sync::RwLockWriteGuard<'_, ApplicationContextState> {
+    ) -> anyhow::Result<tokio::sync::RwLockWriteGuard<'_, ApplicationContextState>> {
         let mut state = self.app_context_state.write().await;
-        state.init(&self.app_context_config);
-        state
+        state.init(&self.app_context_config, self.clients().await?);
+        Ok(state)
     }
 
     pub async fn unload_app_context(&self) {
@@ -618,7 +619,7 @@ pub struct ApplicationContextState {
 }
 
 impl ApplicationContextState {
-    fn init(&mut self, config: &ApplicationContextConfig) {
+    fn init(&mut self, config: &ApplicationContextConfig, clients: &Clients) {
         if self.app_context.is_some() {
             return;
         }
@@ -649,7 +650,7 @@ impl ApplicationContextState {
 
         debug!(config = ?config, "Initializing application context");
 
-        self.app_context = Some(ApplicationContext::new(config).map_err(Arc::new))
+        self.app_context = Some(ApplicationContext::new(config, clients).map_err(Arc::new))
     }
 
     pub fn opt(&self) -> anyhow::Result<Option<&ApplicationContext>> {
@@ -721,6 +722,28 @@ fn new_reqwest_client(config: &HttpClientConfig) -> anyhow::Result<reqwest::Clie
     }
 
     Ok(builder.connection_verbose(true).build()?)
+}
+
+pub async fn check_http_response_success(
+    response: reqwest::Response,
+) -> anyhow::Result<reqwest::Response> {
+    if !response.status().is_success() {
+        let url = response.url().clone();
+        let status = response.status();
+        let bytes = response.bytes().await.ok();
+        let error_payload = bytes
+            .as_ref()
+            .map(|bytes| String::from_utf8_lossy(bytes.as_ref()))
+            .unwrap_or_else(|| Cow::from(""));
+
+        bail!(
+            "Received unexpected response for {}: {}\n{}",
+            url,
+            status,
+            error_payload
+        );
+    }
+    Ok(response)
 }
 
 #[cfg(test)]

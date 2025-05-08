@@ -96,18 +96,20 @@ pub fn clean_app(ctx: &ApplicationContext) -> anyhow::Result<()> {
 
         for dep in ctx.application.all_dependencies() {
             if dep.dep_type.is_wasm_rpc() {
-                log_action(
-                    "Cleaning",
-                    format!(
-                        "component client {}",
-                        dep.name.as_str().log_color_highlight()
-                    ),
-                );
-                let _indent = LogIndent::new();
+                if let Some(dep) = dep.as_dependent_app_component() {
+                    log_action(
+                        "Cleaning",
+                        format!(
+                            "component client {}",
+                            dep.name.as_str().log_color_highlight()
+                        ),
+                    );
+                    let _indent = LogIndent::new();
 
-                delete_path_logged("client wit", &ctx.application.client_wit(&dep.name))?;
-                if dep.dep_type == DependencyType::StaticWasmRpc {
-                    delete_path_logged("client wasm", &ctx.application.client_wasm(&dep.name))?;
+                    delete_path_logged("client wit", &ctx.application.client_wit(&dep.name))?;
+                    if dep.dep_type == DependencyType::StaticWasmRpc {
+                        delete_path_logged("client wasm", &ctx.application.client_wasm(&dep.name))?;
+                    }
                 }
             }
         }

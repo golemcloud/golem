@@ -19,7 +19,9 @@ use crate::config::{
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, log_warn_action, logln, LogColorize};
-use crate::model::app::{AppComponentName, DependencyType, HttpApiDeploymentSite};
+use crate::model::app::{
+    AppComponentName, BinaryComponentSource, DependencyType, HttpApiDeploymentSite,
+};
 use crate::model::component::AppComponentType;
 use crate::model::text::fmt::{log_error, log_warn};
 use crate::model::{ComponentName, Format, NewInteractiveApp, WorkerName};
@@ -35,6 +37,7 @@ use inquire::{Confirm, CustomType, InquireError, Select, Text};
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -266,8 +269,10 @@ impl InteractiveHandler {
         &self,
         component_name: Option<AppComponentName>,
         target_component_name: Option<AppComponentName>,
+        target_component_file: Option<PathBuf>,
+        target_component_url: Option<Url>,
         dependency_type: Option<DependencyType>,
-    ) -> anyhow::Result<Option<(AppComponentName, AppComponentName, DependencyType)>> {
+    ) -> anyhow::Result<Option<(AppComponentName, BinaryComponentSource, DependencyType)>> {
         let component_type_by_name =
             async |component_name: &AppComponentName| -> anyhow::Result<AppComponentType> {
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -399,8 +404,18 @@ impl InteractiveHandler {
             }
         };
 
-        let target_component_name = match target_component_name {
-            Some(target_component_name) => {
+        let target_component_source = match (
+            target_component_name,
+            target_component_file,
+            target_component_url,
+        ) {
+            (None, Some(target_component_file), None) => BinaryComponentSource::LocalFile {
+                path: target_component_file,
+            },
+            (None, None, Some(target_component_url)) => BinaryComponentSource::Url {
+                url: target_component_url,
+            },
+            (Some(target_component_name), None, None) => {
                 if !component_names.contains(&target_component_name) {
                     log_error(format!(
                         "Target component {} not found, available components: {}",
@@ -419,19 +434,21 @@ impl InteractiveHandler {
                     target_component_type,
                 ) {
                     log_error(
-                        format!(
-                            "The target component type {} is not compatible with the selected dependency type {}!",
-                            target_component_type.to_string().log_color_highlight(),
-                            dependency_type.as_str().log_color_highlight(),
-                        )
-                    );
+                            format!(
+                                "The target component type {} is not compatible with the selected dependency type {}!",
+                                target_component_type.to_string().log_color_highlight(),
+                                dependency_type.as_str().log_color_highlight(),
+                            )
+                        );
                     logln("");
                     logln("Use a different target component or dependency type.");
                 }
 
-                target_component_name
+                BinaryComponentSource::AppComponent {
+                    name: target_component_name,
+                }
             }
-            None => {
+            _ => {
                 let target_component_names = {
                     let app_ctx = self.ctx.app_context_lock().await;
                     let app_ctx = app_ctx.some_or_err()?;
@@ -465,7 +482,9 @@ impl InteractiveHandler {
                 .prompt()
                 .none_if_not_interactive_logged()?
                 {
-                    Some(target_component_name) => target_component_name,
+                    Some(target_component_name) => BinaryComponentSource::AppComponent {
+                        name: target_component_name,
+                    },
                     None => return Ok(None),
                 }
             }
@@ -473,7 +492,7 @@ impl InteractiveHandler {
 
         Ok(Some((
             component_name,
-            target_component_name,
+            target_component_source,
             dependency_type,
         )))
     }

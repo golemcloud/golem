@@ -45,15 +45,17 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
             .iter()
             .filter(|dep| dep.dep_type == DependencyType::DynamicWasmRpc)
             .collect::<BTreeSet<_>>();
-        let wasms_to_compose_with = static_dependencies
-            .iter()
-            .map(|dep| ctx.application.client_wasm(&dep.name))
-            .chain(
-                library_dependencies
-                    .iter()
-                    .map(|dep| ctx.application.component_wasm(&dep.name, ctx.profile())),
-            )
-            .collect::<Vec<_>>();
+
+        let mut wasms_to_compose_with = Vec::new();
+        for static_dep in &static_dependencies {
+            let path = ctx.resolve_binary_component_source(static_dep).await?;
+            wasms_to_compose_with.push(path);
+        }
+        for library_dep in &library_dependencies {
+            let path = ctx.resolve_binary_component_source(library_dep).await?;
+            wasms_to_compose_with.push(path);
+        }
+
         let component_wasm = ctx
             .application
             .component_wasm(component_name, ctx.profile());
@@ -74,7 +76,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
                     "dynamic WASM RPC dependencies ({}) for {}",
                     dynamic_dependencies
                         .iter()
-                        .map(|s| s.name.as_str().log_color_highlight())
+                        .map(|s| s.source.to_string().log_color_highlight())
                         .join(", "),
                     component_name.as_str().log_color_highlight(),
                 ),
@@ -88,7 +90,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
                     "static WASM RPC dependencies ({}) for {}",
                     static_dependencies
                         .iter()
-                        .map(|s| s.name.as_str().log_color_highlight())
+                        .map(|s| s.source.to_string().log_color_highlight())
                         .join(", "),
                     component_name.as_str().log_color_highlight(),
                 ),
@@ -102,7 +104,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
                     "static WASM library dependencies ({}) for {}",
                     library_dependencies
                         .iter()
-                        .map(|s| s.name.as_str().log_color_highlight())
+                        .map(|s| s.source.to_string().log_color_highlight())
                         .join(", "),
                     component_name.as_str().log_color_highlight(),
                 ),
@@ -143,11 +145,11 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
                             "static dependencies ({}) into {}",
                             static_dependencies
                                 .iter()
-                                .map(|s| s.name.as_str().log_color_highlight())
+                                .map(|s| s.source.to_string().log_color_highlight())
                                 .chain(
                                     library_dependencies
                                         .iter()
-                                        .map(|s| s.name.as_str().log_color_highlight()),
+                                        .map(|s| s.source.to_string().log_color_highlight()),
                                 )
                                 .join(", "),
                             component_name.as_str().log_color_highlight(),

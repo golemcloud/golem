@@ -450,7 +450,7 @@ impl AppCommandHandler {
         }
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
-        let mut app_ctx = self.ctx.app_context_lock_mut().await;
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
         app_ctx.some_or_err_mut()?.build().await
     }
 
@@ -540,7 +540,7 @@ impl AppCommandHandler {
         default: &ApplicationComponentSelectMode,
         allow_not_found: bool,
     ) -> anyhow::Result<bool> {
-        let mut app_ctx = self.ctx.app_context_lock_mut().await;
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
         let silent_selection = app_ctx.silent_init;
         let Some(app_ctx) = app_ctx.opt_mut()? else {
             return Ok(false);

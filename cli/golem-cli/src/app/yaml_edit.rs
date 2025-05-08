@@ -14,7 +14,9 @@
 
 use crate::fs::{read_to_string, write_str};
 use crate::log::{log_warn_action, LogColorize};
-use crate::model::app::{AppComponentName, Application, DependencyType, HttpApiDefinitionName};
+use crate::model::app::{
+    AppComponentName, Application, BinaryComponentSource, DependencyType, HttpApiDefinitionName,
+};
 use anyhow::{anyhow, Context};
 use nondestructive::yaml::{Document, Id, MappingMut, Separator, SequenceMut, Value, ValueMut};
 use std::collections::HashMap;
@@ -41,10 +43,11 @@ impl<'a> AppYamlEditor<'a> {
     pub fn insert_or_update_dependency(
         &mut self,
         component_name: &AppComponentName,
-        target_component_name: &AppComponentName,
+        target_component_source: &BinaryComponentSource,
         dependency_type: DependencyType,
     ) -> anyhow::Result<bool> {
-        let path = self.target_document_path_for_dependency(component_name, target_component_name);
+        let path =
+            self.target_document_path_for_dependency(component_name, target_component_source);
 
         let document = self.document_mut(&path)?;
         let root_value = document.as_mut();
@@ -59,40 +62,100 @@ impl<'a> AppYamlEditor<'a> {
                 anyhow!(
                     "expected mapping for dependency {} - {}, in {}",
                     component_name.as_str(),
-                    target_component_name.as_str(),
+                    target_component_source.to_string(),
                     path.display()
                 )
             })?;
-            let target = dep.get("target").ok_or_else(|| {
-                anyhow!(
-                    "expected target field for dependency {} - {},  in {}",
+
+            if let Some(target) = dep.get("target") {
+                let target_value = target.as_str_with_comments_workaround().ok_or_else(|| {
+                    anyhow!(
+                        "expected target field for dependency {} - {},  in {}",
+                        component_name.as_str(),
+                        target_component_source.to_string(),
+                        path.display()
+                    )
+                })?;
+                if let BinaryComponentSource::AppComponent { name } = target_component_source {
+                    if target_value == name.as_str() {
+                        dep_type_id = Some(
+                            dep.get("type")
+                                .ok_or_else(|| {
+                                    anyhow!(
+                                        "expected type field for dependency {} - {},  in {}",
+                                        component_name.as_str(),
+                                        target_component_source.to_string(),
+                                        path.display()
+                                    )
+                                })?
+                                .id(),
+                        );
+                        break;
+                    }
+                }
+            } else if let Some(path_field) = dep.get("path") {
+                let path_value = path_field
+                    .as_str_with_comments_workaround()
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "expected path field for dependency {} - {},  in {}",
+                            component_name.as_str(),
+                            target_component_source.to_string(),
+                            path.display()
+                        )
+                    })?;
+                if let BinaryComponentSource::LocalFile { path: target_path } =
+                    target_component_source
+                {
+                    if path_value == target_path.to_string_lossy() {
+                        dep_type_id = Some(
+                            dep.get("type")
+                                .ok_or_else(|| {
+                                    anyhow!(
+                                        "expected type field for dependency {} - {},  in {}",
+                                        component_name.as_str(),
+                                        target_component_source.to_string(),
+                                        path.display()
+                                    )
+                                })?
+                                .id(),
+                        );
+                        break;
+                    }
+                }
+            } else if let Some(url) = dep.get("url") {
+                let url_value = url.as_str_with_comments_workaround().ok_or_else(|| {
+                    anyhow!(
+                        "expected url field for dependency {} - {},  in {}",
+                        component_name.as_str(),
+                        target_component_source.to_string(),
+                        path.display()
+                    )
+                })?;
+                if let BinaryComponentSource::Url { url: target_url } = target_component_source {
+                    if url_value == target_url.to_string() {
+                        dep_type_id = Some(
+                            dep.get("type")
+                                .ok_or_else(|| {
+                                    anyhow!(
+                                        "expected type field for dependency {} - {},  in {}",
+                                        component_name.as_str(),
+                                        target_component_source.to_string(),
+                                        path.display()
+                                    )
+                                })?
+                                .id(),
+                        );
+                        break;
+                    }
+                }
+            } else {
+                Err(anyhow!(
+                    "expected target, path or url field for dependency {} - {},  in {}",
                     component_name.as_str(),
-                    target_component_name.as_str(),
+                    target_component_source.to_string(),
                     path.display()
-                )
-            })?;
-            let target_value = target.as_str_with_comments_workaround().ok_or_else(|| {
-                anyhow!(
-                    "expected target field for dependency {} - {},  in {}",
-                    component_name.as_str(),
-                    target_component_name.as_str(),
-                    path.display()
-                )
-            })?;
-            if target_value == target_component_name.as_str() {
-                dep_type_id = Some(
-                    dep.get("type")
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "expected type field for dependency {} - {},  in {}",
-                                component_name.as_str(),
-                                target_component_name.as_str(),
-                                path.display()
-                            )
-                        })?
-                        .id(),
-                );
-                break;
+                ))?;
             }
         }
 
@@ -111,7 +174,17 @@ impl<'a> AppYamlEditor<'a> {
                 }
 
                 let mut dep = dependencies.push(Separator::Auto).make_mapping();
-                dep.insert_str("target", target_component_name.as_str());
+                match target_component_source {
+                    BinaryComponentSource::AppComponent { name } => {
+                        dep.insert_str("target", name.as_str());
+                    }
+                    BinaryComponentSource::LocalFile { path } => {
+                        dep.insert_str("path", path.to_string_lossy());
+                    }
+                    BinaryComponentSource::Url { url } => {
+                        dep.insert_str("url", url);
+                    }
+                }
                 dep.insert_str("type", dependency_type.as_str());
 
                 if empty_on_start {
@@ -191,19 +264,23 @@ impl<'a> AppYamlEditor<'a> {
     fn existing_document_path_for_dependency(
         &self,
         component_name: &AppComponentName,
-        target_component_name: &AppComponentName,
+        target_component_source: &BinaryComponentSource,
     ) -> Option<PathBuf> {
-        self.application
-            .dependency_source(component_name, target_component_name)
-            .map(|path| path.to_path_buf())
+        match target_component_source {
+            BinaryComponentSource::AppComponent { name } => self
+                .application
+                .dependency_source(component_name, name)
+                .map(|path| path.to_path_buf()),
+            _ => None,
+        }
     }
 
     fn target_document_path_for_dependency(
         &self,
         component_name: &AppComponentName,
-        target_component_name: &AppComponentName,
+        target_component_source: &BinaryComponentSource,
     ) -> PathBuf {
-        match self.existing_document_path_for_dependency(component_name, target_component_name) {
+        match self.existing_document_path_for_dependency(component_name, target_component_source) {
             Some(doc) => doc,
             None => self.document_path_for_component(component_name),
         }
