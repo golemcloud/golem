@@ -920,11 +920,7 @@ mod type_pull_up_tests {
 
         expr.pull_types_up().unwrap();
 
-        dbg!(&expr);
-
         let expected = internal::expected_pattern_match();
-
-        dbg!(&expected);
 
         assert_eq!(expr, expected);
     }
