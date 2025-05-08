@@ -1253,14 +1253,13 @@ pub fn flatten_all_of(types: Vec<InferredType>) -> InferredType {
             }
             _ => {
                 let key = typ.clone();
-                let current_origins = typ.total_origins();
 
                 result_map
                     .entry(key)
                     .and_modify(|existing| {
-                        if current_origins > existing.total_origins() {
-                            *existing = typ.clone();
-                        }
+                        let new_type = typ.add_origin(existing.origin.clone());
+
+                        *existing = new_type;
                     })
                     .or_insert(typ);
             }

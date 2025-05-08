@@ -316,14 +316,14 @@ mod type_refinement_tests {
 
         let refined_type = OptionalType::refine(&inferred_type).unwrap();
 
-        let expected_refine_type = RefinedType::Value(
-            OptionalType(InferredType::all_of(vec![
+        let expected_refine_type = RefinedType::Value(OptionalType(
+            InferredType::all_of(vec![
                 InferredType::u64(),
                 InferredType::u32(),
                 InferredType::string(),
             ])
-            .unwrap()),
-        );
+            .unwrap(),
+        ));
 
         let inner_type = refined_type.inner_type();
         let expected_inner_types = vec![
@@ -352,14 +352,14 @@ mod type_refinement_tests {
 
         let refined_type = OptionalType::refine(&inferred_type).unwrap();
 
-        let expected_refine_type = RefinedType::Value(
-            OptionalType(InferredType::all_of(vec![
+        let expected_refine_type = RefinedType::Value(OptionalType(
+            InferredType::all_of(vec![
                 InferredType::u64(),
                 InferredType::u32(),
                 InferredType::string(),
             ])
-            .unwrap()),
-        );
+            .unwrap(),
+        ));
 
         let inner_type = refined_type.inner_type();
         let expected_inner_type = InferredType::all_of(vec![

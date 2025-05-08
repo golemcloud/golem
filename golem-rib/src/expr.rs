@@ -14,7 +14,7 @@
 
 use crate::call_type::{CallType, InstanceCreationType};
 use crate::generic_type_parameter::GenericTypeParameter;
-use crate::inferred_type::{DefaultType, TypeOrigin};
+use crate::inferred_type::DefaultType;
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
@@ -1027,14 +1027,6 @@ impl Expr {
             inferred_type,
             source_span: SourceSpan::default(),
         }
-    }
-
-    pub fn propagate_origin(&mut self) {
-        let source_location = self.source_span();
-        let origin = TypeOrigin::OriginatedAt(source_location);
-        let inferred_type = self.inferred_type();
-        let origin = inferred_type.add_origin(origin);
-        self.with_inferred_type_mut(origin);
     }
 
     pub fn inferred_type(&self) -> InferredType {

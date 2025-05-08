@@ -29,12 +29,20 @@ pub fn set_pattern_match_origins(expr: &mut Expr) {
                 for arm in match_arms.iter_mut() {
                     let resolution = arm.arm_resolution_expr.as_mut();
                     let inferred_type = resolution.inferred_type();
-                    let with_origin = inferred_type.add_origin(TypeOrigin::PatternMatch(resolution.source_span()));
+                    let with_origin = inferred_type
+                        .add_origin(TypeOrigin::PatternMatch(resolution.source_span()));
                     *resolution = resolution.with_inferred_type(with_origin);
                 }
-                *inferred_type = inferred_type.add_origin(TypeOrigin::OriginatedAt(source_span.clone()))
+                *inferred_type =
+                    inferred_type.add_origin(TypeOrigin::OriginatedAt(source_span.clone()))
             }
-            expr => expr.propagate_origin(),
+            expr => {
+                let source_location = expr.source_span();
+                let origin = TypeOrigin::OriginatedAt(source_location.clone());
+                let inferred_type = expr.inferred_type();
+                let origin = inferred_type.add_origin(origin);
+                expr.with_inferred_type_mut(origin);
+            }
         }
     }
 }

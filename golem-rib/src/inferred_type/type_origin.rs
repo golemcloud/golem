@@ -36,7 +36,7 @@ pub enum TypeOrigin {
 
 impl Debug for TypeOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<SourceSpan>")
+        write!(f, "<OriginInfo>")
     }
 }
 #[derive(Clone, Debug, Eq, PartialOrd, Ord)]
