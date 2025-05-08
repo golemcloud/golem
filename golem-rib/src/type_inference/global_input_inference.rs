@@ -33,9 +33,7 @@ pub fn infer_global_inputs(expr: &mut Expr) {
             // We are only interested in global variables
             if variable_id.is_global() {
                 if let Some(types) = global_variables_dictionary.get(&variable_id.name()) {
-                    if let Some(all_of) = InferredType::all_of(types.clone()) {
-                        *inferred_type = inferred_type.merge(all_of)
-                    }
+                    *inferred_type = InferredType::all_of(types.clone())
                 }
             }
         }

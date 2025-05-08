@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use crate::rib_source_span::SourceSpan;
+use bigdecimal::BigDecimal;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Debug, Eq, PartialOrd, Ord)]
+#[derive(Clone, Eq, PartialOrd, Ord)]
 pub enum TypeOrigin {
     // the first OriginatedAt (if it's TypeOrigin::Multiple) at
     // this level is the source span of the expression to which this
@@ -26,25 +27,67 @@ pub enum TypeOrigin {
     // If an expression has an inferred type that was originated by default
     // this becomes the first origin. So to see if an expression's inferred type
     // was because it was `Default` then this is the first origin
-    Default,
+    Default(DefaultType),
     NoOrigin,
     Declared(SourceSpan),
     Multiple(Vec<TypeOrigin>),
     PatternMatch(SourceSpan),
 }
 
+impl Debug for TypeOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<OriginInfo>")
+    }
+}
+#[derive(Clone, Debug, Eq, PartialOrd, Ord)]
+pub enum DefaultType {
+    String,
+    F64,
+    S32,
+}
+
+impl From<&BigDecimal> for DefaultType {
+    fn from(value: &BigDecimal) -> Self {
+        if value.fractional_digit_count() <= 0 {
+            // Rust inspired
+            // https://github.com/rust-lang/rfcs/blob/master/text/0212-restore-int-fallback.md#rationale-for-the-choice-of-defaulting-to-i32
+            DefaultType::S32
+        } else {
+            // more precision, almost same perf as f32
+            DefaultType::F64
+        }
+    }
+}
+
+impl DefaultType {
+    pub fn eq(&self, other: &DefaultType) -> bool {
+        matches!(
+            (self, other),
+            (DefaultType::String, DefaultType::String)
+                | (DefaultType::F64, DefaultType::F64)
+                | (DefaultType::S32, DefaultType::S32)
+        )
+    }
+}
+
+impl PartialEq for DefaultType {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 impl TypeOrigin {
-    // To not interfere with equality logic of types
-    // yet if we need to specifically compare the type origins
+    // TypeOrigin need separate `eq` since Origin is always part of
+    // a InferredType and their equality shouldn't be affected even their origins are different.
     pub fn eq(&self, other: &TypeOrigin) -> bool {
         match (self, other) {
             (TypeOrigin::NoOrigin, TypeOrigin::NoOrigin) => true,
-            (TypeOrigin::Default, TypeOrigin::Default) => true,
+            (TypeOrigin::Default(df1), TypeOrigin::Default(df2)) => df1.eq(df2),
             (TypeOrigin::Declared(source_span1), TypeOrigin::Declared(source_span2)) => {
-                source_span1.is_equal(source_span2)
+                source_span1.eq(source_span2)
             }
             (TypeOrigin::PatternMatch(source_span1), TypeOrigin::PatternMatch(source_span2)) => {
-                source_span1.is_equal(source_span2)
+                source_span1.eq(source_span2)
             }
             (TypeOrigin::Multiple(origins1), TypeOrigin::Multiple(origins2)) => {
                 if origins1.len() != origins2.len() {
@@ -59,7 +102,7 @@ impl TypeOrigin {
                 }
             }
             (TypeOrigin::OriginatedAt(source_span1), TypeOrigin::OriginatedAt(source_span2)) => {
-                source_span1.is_equal(source_span2)
+                source_span1.eq(source_span2)
             }
 
             _ => false,
@@ -80,7 +123,7 @@ impl TypeOrigin {
                 TypeOrigin::Multiple(origins) => {
                     stack.extend(origins.iter());
                 }
-                TypeOrigin::Default | TypeOrigin::NoOrigin => {}
+                TypeOrigin::Default(_) | TypeOrigin::NoOrigin => {}
             }
         }
 
@@ -107,7 +150,7 @@ impl TypeOrigin {
                     if best.is_none()
                         || matches!(
                             best,
-                            Some(TypeOrigin::Default)
+                            Some(TypeOrigin::Default(_))
                                 | Some(TypeOrigin::NoOrigin)
                                 | Some(TypeOrigin::OriginatedAt(_))
                         )
@@ -115,14 +158,14 @@ impl TypeOrigin {
                         best = Some(TypeOrigin::Declared(span.clone()));
                     }
                 }
-                TypeOrigin::Default => {
+                TypeOrigin::Default(default) => {
                     if best.is_none()
                         || matches!(
                             best,
                             Some(TypeOrigin::NoOrigin) | Some(TypeOrigin::OriginatedAt(_))
                         )
                     {
-                        best = Some(TypeOrigin::Default);
+                        best = Some(TypeOrigin::Default(default.clone()));
                     }
                 }
                 TypeOrigin::OriginatedAt(source_span) => {
@@ -146,7 +189,7 @@ impl TypeOrigin {
 
     pub fn is_default(&self) -> bool {
         match self {
-            TypeOrigin::Default => true,
+            TypeOrigin::Default(_) => true,
             TypeOrigin::OriginatedAt(_) => false,
             TypeOrigin::NoOrigin => false,
             TypeOrigin::Declared(_) => false,
@@ -215,7 +258,7 @@ impl TypeOrigin {
 impl Hash for TypeOrigin {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
-            TypeOrigin::Default => 0.hash(state),
+            TypeOrigin::Default(_) => 0.hash(state),
             TypeOrigin::NoOrigin => 1.hash(state),
             TypeOrigin::Multiple(origins) => {
                 2.hash(state);
@@ -246,6 +289,7 @@ impl PartialEq for TypeOrigin {
 
 #[cfg(test)]
 mod tests {
+    use crate::inferred_type::type_origin::DefaultType;
     use crate::inferred_type::TypeOrigin;
     use crate::rib_source_span::{SourcePosition, SourceSpan};
     use test_r::test;
@@ -253,28 +297,37 @@ mod tests {
     #[test]
     fn test_origin_add_1() {
         let existing_origin = TypeOrigin::NoOrigin;
-        let result = existing_origin.add_origin(TypeOrigin::Default);
+        let result = existing_origin.add_origin(TypeOrigin::Default(DefaultType::S32));
 
-        assert_eq!(result, TypeOrigin::Default);
+        assert_eq!(result, TypeOrigin::Default(DefaultType::S32));
     }
 
     #[test]
     fn test_origin_add_2() {
-        let existing_origin = TypeOrigin::Default;
+        let existing_origin = TypeOrigin::Default(DefaultType::S32);
 
-        let result = existing_origin.add_origin(TypeOrigin::Default);
+        let result = existing_origin.add_origin(TypeOrigin::Default(DefaultType::S32));
 
-        assert!(result.eq(&TypeOrigin::Default));
+        assert!(result.eq(&TypeOrigin::Default(DefaultType::S32)));
+
+        let result = existing_origin.add_origin(TypeOrigin::Default(DefaultType::F64));
+
+        let expected = TypeOrigin::Multiple(vec![
+            TypeOrigin::Default(DefaultType::S32),
+            TypeOrigin::Default(DefaultType::F64),
+        ]);
+
+        assert!(result.eq(&expected));
     }
 
     #[test]
     fn test_origin_add_3() {
-        let existing_origin = TypeOrigin::Default;
+        let existing_origin = TypeOrigin::Default(DefaultType::S32);
 
         let result = existing_origin.add_origin(TypeOrigin::OriginatedAt(SourceSpan::default()));
 
         let expected = TypeOrigin::Multiple(vec![
-            TypeOrigin::Default,
+            TypeOrigin::Default(DefaultType::S32),
             TypeOrigin::OriginatedAt(SourceSpan::default()),
         ]);
 
@@ -284,7 +337,7 @@ mod tests {
     #[test]
     fn test_origin_add_4() {
         let type_origin1 = TypeOrigin::Multiple(vec![
-            TypeOrigin::Default,
+            TypeOrigin::Default(DefaultType::S32),
             TypeOrigin::OriginatedAt(SourceSpan::new(
                 SourcePosition::new(2, 37),
                 SourcePosition::new(2, 38),
@@ -303,7 +356,7 @@ mod tests {
         let result = type_origin1.add_origin(type_origin2.clone());
 
         let expected = TypeOrigin::Multiple(vec![
-            TypeOrigin::Default,
+            TypeOrigin::Default(DefaultType::S32),
             TypeOrigin::OriginatedAt(SourceSpan::new(
                 SourcePosition::new(2, 37),
                 SourcePosition::new(2, 38),
