@@ -83,7 +83,9 @@ impl<'a> MergeTaskStack<'a> {
 
                         let merged = flatten_all_of(field_types);
 
-                        fields.push((field.to_string(), merged));
+                        if !merged.is_unknown() {
+                            fields.push((field.to_string(), merged));
+                        }
                     }
 
                     let inferred_type =
