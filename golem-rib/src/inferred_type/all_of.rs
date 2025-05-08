@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{InferredType, Path, TypeInternal};
+use crate::{InferredType, Path, PathElem, TypeInternal};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::inferred_type::TypeOrigin;
@@ -293,17 +293,14 @@ impl<'a> MergeTaskStack<'a> {
 
     pub fn get_all_inspects(
         &mut self,
-        index: TaskIndex,
-        path: Path,
-        inferred_type: InferredType,
+        path: &Path,
+        inferred_type: &InferredType,
     ) -> Vec<&mut MergeTask<'a>> {
         self.tasks
             .iter_mut()
             .filter(|task| match task {
                 MergeTask::Inspect(inspect) => {
-                    inspect.task_index == index
-                        && inspect.path == path
-                        && inspect.inferred_type == &inferred_type
+                    &inspect.path == path && inspect.inferred_type == inferred_type
                 }
                 _ => false,
             })
@@ -925,10 +922,18 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                                     (next_available_index, next_available_index)
                                 };
 
-                            let mut builder = TupleBuilder::init(path, task_index, elems);
+                            let mut new_path = path.clone();
+                            let path_size = elems.len();
+
+                            // We need to discriminate tuples that differ in size
+                            // and keep them separate
+                            let path_field = PathElem::Field(format!("tuple-{}", path_size));
+                            new_path.push_back(path_field);
+
+                            let mut builder = TupleBuilder::init(&new_path, task_index, elems);
 
                             update_tuple_builder_and_update_tasks(
-                                path,
+                                &new_path,
                                 field_index,
                                 &mut builder,
                                 elems,
@@ -1682,6 +1687,100 @@ mod tests {
     }
 
     #[test]
+    fn test_all_of_merge_record_8() {
+        let internal = InferredType::record(vec![("bar".to_string(), InferredType::s8())]);
+
+        let internal_with_origin = InferredType::record(vec![(
+            "bar".to_string(),
+            InferredType::s8().add_origin(TypeOrigin::OriginatedAt(SourceSpan::default())),
+        )]);
+
+        let all_of_internal = TypeInternal::AllOf(vec![internal, internal_with_origin]);
+
+        let all_of = InferredType::new(all_of_internal, TypeOrigin::NoOrigin);
+
+        let inferred_types = vec![
+            InferredType::record(vec![("foo".to_string(), all_of.clone())]),
+            InferredType::record(vec![("foo".to_string(), all_of)]),
+        ];
+
+        let merge_task_stack = get_merge_task(&inferred_types);
+        let completed = merge_task_stack.complete();
+
+        let expected = InferredType::record(vec![(
+            "foo".to_string(),
+            InferredType::record(vec![("bar".to_string(), InferredType::s8())]),
+        )]);
+
+        assert_eq!(completed, expected);
+    }
+
+    #[test]
+    fn test_all_of_merge_record_9() {
+        let internal = InferredType::record(vec![("baz".to_string(), InferredType::s8())]);
+
+        let internal_with_origin = InferredType::record(vec![(
+            "baz".to_string(),
+            InferredType::s8().add_origin(TypeOrigin::OriginatedAt(SourceSpan::default())),
+        )]);
+
+        let all_of_internal = TypeInternal::AllOf(vec![internal, internal_with_origin]);
+
+        let all_of = InferredType::new(all_of_internal, TypeOrigin::NoOrigin);
+
+        let inferred_types = vec![
+            InferredType::record(vec![("foo".to_string(), all_of.clone())]),
+            InferredType::record(vec![("bar".to_string(), all_of)]),
+        ];
+
+        let merge_task_stack = get_merge_task(&inferred_types);
+
+        let completed = merge_task_stack.complete();
+
+        let baz_type = InferredType::record(vec![("baz".to_string(), InferredType::s8())]);
+
+        let expected_internal = TypeInternal::AllOf(vec![
+            InferredType::record(vec![("bar".to_string(), baz_type.clone())]),
+            InferredType::record(vec![("foo".to_string(), baz_type)]),
+        ]);
+
+        let expected = InferredType::new(expected_internal, TypeOrigin::NoOrigin);
+
+        assert_eq!(completed, expected);
+    }
+
+    #[test]
+    fn test_all_of_merge_record_10() {
+        let internal = InferredType::record(vec![("baz".to_string(), InferredType::s8())]);
+
+        let internal_with_origin = InferredType::record(vec![(
+            "baz".to_string(),
+            InferredType::s8().add_origin(TypeOrigin::OriginatedAt(SourceSpan::default())),
+        )]);
+
+        let all_of_internal = TypeInternal::AllOf(vec![internal, internal_with_origin]);
+
+        let all_of = InferredType::new(all_of_internal, TypeOrigin::NoOrigin);
+
+        let inferred_types = vec![InferredType::record(vec![
+            ("foo".to_string(), all_of.clone()),
+            ("bar".to_string(), all_of.clone()),
+        ])];
+
+        let merge_task_stack = get_merge_task(&inferred_types);
+        let completed = merge_task_stack.complete();
+
+        let baz_type = InferredType::record(vec![("baz".to_string(), InferredType::s8())]);
+
+        let expected = InferredType::record(vec![
+            ("foo".to_string(), baz_type.clone()),
+            ("bar".to_string(), baz_type),
+        ]);
+
+        assert_eq!(completed, expected);
+    }
+
+    #[test]
     fn test_all_of_merge_result_1() {
         let inferred_types = vec![
             InferredType::result(Some(InferredType::s8()), Some(InferredType::u8())),
@@ -1981,16 +2080,15 @@ mod tests {
         assert_eq!(completed_task, expected_type);
     }
 
+    // inspect 1
+    // inspect 2
+
+    //
     #[test]
     fn test_all_of_merge_variant_2() {
         let variant1 = InferredType::variant(vec![
             ("with_arg1".to_string(), Some(InferredType::s8())),
             ("without_arg2".to_string(), None),
-        ]);
-
-        let variant2 = InferredType::variant(vec![
-            ("with_arg3".to_string(), Some(InferredType::string())),
-            ("without_arg4".to_string(), None),
         ]);
 
         let inferred_types = vec![
@@ -1999,10 +2097,13 @@ mod tests {
                 ("without_arg".to_string(), None),
             ]),
             InferredType::variant(vec![
-                ("with_arg".to_string(), Some(variant2.clone())),
+                ("with_arg".to_string(), Some(variant1)),
                 ("without_arg".to_string(), None),
             ]),
         ];
+
+        let inferred_type_s8 = InferredType::s8();
+        let inferred_type_string = InferredType::string();
 
         let merge_task_stack = get_merge_task(&inferred_types);
 
@@ -2011,10 +2112,10 @@ mod tests {
         let expected_type = InferredType::variant(vec![
             (
                 "with_arg".to_string(),
-                Some(InferredType::new(
-                    TypeInternal::AllOf(vec![variant1, variant2]),
-                    TypeOrigin::NoOrigin,
-                )),
+                Some(InferredType::variant(vec![
+                    ("with_arg1".to_string(), Some(InferredType::s8())),
+                    ("without_arg2".to_string(), None),
+                ])),
             ),
             ("without_arg".to_string(), None),
         ]);
@@ -2105,6 +2206,134 @@ mod tests {
         ]);
 
         assert_eq!(completed_task, expected);
+    }
+
+    #[test]
+    fn test_all_of_merge_tuple_3() {
+        let all_of_internal = TypeInternal::AllOf(vec![
+            InferredType::s8(),
+            InferredType::u8(),
+            InferredType::string(),
+        ]);
+
+        let all_of = InferredType::new(all_of_internal.clone(), TypeOrigin::NoOrigin);
+
+        let record1 = InferredType::record(vec![
+            ("foo".to_string(), all_of.clone()),
+            ("bar".to_string(), all_of.clone()),
+        ]);
+
+        let record2 = InferredType::record(vec![
+            ("baz".to_string(), all_of.clone()),
+            ("qux".to_string(), all_of),
+        ]);
+
+        let all_of_record2 = InferredType::new(
+            TypeInternal::AllOf(vec![record2.clone(), record2.clone()]),
+            TypeOrigin::NoOrigin,
+        );
+
+        let all_of_record1 = InferredType::new(
+            TypeInternal::AllOf(vec![record1.clone(), record1.clone()]),
+            TypeOrigin::NoOrigin,
+        );
+
+        let tuple1 = InferredType::tuple(vec![record1.clone(), all_of_record2.clone()]);
+
+        let tuple2 = InferredType::tuple(vec![all_of_record1, record2]);
+
+        let tuple3 = InferredType::tuple(vec![record1]);
+
+        let inferred_types = vec![tuple1.clone(), tuple3.clone()];
+
+        let inferred_type_s8 = InferredType::s8();
+
+        let merge_task_stack = get_merge_task(&inferred_types);
+
+        let completed_task = merge_task_stack.complete();
+
+        let tuple1 = InferredType::tuple(vec![
+            InferredType::record(vec![
+                (
+                    "foo".to_string(),
+                    InferredType::new(
+                        TypeInternal::AllOf(vec![
+                            InferredType::s8(),
+                            InferredType::string(),
+                            InferredType::u8(),
+                        ]),
+                        TypeOrigin::NoOrigin,
+                    ),
+                ),
+                (
+                    "bar".to_string(),
+                    InferredType::new(
+                        TypeInternal::AllOf(vec![
+                            InferredType::u8(),
+                            InferredType::string(),
+                            InferredType::s8(),
+                        ]),
+                        TypeOrigin::NoOrigin,
+                    ),
+                ),
+            ]),
+            InferredType::record(vec![
+                (
+                    "baz".to_string(),
+                    InferredType::new(
+                        TypeInternal::AllOf(vec![
+                            InferredType::u8(),
+                            InferredType::string(),
+                            InferredType::s8(),
+                        ]),
+                        TypeOrigin::NoOrigin,
+                    ),
+                ),
+                (
+                    "qux".to_string(),
+                    InferredType::new(
+                        TypeInternal::AllOf(vec![
+                            InferredType::u8(),
+                            InferredType::string(),
+                            InferredType::s8(),
+                        ]),
+                        TypeOrigin::NoOrigin,
+                    ),
+                ),
+            ]),
+        ]);
+
+        let tuple2 = InferredType::tuple(vec![InferredType::record(vec![
+            (
+                "foo".to_string(),
+                InferredType::new(
+                    TypeInternal::AllOf(vec![
+                        InferredType::s8(),
+                        InferredType::string(),
+                        InferredType::u8(),
+                    ]),
+                    TypeOrigin::NoOrigin,
+                ),
+            ),
+            (
+                "bar".to_string(),
+                InferredType::new(
+                    TypeInternal::AllOf(vec![
+                        InferredType::u8(),
+                        InferredType::string(),
+                        InferredType::s8(),
+                    ]),
+                    TypeOrigin::NoOrigin,
+                ),
+            ),
+        ])]);
+
+        let expected_tuple = InferredType::new(
+            TypeInternal::AllOf(vec![tuple1, tuple2]),
+            TypeOrigin::NoOrigin,
+        );
+
+        assert_eq!(completed_task, expected_tuple);
     }
 
     #[test]

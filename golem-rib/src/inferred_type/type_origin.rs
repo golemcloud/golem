@@ -92,17 +92,17 @@ impl TypeOrigin {
         count
     }
 
-    // To not interfere with equality logic of types
-    // yet if we need to specifically compare the type origins
+    // TypeOrigin need separate `eq` since Origin is always part of
+    // a InferredType and their equality shouldn't be affected even their origins are different.
     pub fn eq(&self, other: &TypeOrigin) -> bool {
         match (self, other) {
             (TypeOrigin::NoOrigin, TypeOrigin::NoOrigin) => true,
             (TypeOrigin::Default(df1), TypeOrigin::Default(df2)) => df1.eq(df2),
             (TypeOrigin::Declared(source_span1), TypeOrigin::Declared(source_span2)) => {
-                source_span1.is_equal(source_span2)
+                source_span1.eq(source_span2)
             }
             (TypeOrigin::PatternMatch(source_span1), TypeOrigin::PatternMatch(source_span2)) => {
-                source_span1.is_equal(source_span2)
+                source_span1.eq(source_span2)
             }
             (TypeOrigin::Multiple(origins1), TypeOrigin::Multiple(origins2)) => {
                 if origins1.len() != origins2.len() {
@@ -117,7 +117,7 @@ impl TypeOrigin {
                 }
             }
             (TypeOrigin::OriginatedAt(source_span1), TypeOrigin::OriginatedAt(source_span2)) => {
-                source_span1.is_equal(source_span2)
+                source_span1.eq(source_span2)
             }
 
             _ => false,

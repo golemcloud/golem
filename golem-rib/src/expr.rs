@@ -3054,7 +3054,7 @@ fn find_expr(expr: &mut Expr, source_span: &SourceSpan) -> Option<Expr> {
     while let Some(current) = visitor.pop_back() {
         let span = current.source_span();
 
-        if source_span.is_equal(&span) {
+        if source_span.eq(&span) {
             return Some(current.clone());
         }
     }
