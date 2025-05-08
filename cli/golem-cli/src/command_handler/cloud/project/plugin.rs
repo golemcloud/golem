@@ -78,7 +78,6 @@ impl CloudProjectPluginCommandHandler {
         priority: i32,
         parameters: Vec<(String, String)>,
     ) -> anyhow::Result<()> {
-        // TODO: account id
         let project = self
             .ctx
             .cloud_project_handler()
@@ -114,7 +113,6 @@ impl CloudProjectPluginCommandHandler {
     }
 
     async fn cmd_get(&self, project: ProjectReference) -> anyhow::Result<()> {
-        // TODO: account id
         let project = self
             .ctx
             .cloud_project_handler()
@@ -142,7 +140,6 @@ impl CloudProjectPluginCommandHandler {
         priority: i32,
         parameters: Vec<(String, String)>,
     ) -> anyhow::Result<()> {
-        // TODO: account id
         let project = self
             .ctx
             .cloud_project_handler()
@@ -182,7 +179,6 @@ impl CloudProjectPluginCommandHandler {
         project_reference: ProjectReference,
         plugin_installation_id: PluginInstallationId,
     ) -> anyhow::Result<()> {
-        // TODO: account id
         let project = self
             .ctx
             .cloud_project_handler()

@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash, HashFromString};
+use crate::cloud::ProjectId;
 use crate::fs;
 use crate::log::log_warn_action;
 use crate::model::app::{AppComponentName, DependentComponent};
-use crate::model::{app_raw, ComponentName, ProjectName};
+use crate::model::{app_raw, ComponentName};
 use anyhow::{anyhow, bail, Context};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -159,7 +160,7 @@ impl TaskResultMarkerHashSource for AddMetadataMarkerHash<'_> {
 }
 
 pub struct GetServerComponentHash<'a> {
-    pub project_name: Option<&'a ProjectName>,
+    pub project_id: Option<&'a ProjectId>,
     pub component_name: &'a ComponentName,
     pub component_version: u64,
     // NOTE: use None for querying
@@ -174,7 +175,7 @@ impl TaskResultMarkerHashSource for GetServerComponentHash<'_> {
     fn id(&self) -> anyhow::Result<Option<String>> {
         Ok(Some(format!(
             "{:?}#{}#{}",
-            self.project_name, self.component_name, self.component_version
+            self.project_id, self.component_name, self.component_version
         )))
     }
 
@@ -187,7 +188,7 @@ impl TaskResultMarkerHashSource for GetServerComponentHash<'_> {
 }
 
 pub struct GetServerIfsFileHash<'a> {
-    pub project_name: Option<&'a ProjectName>,
+    pub project_id: Option<&'a ProjectId>,
     pub component_name: &'a ComponentName,
     pub component_version: u64,
     pub target_path: &'a str,
@@ -203,7 +204,7 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
     fn id(&self) -> anyhow::Result<Option<String>> {
         Ok(Some(format!(
             "{:?}#{}#{}#{}",
-            self.project_name, self.component_name, self.component_version, self.target_path
+            self.project_id, self.component_name, self.component_version, self.target_path
         )))
     }
 

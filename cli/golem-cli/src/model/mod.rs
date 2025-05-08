@@ -33,6 +33,7 @@ use crate::command::shared_args::{ComponentTemplateName, StreamArgs};
 use crate::config::{
     CloudProfile, NamedProfile, OssProfile, Profile, ProfileConfig, ProfileKind, ProfileName,
 };
+use crate::log::LogColorize;
 use crate::model::to_oss::ToOss;
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
@@ -61,15 +62,20 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use url::Url;
 use uuid::Uuid;
-
 // TODO: move arg thing into command
 // TODO: move non generic entities into mods
 
+// NOTE: using aliases for lower-case support in manifest, as global configs are using the
+//       PascalCase versions historically, should be cleared up (migrated), if we touch the global
+//       CLI config
 #[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize, Default)]
 pub enum Format {
+    #[serde(alias = "json")]
     Json,
+    #[serde(alias = "yaml")]
     Yaml,
     #[default]
+    #[serde(alias = "text")]
     Text,
 }
 
@@ -143,7 +149,7 @@ impl FromStr for ProjectReference {
                 let account_email = segments.pop().unwrap().to_string();
                 Ok(Self::WithAccount { account_email, project_name })
             }
-            _ => Err(format!("Unknown format for project: {s}. Expected either <PROJECT_NAME> or <ACCOUNT_EMAIL>/<PROJECT_NAME>"))
+            _ => Err(format!("Unknown format for project: {}. Expected either <PROJECT_NAME> or <ACCOUNT_EMAIL>/<PROJECT_NAME>", s.log_color_highlight()))
         }
     }
 }
@@ -587,8 +593,8 @@ impl ProfileView {
     }
 }
 
-pub struct ProjectNameAndId {
-    pub project_name: ProjectName,
+pub struct ProjectRefAndId {
+    pub project_ref: ProjectReference,
     pub project_id: ProjectId,
 }
 
@@ -616,7 +622,7 @@ impl From<golem_cloud_client::model::Account> for AccountDetails {
 
 pub struct WorkerNameMatch {
     pub account: Option<AccountDetails>,
-    pub project: Option<ProjectNameAndId>,
+    pub project: Option<ProjectRefAndId>,
     pub component_name_match_kind: ComponentNameMatchKind,
     pub component_name: ComponentName,
     pub worker_name: Option<WorkerName>,
@@ -624,7 +630,7 @@ pub struct WorkerNameMatch {
 
 pub struct SelectedComponents {
     pub account: Option<AccountDetails>,
-    pub project: Option<ProjectNameAndId>,
+    pub project: Option<ProjectRefAndId>,
     pub component_names: Vec<ComponentName>,
 }
 

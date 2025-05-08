@@ -58,7 +58,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
 
         let component_wasm = ctx
             .application
-            .component_wasm(component_name, ctx.profile());
+            .component_wasm(component_name, ctx.build_profile());
         let linked_wasm = ctx.application.component_linked_wasm(component_name);
 
         let task_result_marker = TaskResultMarker::new(
@@ -159,7 +159,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
 
                     commands::composition::compose(
                         ctx.application
-                            .component_wasm(component_name, ctx.profile())
+                            .component_wasm(component_name, ctx.build_profile())
                             .as_path(),
                         &wasms_to_compose_with,
                         linked_wasm.as_path(),

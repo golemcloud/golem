@@ -19,7 +19,6 @@ use cli_table::{format::Justify, Table};
 
 use serde::{Deserialize, Serialize};
 
-// TODO: review columns and formats
 #[derive(Table)]
 struct ComponentTableView {
     #[table(title = "Name")]

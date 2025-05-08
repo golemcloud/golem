@@ -29,7 +29,7 @@ pub fn execute_custom_command(
     ctx: &ApplicationContext,
     command_name: &str,
 ) -> Result<(), CustomCommandError> {
-    let all_custom_commands = ctx.application.all_custom_commands(ctx.profile());
+    let all_custom_commands = ctx.application.all_custom_commands(ctx.build_profile());
     if !all_custom_commands.contains(command_name) {
         return Err(CustomCommandError::CommandNotFound);
     }
@@ -62,7 +62,7 @@ pub fn execute_custom_command(
     for component_name in ctx.application.component_names() {
         let properties = &ctx
             .application
-            .component_properties(component_name, ctx.profile());
+            .component_properties(component_name, ctx.build_profile());
         if let Some(custom_command) = properties.custom_commands.get(command_name) {
             log_action(
                 "Executing",

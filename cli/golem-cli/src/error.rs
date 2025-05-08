@@ -37,7 +37,10 @@ impl Error for HintError {}
 
 #[derive(Debug, Display)]
 pub enum ContextInitHintError {
-    ProfileNotFound(ProfileName),
+    ProfileNotFound {
+        profile_name: ProfileName,
+        manifest_profile_names: Vec<ProfileName>,
+    },
 }
 
 impl Error for ContextInitHintError {}

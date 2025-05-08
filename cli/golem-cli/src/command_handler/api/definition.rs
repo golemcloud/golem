@@ -33,7 +33,7 @@ use crate::model::text::api_definition::{
     ApiDefinitionGetView, ApiDefinitionNewView, ApiDefinitionUpdateView,
 };
 use crate::model::text::fmt::{log_deploy_diff, log_error, log_warn};
-use crate::model::{ComponentName, PathBufOrStdin, ProjectNameAndId};
+use crate::model::{ComponentName, PathBufOrStdin, ProjectRefAndId};
 use anyhow::{bail, Context as AnyhowContext};
 use golem_client::api::ApiDefinitionClient as ApiDefinitionClientOss;
 use golem_client::model::{HttpApiDefinitionRequest, HttpApiDefinitionResponseData};
@@ -84,7 +84,11 @@ impl ApiDefinitionCommandHandler {
         name: Option<HttpApiDefinitionName>,
         update_or_redeploy: UpdateOrRedeployArgs,
     ) -> anyhow::Result<()> {
-        let project = None::<ProjectNameAndId>; // TODO: project from manifest
+        let project = self
+            .ctx
+            .cloud_project_handler()
+            .opt_select_project(None)
+            .await?;
 
         if let Some(name) = name.as_ref() {
             let app_ctx = self.ctx.app_context_lock().await;
@@ -305,7 +309,7 @@ impl ApiDefinitionCommandHandler {
 
     pub async fn deploy(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         deploy_mode: HttpApiDeployMode,
         update_or_redeploy: &UpdateOrRedeployArgs,
         latest_component_versions: &BTreeMap<String, Component>,
@@ -345,7 +349,7 @@ impl ApiDefinitionCommandHandler {
 
     pub async fn deploy_api_definition(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         deploy_mode: HttpApiDeployMode,
         update_or_redeploy: &UpdateOrRedeployArgs,
         latest_component_versions: &BTreeMap<String, Component>,
@@ -433,7 +437,7 @@ impl ApiDefinitionCommandHandler {
                             "The current version of the HTTP API is already deployed as non-draft.",
                         );
 
-                        if update_or_redeploy.redeploy_http_api() {
+                        if update_or_redeploy.redeploy_http_api(self.ctx.update_or_redeploy()) {
                             self.ctx
                                 .api_deployment_handler()
                                 .undeploy_api_from_all_sites_for_redeploy(
@@ -564,7 +568,7 @@ impl ApiDefinitionCommandHandler {
 
     pub async fn deploy_required_components(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         update_or_redeploy: &UpdateOrRedeployArgs,
         api_defs_filter: BTreeSet<HttpApiDefinitionName>,
     ) -> anyhow::Result<BTreeMap<String, Component>> {
@@ -620,7 +624,7 @@ impl ApiDefinitionCommandHandler {
 
     async fn api_definition(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         name: &str,
         version: &str,
     ) -> anyhow::Result<Option<HttpApiDefinitionResponseData>> {
@@ -649,7 +653,7 @@ impl ApiDefinitionCommandHandler {
 
     async fn update_api_definition(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         manifest_api_definition: &HttpApiDefinitionRequest,
     ) -> anyhow::Result<HttpApiDefinitionResponseData> {
         match self.ctx.golem_clients().await? {
@@ -685,7 +689,7 @@ impl ApiDefinitionCommandHandler {
 
     async fn new_api_definition(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         api_definition: &HttpApiDefinitionRequest,
     ) -> anyhow::Result<HttpApiDefinitionResponseData> {
         match self.ctx.golem_clients().await? {

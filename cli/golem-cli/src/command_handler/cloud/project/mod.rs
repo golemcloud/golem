@@ -26,7 +26,7 @@ use crate::model::text::fmt::{log_error, log_text_view};
 use crate::model::text::project::{
     ProjectCreatedView, ProjectGetView, ProjectGrantView, ProjectListView,
 };
-use crate::model::{ProjectName, ProjectNameAndId, ProjectReference};
+use crate::model::{ProjectName, ProjectRefAndId, ProjectReference};
 use anyhow::{anyhow, bail};
 use golem_cloud_client::api::{ProjectClient, ProjectGrantClient};
 use golem_cloud_client::model::{Project, ProjectDataRequest, ProjectGrantDataRequest};
@@ -198,34 +198,39 @@ impl CloudProjectCommandHandler {
         }
     }
 
-    // TODO: special care might be needed for ordering app loading if
-    //       project selection can be defined if app manifest too
     pub async fn opt_select_project(
         &self,
         project_reference: Option<&ProjectReference>,
-    ) -> anyhow::Result<Option<ProjectNameAndId>> {
-        match (self.ctx.profile_kind(), project_reference) {
+    ) -> anyhow::Result<Option<ProjectRefAndId>> {
+        let project_reference = match (self.ctx.profile_kind(), project_reference) {
             (ProfileKind::Oss, Some(_)) => {
                 log_error("Cannot use projects with OSS profile!");
                 logln("");
                 bail!(HintError::ExpectedCloudProfile);
             }
-            (ProfileKind::Oss, None) => Ok(None),
-            (ProfileKind::Cloud, Some(project_reference)) => {
+            (ProfileKind::Oss, None) => None,
+            (ProfileKind::Cloud, Some(project_reference)) => Some(project_reference),
+            (ProfileKind::Cloud, None) => self.ctx.profile_project(),
+        };
+
+        let ref_and_id = match project_reference {
+            Some(project_reference) => {
                 let project = self.project_by_reference(project_reference).await?;
-                Ok(Some(ProjectNameAndId {
-                    project_name: project.project_data.name.into(),
+                Some(ProjectRefAndId {
+                    project_ref: project_reference.clone(),
                     project_id: project.project_id.into(),
-                }))
+                })
             }
-            (ProfileKind::Cloud, None) => Ok(None),
-        }
+            None => None,
+        };
+
+        Ok(ref_and_id)
     }
 
     pub async fn select_project(
         &self,
         project_reference: &ProjectReference,
-    ) -> anyhow::Result<ProjectNameAndId> {
+    ) -> anyhow::Result<ProjectRefAndId> {
         match self.opt_select_project(Some(project_reference)).await? {
             Some(project) => Ok(project),
             None => Err(project_not_found(project_reference)),
@@ -234,7 +239,7 @@ impl CloudProjectCommandHandler {
 
     pub async fn selected_project_id_or_default(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
     ) -> anyhow::Result<ProjectId> {
         // TODO: cache default project
         match project {

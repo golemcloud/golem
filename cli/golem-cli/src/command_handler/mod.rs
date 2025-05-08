@@ -45,7 +45,6 @@ use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::rib_repl::RibReplHandler;
 use crate::command_handler::worker::WorkerCommandHandler;
-use crate::config::{Config, ProfileName};
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{logln, set_log_output, Output};
@@ -106,36 +105,34 @@ pub struct CommandHandler<Hooks: CommandHandlerHooks> {
 }
 
 impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
-    fn new(global_flags: &GolemCliGlobalFlags, hooks: Arc<Hooks>) -> anyhow::Result<Self> {
-        let profile_name = {
-            if global_flags.local {
-                Some(ProfileName::local())
-            } else if global_flags.cloud {
-                Some(ProfileName::cloud())
-            } else {
-                global_flags.profile.clone()
-            }
-        };
-
-        let ctx = Arc::new(Context::new(
-            global_flags,
-            Config::get_active_profile(&global_flags.config_dir(), profile_name)?,
-            Self::start_local_server_hook(global_flags.yes),
-        ));
-
+    async fn new(
+        global_flags: GolemCliGlobalFlags,
+        log_output: Option<Output>,
+        hooks: Arc<Hooks>,
+    ) -> anyhow::Result<Self> {
+        let start_local_server_yes = Arc::new(tokio::sync::RwLock::new(global_flags.yes));
         Ok(Self {
-            ctx: ctx.clone(),
+            ctx: Arc::new(
+                Context::new(
+                    global_flags,
+                    log_output,
+                    start_local_server_yes.clone(),
+                    Self::start_local_server_hook(start_local_server_yes),
+                )
+                .await?,
+            ),
             hooks,
         })
     }
 
     #[cfg(feature = "server-commands")]
     fn start_local_server_hook(
-        yes: bool,
+        yes: Arc<tokio::sync::RwLock<bool>>,
     ) -> Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync> {
         Box::new(move || {
+            let yes = yes.clone();
             async move {
-                if !InteractiveHandler::confirm_auto_start_local_server(yes)? {
+                if !InteractiveHandler::confirm_auto_start_local_server(*yes.read().await)? {
                     return Ok(());
                 }
 
@@ -155,21 +152,22 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
     #[cfg(not(feature = "server-commands"))]
     fn start_local_server_hook(
-        _yes: bool,
+        _yes: Arc<tokio::sync::RwLock<bool>>,
     ) -> Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync> {
         Box::new(|| async { Ok(()) }.boxed())
     }
 
-    fn new_with_init_hint_error_handler(
-        global_flags: &GolemCliGlobalFlags,
+    async fn new_with_init_hint_error_handler(
+        global_flags: GolemCliGlobalFlags,
+        log_output: Option<Output>,
         hooks: Arc<Hooks>,
     ) -> anyhow::Result<Self> {
-        match Self::new(global_flags, hooks) {
+        match Self::new(global_flags.clone(), log_output, hooks).await {
             Ok(ok) => Ok(ok),
             Err(error) => {
                 set_log_output(Output::Stderr);
                 if let Some(hint_error) = error.downcast_ref::<ContextInitHintError>() {
-                    ErrorHandler::handle_context_init_hint_errors(global_flags, hint_error)
+                    ErrorHandler::handle_context_init_hint_errors(&global_flags, hint_error)
                         .and_then(|()| Err(anyhow!(NonSuccessfulExit)))
                 } else {
                     Err(error)
@@ -205,7 +203,13 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
                 init_tracing(verbosity, pretty_mode);
 
-                match Self::new_with_init_hint_error_handler(&command.global_flags, hooks) {
+                match Self::new_with_init_hint_error_handler(
+                    command.global_flags.clone(),
+                    None,
+                    hooks,
+                )
+                .await
+                {
                     Ok(handler) => {
                         let result = handler
                             .handle_command(command)
@@ -246,12 +250,19 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
                 debug!(partial_match = ?partial_match, "Partial match");
                 debug_log_parse_error(&error, &fallback_command);
+
+                let handler = Self::new_with_init_hint_error_handler(
+                    fallback_command.global_flags.clone(),
+                    Some(Output::Stderr),
+                    hooks,
+                )
+                .await;
+
+                logln("");
                 error.print().unwrap();
 
-                match Self::new_with_init_hint_error_handler(&fallback_command.global_flags, hooks)
-                {
+                match handler {
                     Ok(handler) => {
-                        set_log_output(Output::Stderr);
                         let exit_code = clamp_exit_code(error.exit_code());
                         handler
                             .ctx
@@ -282,6 +293,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 .downcast_ref::<Arc<anyhow::Error>>()
                 .and_then(|err| err.downcast_ref::<AppValidationError>())
                 .is_some()
+                || error.downcast_ref::<AppValidationError>().is_some()
             {
                 // App validation errors are already formatted and usually contain multiple
                 // errors (and warns)

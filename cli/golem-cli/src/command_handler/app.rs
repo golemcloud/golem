@@ -397,7 +397,7 @@ impl AppCommandHandler {
         let project = self
             .ctx
             .cloud_project_handler()
-            .opt_select_project(None) // TODO: project, account id
+            .opt_select_project(None)
             .await?;
 
         let components = self

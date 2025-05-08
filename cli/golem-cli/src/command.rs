@@ -90,7 +90,7 @@ impl Verbosity {
     }
 }
 
-#[derive(Debug, Default, Args)]
+#[derive(Debug, Clone, Default, Args)]
 pub struct GolemCliGlobalFlags {
     /// Output format, defaults to text, unless specified by the selected profile
     #[arg(long, short, global = true, display_order = 101)]
@@ -149,6 +149,12 @@ pub struct GolemCliGlobalFlags {
 
     #[arg(skip)]
     pub auth_token: Option<Uuid>,
+
+    #[arg(skip)]
+    pub custom_global_cloud_profile: Option<ProfileName>,
+
+    #[arg(skip)]
+    pub local_server_auto_start: bool,
 }
 
 impl GolemCliGlobalFlags {
@@ -217,6 +223,17 @@ impl GolemCliGlobalFlags {
                     .context("Failed to parse GOLEM_AUTH_TOKEN, expected uuid")
                     .unwrap(),
             );
+        }
+
+        if let Ok(default_cloud_profile) = std::env::var("GOLEM_CUSTOM_GLOBAL_CLOUD_PROFILE") {
+            self.custom_global_cloud_profile = Some(default_cloud_profile.into());
+        }
+
+        if let Ok(auto_start) = std::env::var("GOLEM_LOCAL_SERVER_AUTO_START") {
+            self.local_server_auto_start = auto_start
+                .parse::<LenientBool>()
+                .map(|b| b.into())
+                .unwrap_or_default()
         }
 
         self
@@ -505,7 +522,7 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: PluginSubcommand,
     },
-    /// Manage CLI profiles
+    /// Manage global CLI profiles
     Profile {
         #[clap(subcommand)]
         subcommand: ProfileSubcommand,
@@ -668,12 +685,18 @@ pub mod shared_args {
             }
         }
 
-        pub fn redeploy_workers(&self) -> bool {
-            self.redeploy_all || self.redeploy_workers
+        pub fn redeploy_workers(&self, profile_args: &UpdateOrRedeployArgs) -> bool {
+            profile_args.redeploy_all
+                || profile_args.redeploy_workers
+                || self.redeploy_all
+                || self.redeploy_workers
         }
 
-        pub fn redeploy_http_api(&self) -> bool {
-            self.redeploy_all || self.redeploy_http_api
+        pub fn redeploy_http_api(&self, profile_args: &UpdateOrRedeployArgs) -> bool {
+            profile_args.redeploy_all
+                || profile_args.redeploy_http_api
+                || self.redeploy_all
+                || self.redeploy_http_api
         }
     }
 
@@ -683,6 +706,7 @@ pub mod shared_args {
         /// Project, accepted formats:
         ///   - <PROJECT_NAME>
         ///   - <ACCOUNT_EMAIL>/<PROJECT_NAME>
+        #[arg(verbatim_doc_comment)]
         pub project: ProjectReference,
     }
 
@@ -692,7 +716,7 @@ pub mod shared_args {
         /// Project, accepted formats:
         ///   - <PROJECT_NAME>
         ///   - <ACCOUNT_EMAIL>/<PROJECT_NAME>
-        #[arg(long)]
+        #[arg(verbatim_doc_comment, long)]
         pub project: Option<ProjectReference>,
     }
 
@@ -1411,7 +1435,7 @@ pub mod profile {
     #[allow(clippy::large_enum_variant)]
     #[derive(Debug, Subcommand)]
     pub enum ProfileSubcommand {
-        /// Create new profile, call without <PROFILE_NAME> for interactive setup
+        /// Create new global profile, call without <PROFILE_NAME> for interactive setup
         New {
             /// Profile kind
             profile_kind: ProfileKind,
@@ -1441,24 +1465,24 @@ pub mod profile {
             #[arg(long, hide = true)]
             allow_insecure: bool,
         },
-        /// List profiles
+        /// List global profiles
         List,
-        /// Set the active default profile
+        /// Set the active global default profile
         Switch {
             /// Profile name to switch to
             profile_name: ProfileName,
         },
-        /// Show profile details
+        /// Show global profile details
         Get {
             /// Name of profile to show, shows active profile if not specified.
             profile_name: Option<ProfileName>,
         },
-        /// Remove profile
+        /// Remove global profile
         Delete {
             /// Profile name to delete
             profile_name: ProfileName,
         },
-        /// Profile config
+        /// Configure global profile
         Config {
             /// Profile name
             profile_name: ProfileName,

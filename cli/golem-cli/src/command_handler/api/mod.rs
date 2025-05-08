@@ -19,7 +19,7 @@ use crate::context::Context;
 use crate::model::api::HttpApiDeployMode;
 use crate::model::app::ApplicationComponentSelectMode;
 use crate::model::component::Component;
-use crate::model::{ComponentName, ProjectNameAndId};
+use crate::model::{ComponentName, ProjectRefAndId};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -70,7 +70,11 @@ impl ApiCommandHandler {
     }
 
     pub async fn cmd_deploy(&self, update_or_redeploy: UpdateOrRedeployArgs) -> anyhow::Result<()> {
-        let project = None::<ProjectNameAndId>; // TODO
+        let project = self
+            .ctx
+            .cloud_project_handler()
+            .opt_select_project(None)
+            .await?;
 
         let used_component_names = {
             {
@@ -116,7 +120,7 @@ impl ApiCommandHandler {
 
     pub async fn deploy(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         deploy_mode: HttpApiDeployMode,
         update_or_redeploy: &UpdateOrRedeployArgs,
         latest_component_versions: &BTreeMap<String, Component>,

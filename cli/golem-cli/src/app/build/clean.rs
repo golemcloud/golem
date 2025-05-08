@@ -25,7 +25,7 @@ pub fn clean_app(ctx: &ApplicationContext) -> anyhow::Result<()> {
         log_action("Cleaning", "components");
         let _indent = LogIndent::new();
 
-        let all_profiles = ctx.application.all_option_profiles();
+        let all_profiles = ctx.application.all_option_build_profiles();
         let paths = {
             let mut paths = BTreeSet::<(&'static str, PathBuf)>::new();
             for component_name in ctx.application.component_names() {

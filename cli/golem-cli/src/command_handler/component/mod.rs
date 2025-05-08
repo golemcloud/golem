@@ -43,7 +43,7 @@ use crate::model::text::help::ComponentNameHelp;
 use crate::model::to_cloud::ToCloud;
 use crate::model::{
     AccountDetails, ComponentName, ComponentNameMatchKind, ComponentVersionSelection,
-    ProjectNameAndId, ProjectReference, SelectedComponents, WorkerUpdateMode,
+    ProjectRefAndId, ProjectReference, SelectedComponents, WorkerUpdateMode,
 };
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use golem_client::api::ComponentClient as ComponentClientOss;
@@ -618,7 +618,7 @@ impl ComponentCommandHandler {
 
     pub async fn deploy(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         component_names: Vec<ComponentName>,
         force_build: Option<ForceBuildArg>,
         default_component_select_mode: &ApplicationComponentSelectMode,
@@ -684,7 +684,7 @@ impl ComponentCommandHandler {
         if let Some(update) = update_or_redeploy.update_workers {
             self.update_workers_by_components(&components, update)
                 .await?;
-        } else if update_or_redeploy.redeploy_workers() {
+        } else if update_or_redeploy.redeploy_workers(self.ctx.update_or_redeploy()) {
             self.redeploy_workers_by_components(&components).await?;
         }
 
@@ -694,7 +694,7 @@ impl ComponentCommandHandler {
     async fn deploy_component(
         &self,
         build_profile: Option<&BuildProfileName>,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         component_name: &AppComponentName,
     ) -> anyhow::Result<Component> {
         let server_component = self
@@ -760,7 +760,7 @@ impl ComponentCommandHandler {
         let ifs_files = {
             if !deploy_properties.files.is_empty() {
                 Some(
-                    IfsFileManager::new(self.ctx.file_download_client().await?)
+                    IfsFileManager::new(self.ctx.file_download_client().clone())
                         .build_files_archive(deploy_properties.files.as_slice())
                         .await?,
                 )
@@ -889,7 +889,7 @@ impl ComponentCommandHandler {
         TaskResultMarker::new(
             &self.ctx.task_result_marker_dir().await?,
             GetServerComponentHash {
-                project_name: project.map(|p| &p.project_name),
+                project_id: project.map(|p| &p.project_id),
                 component_name: &manifest_diffable_component.component_name,
                 component_version: component.versioned_component_id.version,
                 component_hash: Some(&manifest_diffable_component.component_hash),
@@ -1040,7 +1040,7 @@ impl ComponentCommandHandler {
 
         let (account, project, component_name): (
             Option<AccountDetails>,
-            Option<ProjectNameAndId>,
+            Option<ProjectRefAndId>,
             Option<ComponentName>,
         ) = {
             match component_name {
@@ -1149,7 +1149,7 @@ impl ComponentCommandHandler {
 
     pub async fn component_by_name_with_auto_deploy(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         component_match_kind: ComponentNameMatchKind,
         component_name: &ComponentName,
         component_version_selection: Option<ComponentVersionSelection<'_>>,
@@ -1222,7 +1222,7 @@ impl ComponentCommandHandler {
     // TODO: merge these 3 args into "component lookup" or "selection" struct
     pub async fn component(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         component_name_or_id: ComponentSelection<'_>,
         component_version_selection: Option<ComponentVersionSelection<'_>>,
     ) -> anyhow::Result<Option<Component>> {
@@ -1288,7 +1288,7 @@ impl ComponentCommandHandler {
 
     pub async fn component_id_by_name(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         component_name: &ComponentName,
     ) -> anyhow::Result<Option<ComponentId>> {
         Ok(self
@@ -1331,7 +1331,7 @@ impl ComponentCommandHandler {
 
     pub async fn latest_component_by_name(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         component_name: &ComponentName,
     ) -> anyhow::Result<Option<Component>> {
         let result = match self.ctx.golem_clients().await? {
@@ -1372,7 +1372,7 @@ impl ComponentCommandHandler {
 
     pub async fn latest_components_by_app(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
     ) -> anyhow::Result<BTreeMap<String, Component>> {
         let component_names = {
             let app_ctx = self.ctx.app_context_lock().await;
@@ -1392,7 +1392,7 @@ impl ComponentCommandHandler {
     //       ComponentName types without cloning
     pub async fn latest_components_by_name(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         component_names: Vec<ComponentName>,
     ) -> anyhow::Result<BTreeMap<String, Component>> {
         let results = match self.ctx.golem_clients().await? {
@@ -1457,7 +1457,7 @@ impl ComponentCommandHandler {
         };
 
         let files: BTreeMap<String, DiffableComponentFile> = {
-            IfsFileManager::new(self.ctx.file_download_client().await?)
+            IfsFileManager::new(self.ctx.file_download_client().clone())
                 .collect_file_hashes(component_name.as_str(), properties.files.as_slice())
                 .await?
                 .into_iter()
@@ -1485,7 +1485,7 @@ impl ComponentCommandHandler {
     // NOTE: all of this is naive for now (as in performance, streaming, parallelism)
     async fn server_diffable_component(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         component: &Component,
     ) -> anyhow::Result<DiffableComponent> {
         let component_hash = self
@@ -1541,7 +1541,7 @@ impl ComponentCommandHandler {
 
     async fn server_component_hash(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         component_name: &ComponentName,
         component_id: ComponentId,
         component_version: u64,
@@ -1549,7 +1549,7 @@ impl ComponentCommandHandler {
         let task_result_marker_dir = self.ctx.task_result_marker_dir().await?;
 
         let hash_result = |component_hash| GetServerComponentHash {
-            project_name: project.map(|p| &p.project_name),
+            project_id: project.map(|p| &p.project_id),
             component_name,
             component_version,
             component_hash,
@@ -1608,7 +1608,7 @@ impl ComponentCommandHandler {
 
     async fn server_ifs_file_hash(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         component_name: &ComponentName,
         component_id: ComponentId,
         component_version: u64,
@@ -1617,7 +1617,7 @@ impl ComponentCommandHandler {
         let task_result_marker_dir = self.ctx.task_result_marker_dir().await?;
 
         let hash_result = |file_hash| GetServerIfsFileHash {
-            project_name: project.map(|p| &p.project_name),
+            project_id: project.map(|p| &p.project_id),
             component_name,
             component_version,
             target_path,

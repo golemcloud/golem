@@ -26,6 +26,7 @@ use crate::log::{log_action, log_warn_action, LogColorize};
 use crate::model::text::fmt::log_error;
 use crate::model::{Format, ProfileView};
 use anyhow::bail;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use url::Url;
 
@@ -144,8 +145,9 @@ impl ProfileCommandHandler {
         let config = Config::from_dir(self.ctx.config_dir())?;
         let default_profile_name = config.default_profile_name();
 
-        let profiles = config
-            .profiles
+        let sorted_profiles = config.profiles.into_iter().collect::<BTreeMap<_, _>>();
+
+        let profiles = sorted_profiles
             .into_iter()
             .map(|(name, profile)| {
                 ProfileView::from_profile(&default_profile_name, NamedProfile { name, profile })
@@ -163,16 +165,13 @@ impl ProfileCommandHandler {
     }
 
     fn cmd_get(&self, profile_name: Option<ProfileName>) -> anyhow::Result<()> {
-        let active_profile = Config::get_active_profile(self.ctx.config_dir(), None)?;
-        let active_profile_name = active_profile.name.clone();
+        let default_profile = Config::get_default_profile(self.ctx.config_dir())?;
+        let default_profile_name = default_profile.name.clone();
 
         let profile = match profile_name {
             Some(profile_name) => {
-                match Config::get_profile(&profile_name, self.ctx.config_dir())? {
-                    Some(profile) => NamedProfile {
-                        name: profile_name,
-                        profile,
-                    },
+                match Config::get_profile(self.ctx.config_dir(), &profile_name)? {
+                    Some(profile) => profile,
                     None => {
                         log_error(format!(
                             "Profile {} not found",
@@ -182,12 +181,12 @@ impl ProfileCommandHandler {
                     }
                 }
             }
-            None => active_profile,
+            None => default_profile,
         };
 
         self.ctx
             .log_handler()
-            .log_view(&ProfileView::from_profile(&active_profile_name, profile));
+            .log_view(&ProfileView::from_profile(&default_profile_name, profile));
 
         Ok(())
     }

@@ -17,8 +17,7 @@ use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
 use crate::model::{
-    ComponentName, IdempotencyKey, WorkerMetadata, WorkerMetadataView, WorkerName,
-    WorkersMetadataResponseView,
+    ComponentName, WorkerMetadata, WorkerMetadataView, WorkerName, WorkersMetadataResponseView,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -32,7 +31,7 @@ use golem_common::model::public_oplog::{
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{print_type_annotated_value, ValueAndType};
-use indoc::{formatdoc, indoc};
+use indoc::indoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -224,22 +223,6 @@ impl TextView for WorkersMetadataResponseView {
     }
 }
 
-impl TextView for IdempotencyKey {
-    fn log(&self) {
-        logln(formatdoc!(
-            "
-                Idempotency key: {}
-
-                You can use it in invoke-and-await command this way:
-                {}
-
-                ",
-            format_main_id(&self.0),
-            format!("invoke-and-await --idempotency-key {} ...", self.0).cyan() // TODO: also review for other outdated hints like this
-        ))
-    }
-}
-
 impl TextView for TryUpdateAllWorkersResult {
     fn log(&self) {
         // NOP
@@ -271,10 +254,9 @@ impl TextView for InvokeResultView {
         } else if let Some(json) = &self.result_json {
             logln(format_warn(indoc!(
                 "
-                    Failed to convert invocation result to WAVE format.
-                    At the moment WAVE does not support Handle (aka Resource) data type.
-
-                    "
+                Failed to convert invocation result to WAVE format.
+                At the moment WAVE does not support Handle (aka Resource) data type.
+                "
             )));
             log_results_format("JSON");
             logln(serde_json::to_string_pretty(json).unwrap());

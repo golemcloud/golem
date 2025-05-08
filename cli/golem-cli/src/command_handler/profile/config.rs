@@ -44,9 +44,9 @@ impl ProfileConfigCommandHandler {
     }
 
     fn cmd_set_format(&self, profile_name: ProfileName, format: Format) -> anyhow::Result<()> {
-        match Config::get_profile(&profile_name, self.ctx.config_dir())? {
+        match Config::get_profile(self.ctx.config_dir(), &profile_name)? {
             Some(mut profile) => {
-                profile.get_config_mut().default_format = format;
+                profile.profile.get_config_mut().default_format = format;
 
                 log_action(
                     "Updating",
@@ -55,7 +55,7 @@ impl ProfileConfigCommandHandler {
                         &profile_name, format
                     ),
                 );
-                Config::set_profile(profile_name, profile, self.ctx.config_dir())?;
+                Config::set_profile(profile.name, profile.profile, self.ctx.config_dir())?;
                 log_action("Updated", "");
 
                 Ok(())

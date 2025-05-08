@@ -502,7 +502,7 @@ pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
         },
         match &worker_name_match.project {
             Some(project) => {
-                format!("{}/", project.project_name.0.blue().bold())
+                format!("{}/", project.project_ref.to_string().blue().bold())
             }
             None => "".to_string(),
         },

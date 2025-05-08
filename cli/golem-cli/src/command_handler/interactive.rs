@@ -105,7 +105,7 @@ impl InteractiveHandler {
                 sites
                     .iter()
                     .map(|target| format!("- {}, used API version: {}", target.0.to_string().log_color_highlight(), target.1.log_color_highlight()))
-                    .join(", "),
+                    .join("\n"),
             ),
             None,
         )

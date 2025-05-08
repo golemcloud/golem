@@ -29,7 +29,7 @@ pub fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
     for component_name in components_to_build {
         let component_properties = ctx
             .application
-            .component_properties(&component_name, ctx.profile());
+            .component_properties(&component_name, ctx.build_profile());
 
         if component_properties.build.is_empty() {
             log_warn_action(

@@ -77,7 +77,7 @@ fn create_generated_base_wit(
 ) -> Result<bool, Error> {
     let component_source_wit = ctx
         .application
-        .component_source_wit(component_name, ctx.profile());
+        .component_source_wit(component_name, ctx.build_profile());
     let inputs = {
         let mut inputs = ctx.application.wit_deps();
         inputs.push(component_source_wit.clone());
@@ -200,7 +200,7 @@ fn create_generated_wit(
     let component_generated_base_wit = ctx.application.component_generated_base_wit(component_name);
     let component_generated_wit = ctx
         .application
-        .component_generated_wit(component_name, ctx.profile());
+        .component_generated_wit(component_name, ctx.build_profile());
     let task_result_marker = TaskResultMarker::new(
         &ctx.application.task_result_marker_dir(),
         ComponentGeneratorMarkerHash {
@@ -247,7 +247,7 @@ fn update_cargo_toml(
 ) -> anyhow::Result<()> {
     let component_source_wit = PathExtra::new(
         ctx.application
-            .component_source_wit(component_name, ctx.profile()),
+            .component_source_wit(component_name, ctx.build_profile()),
     );
     let component_source_wit_parent = component_source_wit.parent().with_context(|| {
         anyhow!(
@@ -281,7 +281,7 @@ fn update_cargo_toml(
     task_result_marker.result(regenerate_cargo_package_component(
         &cargo_toml,
         &ctx.application
-            .component_generated_wit(component_name, ctx.profile()),
+            .component_generated_wit(component_name, ctx.build_profile()),
         None,
     ))
 }
@@ -293,7 +293,7 @@ async fn build_client(
     let stub_def = ctx.component_stub_def(
         &component.name,
         ctx.application
-            .component_properties(&component.name, ctx.profile())
+            .component_properties(&component.name, ctx.build_profile())
             .is_ephemeral(),
     )?;
     let client_wit_root = stub_def.client_wit_root();
@@ -369,7 +369,7 @@ async fn build_client(
                             ctx.component_stub_def(
                                 &component.name,
                                 ctx.application
-                                    .component_properties(&component.name, ctx.profile())
+                                    .component_properties(&component.name, ctx.build_profile())
                                     .is_ephemeral(),
                             )?,
                             &client_wasm,
@@ -408,7 +408,7 @@ async fn build_client(
                         let stub_def = ctx.component_stub_def(
                             &component.name,
                             ctx.application
-                                .component_properties(&component.name, ctx.profile())
+                                .component_properties(&component.name, ctx.build_profile())
                                 .is_ephemeral(),
                         )?;
                         commands::generate::generate_and_copy_client_wit(stub_def, &client_wit)
@@ -461,7 +461,7 @@ fn add_client_deps(
                         client_wit_root: ctx.application.client_wit(&dep_component.name),
                         dest_wit_root: ctx
                             .application
-                            .component_generated_wit(component_name, ctx.profile()),
+                            .component_generated_wit(component_name, ctx.build_profile()),
                         update_cargo_toml: UpdateCargoToml::NoUpdate,
                     })?
                 }

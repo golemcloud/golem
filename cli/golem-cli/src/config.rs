@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::cloud::CloudAuthenticationConfig;
-use crate::error::ContextInitHintError;
 use crate::model::{Format, HasFormatConfig};
 use anyhow::{anyhow, bail, Context};
 use itertools::Itertools;
@@ -229,6 +228,18 @@ pub struct OssProfile {
     pub config: ProfileConfig,
 }
 
+impl Default for OssProfile {
+    fn default() -> Self {
+        let url = Url::parse(DEFAULT_OSS_URL).unwrap();
+        OssProfile {
+            url,
+            worker_url: None,
+            allow_insecure: false,
+            config: ProfileConfig::default(),
+        }
+    }
+}
+
 impl HasFormatConfig for OssProfile {
     fn format(&self) -> Option<Format> {
         Some(self.config.default_format)
@@ -309,15 +320,7 @@ impl Config {
     fn with_local_and_cloud_profiles(mut self) -> Self {
         self.profiles
             .entry(ProfileName::local())
-            .or_insert_with(|| {
-                let url = Url::parse(DEFAULT_OSS_URL).unwrap();
-                Profile::Golem(OssProfile {
-                    url,
-                    worker_url: None,
-                    allow_insecure: false,
-                    config: ProfileConfig::default(),
-                })
-            });
+            .or_insert_with(|| Profile::Golem(OssProfile::default()));
 
         self.profiles
             .entry(ProfileName::cloud())
@@ -367,29 +370,25 @@ impl Config {
         Ok(())
     }
 
-    pub fn get_active_profile(
-        config_dir: &Path,
-        selected_profile: Option<ProfileName>,
-    ) -> anyhow::Result<NamedProfile> {
+    pub fn get_default_profile(config_dir: &Path) -> anyhow::Result<NamedProfile> {
         let mut config = Self::from_dir(config_dir)?;
-
-        let name = selected_profile
-            .unwrap_or_else(|| config.default_profile.unwrap_or_else(ProfileName::local));
-
-        match config.profiles.remove(&name) {
-            Some(profile) => Ok(NamedProfile {
-                name: name.clone(),
-                profile,
-            }),
-            None => {
-                bail!(ContextInitHintError::ProfileNotFound(name));
-            }
-        }
+        let profile_name = config.default_profile.unwrap_or_else(ProfileName::local);
+        let profile = config.profiles.remove(&profile_name).unwrap();
+        Ok(NamedProfile {
+            name: profile_name.clone(),
+            profile: profile.clone(),
+        })
     }
 
-    pub fn get_profile(name: &ProfileName, config_dir: &Path) -> anyhow::Result<Option<Profile>> {
+    pub fn get_profile(
+        config_dir: &Path,
+        name: &ProfileName,
+    ) -> anyhow::Result<Option<NamedProfile>> {
         let mut config = Self::from_dir(config_dir)?;
-        Ok(config.profiles.remove(name))
+        Ok(config.profiles.remove(name).map(|profile| NamedProfile {
+            name: name.clone(),
+            profile,
+        }))
     }
 
     pub fn set_profile(

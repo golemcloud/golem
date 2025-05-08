@@ -28,7 +28,7 @@ use crate::model::app::{
 use crate::model::app_raw::HttpApiDeployment;
 use crate::model::deploy_diff::api_deployment::DiffableHttpApiDeployment;
 use crate::model::text::fmt::{log_deploy_diff, log_error, log_warn};
-use crate::model::ProjectNameAndId;
+use crate::model::ProjectRefAndId;
 use anyhow::bail;
 use golem_client::api::ApiDeploymentClient as ApiDeploymentClientOss;
 use golem_client::model::{
@@ -74,14 +74,13 @@ impl ApiDeploymentCommandHandler {
         host_or_site: Option<String>,
         update_or_redeploy: UpdateOrRedeployArgs,
     ) -> anyhow::Result<()> {
-        let project = None::<ProjectNameAndId>; // TODO: project from manifest
+        let project = self
+            .ctx
+            .cloud_project_handler()
+            .opt_select_project(None)
+            .await?;
 
-        let api_deployments = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.some_or_err()?;
-            app_ctx.application.http_api_deployments().clone()
-        };
-
+        let api_deployments = self.manifest_api_deployments().await?;
         let api_deployments = match &host_or_site {
             Some(host_or_site) => api_deployments
                 .into_iter()
@@ -246,15 +245,11 @@ impl ApiDeploymentCommandHandler {
 
     pub async fn deploy(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         deploy_mode: HttpApiDeployMode,
         latest_api_definition_versions: &BTreeMap<String, String>,
     ) -> anyhow::Result<()> {
-        let api_deployments = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.some_or_err()?;
-            app_ctx.application.http_api_deployments().clone()
-        };
+        let api_deployments = self.manifest_api_deployments().await?;
 
         if !api_deployments.is_empty() {
             log_action("Deploying", "HTTP API deployments");
@@ -277,7 +272,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn deploy_api_deployment(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         deploy_mode: HttpApiDeployMode,
         latest_api_definition_versions: &BTreeMap<String, String>,
         site: &HttpApiDeploymentSite,
@@ -437,7 +432,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn deploy_required_api_definitions<'a, I: Iterator<Item = &'a HttpApiDeployment>>(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         update_or_redeploy: &UpdateOrRedeployArgs,
         api_deployments: I,
     ) -> anyhow::Result<BTreeMap<String, String>> {
@@ -495,7 +490,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn api_deployment(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         site: &str,
     ) -> anyhow::Result<Option<ApiDeployment>> {
         let result = match self.ctx.golem_clients().await? {
@@ -526,7 +521,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn create_or_update_api_deployment(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         site: &HttpApiDeploymentSite,
         api_deployment: &DiffableHttpApiDeployment,
     ) -> anyhow::Result<ApiDeployment> {
@@ -580,7 +575,7 @@ impl ApiDeploymentCommandHandler {
 
     async fn undeploy_api_definition(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         site: &HttpApiDeploymentSite,
         id: &str,
         version: &str,
@@ -613,7 +608,7 @@ impl ApiDeploymentCommandHandler {
 
     pub async fn undeploy_api_from_all_sites_for_redeploy(
         &self,
-        project: Option<&ProjectNameAndId>,
+        project: Option<&ProjectRefAndId>,
         api_definition_name: &HttpApiDefinitionName,
     ) -> anyhow::Result<()> {
         let targets: Vec<(HttpApiDeploymentSite, String)> = match self.ctx.golem_clients().await? {
@@ -718,5 +713,19 @@ impl ApiDeploymentCommandHandler {
         }
 
         Ok(())
+    }
+
+    async fn manifest_api_deployments(
+        &self,
+    ) -> anyhow::Result<BTreeMap<HttpApiDeploymentSite, WithSource<HttpApiDeployment>>> {
+        let profile = self.ctx.profile_name().clone();
+
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+        Ok(app_ctx
+            .application
+            .http_api_deployments(&profile)
+            .cloned()
+            .unwrap_or_default())
     }
 }

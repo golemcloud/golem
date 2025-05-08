@@ -1,11 +1,14 @@
+use crate::config::ProfileName;
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::component::AppComponentType;
+use crate::model::Format;
 use anyhow::{anyhow, Context};
 use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use url::Url;
 
 #[derive(Clone, Debug)]
 pub struct ApplicationWithSource {
@@ -52,6 +55,8 @@ pub struct Application {
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_api: Option<HttpApi>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub profiles: HashMap<ProfileName, Profile>,
 }
 
 impl Application {
@@ -93,8 +98,8 @@ pub struct Component {
 pub struct HttpApi {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub definitions: HashMap<String, HttpApiDefinition>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub deployments: Vec<HttpApiDeployment>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub deployments: HashMap<ProfileName, Vec<HttpApiDeployment>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -152,6 +157,39 @@ pub struct HttpApiDeployment {
     pub subdomain: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub definitions: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Profile {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub default: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cloud: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub url: Option<Url>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_url: Option<Url>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub format: Option<Format>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub build_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub auto_confirm: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub redeploy_workers: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub redeploy_http_api: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub redeploy_all: Option<bool>,
+}
+
+impl Profile {
+    pub fn is_cloud(&self) -> bool {
+        self.cloud == Some(true) || self.project.is_some()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

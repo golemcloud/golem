@@ -1,8 +1,8 @@
+use crate::config::ProfileName;
 use crate::fs;
 use crate::log::LogColorize;
-use crate::model::app::app_builder::build_application;
+use crate::model::app::app_builder::{build_application, build_profiles};
 use crate::model::app_raw;
-use crate::model::app_raw::{HttpApiDefinition, HttpApiDeployment};
 use crate::model::component::AppComponentType;
 use crate::model::template::Template;
 use crate::validation::{ValidatedResult, ValidationBuilder};
@@ -27,9 +27,8 @@ pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 
 #[derive(Clone, Debug)]
 pub struct ApplicationConfig {
-    pub app_source_mode: ApplicationSourceMode,
     pub skip_up_to_date_checks: bool,
-    pub profile: Option<BuildProfileName>,
+    pub build_profile: Option<BuildProfileName>,
     pub offline: bool,
     pub steps_filter: HashSet<AppBuildStep>,
     pub golem_rust_override: RustDependencyOverride,
@@ -48,7 +47,11 @@ impl ApplicationConfig {
 #[derive(Debug, Clone)]
 pub enum ApplicationSourceMode {
     Automatic,
-    Explicit(PathBuf),
+    ByRootManifest(PathBuf),
+    Preloaded {
+        raw_apps: Vec<app_raw::ApplicationWithSource>,
+        calling_working_dir: PathBuf,
+    },
     None,
 }
 
@@ -79,6 +82,7 @@ impl ApplicationComponentSelectMode {
 
 #[derive(Debug, Clone)]
 pub struct DynamicHelpSections {
+    profile: Option<ProfileName>,
     components: bool,
     custom_commands: bool,
     builtin_commands: BTreeSet<String>,
@@ -87,8 +91,9 @@ pub struct DynamicHelpSections {
 }
 
 impl DynamicHelpSections {
-    pub fn show_all(builtin_commands: BTreeSet<String>) -> Self {
+    pub fn show_all(profile: ProfileName, builtin_commands: BTreeSet<String>) -> Self {
         Self {
+            profile: Some(profile),
             components: true,
             custom_commands: true,
             builtin_commands,
@@ -99,6 +104,7 @@ impl DynamicHelpSections {
 
     pub fn show_components() -> Self {
         Self {
+            profile: None,
             components: true,
             custom_commands: false,
             builtin_commands: Default::default(),
@@ -109,6 +115,7 @@ impl DynamicHelpSections {
 
     pub fn show_custom_commands(builtin_commands: BTreeSet<String>) -> Self {
         Self {
+            profile: None,
             components: false,
             custom_commands: true,
             builtin_commands,
@@ -119,6 +126,7 @@ impl DynamicHelpSections {
 
     pub fn show_api_definitions() -> Self {
         Self {
+            profile: None,
             components: false,
             custom_commands: false,
             builtin_commands: Default::default(),
@@ -127,8 +135,9 @@ impl DynamicHelpSections {
         }
     }
 
-    pub fn show_api_deployments() -> Self {
+    pub fn show_api_deployments(profile: ProfileName) -> Self {
         Self {
+            profile: Some(profile),
             components: true,
             custom_commands: false,
             builtin_commands: Default::default(),
@@ -153,8 +162,10 @@ impl DynamicHelpSections {
         self.api_definitions
     }
 
-    pub fn api_deployments(&self) -> bool {
-        self.api_deployments
+    pub fn api_deployments_profile(&self) -> Option<&ProfileName> {
+        (self.api_deployments)
+            .then_some(self.profile.as_ref())
+            .flatten()
     }
 }
 
@@ -319,7 +330,7 @@ pub enum ResolvedComponentProperties {
         any_template_overrides: bool,
         properties: ComponentProperties,
     },
-    Profiles {
+    BuildProfiles {
         template_name: Option<TemplateName>,
         any_template_overrides: HashMap<BuildProfileName, bool>,
         default_profile: BuildProfileName,
@@ -503,13 +514,25 @@ pub struct Application {
     no_dependencies: BTreeSet<DependentComponent>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
-    http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>>,
-    http_api_deployments: BTreeMap<HttpApiDeploymentSite, WithSource<HttpApiDeployment>>,
+    http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>>,
+    http_api_deployments: BTreeMap<
+        ProfileName,
+        BTreeMap<HttpApiDeploymentSite, WithSource<app_raw::HttpApiDeployment>>,
+    >,
 }
 
 impl Application {
-    pub fn from_raw_apps(apps: Vec<app_raw::ApplicationWithSource>) -> ValidatedResult<Self> {
-        build_application(apps)
+    pub fn profiles_from_raw_apps(
+        apps: &[app_raw::ApplicationWithSource],
+    ) -> ValidatedResult<BTreeMap<ProfileName, app_raw::Profile>> {
+        build_profiles(apps)
+    }
+
+    pub fn from_raw_apps(
+        available_profiles: &BTreeSet<ProfileName>,
+        apps: Vec<app_raw::ApplicationWithSource>,
+    ) -> ValidatedResult<Self> {
+        build_application(available_profiles, apps)
     }
 
     pub fn all_sources(&self) -> &BTreeSet<PathBuf> {
@@ -551,16 +574,16 @@ impl Application {
         self.dependencies.values().flatten().cloned().collect()
     }
 
-    pub fn all_profiles(&self) -> BTreeSet<BuildProfileName> {
+    pub fn all_build_profiles(&self) -> BTreeSet<BuildProfileName> {
         self.component_names()
-            .flat_map(|component_name| self.component_profiles(component_name))
+            .flat_map(|component_name| self.component_build_profiles(component_name))
             .collect()
     }
 
-    pub fn all_option_profiles(&self) -> BTreeSet<Option<BuildProfileName>> {
+    pub fn all_option_build_profiles(&self) -> BTreeSet<Option<BuildProfileName>> {
         let mut profiles = self
             .component_names()
-            .flat_map(|component_name| self.component_profiles(component_name))
+            .flat_map(|component_name| self.component_build_profiles(component_name))
             .map(Some)
             .collect::<BTreeSet<_>>();
         profiles.insert(None);
@@ -579,7 +602,7 @@ impl Application {
         custom_commands
     }
 
-    pub fn all_custom_commands_for_all_profiles(
+    pub fn all_custom_commands_for_all_build_profiles(
         &self,
     ) -> BTreeMap<Option<BuildProfileName>, BTreeSet<String>> {
         let mut custom_commands = BTreeMap::<Option<BuildProfileName>, BTreeSet<String>>::new();
@@ -589,7 +612,7 @@ impl Application {
             .or_default()
             .extend(self.custom_commands.keys().cloned());
 
-        for profile in self.all_option_profiles() {
+        for profile in self.all_option_build_profiles() {
             let profile_commands: &mut BTreeSet<String> = {
                 if custom_commands.contains_key(&profile) {
                     custom_commands.get_mut(&profile).unwrap()
@@ -661,13 +684,13 @@ impl Application {
             })
     }
 
-    pub fn component_profiles(
+    pub fn component_build_profiles(
         &self,
         component_name: &AppComponentName,
     ) -> BTreeSet<BuildProfileName> {
         match &self.component(component_name).properties {
             ResolvedComponentProperties::Properties { .. } => BTreeSet::new(),
-            ResolvedComponentProperties::Profiles { profiles, .. } => {
+            ResolvedComponentProperties::BuildProfiles { profiles, .. } => {
                 profiles.keys().cloned().collect()
             }
         }
@@ -689,7 +712,7 @@ impl Application {
                 is_requested_profile: false,
                 any_template_overrides: *any_template_overrides,
             },
-            ResolvedComponentProperties::Profiles {
+            ResolvedComponentProperties::BuildProfiles {
                 template_name,
                 any_template_overrides,
                 default_profile,
@@ -728,7 +751,7 @@ impl Application {
     ) -> &ComponentProperties {
         match &self.component(component_name).properties {
             ResolvedComponentProperties::Properties { properties, .. } => properties,
-            ResolvedComponentProperties::Profiles {
+            ResolvedComponentProperties::BuildProfiles {
                 default_profile,
                 profiles,
                 ..
@@ -861,7 +884,7 @@ impl Application {
 
     pub fn http_api_definitions(
         &self,
-    ) -> &BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>> {
+    ) -> &BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>> {
         &self.http_api_definitions
     }
 
@@ -910,8 +933,9 @@ impl Application {
 
     pub fn http_api_deployments(
         &self,
-    ) -> &BTreeMap<HttpApiDeploymentSite, WithSource<HttpApiDeployment>> {
-        &self.http_api_deployments
+        profile: &ProfileName,
+    ) -> Option<&BTreeMap<HttpApiDeploymentSite, WithSource<app_raw::HttpApiDeployment>>> {
+        self.http_api_deployments.get(profile)
     }
 }
 
@@ -1205,6 +1229,7 @@ impl PluginInstallation {
 }
 
 mod app_builder {
+    use crate::config::ProfileName;
     use crate::fs::PathExtra;
     use crate::fuzzy;
     use crate::fuzzy::FuzzySearch;
@@ -1216,9 +1241,6 @@ mod app_builder {
         HttpApiDeploymentSite, ResolvedComponentProperties, TemplateName, WithSource,
     };
     use crate::model::app_raw;
-    use crate::model::app_raw::{
-        HttpApiDefinition, HttpApiDefinitionBindingType, HttpApiDeployment,
-    };
     use crate::model::deploy_diff::api_definition::normalize_http_api_binding_path;
     use crate::model::text::fmt::format_rib_source_for_error;
     use crate::validation::{ValidatedResult, ValidationBuilder};
@@ -1235,10 +1257,19 @@ mod app_builder {
     use std::str::FromStr;
     use url::Url;
 
+    // Load full manifest EXCEPT profiles
     pub fn build_application(
+        available_profiles: &BTreeSet<ProfileName>,
         apps: Vec<app_raw::ApplicationWithSource>,
     ) -> ValidatedResult<Application> {
-        AppBuilder::build(apps)
+        AppBuilder::build_app(available_profiles, apps)
+    }
+
+    // Load only profiles
+    pub fn build_profiles(
+        apps: &[app_raw::ApplicationWithSource],
+    ) -> ValidatedResult<BTreeMap<ProfileName, app_raw::Profile>> {
+        AppBuilder::build_profiles(apps)
     }
 
     #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1256,7 +1287,11 @@ mod app_builder {
             method: String,
             path: String,
         },
-        HttpApiDeployment(HttpApiDeploymentSite),
+        HttpApiDeployment {
+            profile: ProfileName,
+            site: HttpApiDeploymentSite,
+        },
+        Profile(ProfileName),
     }
 
     impl UniqueSourceCheckedEntityKey {
@@ -1274,7 +1309,8 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::HttpApiDefinitionRoute { .. } => {
                     "HTTP API Definition Route"
                 }
-                UniqueSourceCheckedEntityKey::HttpApiDeployment(_) => "HTTP API Deployment",
+                UniqueSourceCheckedEntityKey::HttpApiDeployment { .. } => "HTTP API Deployment",
+                UniqueSourceCheckedEntityKey::Profile(_) => "Profile",
             }
         }
 
@@ -1320,10 +1356,11 @@ mod app_builder {
                         path.log_color_highlight(),
                     )
                 }
-                UniqueSourceCheckedEntityKey::HttpApiDeployment(api_deployment_site) => {
+                UniqueSourceCheckedEntityKey::HttpApiDeployment { profile, site } => {
                     format!(
-                        "{}{}",
-                        match api_deployment_site.subdomain {
+                        "{} - {}{}",
+                        profile.0.as_str().log_color_highlight(),
+                        match site.subdomain {
                             Some(subdomain) => {
                                 format!("{}.", subdomain.as_str().log_color_highlight())
                             }
@@ -1331,8 +1368,11 @@ mod app_builder {
                                 "".to_string()
                             }
                         },
-                        api_deployment_site.host.as_str().log_color_highlight()
+                        site.host.as_str().log_color_highlight()
                     )
+                }
+                UniqueSourceCheckedEntityKey::Profile(profile_name) => {
+                    profile_name.0.log_color_highlight().to_string()
                 }
             }
         }
@@ -1347,8 +1387,12 @@ mod app_builder {
         dependencies: BTreeMap<AppComponentName, BTreeSet<DependentComponent>>,
         custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
         clean: Vec<WithSource<String>>,
-        http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>>,
-        http_api_deployments: BTreeMap<HttpApiDeploymentSite, WithSource<HttpApiDeployment>>,
+        http_api_definitions:
+            BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>>,
+        http_api_deployments: BTreeMap<
+            ProfileName,
+            BTreeMap<HttpApiDeploymentSite, WithSource<app_raw::HttpApiDeployment>>,
+        >,
 
         // NOTE: raw component names are available (for validation) even after component resolving
         raw_component_names: HashSet<String>,
@@ -1356,21 +1400,31 @@ mod app_builder {
         raw_components: HashMap<AppComponentName, (PathBuf, app_raw::Component)>,
         resolved_components: BTreeMap<AppComponentName, Component>,
 
+        profiles: BTreeMap<ProfileName, app_raw::Profile>,
+
         all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
     }
 
     impl AppBuilder {
-        fn build(apps: Vec<app_raw::ApplicationWithSource>) -> ValidatedResult<Application> {
+        // NOTE: build_app DOES NOT include profiles, those are preloaded with build_profiles, so
+        //       flows that do not use manifest otherwise won't get blocked by high-level validation errors,
+        //       and we do not "steal" manifest loading logs from those which do use the manifest fully.
+        fn build_app(
+            available_profiles: &BTreeSet<ProfileName>,
+            apps: Vec<app_raw::ApplicationWithSource>,
+        ) -> ValidatedResult<Application> {
             let mut builder = Self::default();
             let mut validation = ValidationBuilder::default();
 
-            builder.add_raw_apps(&mut validation, apps);
+            for app in apps {
+                builder.add_raw_app(&mut validation, app);
+            }
             builder.resolve_components(&mut validation);
             builder.validate_dependency_targets(&mut validation);
             builder.validate_unique_sources(&mut validation);
             builder.validate_http_api_definitions(&mut validation);
-            builder.validate_http_api_deployments(&mut validation);
+            builder.validate_http_api_deployments(&mut validation, available_profiles);
 
             let dependency_sources = {
                 let mut dependency_sources =
@@ -1414,21 +1468,28 @@ mod app_builder {
             })
         }
 
+        // NOTE: Unlike build_app, here we do not consume the source apps, so they can be
+        //       used for build_app. For more info on this separation, see build_app.
+        //
+        //       Ironically build_profiles does not build BuildProfiles, only regular ones.
+        fn build_profiles(
+            apps: &[app_raw::ApplicationWithSource],
+        ) -> ValidatedResult<BTreeMap<ProfileName, app_raw::Profile>> {
+            let mut builder = Self::default();
+            let mut validation = ValidationBuilder::default();
+
+            for app in apps {
+                builder.add_raw_app_profiles_only(&mut validation, app);
+            }
+
+            validation.build(builder.profiles)
+        }
+
         fn add_entity_source(&mut self, key: UniqueSourceCheckedEntityKey, source: &Path) -> bool {
             let sources = self.entity_sources.entry(key).or_default();
             let is_first = sources.is_empty();
             sources.push(source.to_path_buf());
             is_first
-        }
-
-        fn add_raw_apps(
-            &mut self,
-            validation: &mut ValidationBuilder,
-            apps: Vec<app_raw::ApplicationWithSource>,
-        ) {
-            for app in apps {
-                self.add_raw_app(validation, app);
-            }
         }
 
         fn add_raw_app(
@@ -1542,29 +1603,126 @@ mod app_builder {
                             }
                         }
 
-                        for api_deployment in http_api.deployments {
-                            let api_deployment_site = HttpApiDeploymentSite {
-                                host: api_deployment.host.clone(),
-                                subdomain: api_deployment.subdomain.clone(),
-                            };
-                            if self.add_entity_source(
-                                UniqueSourceCheckedEntityKey::HttpApiDeployment(
-                                    api_deployment_site.clone(),
-                                ),
-                                &app.source,
-                            ) {
-                                self.http_api_deployments.insert(
-                                    api_deployment_site,
-                                    WithSource::new(
-                                        app.source.to_path_buf(),
-                                        api_deployment.clone(),
-                                    ),
-                                );
+                        for (profile, deployments) in http_api.deployments {
+                            let mut collected_deployments = BTreeMap::<
+                                HttpApiDeploymentSite,
+                                WithSource<app_raw::HttpApiDeployment>,
+                            >::new();
+
+                            for api_deployment in deployments {
+                                let api_deployment_site = HttpApiDeploymentSite {
+                                    host: api_deployment.host.clone(),
+                                    subdomain: api_deployment.subdomain.clone(),
+                                };
+
+                                if self.add_entity_source(
+                                    UniqueSourceCheckedEntityKey::HttpApiDeployment {
+                                        profile: profile.clone(),
+                                        site: api_deployment_site.clone(),
+                                    },
+                                    &app.source,
+                                ) {
+                                    collected_deployments.insert(
+                                        api_deployment_site,
+                                        WithSource::new(
+                                            app.source.to_path_buf(),
+                                            api_deployment.clone(),
+                                        ),
+                                    );
+                                }
+                            }
+
+                            if !collected_deployments.is_empty() {
+                                self.http_api_deployments
+                                    .insert(profile, collected_deployments);
                             }
                         }
                     }
                 },
             );
+        }
+
+        fn add_raw_app_profiles_only(
+            &mut self,
+            validation: &mut ValidationBuilder,
+            app: &app_raw::ApplicationWithSource,
+        ) {
+            fn check_not_allowed_for_profile<T>(
+                message_suffix: &str,
+                validation: &mut ValidationBuilder,
+                property_name: &str,
+                value: &Option<T>,
+            ) {
+                if value.is_some() {
+                    validation.add_error(format!(
+                        "Property {} is not allowed for {}",
+                        property_name.log_color_highlight(),
+                        message_suffix
+                    ))
+                }
+            }
+
+            let mut default_profile_names = BTreeSet::<ProfileName>::new();
+
+            validation.with_context(
+                vec![("source", app.source.to_string_lossy().to_string())],
+                |validation| {
+                    for (profile_name, profile) in &app.application.profiles {
+                        if self.add_entity_source(
+                            UniqueSourceCheckedEntityKey::Profile(profile_name.clone()),
+                            &app.source,
+                        ) {
+                            if profile.default == Some(true) {
+                                default_profile_names.insert(profile_name.clone());
+                            };
+
+                            self.profiles.insert(profile_name.clone(), profile.clone());
+                            validation.with_context(
+                                vec![("profile", profile_name.to_string())],
+                                |validation| {
+                                    let is_builtin_local = profile_name.is_builtin_local();
+                                    let is_cloud =
+                                        profile_name.is_builtin_cloud() || profile.is_cloud();
+                                    if is_builtin_local || is_cloud {
+                                        check_not_allowed_for_profile(
+                                            &format!("{} profiles", "Cloud".log_color_highlight()),
+                                            validation,
+                                            "url",
+                                            &profile.url,
+                                        );
+
+                                        check_not_allowed_for_profile(
+                                            &format!(
+                                                "builtin {} profiles",
+                                                "local".log_color_highlight()
+                                            ),
+                                            validation,
+                                            "worker_url",
+                                            &profile.worker_url,
+                                        );
+                                    }
+                                    if is_builtin_local && is_cloud {
+                                        validation.add_error(format!(
+                                            "Builtin profile '{}' cannot be used as Cloud profile, using 'cloud:true' or project are not allowed!",
+                                            profile_name.0.log_color_highlight(),
+                                        ))
+                                    }
+                                },
+                            );
+                        }
+                    }
+                },
+            );
+
+            if default_profile_names.len() > 1 {
+                validation.add_error(format!(
+                    "Only one profile can be used as default! Profiles marked as default: {}",
+                    default_profile_names
+                        .iter()
+                        .map(|pn| pn.0.log_color_highlight())
+                        .join(", ")
+                ));
+            }
         }
 
         fn add_raw_template(
@@ -2051,7 +2209,7 @@ mod app_builder {
                     (resolved_profiles, resolved_overrides)
                 });
 
-            valid.then(|| ResolvedComponentProperties::Profiles {
+            valid.then(|| ResolvedComponentProperties::BuildProfiles {
                 template_name: Some(template_name),
                 any_template_overrides,
                 default_profile: default_profile
@@ -2108,7 +2266,7 @@ mod app_builder {
                     }
                 });
 
-            valid.then(|| ResolvedComponentProperties::Profiles {
+            valid.then(|| ResolvedComponentProperties::BuildProfiles {
                 template_name: None,
                 any_template_overrides: Default::default(),
                 default_profile: component
@@ -2351,25 +2509,25 @@ mod app_builder {
                                     };
 
                                     match route.binding.type_.unwrap_or_default() {
-                                        HttpApiDefinitionBindingType::Default => {
+                                        app_raw::HttpApiDefinitionBindingType::Default => {
                                             check_component_name_and_version(validation);
                                             check_rib(validation, "idempotency_key", &route.binding.idempotency_key, false);
                                             check_rib(validation, "invocation_context", &route.binding.invocation_context, false);
                                             check_rib(validation, "response", &route.binding.response, true);
                                         }
-                                        HttpApiDefinitionBindingType::CorsPreflight => {
+                                        app_raw::HttpApiDefinitionBindingType::CorsPreflight => {
                                             check_not_allowed(validation, "component_name", &route.binding.component_name);
                                             check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
                                             check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
                                             check_rib(validation, "response", &route.binding.response, false);
                                         }
-                                        HttpApiDefinitionBindingType::FileServer => {
+                                        app_raw::HttpApiDefinitionBindingType::FileServer => {
                                             check_component_name_and_version(validation);
                                             check_rib(validation, "idempotency_key", &route.binding.idempotency_key, false);
                                             check_rib(validation, "invocation_context", &route.binding.invocation_context, false);
                                             check_rib(validation, "response", &route.binding.response, true);
                                         }
-                                        HttpApiDefinitionBindingType::HttpHandler => {
+                                        app_raw::HttpApiDefinitionBindingType::HttpHandler => {
                                             check_component_name_and_version(validation);
                                             check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
                                             check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
@@ -2384,62 +2542,93 @@ mod app_builder {
             }
         }
 
-        fn validate_http_api_deployments(&self, validation: &mut ValidationBuilder) {
-            for (site, api_deployment) in &self.http_api_deployments {
+        fn validate_http_api_deployments(
+            &self,
+            validation: &mut ValidationBuilder,
+            available_profiles: &BTreeSet<ProfileName>,
+        ) {
+            for (profile, api_deployments) in &self.http_api_deployments {
+                if !available_profiles.contains(profile) {
+                    validation.add_warn(format!(
+                        "Unknown profile in manifest: {}\n\n{}",
+                        profile.0.log_color_highlight(),
+                        self.available_profiles(available_profiles, &profile.0)
+                    ));
+                }
+
                 validation.with_context(
-                    vec![
-                        (
-                            "source",
-                            api_deployment.source.to_string_lossy().to_string(),
-                        ),
-                        ("HTTP API deployment site", site.to_string()),
-                    ],
+                    vec![("profile", profile.0.clone())],
                     |validation| {
-                        for def_name in &api_deployment.value.definitions {
-                            let parts = def_name.split("@").collect::<Vec<_>>();
-                            let (name, version) = match parts.len() {
-                                1 => (HttpApiDefinitionName::from(def_name.as_str()), None),
-                                2 => (HttpApiDefinitionName::from(parts[0]), Some(parts[1])),
-                                _ => {
-                                    validation.add_error(
-                                        format!(
-                                            "Invalid definition name: {}, expected 'api-name', or 'api-name@version'",
-                                            def_name.log_color_error_highlight(),
-                                        ),
-                                    );
-                                    continue;
-                                }
-                            };
-                            if name.0.is_empty() {
-                                validation.add_error(
-                                    format!(
-                                        "Invalid definition name, empty API name part: {}, expected 'api-name', or 'api-name@version'",
-                                        def_name.log_color_error_highlight(),
+                        for (site, api_deployment) in api_deployments {
+                            validation.with_context(
+                                vec![
+                                    (
+                                        "source",
+                                        api_deployment.source.to_string_lossy().to_string(),
                                     ),
-                                );
-                            } else if !self.http_api_definitions.contains_key(&name) {
-                                validation.add_error(
-                                    format!(
-                                        "Unknown HTTP API definition name: {}\n\n{}",
-                                        def_name.as_str().log_color_error_highlight(),
-                                        self.available_http_api_definitions(def_name.as_str())
-                                    ),
-                                )
-                            }
-                            if let Some(version) = version {
-                                if version.is_empty() {
-                                    validation.add_error(
-                                        format!(
-                                            "Invalid definition name, empty version part: {}, expected 'api-name', or 'api-name@version'",
-                                            def_name.log_color_error_highlight(),
-                                        ),
-                                    );
-                                }
-                            }
+                                    ("HTTP API deployment site", site.to_string()),
+                                ],
+                                |validation| {
+                                    for def_name in &api_deployment.value.definitions {
+                                        let parts = def_name.split("@").collect::<Vec<_>>();
+                                        let (name, version) = match parts.len() {
+                                            1 => (HttpApiDefinitionName::from(def_name.as_str()), None),
+                                            2 => (HttpApiDefinitionName::from(parts[0]), Some(parts[1])),
+                                            _ => {
+                                                validation.add_error(
+                                                    format!(
+                                                        "Invalid definition name: {}, expected 'api-name', or 'api-name@version'",
+                                                        def_name.log_color_error_highlight(),
+                                                    ),
+                                                );
+                                                continue;
+                                            }
+                                        };
+                                        if name.0.is_empty() {
+                                            validation.add_error(
+                                                format!(
+                                                    "Invalid definition name, empty API name part: {}, expected 'api-name', or 'api-name@version'",
+                                                    def_name.log_color_error_highlight(),
+                                                ),
+                                            );
+                                        } else if !self.http_api_definitions.contains_key(&name) {
+                                            validation.add_error(
+                                                format!(
+                                                    "Unknown HTTP API definition name: {}\n\n{}",
+                                                    def_name.as_str().log_color_error_highlight(),
+                                                    self.available_http_api_definitions(def_name.as_str())
+                                                ),
+                                            )
+                                        }
+                                        if let Some(version) = version {
+                                            if version.is_empty() {
+                                                validation.add_error(
+                                                    format!(
+                                                        "Invalid definition name, empty version part: {}, expected 'api-name', or 'api-name@version'",
+                                                        def_name.log_color_error_highlight(),
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                    }
+                                },
+                            );
                         }
-                    },
-                );
+                    });
             }
+        }
+
+        fn available_profiles(
+            &self,
+            available_profiles: &BTreeSet<ProfileName>,
+            unknown: &str,
+        ) -> String {
+            self.available_options_help(
+                "profiles",
+                "profile names",
+                unknown,
+                available_profiles.iter().map(|name| name.0.as_str()),
+            )
         }
 
         fn available_templates(&self, unknown: &str) -> String {

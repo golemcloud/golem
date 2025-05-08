@@ -21,7 +21,7 @@ use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
 use crate::model::component::Component;
 use crate::model::plugin_manifest::{PluginManifest, PluginTypeSpecificManifest};
 use crate::model::{
-    ComponentName, PathBufOrStdin, PluginDefinition, ProjectNameAndId, ProjectReference,
+    ComponentName, PathBufOrStdin, PluginDefinition, ProjectRefAndId, ProjectReference,
 };
 use anyhow::{anyhow, Context as AnyhowContext};
 use golem_client::api::{ComponentClient as ComponentClientOss, PluginClient as PluginClientOss};
@@ -410,7 +410,7 @@ impl PluginCommandHandler {
     async fn resolve_scope(
         &self,
         scope: &PluginScopeArgs,
-    ) -> anyhow::Result<(Option<ProjectNameAndId>, Option<ComponentId>)> {
+    ) -> anyhow::Result<(Option<ProjectRefAndId>, Option<ComponentId>)> {
         if scope.is_global() {
             return Ok((None, None));
         }
@@ -460,7 +460,7 @@ fn default_plugin_scope(scope_component_id: Option<&ComponentId>) -> DefaultPlug
 }
 
 fn cloud_plugin_scope(
-    scope_project: Option<&ProjectNameAndId>,
+    scope_project: Option<&ProjectRefAndId>,
     scope_component_id: Option<&ComponentId>,
 ) -> CloudPluginScope {
     if let Some(component_id) = scope_component_id {
