@@ -1125,10 +1125,7 @@ where
         .map(|e| e.state.clone());
 
     match state {
-        Ok(RdbmsTransactionState::Open(transaction)) => {
-            // TODO pre commit
-            Ok(())
-        }
+        Ok(RdbmsTransactionState::Open(transaction)) => transaction.pre_rollback().await,
         Ok(_) => Ok(()),
         Err(error) => Err(RdbmsError::other_response_failure(error)),
     }
@@ -1178,10 +1175,7 @@ where
         .map(|e| e.state.clone());
 
     match state {
-        Ok(RdbmsTransactionState::Open(transaction)) => {
-            // TODO pre rollback
-            Ok(())
-        }
+        Ok(RdbmsTransactionState::Open(transaction)) => transaction.pre_commit().await,
         Ok(_) => Ok(()),
         Err(error) => Err(RdbmsError::other_response_failure(error)),
     }

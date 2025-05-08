@@ -321,24 +321,6 @@ where
                 .begin(key, pool)
                 .await
                 .map(|r| r as Arc<dyn DbTransaction<T> + Send + Sync>)
-            // let mut connection = pool
-            //     .deref()
-            //     .acquire()
-            //     .await
-            //     .map_err(Error::connection_failure)?;
-            // DB::TransactionManager::begin(&mut connection)
-            //     .await
-            //     .map_err(Error::query_execution_failure)?;
-            //
-            // let db_transaction: Arc<dyn DbTransaction<T> + Send + Sync> =
-            //     Arc::new(SqlxDbTransaction::new(
-            //         RdbmsTransactionIdentifier::generate(),
-            //         key.clone(),
-            //         connection,
-            //         self.config.query,
-            //     ));
-            //
-            // Ok(db_transaction)
         };
 
         let result = result.map_err(|e| {
@@ -437,6 +419,7 @@ pub struct SqlxDbTransaction<T: RdbmsType, DB: Database> {
     transaction_id: RdbmsTransactionId,
     pool_key: RdbmsPoolKey,
     tx_connection: SqlxDbTransactionConnection<DB>,
+    pool: Arc<Pool<DB>>,
     query_config: RdbmsQueryConfig,
 }
 
@@ -460,6 +443,7 @@ where
         transaction_id: RdbmsTransactionId,
         pool_key: RdbmsPoolKey,
         connection: PoolConnection<DB>,
+        pool: Arc<Pool<DB>>,
         query_config: RdbmsQueryConfig,
     ) -> Self {
         let rdbms_type = T::default();
@@ -468,6 +452,7 @@ where
             transaction_id,
             pool_key,
             tx_connection: SqlxDbTransactionConnection::new(connection, true),
+            pool,
             query_config,
         }
     }
@@ -664,6 +649,28 @@ where
             e
         });
         self.record_metrics("query-stream", start, result)
+    }
+
+    async fn pre_commit(&self) -> Result<(), Error> {
+        let start = Instant::now();
+        debug!(
+            rdbms_type = self.rdbms_type.to_string(),
+            pool_key = self.pool_key.to_string(),
+            "pre-commit transaction"
+        );
+        // TODO
+        Ok(())
+    }
+
+    async fn pre_rollback(&self) -> Result<(), Error> {
+        let start = Instant::now();
+        debug!(
+            rdbms_type = self.rdbms_type.to_string(),
+            pool_key = self.pool_key.to_string(),
+            "pre-rollback transaction"
+        );
+        // TODO
+        Ok(())
     }
 
     async fn commit(&self) -> Result<(), Error> {
@@ -989,6 +996,7 @@ where
             id,
             key.clone(),
             connection,
+            pool,
             self.query_config,
         ));
 

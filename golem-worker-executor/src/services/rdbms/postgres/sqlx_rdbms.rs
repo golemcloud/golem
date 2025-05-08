@@ -102,9 +102,14 @@ impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactio
         let id: i64 = row.try_get(0).map_err(Error::query_response_failure)?;
         let transaction_id = RdbmsTransactionId::new(id);
 
-        let db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>> = Arc::new(
-            SqlxDbTransaction::new(transaction_id, key.clone(), connection, self.query_config),
-        );
+        let db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>> =
+            Arc::new(SqlxDbTransaction::new(
+                transaction_id,
+                key.clone(),
+                connection,
+                pool,
+                self.query_config,
+            ));
 
         Ok(db_transaction)
     }

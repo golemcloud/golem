@@ -93,6 +93,10 @@ pub trait DbTransaction<T: RdbmsType> {
     where
         <T as RdbmsType>::DbValue: 'async_trait;
 
+    async fn pre_commit(&self) -> Result<(), Error>;
+
+    async fn pre_rollback(&self) -> Result<(), Error>;
+
     async fn commit(&self) -> Result<(), Error>;
 
     async fn rollback(&self) -> Result<(), Error>;
