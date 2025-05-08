@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, ExprVisitor};
 use crate::inferred_type::TypeOrigin;
+use crate::{Expr, ExprVisitor};
 
 pub fn set_pattern_match_origins(expr: &mut Expr) {
     let mut visitor = ExprVisitor::bottom_up(expr);

@@ -34,7 +34,6 @@ pub enum TypeOrigin {
     PatternMatch(SourceSpan),
 }
 
-
 impl Debug for TypeOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<SourceSpan>")
