@@ -129,7 +129,7 @@ impl<'a> MergeTaskStack<'a> {
                         let mut tuple_types = vec![];
 
                         for task_index in task_indices {
-                            if let Some(typ) = types.get(&task_index) {
+                            if let Some(typ) = types.get(task_index) {
                                 used_index.insert(*task_index);
                                 tuple_types.push(typ.clone());
                             }
@@ -153,7 +153,7 @@ impl<'a> MergeTaskStack<'a> {
                     if let Some(task_indices) = &result_builder.ok {
                         let mut ok_types = vec![];
                         for task_index in task_indices {
-                            if let Some(typ) = types.get(&task_index) {
+                            if let Some(typ) = types.get(task_index) {
                                 used_index.insert(*task_index);
                                 ok_types.push(typ.clone());
                             }
@@ -168,7 +168,7 @@ impl<'a> MergeTaskStack<'a> {
                         let mut error_types = vec![];
 
                         for task_index in task_indices {
-                            if let Some(typ) = types.get(&task_index) {
+                            if let Some(typ) = types.get(task_index) {
                                 used_index.insert(*task_index);
                                 error_types.push(typ.clone());
                             }
@@ -189,7 +189,7 @@ impl<'a> MergeTaskStack<'a> {
                     let mut all_of_types = vec![];
 
                     for task_index in &all_of_builder.pointers {
-                        if let Some(typ) = types.get(&task_index) {
+                        if let Some(typ) = types.get(task_index) {
                             used_index.insert(*task_index);
                             all_of_types.push(typ.clone());
                         }
@@ -204,7 +204,7 @@ impl<'a> MergeTaskStack<'a> {
                     let mut list_types = vec![];
 
                     for task_index in &list_builder.list {
-                        if let Some(typ) = types.get(&task_index) {
+                        if let Some(typ) = types.get(task_index) {
                             used_index.insert(*task_index);
                             list_types.push(typ.clone());
                         }
@@ -222,7 +222,7 @@ impl<'a> MergeTaskStack<'a> {
                     let mut list_types = vec![];
 
                     for task_index in &option_builder.option {
-                        if let Some(typ) = types.get(&task_index) {
+                        if let Some(typ) = types.get(task_index) {
                             used_index.insert(*task_index);
                             list_types.push(typ.clone());
                         }
@@ -268,7 +268,7 @@ impl<'a> MergeTaskStack<'a> {
         // does it exist before
         let index = task.get_index_in_stack();
 
-        if let Some(_) = self.tasks.get(index) {
+        if self.tasks.get(index).is_some() {
             self.tasks[index] = task;
         } else {
             self.tasks.push(task);
@@ -371,33 +371,29 @@ impl<'a> MergeTaskStack<'a> {
         variant_identifier: &VariantIdentifier,
     ) -> Option<&mut VariantBuilder> {
         for task in self.tasks.iter_mut().rev() {
-            match task {
-                MergeTask::VariantBuilder(builder) => {
-                    let builder_variants = &builder.variants;
+            if let MergeTask::VariantBuilder(builder) = task {
+                let builder_variants = &builder.variants;
 
-                    if builder_variants.len() != variant_identifier.variants.len() {
-                        continue;
-                    } else {
-                        let found = variant_identifier.path == builder.path
-                            && variant_identifier.variants.iter().all(
-                                |(variant_name, variant_type)| {
-                                    builder_variants.iter().any(|(name, type_)| {
-                                        name == variant_name
-                                            && match variant_type {
-                                                VariantType::WithArgs => type_.is_some(),
-                                                VariantType::WithoutArgs => type_.is_none(),
-                                            }
-                                    })
-                                },
-                            );
+                if builder_variants.len() != variant_identifier.variants.len() {
+                    continue;
+                } else {
+                    let found = variant_identifier.path == builder.path
+                        && variant_identifier.variants.iter().all(
+                            |(variant_name, variant_type)| {
+                                builder_variants.iter().any(|(name, type_)| {
+                                    name == variant_name
+                                        && match variant_type {
+                                            VariantType::WithArgs => type_.is_some(),
+                                            VariantType::WithoutArgs => type_.is_none(),
+                                        }
+                                })
+                            },
+                        );
 
-                        if found {
-                            return Some(builder);
-                        }
+                    if found {
+                        return Some(builder);
                     }
                 }
-
-                _ => {}
             }
         }
 
@@ -406,44 +402,40 @@ impl<'a> MergeTaskStack<'a> {
 
     pub fn get_result_mut(&mut self, result_key: &ResultIdentifier) -> Option<&mut ResultBuilder> {
         for task in self.tasks.iter_mut().rev() {
-            match task {
-                MergeTask::ResultBuilder(builder) => match (result_key.ok, result_key.error) {
-                    (true, true) => {
-                        if builder.ok.is_some()
-                            && builder.error.is_some()
-                            && builder.path == result_key.path
-                        {
-                            return Some(builder);
-                        }
+            if let MergeTask::ResultBuilder(builder) = task { match (result_key.ok, result_key.error) {
+                (true, true) => {
+                    if builder.ok.is_some()
+                        && builder.error.is_some()
+                        && builder.path == result_key.path
+                    {
+                        return Some(builder);
                     }
-                    (true, false) => {
-                        if builder.ok.is_some()
-                            && builder.error.is_none()
-                            && builder.path == result_key.path
-                        {
-                            return Some(builder);
-                        }
+                }
+                (true, false) => {
+                    if builder.ok.is_some()
+                        && builder.error.is_none()
+                        && builder.path == result_key.path
+                    {
+                        return Some(builder);
                     }
-                    (false, true) => {
-                        if builder.ok.is_none()
-                            && builder.error.is_some()
-                            && builder.path == result_key.path
-                        {
-                            return Some(builder);
-                        }
+                }
+                (false, true) => {
+                    if builder.ok.is_none()
+                        && builder.error.is_some()
+                        && builder.path == result_key.path
+                    {
+                        return Some(builder);
                     }
-                    (false, false) => {
-                        if builder.ok.is_none()
-                            && builder.error.is_none()
-                            && builder.path == result_key.path
-                        {
-                            return Some(builder);
-                        }
+                }
+                (false, false) => {
+                    if builder.ok.is_none()
+                        && builder.error.is_none()
+                        && builder.path == result_key.path
+                    {
+                        return Some(builder);
                     }
-                },
-
-                _ => {}
-            }
+                }
+            } }
         }
 
         None
@@ -762,7 +754,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                         let next_available_index = final_task_stack.next_index();
 
                         let record_identifier: RecordIdentifier =
-                            RecordIdentifier::from(&path, fields);
+                            RecordIdentifier::from(path, fields);
 
                         let builder = final_task_stack.get_record_mut(&record_identifier);
 
@@ -770,7 +762,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
 
                         if let Some(builder) = builder {
                             update_record_builder_and_update_tasks(
-                                &path,
+                                path,
                                 next_available_index - 1,
                                 builder,
                                 fields,
@@ -779,7 +771,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                             );
                         } else {
                             let (task_index, field_index) =
-                                if final_task_stack.get(*task_index) == Some(&task) {
+                                if final_task_stack.get(*task_index) == Some(task) {
                                     (*task_index, next_available_index - 1)
                                 } else {
                                     (next_available_index, next_available_index)
@@ -823,7 +815,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                             );
                         } else {
                             let (task_index, field_index) =
-                                if final_task_stack.get(*task_index) == Some(&task) {
+                                if final_task_stack.get(*task_index) == Some(task) {
                                     (*task_index, next_available_index - 1)
                                 } else {
                                     (next_available_index, next_available_index)
@@ -867,7 +859,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                             );
                         } else {
                             let (task_index, field_index) =
-                                if final_task_stack.get(*task_index) == Some(&task) {
+                                if final_task_stack.get(*task_index) == Some(task) {
                                     (*task_index, next_available_index - 1)
                                 } else {
                                     (next_available_index, next_available_index)
@@ -912,7 +904,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                             );
                         } else {
                             let (task_index, field_index) =
-                                if final_task_stack.get(*task_index) == Some(&task) {
+                                if final_task_stack.get(*task_index) == Some(task) {
                                     (*task_index, next_available_index - 1)
                                 } else {
                                     (next_available_index, next_available_index)
@@ -959,7 +951,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                             );
                         } else {
                             let (task_index, field_index) =
-                                if final_task_stack.get(*task_index) == Some(&task) {
+                                if final_task_stack.get(*task_index) == Some(task) {
                                     (*task_index, next_available_index - 1)
                                 } else {
                                     (next_available_index, next_available_index)
@@ -1004,7 +996,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                             );
                         } else {
                             let (task_index, field_index) =
-                                if final_task_stack.get(*task_index) == Some(&task) {
+                                if final_task_stack.get(*task_index) == Some(task) {
                                     (*task_index, next_available_index - 1)
                                 } else {
                                     (next_available_index, next_available_index)
@@ -1096,7 +1088,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                     | TypeInternal::Unknown
                     | TypeInternal::Range { .. }
                     | TypeInternal::Str => final_task_stack
-                        .update(&task_index, MergeTask::Complete(*task_index, inferred_type)),
+                        .update(task_index, MergeTask::Complete(*task_index, inferred_type)),
                 }
             }
 
@@ -1108,7 +1100,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
             MergeTask::ListBuilder(_) => {}
             MergeTask::OptionBuilder(_) => {}
             MergeTask::Complete(index, task) => {
-                final_task_stack.update(&index, MergeTask::Complete(*index, task));
+                final_task_stack.update(index, MergeTask::Complete(*index, task));
             }
         }
     }
@@ -1324,7 +1316,7 @@ mod internal {
     ) {
         let mut field_task_index = field_task_index;
 
-        for (field, inferred_type) in fields.into_iter() {
+        for (field, inferred_type) in fields.iter() {
             field_task_index += 1;
 
             builder.insert(field, field_task_index);
@@ -1412,7 +1404,7 @@ mod internal {
     ) {
         let mut field_task_index = field_task_index;
 
-        for (variant_name, inferred_type) in variants.into_iter() {
+        for (variant_name, inferred_type) in variants.iter() {
             if let Some(inferred_type) = inferred_type {
                 field_task_index += 1;
 
@@ -1515,7 +1507,7 @@ mod internal {
 
         let mut indices = vec![];
 
-        for (i, inferred_type) in inferred_types.into_iter().enumerate() {
+        for (i, inferred_type) in inferred_types.iter().enumerate() {
             field_task_index += 1;
 
             indices.push(field_task_index);

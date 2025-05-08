@@ -157,12 +157,9 @@ impl InferredType {
             TypeOrigin::Multiple(origins) => {
                 let mut source_span = None;
                 for origin in origins {
-                    match origin {
-                        TypeOrigin::OriginatedAt(loc) => {
-                            source_span = Some(loc.clone());
-                            break;
-                        }
-                        _ => {}
+                    if let TypeOrigin::OriginatedAt(loc) = origin {
+                        source_span = Some(loc.clone());
+                        break;
                     }
                 }
                 source_span
