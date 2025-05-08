@@ -135,11 +135,7 @@ impl ApiDeploymentCommandHandler {
         Ok(())
     }
 
-    async fn cmd_get(
-        &self,
-        project: ProjectOptionalFlagArg,
-        site: String,
-    ) -> anyhow::Result<()> {
+    async fn cmd_get(&self, project: ProjectOptionalFlagArg, site: String) -> anyhow::Result<()> {
         let project = self
             .ctx
             .cloud_project_handler()
