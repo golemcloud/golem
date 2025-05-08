@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{InferredType, Path, PathElem, TypeInternal};
+use crate::{InferredType, Path, TypeInternal};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::inferred_type::TypeOrigin;
@@ -289,22 +289,6 @@ impl<'a> MergeTaskStack<'a> {
         }
 
         None
-    }
-
-    pub fn get_all_inspects(
-        &mut self,
-        path: &Path,
-        inferred_type: &InferredType,
-    ) -> Vec<&mut MergeTask<'a>> {
-        self.tasks
-            .iter_mut()
-            .filter(|task| match task {
-                MergeTask::Inspect(inspect) => {
-                    &inspect.path == path && inspect.inferred_type == inferred_type
-                }
-                _ => false,
-            })
-            .collect::<Vec<_>>()
     }
 
     pub fn get_record_mut(
@@ -922,7 +906,6 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                                     (next_available_index, next_available_index)
                                 };
 
-
                             let mut builder = TupleBuilder::init(path, task_index, elems);
 
                             update_tuple_builder_and_update_tasks(
@@ -1314,6 +1297,9 @@ mod internal {
     ) {
         let mut field_task_index = field_task_index;
 
+        let mut path = path.clone();
+        path.push_back(PathElem::Field("std_result".to_string()));
+
         if let Some(inferred_type) = ok {
             field_task_index += 1;
 
@@ -1321,7 +1307,7 @@ mod internal {
 
             let mut path = path.clone();
 
-            path.push_back(PathElem::Field("result::ok".to_string()));
+            path.push_back(PathElem::Field("ok".to_string()));
 
             tasks_for_final_stack.push(MergeTask::inspect(
                 path.clone(),
@@ -1343,7 +1329,7 @@ mod internal {
 
             let mut path = path.clone();
 
-            path.push_back(PathElem::Field("result::error".to_string()));
+            path.push_back(PathElem::Field("error".to_string()));
 
             tasks_for_final_stack.push(MergeTask::inspect(
                 path.clone(),
@@ -1385,7 +1371,7 @@ mod internal {
             indices.push(field_task_index);
 
             let mut path = path.clone();
-            path.push_back(PathElem::Field(format!("tuple::{}", i)));
+            path.push_back(PathElem::Field(format!("tuple-index::{}", i)));
 
             tasks_for_final_stack.push(MergeTask::inspect(
                 path.clone(),
@@ -1783,6 +1769,42 @@ mod tests {
     }
 
     #[test]
+    fn test_all_of_merge_result_0() {
+        let inferred_types = vec![InferredType::result(
+            Some(InferredType::s8()),
+            Some(InferredType::u8()),
+        )];
+
+        let merge_task_stack = get_merge_task(&inferred_types);
+
+        let s8 = InferredType::s8();
+        let u8 = InferredType::u8();
+
+        let expected = MergeTaskStack {
+            tasks: vec![
+                MergeTask::ResultBuilder(ResultBuilder {
+                    path: Path::default(),
+                    task_index: 0,
+                    ok: Some(vec![1]),
+                    error: Some(vec![2]),
+                }),
+                MergeTask::Complete(1, &s8),
+                MergeTask::Complete(2, &u8),
+            ],
+        };
+
+        dbg!(&merge_task_stack);
+
+        assert_eq!(&merge_task_stack, &expected);
+
+        let completed_task = merge_task_stack.complete();
+        let expected_type =
+            InferredType::result(Some(InferredType::s8()), Some(InferredType::u8()));
+
+        assert_eq!(completed_task, expected_type);
+    }
+
+    #[test]
     fn test_all_of_merge_result_1() {
         let inferred_types = vec![
             InferredType::result(Some(InferredType::s8()), Some(InferredType::u8())),
@@ -1852,7 +1874,7 @@ mod tests {
                     error: Some(vec![2]),
                 }),
                 MergeTask::ResultBuilder(ResultBuilder {
-                    path: Path::from_elems(vec!["result::ok"]),
+                    path: Path::from_elems(vec!["std_result", "ok"]),
                     task_index: 1,
                     ok: Some(vec![3]),
                     error: Some(vec![4]),
@@ -1906,13 +1928,13 @@ mod tests {
                 }),
                 MergeTask::Complete(1, &u8),
                 MergeTask::ResultBuilder(ResultBuilder {
-                    path: Path::from_elems(vec!["result::error"]),
+                    path: Path::from_elems(vec!["std_result", "error"]),
                     task_index: 2,
                     ok: Some(vec![3]),
                     error: Some(vec![4]),
                 }),
                 MergeTask::ResultBuilder(ResultBuilder {
-                    path: Path::from_elems(vec!["result::error", "result::ok"]),
+                    path: Path::from_elems(vec!["std_result", "error", "std_result", "ok"]),
                     task_index: 3,
                     ok: Some(vec![5]),
                     error: Some(vec![6]),
@@ -1922,6 +1944,8 @@ mod tests {
                 MergeTask::Complete(6, &u64),
             ],
         };
+
+        dbg!(&merge_task_stack);
 
         assert_eq!(&merge_task_stack, &expected_stack);
 
@@ -2104,9 +2128,6 @@ mod tests {
             ]),
         ];
 
-        let inferred_type_s8 = InferredType::s8();
-        let inferred_type_string = InferredType::string();
-
         let merge_task_stack = get_merge_task(&inferred_types);
 
         let completed_task = merge_task_stack.complete();
@@ -2141,7 +2162,7 @@ mod tests {
         let expected_stack = MergeTaskStack {
             tasks: vec![
                 MergeTask::TupleBuilder(TupleBuilder {
-                    path: Path::from_elems(vec!["tuple-2"]),
+                    path: Path::default(),
                     task_index: 0,
                     tuple: vec![vec![1, 3], vec![2, 4]],
                 }),
@@ -2152,14 +2173,9 @@ mod tests {
             ],
         };
 
-        dbg!(&merge_task_stack);
-       // assert_eq!(&merge_task_stack, &expected_stack);
-
-        dbg!(&merge_task_stack);
+        assert_eq!(&merge_task_stack, &expected_stack);
 
         let completed_task = merge_task_stack.complete();
-
-        dbg!(&completed_task);
 
         let expected_type = InferredType::tuple(vec![
             InferredType::new(
@@ -2195,7 +2211,7 @@ mod tests {
                 }),
                 MergeTask::Complete(1, &inferred_type_s8),
                 MergeTask::TupleBuilder(TupleBuilder {
-                    path: Path::from_elems(vec!["tuple-size::2", "tuple::1"]),
+                    path: Path::from_elems(vec!["tuple-size::2", "tuple-index::1"]),
                     task_index: 2,
                     tuple: vec![vec![3]],
                 }),
@@ -2251,9 +2267,7 @@ mod tests {
 
         let tuple3 = InferredType::tuple(vec![record1]);
 
-        let inferred_types = vec![tuple1.clone(), tuple3.clone()];
-
-        let inferred_type_s8 = InferredType::s8();
+        let inferred_types = vec![tuple1.clone(), tuple2.clone(), tuple3.clone()];
 
         let merge_task_stack = get_merge_task(&inferred_types);
 
