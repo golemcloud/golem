@@ -43,7 +43,7 @@ use crate::model::text::help::ComponentNameHelp;
 use crate::model::to_cloud::ToCloud;
 use crate::model::{
     AccountDetails, ComponentName, ComponentNameMatchKind, ComponentVersionSelection,
-    ProjectNameAndId, SelectedComponents, WorkerUpdateMode,
+    ProjectNameAndId, ProjectReference, SelectedComponents, WorkerUpdateMode,
 };
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use golem_client::api::ComponentClient as ComponentClientOss;
@@ -271,7 +271,7 @@ impl ComponentCommandHandler {
         self.deploy(
             self.ctx
                 .cloud_project_handler()
-                .opt_select_project(None, None)
+                .opt_select_project(None)
                 .await?
                 .as_ref(),
             component_name.component_name,
@@ -1044,30 +1044,30 @@ impl ComponentCommandHandler {
                             Some(
                                 self.ctx
                                     .cloud_project_handler()
-                                    .select_project(
-                                        None,
-                                        &empty_checked_project(segments[0])?.into(),
-                                    )
+                                    .select_project(&ProjectReference::JustName(
+                                        empty_checked_project(segments[0])?.into(),
+                                    ))
                                     .await?,
                             ),
                             Some(empty_checked_component(segments[1])?.into()),
                         ),
                         3 => {
-                            let account_email = empty_checked_account(segments[0])?;
+                            let account_email = empty_checked_account(segments[0])?.to_string();
                             let account = self
                                 .ctx
                                 .cloud_account_handler()
-                                .select_account_by_email_or_error(account_email)
+                                .select_account_by_email_or_error(&account_email)
                                 .await?;
                             (
                                 Some(account.clone()),
                                 Some(
                                     self.ctx
                                         .cloud_project_handler()
-                                        .select_project(
-                                            Some(&account),
-                                            &empty_checked_project(segments[1])?.into(),
-                                        )
+                                        .select_project(&ProjectReference::WithAccount {
+                                            account_email,
+                                            project_name: empty_checked_project(segments[1])?
+                                                .into(),
+                                        })
                                         .await?,
                                 ),
                                 Some(empty_checked_component(segments[2])?.into()),

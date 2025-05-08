@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
-use crate::command::shared_args::ProjectNameOptionalArg;
+use crate::command::shared_args::ProjectOptionalFlagArg;
 use crate::command_handler::Handlers;
 use crate::context::{Context, GolemClients};
 use crate::error::service::AnyhowMapServiceError;
@@ -66,7 +66,7 @@ impl ApiSecuritySchemeCommandHandler {
 
     async fn cmd_create(
         &self,
-        project: ProjectNameOptionalArg,
+        project: ProjectOptionalFlagArg,
         scheme_identifier: String,
         provider_type: IdentityProviderType,
         client_id: String,
@@ -77,7 +77,7 @@ impl ApiSecuritySchemeCommandHandler {
         let project = self
             .ctx
             .cloud_project_handler()
-            .opt_select_project(None /* TODO: account id */, project.project.as_ref())
+            .opt_select_project(project.project.as_ref())
             .await?;
 
         let result: ApiSecurityScheme = match self.ctx.golem_clients().await? {
@@ -134,13 +134,13 @@ impl ApiSecuritySchemeCommandHandler {
 
     async fn cmd_get(
         &self,
-        project: ProjectNameOptionalArg,
+        project: ProjectOptionalFlagArg,
         security_scheme_id: String,
     ) -> anyhow::Result<()> {
         let project = self
             .ctx
             .cloud_project_handler()
-            .opt_select_project(None /* TODO: account id */, project.project.as_ref())
+            .opt_select_project(project.project.as_ref())
             .await?;
 
         let result: ApiSecurityScheme = match self.ctx.golem_clients().await? {

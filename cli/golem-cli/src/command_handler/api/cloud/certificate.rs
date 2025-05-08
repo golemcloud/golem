@@ -20,7 +20,7 @@ use crate::error::NonSuccessfulExit;
 use crate::log::log_warn_action;
 use crate::model::text::certificate::{CertificateListView, CertificateNewView};
 use crate::model::text::fmt::log_error;
-use crate::model::{PathBufOrStdin, ProjectName};
+use crate::model::{PathBufOrStdin, ProjectReference};
 use anyhow::bail;
 use golem_cloud_client::api::ApiCertificateClient;
 use golem_cloud_client::model::CertificateRequest;
@@ -39,17 +39,17 @@ impl ApiCloudCertificateCommandHandler {
     pub async fn handle_command(&self, command: ApiCertificateSubcommand) -> anyhow::Result<()> {
         match command {
             ApiCertificateSubcommand::Get {
-                project_name,
+                project,
                 certificate_id,
-            } => self.cmd_get(project_name, certificate_id).await,
+            } => self.cmd_get(project.project, certificate_id).await,
             ApiCertificateSubcommand::New {
-                project_name,
+                project,
                 domain_name,
                 certificate_body,
                 certificate_private_key,
             } => {
                 self.cmd_new(
-                    project_name,
+                    project.project,
                     domain_name,
                     certificate_body,
                     certificate_private_key,
@@ -57,15 +57,15 @@ impl ApiCloudCertificateCommandHandler {
                 .await
             }
             ApiCertificateSubcommand::Delete {
-                project_name,
+                project,
                 certificate_id,
-            } => self.cmd_delete(project_name, certificate_id).await,
+            } => self.cmd_delete(project.project, certificate_id).await,
         }
     }
 
     async fn cmd_get(
         &self,
-        project_name: ProjectName,
+        project: ProjectReference,
         certificate_id: Option<Uuid>,
     ) -> anyhow::Result<()> {
         let certificates = self
@@ -77,7 +77,7 @@ impl ApiCloudCertificateCommandHandler {
                 &self
                     .ctx
                     .cloud_project_handler()
-                    .select_project(None, &project_name)
+                    .select_project(&project)
                     .await?
                     .project_id
                     .0,
@@ -95,7 +95,7 @@ impl ApiCloudCertificateCommandHandler {
 
     async fn cmd_new(
         &self,
-        project_name: ProjectName,
+        project: ProjectReference,
         domain_name: String,
         certificate_body: PathBufOrStdin,
         certificate_private_key: PathBufOrStdin,
@@ -114,7 +114,7 @@ impl ApiCloudCertificateCommandHandler {
                 project_id: self
                     .ctx
                     .cloud_project_handler()
-                    .select_project(None, &project_name)
+                    .select_project(&project)
                     .await?
                     .project_id
                     .0,
@@ -134,7 +134,7 @@ impl ApiCloudCertificateCommandHandler {
 
     async fn cmd_delete(
         &self,
-        project_name: ProjectName,
+        project: ProjectReference,
         certificate_id: Uuid,
     ) -> anyhow::Result<()> {
         self.ctx
@@ -145,7 +145,7 @@ impl ApiCloudCertificateCommandHandler {
                 &self
                     .ctx
                     .cloud_project_handler()
-                    .select_project(None, &project_name)
+                    .select_project(&project)
                     .await?
                     .project_id
                     .0,

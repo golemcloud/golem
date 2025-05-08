@@ -17,7 +17,7 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::text::api_domain::{ApiDomainListView, ApiDomainNewView};
-use crate::model::ProjectName;
+use crate::model::ProjectReference;
 use golem_cloud_client::api::ApiDomainClient;
 use golem_cloud_client::model::DomainRequest;
 
@@ -35,19 +35,19 @@ impl ApiCloudDomainCommandHandler {
 
     pub async fn handle_command(&self, command: ApiDomainSubcommand) -> anyhow::Result<()> {
         match command {
-            ApiDomainSubcommand::Get { project_name } => self.cmd_get(project_name).await,
+            ApiDomainSubcommand::Get { project } => self.cmd_get(project.project).await,
             ApiDomainSubcommand::New {
-                project_name,
+                project,
                 domain_name,
-            } => self.cmd_new(project_name, domain_name).await,
+            } => self.cmd_new(project.project, domain_name).await,
             ApiDomainSubcommand::Delete {
-                project_name,
+                project,
                 domain_name,
-            } => self.cmd_delete(project_name, domain_name).await,
+            } => self.cmd_delete(project.project, domain_name).await,
         }
     }
 
-    async fn cmd_get(&self, project_name: ProjectName) -> anyhow::Result<()> {
+    async fn cmd_get(&self, project_reference: ProjectReference) -> anyhow::Result<()> {
         let domains = self
             .ctx
             .golem_clients_cloud()
@@ -57,7 +57,7 @@ impl ApiCloudDomainCommandHandler {
                 &self
                     .ctx
                     .cloud_project_handler()
-                    .select_project(None, &project_name)
+                    .select_project(&project_reference)
                     .await?
                     .project_id
                     .0,
@@ -70,7 +70,11 @@ impl ApiCloudDomainCommandHandler {
         Ok(())
     }
 
-    async fn cmd_new(&self, project_name: ProjectName, domain_name: String) -> anyhow::Result<()> {
+    async fn cmd_new(
+        &self,
+        project_reference: ProjectReference,
+        domain_name: String,
+    ) -> anyhow::Result<()> {
         let domain = self
             .ctx
             .golem_clients_cloud()
@@ -80,7 +84,7 @@ impl ApiCloudDomainCommandHandler {
                 project_id: self
                     .ctx
                     .cloud_project_handler()
-                    .select_project(None, &project_name)
+                    .select_project(&project_reference)
                     .await?
                     .project_id
                     .0,
@@ -96,7 +100,7 @@ impl ApiCloudDomainCommandHandler {
 
     async fn cmd_delete(
         &self,
-        project_name: ProjectName,
+        project_reference: ProjectReference,
         domain_name: String,
     ) -> anyhow::Result<()> {
         self.ctx
@@ -107,7 +111,7 @@ impl ApiCloudDomainCommandHandler {
                 &self
                     .ctx
                     .cloud_project_handler()
-                    .select_project(None, &project_name)
+                    .select_project(&project_reference)
                     .await?
                     .project_id
                     .0,

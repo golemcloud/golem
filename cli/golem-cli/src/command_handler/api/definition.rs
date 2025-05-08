@@ -14,7 +14,7 @@
 
 use crate::app::yaml_edit::AppYamlEditor;
 use crate::command::api::definition::ApiDefinitionSubcommand;
-use crate::command::shared_args::{ProjectNameOptionalArg, UpdateOrRedeployArgs};
+use crate::command::shared_args::{ProjectOptionalFlagArg, UpdateOrRedeployArgs};
 use crate::command_handler::Handlers;
 use crate::context::{Context, GolemClients};
 use crate::error::service::AnyhowMapServiceError;
@@ -153,14 +153,14 @@ impl ApiDefinitionCommandHandler {
 
     async fn cmd_get(
         &self,
-        project: ProjectNameOptionalArg,
+        project: ProjectOptionalFlagArg,
         api_def_id: ApiDefinitionId,
         version: ApiDefinitionVersion,
     ) -> anyhow::Result<()> {
         let project = self
             .ctx
             .cloud_project_handler()
-            .opt_select_project(None /* TODO: account id */, project.project.as_ref())
+            .opt_select_project(project.project.as_ref())
             .await?;
 
         match self
@@ -183,13 +183,13 @@ impl ApiDefinitionCommandHandler {
     // TODO: drop or make it a client side feature?
     async fn cmd_import(
         &self,
-        project: ProjectNameOptionalArg,
+        project: ProjectOptionalFlagArg,
         definition: PathBufOrStdin,
     ) -> anyhow::Result<()> {
         let project = self
             .ctx
             .cloud_project_handler()
-            .opt_select_project(None /* TODO: account id */, project.project.as_ref())
+            .opt_select_project(project.project.as_ref())
             .await?;
 
         let result = match self.ctx.golem_clients().await? {
@@ -222,13 +222,13 @@ impl ApiDefinitionCommandHandler {
 
     async fn cmd_list(
         &self,
-        project: ProjectNameOptionalArg,
+        project: ProjectOptionalFlagArg,
         api_definition_id: Option<ApiDefinitionId>,
     ) -> anyhow::Result<()> {
         let project = self
             .ctx
             .cloud_project_handler()
-            .opt_select_project(None /* TODO: account id */, project.project.as_ref())
+            .opt_select_project(project.project.as_ref())
             .await?;
 
         let definitions = match self.ctx.golem_clients().await? {
@@ -259,14 +259,14 @@ impl ApiDefinitionCommandHandler {
 
     async fn cmd_delete(
         &self,
-        project: ProjectNameOptionalArg,
+        project: ProjectOptionalFlagArg,
         api_def_id: ApiDefinitionId,
         version: ApiDefinitionVersion,
     ) -> anyhow::Result<()> {
         let project = self
             .ctx
             .cloud_project_handler()
-            .opt_select_project(None /* TODO: account id */, project.project.as_ref())
+            .opt_select_project(project.project.as_ref())
             .await?;
 
         match self.ctx.golem_clients().await? {

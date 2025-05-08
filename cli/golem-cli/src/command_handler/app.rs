@@ -397,7 +397,7 @@ impl AppCommandHandler {
         let project = self
             .ctx
             .cloud_project_handler()
-            .opt_select_project(None, None) // TODO: project, account id
+            .opt_select_project(None) // TODO: project, account id
             .await?;
 
         let components = self
@@ -478,7 +478,7 @@ impl AppCommandHandler {
         let project = self
             .ctx
             .cloud_project_handler()
-            .opt_select_project(None, None)
+            .opt_select_project(None)
             .await?;
 
         let mut components = Vec::with_capacity(selected_component_names.len());

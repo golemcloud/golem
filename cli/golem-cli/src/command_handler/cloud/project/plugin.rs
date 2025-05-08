@@ -17,7 +17,7 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::{log_action, log_warn_action, logln};
-use crate::model::ProjectName;
+use crate::model::ProjectReference;
 use golem_client::model::{PluginInstallationCreation, PluginInstallationUpdate};
 use golem_cloud_client::api::ProjectClient;
 use golem_common::base_model::PluginInstallationId;
@@ -35,30 +35,36 @@ impl CloudProjectPluginCommandHandler {
     pub async fn handle_command(&self, subcommand: ProjectPluginSubcommand) -> anyhow::Result<()> {
         match subcommand {
             ProjectPluginSubcommand::Install {
-                project_name,
+                project,
                 plugin_name,
                 plugin_version,
                 priority,
                 param,
             } => {
-                self.cmd_install(project_name, plugin_name, plugin_version, priority, param)
-                    .await
+                self.cmd_install(
+                    project.project,
+                    plugin_name,
+                    plugin_version,
+                    priority,
+                    param,
+                )
+                .await
             }
-            ProjectPluginSubcommand::Get { project_name } => self.cmd_get(project_name).await,
+            ProjectPluginSubcommand::Get { project } => self.cmd_get(project.project).await,
             ProjectPluginSubcommand::Update {
-                project_name,
+                project,
                 plugin_installation_id,
                 priority,
                 param,
             } => {
-                self.cmd_update(project_name, plugin_installation_id, priority, param)
+                self.cmd_update(project.project, plugin_installation_id, priority, param)
                     .await
             }
             ProjectPluginSubcommand::Uninstall {
-                project_name,
+                project,
                 plugin_installation_id,
             } => {
-                self.cmd_uninstall(project_name, plugin_installation_id)
+                self.cmd_uninstall(project.project, plugin_installation_id)
                     .await
             }
         }
@@ -66,7 +72,7 @@ impl CloudProjectPluginCommandHandler {
 
     async fn cmd_install(
         &self,
-        project_name: ProjectName,
+        project_reference: ProjectReference,
         plugin_name: String,
         plugin_version: String,
         priority: i32,
@@ -76,12 +82,12 @@ impl CloudProjectPluginCommandHandler {
         let project = self
             .ctx
             .cloud_project_handler()
-            .select_project(None, &project_name)
+            .select_project(&project_reference)
             .await?;
 
         log_action(
             "Installing",
-            format!("plugin {} for project {}", plugin_name, project_name.0),
+            format!("plugin {} for project {}", plugin_name, project_reference),
         );
         logln("");
 
@@ -107,12 +113,12 @@ impl CloudProjectPluginCommandHandler {
         Ok(())
     }
 
-    async fn cmd_get(&self, project_name: ProjectName) -> anyhow::Result<()> {
+    async fn cmd_get(&self, project: ProjectReference) -> anyhow::Result<()> {
         // TODO: account id
         let project = self
             .ctx
             .cloud_project_handler()
-            .select_project(None, &project_name)
+            .select_project(&project)
             .await?;
 
         let results = self
@@ -131,7 +137,7 @@ impl CloudProjectPluginCommandHandler {
 
     async fn cmd_update(
         &self,
-        project_name: ProjectName,
+        project_reference: ProjectReference,
         plugin_installation_id: PluginInstallationId,
         priority: i32,
         parameters: Vec<(String, String)>,
@@ -140,14 +146,14 @@ impl CloudProjectPluginCommandHandler {
         let project = self
             .ctx
             .cloud_project_handler()
-            .select_project(None, &project_name)
+            .select_project(&project_reference)
             .await?;
 
         log_action(
             "Updating",
             format!(
                 "plugin {} for project {}",
-                plugin_installation_id, project_name.0
+                plugin_installation_id, project_reference
             ),
         );
 
@@ -173,21 +179,21 @@ impl CloudProjectPluginCommandHandler {
 
     async fn cmd_uninstall(
         &self,
-        project_name: ProjectName,
+        project_reference: ProjectReference,
         plugin_installation_id: PluginInstallationId,
     ) -> anyhow::Result<()> {
         // TODO: account id
         let project = self
             .ctx
             .cloud_project_handler()
-            .select_project(None, &project_name)
+            .select_project(&project_reference)
             .await?;
 
         log_warn_action(
             "Uninstalling",
             format!(
                 "plugin {} from project {}",
-                plugin_installation_id, project_name.0
+                plugin_installation_id, project_reference
             ),
         );
 

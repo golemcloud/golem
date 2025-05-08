@@ -20,7 +20,9 @@ use crate::error::service::AnyhowMapServiceError;
 use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
 use crate::model::component::Component;
 use crate::model::plugin_manifest::{PluginManifest, PluginTypeSpecificManifest};
-use crate::model::{ComponentName, PathBufOrStdin, PluginDefinition, ProjectNameAndId};
+use crate::model::{
+    ComponentName, PathBufOrStdin, PluginDefinition, ProjectNameAndId, ProjectReference,
+};
 use anyhow::{anyhow, Context as AnyhowContext};
 use golem_client::api::{ComponentClient as ComponentClientOss, PluginClient as PluginClientOss};
 use golem_client::model::{
@@ -413,27 +415,27 @@ impl PluginCommandHandler {
             return Ok((None, None));
         }
 
-        let project = match &scope.project {
-            Some(project) => {
-                let account_details = if let Some(account) = &scope.account {
-                    Some(
-                        self.ctx
-                            .cloud_account_handler()
-                            .select_account_by_email_or_error(account)
-                            .await?,
-                    )
-                } else {
-                    None
-                };
-
+        let project = match (&scope.account, &scope.project) {
+            (Some(account_email), Some(project_name)) => {
                 let project = self
                     .ctx
                     .cloud_project_handler()
-                    .select_project(account_details.as_ref(), project)
+                    .select_project(&ProjectReference::WithAccount {
+                        account_email: account_email.clone(),
+                        project_name: project_name.clone(),
+                    })
                     .await?;
                 Some(project)
             }
-            None => None,
+            (None, Some(project_name)) => {
+                let project = self
+                    .ctx
+                    .cloud_project_handler()
+                    .select_project(&ProjectReference::JustName(project_name.clone()))
+                    .await?;
+                Some(project)
+            }
+            _ => None,
         };
 
         let component_id = match &scope.component {

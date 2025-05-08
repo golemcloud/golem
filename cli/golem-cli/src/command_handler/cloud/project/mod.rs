@@ -26,7 +26,7 @@ use crate::model::text::fmt::{log_error, log_text_view};
 use crate::model::text::project::{
     ProjectCreatedView, ProjectGetView, ProjectGrantView, ProjectListView,
 };
-use crate::model::{AccountDetails, ProjectName, ProjectNameAndId};
+use crate::model::{ProjectName, ProjectNameAndId, ProjectReference};
 use anyhow::{anyhow, bail};
 use golem_cloud_client::api::{ProjectClient, ProjectGrantClient};
 use golem_cloud_client::model::{Project, ProjectDataRequest, ProjectGrantDataRequest};
@@ -53,12 +53,12 @@ impl CloudProjectCommandHandler {
             ProjectSubcommand::List { project_name } => self.cmd_list(project_name).await,
             ProjectSubcommand::GetDefault => self.cmd_get_default().await,
             ProjectSubcommand::Grant {
-                project_name,
+                project_reference,
                 recipient_account_id,
                 project_actions_or_policy_id,
             } => {
                 self.cmd_grant(
-                    project_name,
+                    project_reference,
                     recipient_account_id,
                     project_actions_or_policy_id,
                 )
@@ -130,22 +130,53 @@ impl CloudProjectCommandHandler {
         Ok(())
     }
 
-    async fn opt_project_by_name(
+    async fn opt_project_by_reference(
         &self,
-        account: Option<&AccountDetails>,
-        project_name: &ProjectName,
+        project_reference: &ProjectReference,
     ) -> anyhow::Result<Option<Project>> {
-        let mut projects = self
-            .ctx
-            .golem_clients_cloud()
-            .await?
-            .project
-            .get_projects(Some(&project_name.0))
-            .await
-            .map_service_error()?;
+        match project_reference {
+            ProjectReference::JustName(project_name) => {
+                let mut projects = self
+                    .ctx
+                    .golem_clients_cloud()
+                    .await?
+                    .project
+                    .get_projects(Some(&project_name.0))
+                    .await
+                    .map_service_error()?;
 
-        match account {
-            Some(account) => {
+                match projects.len() {
+                    0 => Ok(None),
+                    1 => Ok(Some(projects.pop().unwrap())),
+                    _ => {
+                        log_error(format!(
+                            "Project name {} is ambiguous!",
+                            project_name.0.log_color_highlight()
+                        ));
+                        logln("");
+                        log_text_view(&ProjectListView::from(projects));
+                        bail!(NonSuccessfulExit);
+                    }
+                }
+            }
+            ProjectReference::WithAccount {
+                account_email,
+                project_name,
+            } => {
+                let account = self
+                    .ctx
+                    .cloud_account_handler()
+                    .select_account_by_email_or_error(account_email)
+                    .await?;
+
+                let mut projects = self
+                    .ctx
+                    .golem_clients_cloud()
+                    .await?
+                    .project
+                    .get_projects(Some(&project_name.0))
+                    .await
+                    .map_service_error()?;
                 let project_idx = projects.iter().position(|project| {
                     project.project_data.owner_account_id == account.account_id.0
                 });
@@ -154,30 +185,16 @@ impl CloudProjectCommandHandler {
                     None => Ok(None),
                 }
             }
-            None => match projects.len() {
-                0 => Ok(None),
-                1 => Ok(Some(projects.pop().unwrap())),
-                _ => {
-                    log_error(format!(
-                        "Project name {} is ambiguous!",
-                        project_name.0.log_color_highlight()
-                    ));
-                    logln("");
-                    log_text_view(&ProjectListView::from(projects));
-                    bail!(NonSuccessfulExit);
-                }
-            },
         }
     }
 
-    pub async fn project_by_name(
+    pub async fn project_by_reference(
         &self,
-        account: Option<&AccountDetails>,
-        project_name: &ProjectName,
+        project_reference: &ProjectReference,
     ) -> anyhow::Result<Project> {
-        match self.opt_project_by_name(account, project_name).await? {
+        match self.opt_project_by_reference(project_reference).await? {
             Some(project) => Ok(project),
-            None => Err(project_not_found(account, project_name)),
+            None => Err(project_not_found(project_reference)),
         }
     }
 
@@ -185,18 +202,17 @@ impl CloudProjectCommandHandler {
     //       project selection can be defined if app manifest too
     pub async fn opt_select_project(
         &self,
-        account: Option<&AccountDetails>,
-        project_name: Option<&ProjectName>,
+        project_reference: Option<&ProjectReference>,
     ) -> anyhow::Result<Option<ProjectNameAndId>> {
-        match (self.ctx.profile_kind(), project_name) {
+        match (self.ctx.profile_kind(), project_reference) {
             (ProfileKind::Oss, Some(_)) => {
                 log_error("Cannot use projects with OSS profile!");
                 logln("");
                 bail!(HintError::ExpectedCloudProfile);
             }
             (ProfileKind::Oss, None) => Ok(None),
-            (ProfileKind::Cloud, Some(project_name)) => {
-                let project = self.project_by_name(account, project_name).await?;
+            (ProfileKind::Cloud, Some(project_reference)) => {
+                let project = self.project_by_reference(project_reference).await?;
                 Ok(Some(ProjectNameAndId {
                     project_name: project.project_data.name.into(),
                     project_id: project.project_id.into(),
@@ -208,12 +224,11 @@ impl CloudProjectCommandHandler {
 
     pub async fn select_project(
         &self,
-        account: Option<&AccountDetails>,
-        project_name: &ProjectName,
+        project_reference: &ProjectReference,
     ) -> anyhow::Result<ProjectNameAndId> {
-        match self.opt_select_project(account, Some(project_name)).await? {
+        match self.opt_select_project(Some(project_reference)).await? {
             Some(project) => Ok(project),
-            None => Err(project_not_found(account, project_name)),
+            None => Err(project_not_found(project_reference)),
         }
     }
 
@@ -238,7 +253,7 @@ impl CloudProjectCommandHandler {
 
     async fn cmd_grant(
         &self,
-        project_name: ProjectName,
+        project_reference: ProjectReference,
         account_id: AccountId,
         actions_or_policy_id: ProjectActionsOrPolicyId,
     ) -> anyhow::Result<()> {
@@ -248,7 +263,7 @@ impl CloudProjectCommandHandler {
             .await?
             .project_grant
             .create_project_grant(
-                &self.select_project(None, &project_name).await?.project_id.0,
+                &self.select_project(&project_reference).await?.project_id.0,
                 &ProjectGrantDataRequest {
                     grantee_account_id: account_id.0,
                     project_policy_id: actions_or_policy_id.policy_id.map(|id| id.0),
@@ -270,17 +285,20 @@ impl CloudProjectCommandHandler {
     }
 }
 
-fn project_not_found(
-    account: Option<&AccountDetails>,
-    project_name: &ProjectName,
-) -> anyhow::Error {
-    let formatted_account = account
-        .map(|acc| format!("{}/", acc.email.log_color_highlight()))
-        .unwrap_or_default();
-    log_error(format!(
-        "Project {}{} not found.",
-        formatted_account,
-        project_name.0.log_color_highlight()
-    ));
+fn project_not_found(project_reference: &ProjectReference) -> anyhow::Error {
+    match project_reference {
+        ProjectReference::JustName(project_name) => log_error(format!(
+            "Project {} not found.",
+            project_name.0.log_color_highlight()
+        )),
+        ProjectReference::WithAccount {
+            account_email,
+            project_name,
+        } => log_error(format!(
+            "Project {}/{} not found.",
+            account_email.log_color_highlight(),
+            project_name.0.log_color_highlight()
+        )),
+    };
     anyhow!(NonSuccessfulExit)
 }

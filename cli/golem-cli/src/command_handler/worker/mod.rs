@@ -41,8 +41,9 @@ use crate::model::text::worker::{WorkerCreateView, WorkerGetView};
 use crate::model::to_oss::ToOss;
 use crate::model::worker::fuzzy_match_function_name;
 use crate::model::{
-    ComponentName, ComponentNameMatchKind, IdempotencyKey, ProjectName, WorkerMetadata,
-    WorkerMetadataView, WorkerName, WorkerNameMatch, WorkerUpdateMode, WorkersMetadataResponseView,
+    ComponentName, ComponentNameMatchKind, IdempotencyKey, ProjectName, ProjectReference,
+    WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch, WorkerUpdateMode,
+    WorkersMetadataResponseView,
 };
 use anyhow::{anyhow, bail};
 use colored::Colorize;
@@ -1724,22 +1725,35 @@ impl WorkerCommandHandler {
                     bail!(NonSuccessfulExit);
                 }
 
-                let account = if let Some(account_email) = account_email {
+                let account = if let Some(ref account_email) = account_email {
                     Some(
                         self.ctx
                             .cloud_account_handler()
-                            .select_account_by_email_or_error(&account_email)
+                            .select_account_by_email_or_error(account_email)
                             .await?,
                     )
                 } else {
                     None
                 };
 
-                let project = self
-                    .ctx
-                    .cloud_project_handler()
-                    .opt_select_project(account.as_ref(), project_name.as_ref())
-                    .await?;
+                let project = match (account_email, project_name) {
+                    (Some(account_email), Some(project_name)) => {
+                        self.ctx
+                            .cloud_project_handler()
+                            .opt_select_project(Some(&ProjectReference::WithAccount {
+                                account_email,
+                                project_name,
+                            }))
+                            .await?
+                    }
+                    (None, Some(project_name)) => {
+                        self.ctx
+                            .cloud_project_handler()
+                            .opt_select_project(Some(&ProjectReference::JustName(project_name)))
+                            .await?
+                    }
+                    _ => None,
+                };
 
                 self.ctx
                     .app_handler()
