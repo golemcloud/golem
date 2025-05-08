@@ -402,40 +402,42 @@ impl<'a> MergeTaskStack<'a> {
 
     pub fn get_result_mut(&mut self, result_key: &ResultIdentifier) -> Option<&mut ResultBuilder> {
         for task in self.tasks.iter_mut().rev() {
-            if let MergeTask::ResultBuilder(builder) = task { match (result_key.ok, result_key.error) {
-                (true, true) => {
-                    if builder.ok.is_some()
-                        && builder.error.is_some()
-                        && builder.path == result_key.path
-                    {
-                        return Some(builder);
+            if let MergeTask::ResultBuilder(builder) = task {
+                match (result_key.ok, result_key.error) {
+                    (true, true) => {
+                        if builder.ok.is_some()
+                            && builder.error.is_some()
+                            && builder.path == result_key.path
+                        {
+                            return Some(builder);
+                        }
+                    }
+                    (true, false) => {
+                        if builder.ok.is_some()
+                            && builder.error.is_none()
+                            && builder.path == result_key.path
+                        {
+                            return Some(builder);
+                        }
+                    }
+                    (false, true) => {
+                        if builder.ok.is_none()
+                            && builder.error.is_some()
+                            && builder.path == result_key.path
+                        {
+                            return Some(builder);
+                        }
+                    }
+                    (false, false) => {
+                        if builder.ok.is_none()
+                            && builder.error.is_none()
+                            && builder.path == result_key.path
+                        {
+                            return Some(builder);
+                        }
                     }
                 }
-                (true, false) => {
-                    if builder.ok.is_some()
-                        && builder.error.is_none()
-                        && builder.path == result_key.path
-                    {
-                        return Some(builder);
-                    }
-                }
-                (false, true) => {
-                    if builder.ok.is_none()
-                        && builder.error.is_some()
-                        && builder.path == result_key.path
-                    {
-                        return Some(builder);
-                    }
-                }
-                (false, false) => {
-                    if builder.ok.is_none()
-                        && builder.error.is_none()
-                        && builder.path == result_key.path
-                    {
-                        return Some(builder);
-                    }
-                }
-            } }
+            }
         }
 
         None
@@ -530,7 +532,7 @@ pub struct TupleBuilder {
 }
 
 impl TupleBuilder {
-    pub fn init(path: &Path, index: TaskIndex, elems: &Vec<InferredType>) -> TupleBuilder {
+    pub fn init(path: &Path, index: TaskIndex, elems: &[InferredType]) -> TupleBuilder {
         let mut tuple: Vec<Vec<TaskIndex>> = vec![];
 
         elems.iter().for_each(|_| {
@@ -565,7 +567,7 @@ impl VariantBuilder {
     pub fn init(
         path: Path,
         index: TaskIndex,
-        variants: &Vec<(String, Option<InferredType>)>,
+        variants: &[(String, Option<InferredType>)],
     ) -> VariantBuilder {
         let mut default_values: Vec<(String, Option<Vec<TaskIndex>>)> = vec![];
 
@@ -589,17 +591,19 @@ impl VariantBuilder {
 
     pub fn insert(&mut self, variant_name: String, task_index: TaskIndex) {
         let mut found = false;
-        self.variants
+
+        if let Some((_, task_indices)) = self
+            .variants
             .iter_mut()
             .find(|(name, _)| name == &variant_name)
-            .map(|(_, task_indices)| {
-                found = true;
-                if let Some(task_indices) = task_indices {
-                    task_indices.push(task_index);
-                } else {
-                    *task_indices = Some(vec![task_index]);
-                }
-            });
+        {
+            found = true;
+            if let Some(task_indices) = task_indices {
+                task_indices.push(task_index);
+            } else {
+                *task_indices = Some(vec![task_index]);
+            }
+        }
 
         if !found {
             self.variants.push((variant_name, Some(vec![task_index])));
@@ -698,7 +702,7 @@ impl<'a> RecordBuilder<'a> {
     pub fn init(
         path: &Path,
         task_index: TaskIndex,
-        fields: &'a Vec<(String, InferredType)>,
+        fields: &'a [(String, InferredType)],
     ) -> RecordBuilder<'a> {
         let mut default_values: Vec<(&str, Vec<TaskIndex>)> = vec![];
 
@@ -715,13 +719,15 @@ impl<'a> RecordBuilder<'a> {
 
     pub fn insert(&mut self, field_name: &'a str, task_index: TaskIndex) {
         let mut found = false;
-        self.field_and_pointers
+
+        if let Some((_, task_indices)) = self
+            .field_and_pointers
             .iter_mut()
             .find(|(name, _)| name == &field_name)
-            .map(|(_, task_indices)| {
-                found = true;
-                task_indices.push(task_index)
-            });
+        {
+            found = true;
+            task_indices.push(task_index);
+        }
 
         if !found {
             self.field_and_pointers.push((field_name, vec![task_index]));
@@ -729,7 +735,7 @@ impl<'a> RecordBuilder<'a> {
     }
 }
 
-fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'a> {
+fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> {
     let mut temp_task_queue = VecDeque::new();
 
     let merge_tasks: Vec<MergeTask<'a>> = inferred_types
@@ -1117,7 +1123,7 @@ mod type_identifiers {
     }
 
     impl TupleIdentifier {
-        pub fn from(path: &Path, tuple: &Vec<InferredType>) -> TupleIdentifier {
+        pub fn from(path: &Path, tuple: &[InferredType]) -> TupleIdentifier {
             TupleIdentifier {
                 path: path.clone(),
                 length: tuple.len(),
@@ -1132,7 +1138,7 @@ mod type_identifiers {
     }
 
     impl RecordIdentifier {
-        pub fn from(path: &Path, fields: &Vec<(String, InferredType)>) -> RecordIdentifier {
+        pub fn from(path: &Path, fields: &[(String, InferredType)]) -> RecordIdentifier {
             let mut keys = vec![];
 
             for (field, _) in fields.iter() {
@@ -1208,10 +1214,7 @@ mod type_identifiers {
         pub variants: Vec<(String, VariantType)>,
     }
     impl VariantIdentifier {
-        pub fn from(
-            path: &Path,
-            variants: &Vec<(String, Option<InferredType>)>,
-        ) -> VariantIdentifier {
+        pub fn from(path: &Path, variants: &[(String, Option<InferredType>)]) -> VariantIdentifier {
             let mut keys = vec![];
 
             for (variant, inferred_type) in variants.iter() {
@@ -1310,7 +1313,7 @@ mod internal {
         current_path: &Path,
         field_task_index: TaskIndex,
         builder: &mut RecordBuilder<'a>,
-        fields: &'a Vec<(String, InferredType)>,
+        fields: &'a [(String, InferredType)],
         tasks_for_final_stack: &mut Vec<MergeTask<'a>>,
         temp_task_queue: &mut VecDeque<MergeTask<'a>>,
     ) {
@@ -1398,7 +1401,7 @@ mod internal {
         path: &Path,
         field_task_index: TaskIndex,
         builder: &mut VariantBuilder,
-        variants: &'a Vec<(String, Option<InferredType>)>,
+        variants: &'a [(String, Option<InferredType>)],
         tasks_for_final_stack: &mut Vec<MergeTask<'a>>,
         temp_task_queue: &mut VecDeque<MergeTask<'a>>,
     ) {
@@ -1491,7 +1494,7 @@ mod internal {
         path: &Path,
         field_task_index: TaskIndex,
         builder: &mut TupleBuilder,
-        inferred_types: &'a Vec<InferredType>,
+        inferred_types: &'a [InferredType],
         tasks_for_final_stack: &mut Vec<MergeTask<'a>>,
         temp_task_queue: &mut VecDeque<MergeTask<'a>>,
     ) {

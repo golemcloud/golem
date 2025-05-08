@@ -61,12 +61,12 @@ impl From<&BigDecimal> for DefaultType {
 
 impl DefaultType {
     pub fn eq(&self, other: &DefaultType) -> bool {
-        match (self, other) {
-            (DefaultType::String, DefaultType::String) => true,
-            (DefaultType::F64, DefaultType::F64) => true,
-            (DefaultType::S32, DefaultType::S32) => true,
-            _ => false,
-        }
+        matches!(
+            (self, other),
+            (DefaultType::String, DefaultType::String)
+                | (DefaultType::F64, DefaultType::F64)
+                | (DefaultType::S32, DefaultType::S32)
+        )
     }
 }
 
