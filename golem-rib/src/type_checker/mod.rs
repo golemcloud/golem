@@ -285,7 +285,7 @@ mod type_check_tests {
             let expected = r#"
             error in the following rib found at line 2, column 21
             `{a: "foo"}`
-            cause: ambiguous types: `list<number>`, `record{a: str}`
+            cause: ambiguous types: `list<number>`, `record{a: string}`
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));

@@ -1277,7 +1277,11 @@ pub fn flatten_all_of(types: Vec<InferredType>) -> InferredType {
 
         filtered.sort();
 
-        InferredType::new(TypeInternal::AllOf(filtered), TypeOrigin::NoOrigin)
+        if filtered.is_empty() {
+           InferredType::unknown()
+        } else {
+            InferredType::new(TypeInternal::AllOf(filtered), TypeOrigin::NoOrigin)
+        }
     }
 }
 
