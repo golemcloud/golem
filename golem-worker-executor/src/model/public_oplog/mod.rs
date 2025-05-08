@@ -17,7 +17,7 @@ pub mod wit;
 use crate::durable_host::http::serialized::{
     SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
 };
-use crate::durable_host::rdbms::serialized::RdbmsRequest;
+use crate::durable_host::rdbms::serialized::{RdbmsRequest, RdbmsTransactionRequest};
 use crate::durable_host::serialized::{
     SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddress,
     SerializableIpAddresses, SerializableStreamError,
@@ -1240,7 +1240,8 @@ fn encode_host_function_request_as_value(
             let payload: Option<RdbmsRequest<MysqlType>> = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
-        "rdbms::mysql::db-transaction::rollback"
+        "rdbms::mysql::db-connection::begin-transaction"
+        | "rdbms::mysql::db-transaction::rollback"
         | "rdbms::mysql::db-transaction::commit"
         | "rdbms::mysql::db-result-stream::get-columns"
         | "rdbms::mysql::db-result-stream::get-next" => no_payload(),
@@ -1253,7 +1254,8 @@ fn encode_host_function_request_as_value(
             let payload: Option<RdbmsRequest<PostgresType>> = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
-        "rdbms::postgres::db-transaction::rollback"
+        "rdbms::postgres::db-connection::begin-transaction"
+        | "rdbms::postgres::db-transaction::rollback"
         | "rdbms::postgres::db-transaction::commit"
         | "rdbms::postgres::db-result-stream::get-columns"
         | "rdbms::postgres::db-result-stream::get-next" => no_payload(),
@@ -1625,6 +1627,11 @@ fn encode_host_function_response_as_value(
             let payload: Result<Option<WorkerId>, SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
+        "rdbms::mysql::db-connection::begin-transaction" => {
+            let payload: Result<RdbmsTransactionRequest, SerializableError> =
+                try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
         "rdbms::mysql::db-connection::execute" | "rdbms::mysql::db-transaction::execute" => {
             let payload: Result<u64, SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
@@ -1655,6 +1662,11 @@ fn encode_host_function_response_as_value(
                 SerializableError,
             > = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
+        }
+        "rdbms::postgres::db-connection::begin-transaction" => {
+            let payload: Result<RdbmsTransactionRequest, SerializableError> =
+                try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
         }
         "rdbms::postgres::db-connection::execute" | "rdbms::postgres::db-transaction::execute" => {
             let payload: Result<u64, SerializableError> = try_deserialize(bytes)?;

@@ -107,3 +107,36 @@ where
         RdbmsRequest::<T>::get_analysed_type(<Vec<T::DbValue>>::get_base_type())
     }
 }
+
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct RdbmsTransactionRequest {
+    pub pool_key: RdbmsPoolKey,
+    pub transaction_id: RdbmsTransactionId,
+}
+
+impl RdbmsTransactionRequest {
+    pub fn new(pool_key: RdbmsPoolKey, transaction_id: RdbmsTransactionId) -> Self {
+        Self {
+            pool_key,
+            transaction_id,
+        }
+    }
+}
+
+impl RdbmsIntoValueAndType for RdbmsTransactionRequest {
+    fn into_value_and_type(self) -> ValueAndType {
+        let t = Self::get_base_type();
+        let v = Value::Record(vec![
+            self.pool_key.into_value(),
+            self.transaction_id.into_value(),
+        ]);
+        ValueAndType::new(v, t)
+    }
+
+    fn get_base_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("pool-key", RdbmsPoolKey::get_type()),
+            analysed_type::field("transaction-id", RdbmsTransactionId::get_type()),
+        ])
+    }
+}

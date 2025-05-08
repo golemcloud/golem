@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::rdbms::serialized::RdbmsRequest;
+use crate::durable_host::rdbms::serialized::{RdbmsRequest, RdbmsTransactionRequest};
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::services::rdbms::{
@@ -108,33 +108,66 @@ where
         .pool_key
         .clone();
 
-    let begin_oplog_index = ctx
+    let begin_oplog_idx = ctx
         .begin_durable_transaction(&DurableFunctionType::WriteRemoteTransaction(None))
         .await?;
 
-    let transaction = ctx
-        .state
-        .rdbms_service
-        .deref()
-        .rdbms_type_service()
-        .begin_transaction(&pool_key, &ctx.state.owned_worker_id.worker_id)
-        .await;
+    let durability = Durability::<RdbmsTransactionRequest, SerializableError>::new(
+        ctx,
+        interface.leak(),
+        "begin-transaction",
+        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
+    )
+    .await?;
 
-    match transaction {
-        Ok(transaction) => {
-            let entry =
-                RdbmsTransactionEntry::new(pool_key, RdbmsTransactionState::Open(transaction));
+    let result: Result<RdbmsTransactionState<T>, RdbmsError> = if durability.is_live() {
+        let transaction = ctx
+            .state
+            .rdbms_service
+            .deref()
+            .rdbms_type_service()
+            .begin_transaction(&pool_key, &ctx.state.owned_worker_id.worker_id)
+            .await;
+
+        match transaction {
+            Ok(transaction) => {
+                let result: Result<RdbmsTransactionRequest, RdbmsError> = Ok(
+                    RdbmsTransactionRequest::new(pool_key.clone(), transaction.transaction_id()),
+                );
+                match durability.persist(ctx, (), result).await {
+                    Ok(_) => Ok(RdbmsTransactionState::Open(transaction)),
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error) => {
+                let result: Result<RdbmsTransactionRequest, RdbmsError> = Err(error.clone());
+                match durability.persist(ctx, (), result).await {
+                    Ok(_) => Err(error),
+                    Err(error) => Err(error),
+                }
+            }
+        }
+    } else {
+        durability
+            .replay::<RdbmsTransactionRequest, RdbmsError>(ctx)
+            .await
+            .map(|r| RdbmsTransactionState::Closed(r.transaction_id))
+    };
+
+    match result {
+        Ok(transaction_state) => {
+            let entry = RdbmsTransactionEntry::new(pool_key, transaction_state);
             let resource = ctx.as_wasi_view().table().push(entry)?;
             let handle = resource.rep();
             ctx.state
                 .open_function_table
-                .insert(handle, begin_oplog_index);
+                .insert(handle, begin_oplog_idx);
             Ok(Ok(resource))
         }
         Err(error) => {
             ctx.aborted_durable_transaction(
                 &DurableFunctionType::WriteRemoteTransaction(None),
-                begin_oplog_index,
+                begin_oplog_idx,
             )
             .await?;
 
@@ -568,10 +601,22 @@ where
     let handle = entry.rep();
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
 
-    ctx.pre_rollback_durable_transaction(&DurableFunctionType::WriteRemoteTransaction(Some(
-        begin_oplog_idx,
-    )))
-    .await?;
+    // TODO handle error
+    let _ = if ctx.durable_execution_state().is_live {
+        let result = db_transaction_pre_rollback(ctx, entry).await;
+        match result {
+            Ok(_) => {
+                ctx.pre_rollback_durable_transaction(&DurableFunctionType::WriteRemoteTransaction(
+                    Some(begin_oplog_idx),
+                ))
+                .await?;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    } else {
+        Ok(())
+    };
 
     let durability = Durability::<(), SerializableError>::new(
         ctx,
@@ -606,10 +651,22 @@ where
     let handle = entry.rep();
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
 
-    ctx.pre_commit_durable_transaction(&DurableFunctionType::WriteRemoteTransaction(Some(
-        begin_oplog_idx,
-    )))
-    .await?;
+    // TODO handle error
+    let _ = if ctx.durable_execution_state().is_live {
+        let result = db_transaction_pre_commit(ctx, entry).await;
+        match result {
+            Ok(_) => {
+                ctx.pre_commit_durable_transaction(&DurableFunctionType::WriteRemoteTransaction(
+                    Some(begin_oplog_idx),
+                ))
+                .await?;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    } else {
+        Ok(())
+    };
 
     let durability = Durability::<(), SerializableError>::new(
         ctx,
@@ -1053,6 +1110,30 @@ where
     }
 }
 
+async fn db_transaction_pre_commit<Ctx, T>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsTransactionEntry<T>>,
+) -> Result<(), RdbmsError>
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + Clone + 'static,
+{
+    let state = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsTransactionEntry<T>>(entry)
+        .map(|e| e.state.clone());
+
+    match state {
+        Ok(RdbmsTransactionState::Open(transaction)) => {
+            // TODO pre commit
+            Ok(())
+        }
+        Ok(_) => Ok(()),
+        Err(error) => Err(RdbmsError::other_response_failure(error)),
+    }
+}
+
 async fn db_transaction_commit<Ctx, T>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     entry: &Resource<RdbmsTransactionEntry<T>>,
@@ -1075,6 +1156,30 @@ where
                 .get_mut::<RdbmsTransactionEntry<T>>(entry)
                 .map_err(RdbmsError::other_response_failure)?
                 .set_closed();
+            Ok(())
+        }
+        Ok(_) => Ok(()),
+        Err(error) => Err(RdbmsError::other_response_failure(error)),
+    }
+}
+
+async fn db_transaction_pre_rollback<Ctx, T>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsTransactionEntry<T>>,
+) -> Result<(), RdbmsError>
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + Clone + 'static,
+{
+    let state = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsTransactionEntry<T>>(entry)
+        .map(|e| e.state.clone());
+
+    match state {
+        Ok(RdbmsTransactionState::Open(transaction)) => {
+            // TODO pre rollback
             Ok(())
         }
         Ok(_) => Ok(()),
