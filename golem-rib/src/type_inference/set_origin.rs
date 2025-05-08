@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::{Expr, ExprVisitor};
+use crate::inferred_type::TypeOrigin;
 
 pub fn set_pattern_match_origins(expr: &mut Expr) {
     let mut visitor = ExprVisitor::bottom_up(expr);

@@ -76,8 +76,7 @@ impl Debug for SourceSpan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "SourceSpan {{ start: {}, end: {} }}",
-            self.start, self.end
+            "<SourceSpan>",
         )
     }
 }

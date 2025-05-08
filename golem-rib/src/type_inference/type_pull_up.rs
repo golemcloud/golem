@@ -407,6 +407,10 @@ fn get_inferred_type_of_selected_field(
     field: &str,
 ) -> Result<InferredType, RibTypeError> {
     let select_from_inferred_type = select_from.inferred_type();
+    dbg!(select_from.to_string());
+    dbg!(&select_from_inferred_type.get_type_hint());
+    dbg!(RecordType::refine(&select_from_inferred_type));
+
     let refined_record = RecordType::refine(&select_from_inferred_type).ok_or({
         TypeMismatchError {
             expr_with_wrong_type: select_from.clone(),

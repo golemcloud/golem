@@ -1267,22 +1267,22 @@ pub fn flatten_all_of(types: Vec<InferredType>) -> InferredType {
 
     let mut result = result_map.into_values().collect::<Vec<_>>();
 
-    if result.len() == 1 {
-        result[0].clone()
-    } else {
-        let mut filtered = result
-            .into_iter()
-            .filter(|x| !x.is_unknown())
-            .collect::<Vec<_>>();
+    let mut filtered = result
+        .into_iter()
+        .filter(|x| !x.is_unknown())
+        .collect::<Vec<_>>();
 
-        filtered.sort();
+    filtered.sort();
 
-        if filtered.is_empty() {
-           InferredType::unknown()
-        } else {
-            InferredType::new(TypeInternal::AllOf(filtered), TypeOrigin::NoOrigin)
-        }
+    if filtered.is_empty() {
+        return InferredType::unknown();
     }
+
+    if filtered.len() == 1 {
+        return filtered[0].clone();
+    }
+
+    InferredType::new(TypeInternal::AllOf(filtered), TypeOrigin::NoOrigin)
 }
 
 pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {

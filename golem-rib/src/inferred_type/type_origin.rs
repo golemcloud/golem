@@ -18,7 +18,7 @@ use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Debug, Eq, PartialOrd, Ord)]
+#[derive(Clone, Eq, PartialOrd, Ord)]
 pub enum TypeOrigin {
     // the first OriginatedAt (if it's TypeOrigin::Multiple) at
     // this level is the source span of the expression to which this
@@ -34,6 +34,12 @@ pub enum TypeOrigin {
     PatternMatch(SourceSpan),
 }
 
+
+impl Debug for TypeOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<SourceSpan>")
+    }
+}
 #[derive(Clone, Debug, Eq, PartialOrd, Ord)]
 pub enum DefaultType {
     String,
