@@ -212,6 +212,24 @@ impl<'a> MergeTaskStack<'a> {
                     types.insert(list_builder.task_index, inferred_type);
                 }
 
+                MergeTask::OptionBuilder(option_builder) => {
+                    let mut list_types = vec![];
+
+                    for task_index in &option_builder.option {
+                        if let Some(typ) = types.get(&task_index) {
+                            used_index.insert(*task_index);
+                            list_types.push(typ.clone());
+                        }
+                    }
+
+                    let merged = flatten_all_of(list_types);
+
+                    let inferred_type =
+                        InferredType::new(TypeInternal::List(merged), TypeOrigin::NoOrigin);
+
+                    types.insert(option_builder.task_index, inferred_type);
+                }
+
                 MergeTask::Inspect(_) => {}
             }
         }
@@ -325,6 +343,23 @@ impl<'a> MergeTaskStack<'a> {
         None
     }
 
+    pub fn get_option_mut(
+        &mut self,
+        option_identifier: &OptionIdentifier,
+    ) -> Option<&mut OptionBuilder> {
+        for task in self.tasks.iter_mut().rev() {
+            match task {
+                MergeTask::OptionBuilder(builder) if builder.path == option_identifier.path => {
+                    return Some(builder);
+                }
+
+                _ => {}
+            }
+        }
+
+        None
+    }
+
     pub fn get_variant_mut(
         &mut self,
         variant_identifier: &VariantIdentifier,
@@ -415,6 +450,7 @@ pub enum MergeTask<'a> {
     VariantBuilder(VariantBuilder),
     TupleBuilder(TupleBuilder),
     ListBuilder(ListBuilder),
+    OptionBuilder(OptionBuilder),
     Inspect(Inspect<'a>),
     AllOfBuilder(AllOfBuilder),
     ResultBuilder(ResultBuilder),
@@ -440,6 +476,7 @@ impl MergeTask<'_> {
             MergeTask::VariantBuilder(builder) => builder.task_index,
             MergeTask::TupleBuilder(builder) => builder.task_index,
             MergeTask::ListBuilder(builder) => builder.task_index,
+            MergeTask::OptionBuilder(builder) => builder.task_index,
         }
     }
 }
@@ -466,6 +503,23 @@ impl ListBuilder {
             path: path.clone(),
             task_index,
             list: vec![],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OptionBuilder {
+    path: Path,
+    task_index: TaskIndex,
+    option: Vec<TaskIndex>,
+}
+
+impl OptionBuilder {
+    pub fn init(path: &Path, task_index: TaskIndex) -> OptionBuilder {
+        OptionBuilder {
+            path: path.clone(),
+            task_index,
+            option: vec![],
         }
     }
 }
@@ -743,6 +797,50 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                         final_task_stack.extend(new_field_task_stack);
                     }
 
+                    TypeInternal::Option(inner) => {
+                        let next_available_index = final_task_stack.next_index();
+
+                        let option_identifier: OptionIdentifier = OptionIdentifier::from(path);
+
+                        let builder = final_task_stack.get_option_mut(&option_identifier);
+
+                        let mut tasks_for_final_stack = vec![];
+
+                        if let Some(builder) = builder {
+                            update_option_builder_and_update_tasks(
+                                path,
+                                next_available_index - 1,
+                                builder,
+                                inner,
+                                &mut tasks_for_final_stack,
+                                &mut temp_task_queue,
+                            );
+                        } else {
+                            let (task_index, field_index) =
+                                if final_task_stack.get(*task_index) == Some(&task) {
+                                    (*task_index, next_available_index - 1)
+                                } else {
+                                    (next_available_index, next_available_index)
+                                };
+
+                            let mut builder = OptionBuilder::init(path, task_index);
+
+                            update_option_builder_and_update_tasks(
+                                path,
+                                field_index,
+                                &mut builder,
+                                inner,
+                                &mut tasks_for_final_stack,
+                                &mut temp_task_queue,
+                            );
+
+                            final_task_stack.update_build_task(MergeTask::OptionBuilder(builder));
+                        }
+
+                        let new_field_task_stack = MergeTaskStack::init(tasks_for_final_stack);
+                        final_task_stack.extend(new_field_task_stack);
+                    }
+
                     TypeInternal::List(inner) => {
                         let next_available_index = final_task_stack.next_index();
 
@@ -990,11 +1088,9 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
                     | TypeInternal::Sequence(_)
                     | TypeInternal::Instance { .. }
                     | TypeInternal::Unknown
+                    | TypeInternal::Range { .. }
                     | TypeInternal::Str => final_task_stack
                         .update(&task_index, MergeTask::Complete(*task_index, inferred_type)),
-
-                    TypeInternal::Option(_) => {}
-                    TypeInternal::Range { .. } => {}
                 }
             }
 
@@ -1004,6 +1100,7 @@ fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'
             MergeTask::RecordBuilder(_) => {}
             MergeTask::AllOfBuilder(_) => {}
             MergeTask::ListBuilder(_) => {}
+            MergeTask::OptionBuilder(_) => {}
             MergeTask::Complete(index, task) => {
                 final_task_stack.update(&index, MergeTask::Complete(*index, task));
             }
@@ -1098,6 +1195,16 @@ mod type_identifiers {
         }
     }
 
+    pub struct OptionIdentifier {
+        pub path: Path,
+    }
+
+    impl OptionIdentifier {
+        pub fn from(path: &Path) -> OptionIdentifier {
+            OptionIdentifier { path: path.clone() }
+        }
+    }
+
     pub struct VariantIdentifier {
         pub path: Path,
         pub variants: Vec<(String, VariantType)>,
@@ -1186,8 +1293,8 @@ pub fn flatten_all_of_list(types: &Vec<InferredType>) -> Vec<InferredType> {
 
 mod internal {
     use crate::inferred_type::{
-        ListBuilder, MergeTask, RecordBuilder, ResultBuilder, TaskIndex, TupleBuilder,
-        VariantBuilder,
+        ListBuilder, MergeTask, OptionBuilder, RecordBuilder, ResultBuilder, TaskIndex,
+        TupleBuilder, VariantBuilder,
     };
     use crate::{InferredType, Path, PathElem};
     use std::collections::VecDeque;
@@ -1238,6 +1345,34 @@ mod internal {
 
         let mut current_path = current_path.clone();
         current_path.push_back(PathElem::Field("list".to_string()));
+
+        tasks_for_final_stack.push(MergeTask::inspect(
+            current_path.clone(),
+            field_task_index,
+            inferred_type,
+        ));
+
+        temp_task_queue.push_back(MergeTask::inspect(
+            current_path,
+            field_task_index,
+            inferred_type,
+        ));
+    }
+
+    pub fn update_option_builder_and_update_tasks<'a>(
+        current_path: &Path,
+        field_task_index: TaskIndex,
+        builder: &mut OptionBuilder,
+        inferred_type: &'a InferredType,
+        tasks_for_final_stack: &mut Vec<MergeTask<'a>>,
+        temp_task_queue: &mut VecDeque<MergeTask<'a>>,
+    ) {
+        let field_task_index = field_task_index + 1;
+
+        builder.option.push(field_task_index);
+
+        let mut current_path = current_path.clone();
+        current_path.push_back(PathElem::Field("std_option".to_string()));
 
         tasks_for_final_stack.push(MergeTask::inspect(
             current_path.clone(),
