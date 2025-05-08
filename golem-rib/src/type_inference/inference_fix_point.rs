@@ -248,6 +248,9 @@ mod tests {
         .unwrap()])
         .unwrap();
 
+        dbg!(&left);
+        dbg!(&right);
+
         assert!(compare_inferred_types(&left, &right));
     }
 

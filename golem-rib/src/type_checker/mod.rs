@@ -78,9 +78,8 @@ mod type_check_tests {
 
             let expected = r#"
             error in the following rib found at line 4, column 24
-            `x`
-            cause: type mismatch. expected string, found u64
-            expected string based on pattern match branch at line 5 column 21
+            `\"bar\"`
+            cause: type mismatch. expected s32, found string
             "#;
 
             //assert!(false);

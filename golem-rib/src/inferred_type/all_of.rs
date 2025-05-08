@@ -19,7 +19,6 @@ use crate::inferred_type::TypeOrigin;
 pub(crate) use internal::*;
 pub(crate) use type_identifiers::*;
 
-
 pub fn merge(inferred_types: &Vec<InferredType>) -> InferredType {
     get_merge_task(inferred_types).complete()
 }
@@ -251,7 +250,7 @@ impl<'a> MergeTaskStack<'a> {
         if final_types.len() == 1 {
             final_types[0].clone()
         } else {
-            InferredType::new(TypeInternal::AllOf(final_types), TypeOrigin::NoOrigin)
+            flatten_all_of(final_types)
         }
     }
 
@@ -735,8 +734,6 @@ impl<'a> RecordBuilder<'a> {
         }
     }
 }
-
-
 
 fn get_merge_task<'a>(inferred_types: &'a Vec<InferredType>) -> MergeTaskStack<'a> {
     let mut temp_task_queue = VecDeque::new();
@@ -1268,14 +1265,15 @@ pub fn flatten_all_of(types: Vec<InferredType>) -> InferredType {
         }
     }
 
-    let mut result =
-        result_map.into_values().collect::<Vec<_>>();
+    let mut result = result_map.into_values().collect::<Vec<_>>();
 
     if result.len() == 1 {
         result[0].clone()
     } else {
-        let mut filtered =
-            result.into_iter().filter(|x| !x.is_unknown()).collect::<Vec<_>>();
+        let mut filtered = result
+            .into_iter()
+            .filter(|x| !x.is_unknown())
+            .collect::<Vec<_>>();
 
         filtered.sort();
 
