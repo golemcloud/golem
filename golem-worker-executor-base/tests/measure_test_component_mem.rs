@@ -109,6 +109,7 @@ async fn measure_component(
             &[],
             &HashMap::new(),
             false,
+            &HashMap::new(),
         )
         .await;
 

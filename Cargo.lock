@@ -3446,6 +3446,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "wasm-metadata 0.227.1",
 ]
 
 [[package]]

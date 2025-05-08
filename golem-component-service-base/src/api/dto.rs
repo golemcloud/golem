@@ -252,4 +252,5 @@ pub struct Component {
     pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
     pub installed_plugins: Vec<PluginInstallation>,
+    pub env: HashMap<String, String>,
 }

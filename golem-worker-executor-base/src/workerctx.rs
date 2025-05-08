@@ -34,6 +34,7 @@ use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
+use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
     worker_enumeration, HasAll, HasConfig, HasOplog, HasOplogService, HasWorker,
@@ -138,6 +139,7 @@ pub trait WorkerCtx:
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<Self::Types>>,
+        worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
     ) -> Result<Self, GolemError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
@@ -173,6 +175,8 @@ pub trait WorkerCtx:
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync>;
 
     fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync>;
+
+    fn worker_fork(&self) -> Arc<dyn WorkerForkService + Send + Sync>;
 
     async fn generate_unique_local_worker_id(
         &mut self,

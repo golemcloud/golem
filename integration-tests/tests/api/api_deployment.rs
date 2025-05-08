@@ -228,6 +228,7 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
             ComponentType::Durable,
             None,
             None,
+            &HashMap::new(),
         )
         .await
         .unwrap_err()
@@ -252,6 +253,7 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
             ComponentType::Durable,
             None,
             None,
+            &HashMap::new(),
         )
         .await;
 
@@ -324,6 +326,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
             ComponentType::Durable,
             None,
             None,
+            &HashMap::new(),
         )
         .await
         .unwrap_err()
@@ -348,6 +351,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
             ComponentType::Durable,
             None,
             None,
+            &HashMap::new(),
         )
         .await
         .unwrap_err()
@@ -371,6 +375,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
             ComponentType::Durable,
             None,
             None,
+            &HashMap::new(),
         )
         .await;
 
@@ -452,6 +457,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
             ComponentType::Durable,
             None,
             None,
+            &HashMap::new(),
         )
         .await
         .unwrap_err()
@@ -475,6 +481,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
             ComponentType::Durable,
             None,
             None,
+            &HashMap::new(),
         )
         .await;
 
@@ -862,6 +869,7 @@ async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
             ComponentType::Durable,
             None,
             None,
+            &HashMap::new(),
         )
         .await
         .unwrap_err()
@@ -890,6 +898,7 @@ async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
             ComponentType::Durable,
             None,
             None,
+            &HashMap::new(),
         )
         .await;
 

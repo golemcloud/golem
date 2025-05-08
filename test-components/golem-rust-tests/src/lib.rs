@@ -2,6 +2,7 @@
 mod bindings;
 
 use crate::bindings::exports::golem::it::api::*;
+use golem_rust::bindings::golem::api::host::get_self_metadata;
 use golem_rust::bindings::wasi;
 use golem_rust::bindings::wasi::io::streams::StreamError;
 use golem_rust::wasm_rpc::wasi::io::poll;
@@ -127,6 +128,37 @@ impl Guest for Component {
             let _ = tx.transaction_step(4);
             11
         })
+    }
+
+    fn fork_test(input: String) -> String {
+        let port = std::env::var("PORT").unwrap_or("9999".to_string());
+        let self_name = get_self_metadata().worker_id.worker_name;
+        let client = Client::builder().build().unwrap();
+
+        let url = format!("http://localhost:{port}/fork-test/step1/{self_name}/{input}");
+        println!("Sending GET {url}");
+
+        let response: Response = client.get(&url).send().expect("Request failed");
+        let part1_raw = response.text().expect("Invalid response");
+        println!("Received {part1_raw}");
+
+        let part1: String = serde_json::from_str(&part1_raw).unwrap();
+
+        let url = match fork("forked-worker") {
+            ForkResult::Original => {
+                format!("http://localhost:{port}/fork-test/step2/{self_name}/original/{input}")
+            }
+            ForkResult::Forked => {
+                format!("http://localhost:{port}/fork-test/step2/{self_name}/forked/{input}")
+            }
+        };
+        let response2: Response = client.get(&url).send().expect("Request failed");
+        let part2_raw = response2.text().expect("Invalid response");
+        println!("Received {part2_raw}");
+
+        let part2: String = serde_json::from_str(&part2_raw).unwrap();
+
+        format!("{part1}::{part2}")
     }
 }
 

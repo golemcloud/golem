@@ -395,6 +395,7 @@ impl TestComponentService {
             component_type: None,
             files: vec![],
             installed_plugins: vec![],
+            env: HashMap::new(),
         }
     }
 

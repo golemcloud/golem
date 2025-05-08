@@ -2606,6 +2606,8 @@ paths:
                   format: binary
                 dynamicLinking:
                   $ref: '#/components/schemas/DynamicLinking'
+                env:
+                  $ref: '#/components/schemas/ComponentEnv'
               required:
               - name
               - component
@@ -2763,6 +2765,8 @@ paths:
                   format: binary
                 dynamicLinking:
                   $ref: '#/components/schemas/DynamicLinking'
+                env:
+                  $ref: '#/components/schemas/ComponentEnv'
               required:
               - component
         required: true
@@ -7270,6 +7274,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallation'
+        env:
+          type: object
+          additionalProperties:
+            type: string
       required:
       - versionedComponentId
       - componentName
@@ -7279,6 +7287,16 @@ components:
       - componentType
       - files
       - installedPlugins
+      - env
+    ComponentEnv:
+      type: object
+      properties:
+        keyValues:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - keyValues
     ComponentFilePathWithPermissions:
       type: object
       properties:

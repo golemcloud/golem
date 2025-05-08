@@ -91,6 +91,7 @@ message CreateComponentRequestHeader {
   // All files need to be uploaded to the blob storage before providing them here
   repeated InitialComponentFile files = 4;
   map<string, golem.component.DynamicLinkedInstance> dynamic_linking = 5;
+  map<string, string> env = 6;
 }
 
 message CreateComponentRequestChunk {
@@ -166,6 +167,7 @@ message UpdateComponentRequestHeader {
   // All files need to be uploaded to the blob storage before providing them here
   repeated InitialComponentFile files = 4;
   map<string, golem.component.DynamicLinkedInstance> dynamic_linking = 5;
+  map<string, string> env = 6;
 }
 
 message UpdateComponentRequestChunk {

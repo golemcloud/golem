@@ -26,7 +26,7 @@ use golem_common::recorded_http_api_request;
 use golem_component_service_base::api::dto;
 use golem_component_service_base::api::mapper::ApiMapper;
 use golem_component_service_base::model::{
-    BatchPluginInstallationUpdates, ComponentSearch, DynamicLinking,
+    BatchPluginInstallationUpdates, ComponentEnv, ComponentSearch, DynamicLinking,
     InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use golem_component_service_base::service::component::ComponentService;
@@ -117,6 +117,7 @@ impl ComponentApi {
                     .0
                     .dynamic_linking,
                 &DefaultComponentOwner,
+                payload.env.map(|x| x.0.key_values).unwrap_or_default(),
             )
             .await?;
 
@@ -143,7 +144,7 @@ impl ComponentApi {
         );
 
         let response = self
-            .upload_component_internal(component_id.0, wasm.0, component_type.0)
+            .upload_component_internal(component_id.0, wasm.0, component_type.0, HashMap::new())
             .instrument(record.span.clone())
             .await;
         record.result(response)
@@ -154,6 +155,7 @@ impl ComponentApi {
         component_id: ComponentId,
         wasm: Body,
         component_type: Option<ComponentType>,
+        env: HashMap<String, String>,
     ) -> Result<Json<dto::Component>> {
         let data = wasm.into_vec().await?;
         let response = self
@@ -165,6 +167,7 @@ impl ComponentApi {
                 None,
                 HashMap::new(),
                 &DefaultComponentOwner,
+                env,
             )
             .await?;
 
@@ -223,6 +226,7 @@ impl ComponentApi {
                     .0
                     .dynamic_linking,
                 &DefaultComponentOwner,
+                payload.env.map(|x| x.0.key_values).unwrap_or_default(),
             )
             .await?;
 
@@ -700,7 +704,7 @@ impl ComponentApi {
         method = "post",
         operation_id = "bath_update_installed_plugins"
     )]
-    async fn bath_update_installed_plugins(
+    async fn batch_update_installed_plugins(
         &self,
         component_id: Path<ComponentId>,
         updates: Json<BatchPluginInstallationUpdates>,
@@ -796,4 +800,5 @@ pub struct UploadPayload {
     files_permissions: Option<ComponentFilePathWithPermissionsList>,
     files: Option<TempFileUpload>,
     dynamic_linking: Option<JsonField<DynamicLinking>>,
+    env: Option<JsonField<ComponentEnv>>,
 }
