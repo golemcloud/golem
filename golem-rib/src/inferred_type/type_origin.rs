@@ -77,26 +77,6 @@ impl PartialEq for DefaultType {
 }
 
 impl TypeOrigin {
-    pub fn total_origins(&self) -> usize {
-        let mut stack = vec![self];
-        let mut count = 0;
-
-        while let Some(origin) = stack.pop() {
-            match origin {
-                TypeOrigin::NoOrigin => {}
-                TypeOrigin::Default(_) => count += 1,
-                TypeOrigin::Declared(_) => count += 1,
-                TypeOrigin::PatternMatch(_) => count += 1,
-                TypeOrigin::OriginatedAt(_) => count += 1,
-                TypeOrigin::Multiple(origins) => {
-                    stack.extend(origins.iter());
-                }
-            }
-        }
-
-        count
-    }
-
     // TypeOrigin need separate `eq` since Origin is always part of
     // a InferredType and their equality shouldn't be affected even their origins are different.
     pub fn eq(&self, other: &TypeOrigin) -> bool {

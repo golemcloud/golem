@@ -19,7 +19,7 @@ use crate::inferred_type::TypeOrigin;
 pub(crate) use internal::*;
 pub(crate) use type_identifiers::*;
 
-pub fn merge(inferred_types: &Vec<InferredType>) -> InferredType {
+pub fn merge(inferred_types: &[InferredType]) -> InferredType {
     get_merge_task(inferred_types).complete()
 }
 

@@ -29,7 +29,6 @@ use crate::type_inference::GetTypeHint;
 use crate::TypeName;
 use bigdecimal::BigDecimal;
 use golem_wasm_ast::analysis::*;
-use std::collections::VecDeque;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -41,80 +40,6 @@ pub struct InferredType {
 }
 
 impl InferredType {
-    pub fn total_origins(&self) -> usize {
-        let mut visitor = VecDeque::new();
-        visitor.push_back(self);
-        let mut total_count = 0;
-
-        while let Some(inferred_type) = visitor.pop_front() {
-            match inferred_type.inner.deref() {
-                TypeInternal::AllOf(types) => {
-                    for typ in types {
-                        visitor.push_back(typ);
-                    }
-                }
-
-                TypeInternal::Bool => {}
-                TypeInternal::S8 => {}
-                TypeInternal::U8 => {}
-                TypeInternal::S16 => {}
-                TypeInternal::U16 => {}
-                TypeInternal::S32 => {}
-                TypeInternal::U32 => {}
-                TypeInternal::S64 => {}
-                TypeInternal::U64 => {}
-                TypeInternal::F32 => {}
-                TypeInternal::F64 => {}
-                TypeInternal::Chr => {}
-                TypeInternal::Str => {}
-                TypeInternal::List(inferred_type) => {
-                    visitor.push_back(inferred_type);
-                }
-                TypeInternal::Tuple(inferred_types) => {
-                    visitor.extend(inferred_types.iter());
-                }
-                TypeInternal::Record(fields) => {
-                    for (_, inferred_type) in fields.iter() {
-                        visitor.push_back(inferred_type);
-                    }
-                }
-                TypeInternal::Flags(_) => {}
-                TypeInternal::Enum(_) => {}
-                TypeInternal::Option(inferred_type) => {
-                    visitor.push_back(inferred_type);
-                }
-                TypeInternal::Result { ok, error } => {
-                    if let Some(inferred_type) = ok {
-                        visitor.push_back(inferred_type);
-                    }
-                    if let Some(inferred_type) = error {
-                        visitor.push_back(inferred_type);
-                    }
-                }
-                TypeInternal::Variant(variants) => {
-                    for (_, inferred_type) in variants.iter() {
-                        if let Some(inferred_type) = inferred_type {
-                            visitor.push_back(inferred_type);
-                        }
-                    }
-                }
-                TypeInternal::Resource { .. } => {}
-                TypeInternal::Range { from, to } => {
-                    visitor.push_back(from);
-                    if let Some(inferred_type) = to {
-                        visitor.push_back(inferred_type);
-                    }
-                }
-                TypeInternal::Instance { .. } => {}
-                TypeInternal::Unknown => {}
-                TypeInternal::Sequence(_) => {}
-            }
-
-            total_count += inferred_type.origin.total_origins();
-        }
-
-        total_count
-    }
     pub fn description(&self) -> Option<String> {
         match self.critical_origin() {
             TypeOrigin::OriginatedAt(_) => None,
@@ -560,41 +485,8 @@ impl InferredType {
             .unwrap_or(self.get_type_hint().to_string())
     }
 
-    pub fn all_of(types: Vec<InferredType>) -> Option<InferredType> {
-        Some(merge(&types))
-        // let flattened = InferredType::flatten_all_of_inferred_types(&types);
-        //
-        // let types: Vec<InferredType> = flattened.into_iter().filter(|t| !t.is_unknown()).collect();
-        //
-        // let mut type_map: std::collections::HashMap<InferredType, InferredType> =
-        //     std::collections::HashMap::new();
-        //
-        // for t in types {
-        //     type_map
-        //         .entry(t.clone())
-        //         .and_modify(|existing| {
-        //             if t.total_origins() > existing.total_origins() {
-        //                 *existing = t.clone();
-        //             }
-        //         })
-        //         .or_insert(t);
-        // }
-        //
-        // if type_map.is_empty() {
-        //     None
-        // } else if type_map.len() == 1 {
-        //     type_map.into_iter().next().map(|(_, t)| t)
-        // } else {
-        //     let mut unique_all_of_types: Vec<InferredType> = type_map.into_values().collect();
-        //     unique_all_of_types.sort(); // Assuming InferredType implements Ord
-        //
-        //     let origin = TypeOrigin::NoOrigin;
-        //
-        //     Some(InferredType {
-        //         inner: Box::new(TypeInternal::AllOf(unique_all_of_types)),
-        //         origin,
-        //     })
-        // }
+    pub fn all_of(types: Vec<InferredType>) -> InferredType {
+        merge(&types)
     }
 
     pub fn is_unit(&self) -> bool {
@@ -654,27 +546,26 @@ impl InferredType {
                 let mut all_types = new_types.clone();
                 all_types.extend(existing_types.clone());
 
-                InferredType::all_of(all_types).unwrap_or(InferredType::unknown())
+                InferredType::all_of(all_types)
             }
 
             (TypeInternal::AllOf(existing_types), _) => {
                 let mut all_types = existing_types.clone();
                 all_types.push(new_inferred_type);
 
-                InferredType::all_of(all_types).unwrap_or(InferredType::unknown())
+                InferredType::all_of(all_types)
             }
 
             (_, TypeInternal::AllOf(new_types)) => {
                 let mut all_types = new_types.clone();
                 all_types.push(self.clone());
 
-                InferredType::all_of(all_types).unwrap_or(InferredType::unknown())
+                InferredType::all_of(all_types)
             }
 
             (_, _) => {
                 if self != &new_inferred_type && !new_inferred_type.is_unknown() {
                     InferredType::all_of(vec![self.clone(), new_inferred_type.clone()])
-                        .unwrap_or(InferredType::unknown())
                 } else {
                     self.clone()
                 }

@@ -312,18 +312,15 @@ mod type_refinement_tests {
             InferredType::option(InferredType::string()),
         ];
 
-        let inferred_type = InferredType::all_of(types).unwrap();
+        let inferred_type = InferredType::all_of(types);
 
         let refined_type = OptionalType::refine(&inferred_type).unwrap();
 
-        let expected_refine_type = RefinedType::Value(OptionalType(
-            InferredType::all_of(vec![
-                InferredType::u64(),
-                InferredType::u32(),
-                InferredType::string(),
-            ])
-            .unwrap(),
-        ));
+        let expected_refine_type = RefinedType::Value(OptionalType(InferredType::all_of(vec![
+            InferredType::u64(),
+            InferredType::u32(),
+            InferredType::string(),
+        ])));
 
         let inner_type = refined_type.inner_type();
         let expected_inner_types = vec![
@@ -332,7 +329,7 @@ mod type_refinement_tests {
             InferredType::string(),
         ];
 
-        let expected_inner_type = InferredType::all_of(expected_inner_types).unwrap();
+        let expected_inner_type = InferredType::all_of(expected_inner_types);
 
         assert_eq!(refined_type, expected_refine_type);
         assert_eq!(inner_type, expected_inner_type);
@@ -345,29 +342,23 @@ mod type_refinement_tests {
             InferredType::all_of(vec![
                 InferredType::option(InferredType::u32()),
                 InferredType::option(InferredType::string()),
-            ])
-            .unwrap(),
-        ])
-        .unwrap();
+            ]),
+        ]);
 
         let refined_type = OptionalType::refine(&inferred_type).unwrap();
 
-        let expected_refine_type = RefinedType::Value(OptionalType(
-            InferredType::all_of(vec![
-                InferredType::u64(),
-                InferredType::u32(),
-                InferredType::string(),
-            ])
-            .unwrap(),
-        ));
+        let expected_refine_type = RefinedType::Value(OptionalType(InferredType::all_of(vec![
+            InferredType::u64(),
+            InferredType::u32(),
+            InferredType::string(),
+        ])));
 
         let inner_type = refined_type.inner_type();
         let expected_inner_type = InferredType::all_of(vec![
             InferredType::u64(),
             InferredType::u32(),
             InferredType::string(),
-        ])
-        .unwrap();
+        ]);
 
         assert_eq!(refined_type, expected_refine_type);
         assert_eq!(inner_type, expected_inner_type);

@@ -336,9 +336,7 @@ pub fn handle_pattern_match(current_match_arms: &[MatchArm], inferred_type: &mut
 
     let new_inferred_type = InferredType::all_of(arm_resolution_inferred_types);
 
-    if let Some(new_inferred_type) = new_inferred_type {
-        *inferred_type = inferred_type.merge(new_inferred_type)
-    }
+    *inferred_type = inferred_type.merge(new_inferred_type)
 }
 
 fn handle_multiple(expr_block: &[Expr], inferred_type: &mut InferredType) {
@@ -556,19 +554,16 @@ mod type_pull_up_tests {
 
         assert_eq!(
             expr,
-            Expr::record(elems).with_inferred_type(
-                InferredType::all_of(vec![
-                    InferredType::record(vec![
-                        ("foo".to_string(), InferredType::u64()),
-                        ("bar".to_string(), InferredType::u32())
-                    ]),
-                    InferredType::record(vec![
-                        ("foo".to_string(), InferredType::unknown()),
-                        ("bar".to_string(), InferredType::unknown())
-                    ])
+            Expr::record(elems).with_inferred_type(InferredType::all_of(vec![
+                InferredType::record(vec![
+                    ("foo".to_string(), InferredType::u64()),
+                    ("bar".to_string(), InferredType::u32())
+                ]),
+                InferredType::record(vec![
+                    ("foo".to_string(), InferredType::unknown()),
+                    ("bar".to_string(), InferredType::unknown())
                 ])
-                .unwrap()
-            )
+            ]))
         );
     }
 

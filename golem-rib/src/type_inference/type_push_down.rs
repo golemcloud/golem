@@ -809,26 +809,20 @@ mod type_push_down_tests {
             "titles".to_string(),
             Expr::identifier_global("x", None),
         )])
-        .with_inferred_type(
-            InferredType::all_of(vec![
-                InferredType::record(vec![("titles".to_string(), InferredType::unknown())]),
-                InferredType::record(vec![("titles".to_string(), InferredType::u64())]),
-            ])
-            .unwrap(),
-        );
+        .with_inferred_type(InferredType::all_of(vec![
+            InferredType::record(vec![("titles".to_string(), InferredType::unknown())]),
+            InferredType::record(vec![("titles".to_string(), InferredType::u64())]),
+        ]));
 
         expr.push_types_down().unwrap();
         let expected = Expr::record(vec![(
             "titles".to_string(),
             Expr::identifier_global("x", None).with_inferred_type(InferredType::u64()),
         )])
-        .with_inferred_type(
-            InferredType::all_of(vec![
-                InferredType::record(vec![("titles".to_string(), InferredType::unknown())]),
-                InferredType::record(vec![("titles".to_string(), InferredType::u64())]),
-            ])
-            .unwrap(),
-        );
+        .with_inferred_type(InferredType::all_of(vec![
+            InferredType::record(vec![("titles".to_string(), InferredType::unknown())]),
+            InferredType::record(vec![("titles".to_string(), InferredType::u64())]),
+        ]));
         assert_eq!(expr, expected);
     }
 
@@ -841,33 +835,28 @@ mod type_push_down_tests {
             ],
             None,
         )
-        .with_inferred_type(
-            InferredType::all_of(vec![
-                InferredType::list(InferredType::u32()),
-                InferredType::list(InferredType::u64()),
-            ])
-            .unwrap(),
-        );
+        .with_inferred_type(InferredType::all_of(vec![
+            InferredType::list(InferredType::u32()),
+            InferredType::list(InferredType::u64()),
+        ]));
 
         expr.push_types_down().unwrap();
-        let expected = Expr::sequence(
-            vec![
-                Expr::identifier_global("x", None).with_inferred_type(
-                    InferredType::all_of(vec![InferredType::u32(), InferredType::u64()]).unwrap(),
-                ),
-                Expr::identifier_global("y", None).with_inferred_type(
-                    InferredType::all_of(vec![InferredType::u32(), InferredType::u64()]).unwrap(),
-                ),
-            ],
-            None,
-        )
-        .with_inferred_type(
-            InferredType::all_of(vec![
+        let expected =
+            Expr::sequence(
+                vec![
+                    Expr::identifier_global("x", None).with_inferred_type(InferredType::all_of(
+                        vec![InferredType::u32(), InferredType::u64()],
+                    )),
+                    Expr::identifier_global("y", None).with_inferred_type(InferredType::all_of(
+                        vec![InferredType::u32(), InferredType::u64()],
+                    )),
+                ],
+                None,
+            )
+            .with_inferred_type(InferredType::all_of(vec![
                 InferredType::list(InferredType::u32()),
                 InferredType::list(InferredType::u64()),
-            ])
-            .unwrap(),
-        );
+            ]));
         assert_eq!(expr, expected);
     }
 
