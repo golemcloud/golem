@@ -77,12 +77,11 @@ mod type_check_tests {
             let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 4, column 24
-            `\"bar\"`
+            error in the following rib found at line 3, column 28
+            `"bar"`
             cause: type mismatch. expected s32, found string
             "#;
 
-            //assert!(false);
             assert_eq!(error_msg, strip_spaces(expected));
         }
 
@@ -131,7 +130,7 @@ mod type_check_tests {
 
             let expected = r#"
             error in the following rib found at line 4, column 24
-            `ok(1)`
+            `"none"`
             cause: type mismatch. expected string, found s32
             expected string based on pattern match branch at line 5 column 24
             "#;

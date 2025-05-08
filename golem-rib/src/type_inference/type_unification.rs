@@ -585,10 +585,11 @@ fn get_type_unification_error_from_mismatch(
         // We make the right expected
         (Some((_, left_expr)), Some((right_span, right_expr))) => {
             let error_detail = format!(
-                "expected type {} based on `{}` found at `{}`",
+                "expected type {} based on expression `{}` found at line {} column {}",
                 right.printable(),
                 right_expr,
-                right_span
+                right_span.start_line(),
+                right_span.start_column()
             );
             TypeUnificationError::type_mismatch_error(
                 left_expr,

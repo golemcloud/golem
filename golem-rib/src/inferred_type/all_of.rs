@@ -1265,7 +1265,7 @@ pub fn flatten_all_of(types: Vec<InferredType>) -> InferredType {
         }
     }
 
-    let mut result = result_map.into_values().collect::<Vec<_>>();
+    let result = result_map.into_values().collect::<Vec<_>>();
 
     let mut filtered = result
         .into_iter()
