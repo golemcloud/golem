@@ -17,7 +17,7 @@ use crate::services::rdbms::mysql::types::{DbColumn, DbColumnType, DbValue};
 use crate::services::rdbms::mysql::{MysqlType, MYSQL};
 use crate::services::rdbms::sqlx_common::{
     create_db_result, DbTransactionStatus, PoolCreator, QueryExecutor, QueryParamsBinder,
-    SqlxDbResultStream, SqlxRdbms, TableDbTransactionSupport, TransactionTableRepo,
+    SqlxDbResultStream, SqlxRdbms, TransactionTableRepo,
 };
 use crate::services::rdbms::{DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey};
 use async_trait::async_trait;
@@ -29,8 +29,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 pub(crate) fn new(config: RdbmsConfig) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
-    let ts = Arc::new(TableDbTransactionSupport::new(config.query));
-    let sqlx: SqlxRdbms<MysqlType, sqlx::mysql::MySql> = SqlxRdbms::new(ts, config);
+    let sqlx: SqlxRdbms<MysqlType, sqlx::mysql::MySql> = SqlxRdbms::new(config);
     Arc::new(sqlx)
 }
 

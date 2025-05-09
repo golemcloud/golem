@@ -657,6 +657,12 @@ fn get_bound_analysed_type(base_type: AnalysedType) -> AnalysedType {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct RdbmsTransactionId(String);
 
+impl Display for RdbmsTransactionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 impl RdbmsTransactionId {
     pub fn new<Id: Display>(id: Id) -> Self {
         Self(id.to_string())

@@ -601,8 +601,7 @@ where
     let handle = entry.rep();
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
 
-    // TODO handle error
-    let _ = if ctx.durable_execution_state().is_live {
+    let pre_result = if ctx.durable_execution_state().is_live {
         let result = db_transaction_pre_rollback(ctx, entry).await;
         match result {
             Ok(_) => {
@@ -618,24 +617,29 @@ where
         Ok(())
     };
 
-    let durability = Durability::<(), SerializableError>::new(
-        ctx,
-        interface.leak(),
-        "rollback",
-        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
-    )
-    .await?;
+    match pre_result {
+        Ok(_) => {
+            let durability = Durability::<(), SerializableError>::new(
+                ctx,
+                interface.leak(),
+                "rollback",
+                DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
+            )
+            .await?;
 
-    let result = if durability.is_live() {
-        let result = db_transaction_rollback(ctx, entry).await;
-        durability.persist(ctx, (), result).await
-    } else {
-        durability.replay(ctx).await
-    };
+            let result = if durability.is_live() {
+                let result = db_transaction_rollback(ctx, entry).await;
+                durability.persist(ctx, (), result).await
+            } else {
+                durability.replay(ctx).await
+            };
 
-    rolled_back_durable_transaction_if_open(ctx, handle).await?;
+            rolled_back_durable_transaction_if_open(ctx, handle).await?;
 
-    Ok(result.map_err(|e| e.into()))
+            Ok(result.map_err(|e| e.into()))
+        }
+        Err(error) => Ok(Err(error.into())),
+    }
 }
 
 async fn db_transaction_durable_commit<Ctx, T, E>(
@@ -651,8 +655,7 @@ where
     let handle = entry.rep();
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
 
-    // TODO handle error
-    let _ = if ctx.durable_execution_state().is_live {
+    let pre_result = if ctx.durable_execution_state().is_live {
         let result = db_transaction_pre_commit(ctx, entry).await;
         match result {
             Ok(_) => {
@@ -668,24 +671,29 @@ where
         Ok(())
     };
 
-    let durability = Durability::<(), SerializableError>::new(
-        ctx,
-        interface.leak(),
-        "commit",
-        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
-    )
-    .await?;
+    match pre_result {
+        Ok(_) => {
+            let durability = Durability::<(), SerializableError>::new(
+                ctx,
+                interface.leak(),
+                "commit",
+                DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
+            )
+            .await?;
 
-    let result = if durability.is_live() {
-        let result = db_transaction_commit(ctx, entry).await;
-        durability.persist(ctx, (), result).await
-    } else {
-        durability.replay(ctx).await
-    };
+            let result = if durability.is_live() {
+                let result = db_transaction_commit(ctx, entry).await;
+                durability.persist(ctx, (), result).await
+            } else {
+                durability.replay(ctx).await
+            };
 
-    commited_durable_transaction_if_open(ctx, handle).await?;
+            commited_durable_transaction_if_open(ctx, handle).await?;
 
-    Ok(result.map_err(|e| e.into()))
+            Ok(result.map_err(|e| e.into()))
+        }
+        Err(error) => Ok(Err(error.into())),
+    }
 }
 
 async fn db_transaction_drop<Ctx, T>(

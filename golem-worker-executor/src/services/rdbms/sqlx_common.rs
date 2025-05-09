@@ -48,19 +48,19 @@ where
     config: RdbmsConfig,
     pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool<DB>>, Error>,
     pool_workers_cache: DashMap<RdbmsPoolKey, HashSet<WorkerId>>,
-    transaction_support: Arc<dyn DbTransactionSupport<T, DB> + Sync + Send>,
 }
 
 impl<T, DB> SqlxRdbms<T, DB>
 where
-    T: RdbmsType + Sync + QueryExecutor<T, DB>,
+    T: RdbmsType
+        + Sync
+        + QueryExecutor<T, DB>
+        + BeginTransactionSupport<T, DB>
+        + TransactionSupport<T, DB>,
     DB: Database,
     RdbmsPoolKey: PoolCreator<DB>,
 {
-    pub(crate) fn new(
-        transaction_support: Arc<dyn DbTransactionSupport<T, DB> + Sync + Send>,
-        config: RdbmsConfig,
-    ) -> Self {
+    pub(crate) fn new(config: RdbmsConfig) -> Self {
         let rdbms_type = T::default();
         let cache_name: &'static str = format!("rdbms-{}-pools", rdbms_type).leak();
         let pool_cache = Cache::new(
@@ -78,7 +78,6 @@ where
             config,
             pool_cache,
             pool_workers_cache,
-            transaction_support,
         }
     }
 
@@ -149,7 +148,12 @@ where
 #[async_trait]
 impl<T, DB> Rdbms<T> for SqlxRdbms<T, DB>
 where
-    T: RdbmsType + Sync + QueryExecutor<T, DB> + 'static,
+    T: RdbmsType
+        + Sync
+        + QueryExecutor<T, DB>
+        + BeginTransactionSupport<T, DB>
+        + TransactionSupport<T, DB>
+        + 'static,
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
     RdbmsPoolKey: PoolCreator<DB>,
@@ -317,8 +321,7 @@ where
 
         let result = {
             let pool = self.get_or_create(key, worker_id).await?;
-            self.transaction_support
-                .begin(key, pool)
+            T::begin_transaction(key, pool, self.config.query)
                 .await
                 .map(|r| r as Arc<dyn DbTransaction<T> + Send + Sync>)
         };
@@ -414,7 +417,11 @@ impl<DB: Database> Debug for SqlxDbTransactionConnection<DB> {
 }
 
 #[derive(Clone)]
-pub struct SqlxDbTransaction<T: RdbmsType, DB: Database> {
+pub struct SqlxDbTransaction<T, DB>
+where
+    T: RdbmsType,
+    DB: Database,
+{
     rdbms_type: T,
     transaction_id: RdbmsTransactionId,
     pool_key: RdbmsPoolKey,
@@ -436,7 +443,7 @@ impl<T: RdbmsType, DB: Database> Debug for SqlxDbTransaction<T, DB> {
 
 impl<T, DB> SqlxDbTransaction<T, DB>
 where
-    T: RdbmsType + Sync + QueryExecutor<T, DB>,
+    T: RdbmsType + Sync + QueryExecutor<T, DB> + TransactionSupport<T, DB>,
     DB: Database,
 {
     pub(crate) fn new(
@@ -547,7 +554,7 @@ where
 #[async_trait]
 impl<T, DB> DbTransaction<T> for SqlxDbTransaction<T, DB>
 where
-    T: RdbmsType + Sync + QueryExecutor<T, DB>,
+    T: RdbmsType + Sync + QueryExecutor<T, DB> + TransactionSupport<T, DB>,
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
 {
@@ -563,6 +570,7 @@ where
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
+            transaction_id = self.transaction_id.to_string(),
             "execute - statement: {}, params count: {}",
             statement,
             params.len()
@@ -576,6 +584,7 @@ where
                 error!(
                     rdbms_type = self.rdbms_type.to_string(),
                     pool_key = self.pool_key.to_string(),
+                    transaction_id = self.transaction_id.to_string(),
                     "execute - statement: {}, error: {}",
                     statement,
                     e
@@ -593,6 +602,7 @@ where
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
+            transaction_id = self.transaction_id.to_string(),
             "query - statement: {}, params count: {}",
             statement,
             params.len()
@@ -605,6 +615,7 @@ where
                 error!(
                     rdbms_type = self.rdbms_type.to_string(),
                     pool_key = self.pool_key.to_string(),
+                    transaction_id = self.transaction_id.to_string(),
                     "query - statement: {}, error: {}",
                     statement,
                     e
@@ -626,6 +637,7 @@ where
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
+            transaction_id = self.transaction_id.to_string(),
             "query stream - statement: {}, params count: {}",
             statement,
             params.len()
@@ -656,10 +668,23 @@ where
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
+            transaction_id = self.transaction_id.to_string(),
             "pre-commit transaction"
         );
-        // TODO
-        Ok(())
+
+        let result = T::pre_commit_transaction(&self.pool.deref(), &self)
+            .await
+            .map_err(|e| {
+                error!(
+                    rdbms_type = self.rdbms_type.to_string(),
+                    pool_key = self.pool_key.to_string(),
+                    transaction_id = self.transaction_id.to_string(),
+                    "pre-commit transaction - error: {}",
+                    e
+                );
+                e
+            });
+        self.record_metrics("pre-commit-transaction", start, result)
     }
 
     async fn pre_rollback(&self) -> Result<(), Error> {
@@ -667,10 +692,23 @@ where
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
+            transaction_id = self.transaction_id.to_string(),
             "pre-rollback transaction"
         );
-        // TODO
-        Ok(())
+
+        let result = T::pre_rollback_transaction(&self.pool.deref(), &self)
+            .await
+            .map_err(|e| {
+                error!(
+                    rdbms_type = self.rdbms_type.to_string(),
+                    pool_key = self.pool_key.to_string(),
+                    transaction_id = self.transaction_id.to_string(),
+                    "pre-rollback transaction - error: {}",
+                    e
+                );
+                e
+            });
+        self.record_metrics("pre-rollback-transaction", start, result)
     }
 
     async fn commit(&self) -> Result<(), Error> {
@@ -678,6 +716,7 @@ where
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
+            transaction_id = self.transaction_id.to_string(),
             "commit transaction"
         );
 
@@ -693,6 +732,7 @@ where
             error!(
                 rdbms_type = self.rdbms_type.to_string(),
                 pool_key = self.pool_key.to_string(),
+                transaction_id = self.transaction_id.to_string(),
                 "commit transaction - error: {}",
                 e
             );
@@ -706,6 +746,7 @@ where
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
+            transaction_id = self.transaction_id.to_string(),
             "rollback transaction"
         );
 
@@ -721,6 +762,7 @@ where
             error!(
                 rdbms_type = self.rdbms_type.to_string(),
                 pool_key = self.pool_key.to_string(),
+                transaction_id = self.transaction_id.to_string(),
                 "rollback transaction - error: {}",
                 e
             );
@@ -734,6 +776,7 @@ where
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
+            transaction_id = self.transaction_id.to_string(),
             "rollback transaction if open"
         );
 
@@ -750,7 +793,7 @@ where
 #[async_trait]
 impl<T, DB> AsyncDrop for SqlxDbTransaction<T, DB>
 where
-    T: RdbmsType + Sync + QueryExecutor<T, DB>,
+    T: RdbmsType + Sync + QueryExecutor<T, DB> + TransactionSupport<T, DB>,
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
 {
@@ -928,55 +971,25 @@ impl FromStr for DbTransactionStatus {
 }
 
 #[async_trait]
-pub(crate) trait DbTransactionSupport<T: RdbmsType, DB: Database> {
-    async fn begin(
-        &self,
+pub(crate) trait BeginTransactionSupport<T: RdbmsType, DB: Database> {
+    async fn begin_transaction(
         key: &RdbmsPoolKey,
         pool: Arc<Pool<DB>>,
+        query_config: RdbmsQueryConfig,
     ) -> Result<Arc<SqlxDbTransaction<T, DB>>, Error>;
-
-    async fn pre_commit(
-        &self,
-        pool: Arc<Pool<DB>>,
-        db_transaction: Arc<SqlxDbTransaction<T, DB>>,
-    ) -> Result<(), Error>;
-
-    async fn pre_rollback(
-        &self,
-        pool: Arc<Pool<DB>>,
-        db_transaction: Arc<SqlxDbTransaction<T, DB>>,
-    ) -> Result<(), Error>;
-
-    async fn get_status(
-        &self,
-        pool: Arc<Pool<DB>>,
-        id: RdbmsTransactionId,
-    ) -> Result<DbTransactionStatus, Error>;
-
-    async fn cleanup(&self, pool: Arc<Pool<DB>>, id: RdbmsTransactionId) -> Result<(), Error>;
-}
-
-pub(crate) struct TableDbTransactionSupport {
-    query_config: RdbmsQueryConfig,
-}
-
-impl TableDbTransactionSupport {
-    pub(crate) fn new(query_config: RdbmsQueryConfig) -> Self {
-        Self { query_config }
-    }
 }
 
 #[async_trait]
-impl<T, DB> DbTransactionSupport<T, DB> for TableDbTransactionSupport
+impl<T, DB> BeginTransactionSupport<T, DB> for T
 where
     T: RdbmsType + Sync + QueryExecutor<T, DB> + TransactionTableRepo<DB> + 'static,
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
 {
-    async fn begin(
-        &self,
+    async fn begin_transaction(
         key: &RdbmsPoolKey,
         pool: Arc<Pool<DB>>,
+        query_config: RdbmsQueryConfig,
     ) -> Result<Arc<SqlxDbTransaction<T, DB>>, Error> {
         let mut connection = pool
             .deref()
@@ -986,7 +999,7 @@ where
 
         let id = RdbmsTransactionId::generate();
 
-        T::create_transaction(id.0.clone(), pool.deref()).await?;
+        <T as TransactionTableRepo<DB>>::create_transaction(id.0.clone(), pool.deref()).await?;
 
         DB::TransactionManager::begin(&mut connection)
             .await
@@ -997,19 +1010,46 @@ where
             key.clone(),
             connection,
             pool,
-            self.query_config,
+            query_config,
         ));
 
         Ok(db_transaction)
     }
+}
 
-    async fn pre_commit(
-        &self,
-        _pool: Arc<Pool<DB>>,
-        db_transaction: Arc<SqlxDbTransaction<T, DB>>,
+#[async_trait]
+pub(crate) trait TransactionSupport<T: RdbmsType, DB: Database> {
+    async fn pre_commit_transaction(
+        pool: &Pool<DB>,
+        db_transaction: &SqlxDbTransaction<T, DB>,
+    ) -> Result<(), Error>;
+
+    async fn pre_rollback_transaction(
+        pool: &Pool<DB>,
+        db_transaction: &SqlxDbTransaction<T, DB>,
+    ) -> Result<(), Error>;
+
+    async fn get_transaction_status(
+        pool: &Pool<DB>,
+        id: RdbmsTransactionId,
+    ) -> Result<DbTransactionStatus, Error>;
+
+    async fn cleanup_transaction(pool: &Pool<DB>, id: RdbmsTransactionId) -> Result<(), Error>;
+}
+
+#[async_trait]
+impl<T, DB> TransactionSupport<T, DB> for T
+where
+    T: RdbmsType + Sync + QueryExecutor<T, DB> + TransactionTableRepo<DB> + 'static,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
+{
+    async fn pre_commit_transaction(
+        _pool: &Pool<DB>,
+        db_transaction: &SqlxDbTransaction<T, DB>,
     ) -> Result<(), Error> {
         let id = db_transaction.transaction_id();
-        let _res = T::update_transaction_status(
+        let _res = <T as TransactionTableRepo<DB>>::update_transaction_status(
             id.0,
             DbTransactionStatus::Committed,
             db_transaction.tx_connection.clone(),
@@ -1018,28 +1058,29 @@ where
         Ok(())
     }
 
-    async fn pre_rollback(
-        &self,
-        pool: Arc<Pool<DB>>,
-        db_transaction: Arc<SqlxDbTransaction<T, DB>>,
+    async fn pre_rollback_transaction(
+        pool: &Pool<DB>,
+        db_transaction: &SqlxDbTransaction<T, DB>,
     ) -> Result<(), Error> {
         let id = db_transaction.transaction_id();
-        let _res =
-            T::update_transaction_status(id.0, DbTransactionStatus::RolledBack, pool.deref())
-                .await?;
+        let _res = <T as TransactionTableRepo<DB>>::update_transaction_status(
+            id.0,
+            DbTransactionStatus::RolledBack,
+            pool,
+        )
+        .await?;
         Ok(())
     }
 
-    async fn get_status(
-        &self,
-        pool: Arc<Pool<DB>>,
+    async fn get_transaction_status(
+        pool: &Pool<DB>,
         id: RdbmsTransactionId,
     ) -> Result<DbTransactionStatus, Error> {
-        T::get_transaction_status(id.0, pool.deref()).await
+        <T as TransactionTableRepo<DB>>::get_transaction_status(id.0, pool).await
     }
 
-    async fn cleanup(&self, pool: Arc<Pool<DB>>, id: RdbmsTransactionId) -> Result<(), Error> {
-        T::delete_transaction(id.0, pool.deref()).await?;
+    async fn cleanup_transaction(pool: &Pool<DB>, id: RdbmsTransactionId) -> Result<(), Error> {
+        <T as TransactionTableRepo<DB>>::delete_transaction(id.0, pool).await?;
         Ok(())
     }
 }

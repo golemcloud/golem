@@ -19,8 +19,8 @@ use crate::services::rdbms::postgres::types::{
 };
 use crate::services::rdbms::postgres::{PostgresType, POSTGRES};
 use crate::services::rdbms::sqlx_common::{
-    create_db_result, DbTransactionStatus, DbTransactionSupport, PoolCreator, QueryExecutor,
-    QueryParamsBinder, SqlxDbResultStream, SqlxDbTransaction, SqlxRdbms,
+    create_db_result, BeginTransactionSupport, DbTransactionStatus, PoolCreator, QueryExecutor,
+    QueryParamsBinder, SqlxDbResultStream, SqlxDbTransaction, SqlxRdbms, TransactionSupport,
 };
 use crate::services::rdbms::{
     DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionId,
@@ -43,8 +43,7 @@ use try_match::try_match;
 use uuid::Uuid;
 
 pub(crate) fn new(config: RdbmsConfig) -> Arc<dyn Rdbms<PostgresType> + Send + Sync> {
-    let ts = Arc::new(PostgresDbTransactionSupport::new(config.query));
-    let sqlx: SqlxRdbms<PostgresType, sqlx::postgres::Postgres> = SqlxRdbms::new(ts, config);
+    let sqlx: SqlxRdbms<PostgresType, sqlx::postgres::Postgres> = SqlxRdbms::new(config);
     Arc::new(sqlx)
 }
 
@@ -67,22 +66,12 @@ impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
     }
 }
 
-pub(crate) struct PostgresDbTransactionSupport {
-    query_config: RdbmsQueryConfig,
-}
-
-impl PostgresDbTransactionSupport {
-    fn new(query_config: RdbmsQueryConfig) -> Self {
-        Self { query_config }
-    }
-}
-
 #[async_trait]
-impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactionSupport {
-    async fn begin(
-        &self,
+impl BeginTransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
+    async fn begin_transaction(
         key: &RdbmsPoolKey,
         pool: Arc<Pool<sqlx::Postgres>>,
+        query_config: RdbmsQueryConfig,
     ) -> Result<Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>>, Error> {
         let mut connection = pool
             .deref()
@@ -102,37 +91,32 @@ impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactio
         let id: i64 = row.try_get(0).map_err(Error::query_response_failure)?;
         let transaction_id = RdbmsTransactionId::new(id);
 
-        let db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>> =
-            Arc::new(SqlxDbTransaction::new(
-                transaction_id,
-                key.clone(),
-                connection,
-                pool,
-                self.query_config,
-            ));
+        let db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>> = Arc::new(
+            SqlxDbTransaction::new(transaction_id, key.clone(), connection, pool, query_config),
+        );
 
         Ok(db_transaction)
     }
+}
 
-    async fn pre_commit(
-        &self,
-        _pool: Arc<Pool<sqlx::Postgres>>,
-        _db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>>,
+#[async_trait]
+impl TransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
+    async fn pre_commit_transaction(
+        _pool: &Pool<sqlx::Postgres>,
+        _db_transaction: &SqlxDbTransaction<PostgresType, sqlx::Postgres>,
     ) -> Result<(), Error> {
         Ok(())
     }
 
-    async fn pre_rollback(
-        &self,
-        _pool: Arc<Pool<sqlx::Postgres>>,
-        _db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>>,
+    async fn pre_rollback_transaction(
+        _pool: &Pool<sqlx::Postgres>,
+        _db_transaction: &SqlxDbTransaction<PostgresType, sqlx::Postgres>,
     ) -> Result<(), Error> {
         Ok(())
     }
 
-    async fn get_status(
-        &self,
-        pool: Arc<Pool<sqlx::Postgres>>,
+    async fn get_transaction_status(
+        pool: &Pool<sqlx::Postgres>,
         id: RdbmsTransactionId,
     ) -> Result<DbTransactionStatus, Error> {
         let query = sqlx::query("SELECT txid_status($1::bigint)").bind(id.0);
@@ -156,9 +140,8 @@ impl DbTransactionSupport<PostgresType, sqlx::Postgres> for PostgresDbTransactio
         }
     }
 
-    async fn cleanup(
-        &self,
-        _pool: Arc<Pool<sqlx::Postgres>>,
+    async fn cleanup_transaction(
+        _pool: &Pool<sqlx::Postgres>,
         _id: RdbmsTransactionId,
     ) -> Result<(), Error> {
         Ok(())
