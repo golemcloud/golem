@@ -100,4 +100,8 @@ impl TestDependencies for TestRegularWorkerExecutor {
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.deps.plugin_wasm_files_service()
     }
+
+    fn component_temp_directory(&self) -> &Path {
+        self.deps.component_temp_directory()
+    }
 }

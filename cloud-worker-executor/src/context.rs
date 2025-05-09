@@ -43,6 +43,7 @@ use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
+use golem_worker_executor_base::services::worker_fork::WorkerForkService;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{
     worker_enumeration, HasAll, HasConfig, HasOplogService,
@@ -588,9 +589,9 @@ impl InvocationContextManagement for Context {
 
 #[async_trait]
 impl WorkerCtx for Context {
-    type PublicState = PublicDurableWorkerState<Context>;
-
     type Types = CloudGolemTypes;
+
+    type PublicState = PublicDurableWorkerState<Context>;
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
@@ -618,6 +619,7 @@ impl WorkerCtx for Context {
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<CloudGolemTypes>>,
+        worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id.clone(),
@@ -641,6 +643,7 @@ impl WorkerCtx for Context {
             execution_status,
             file_loader,
             plugins,
+            worker_fork,
         )
         .await?;
         Ok(Self::new(
@@ -691,6 +694,14 @@ impl WorkerCtx for Context {
         self.durable_ctx.worker_proxy()
     }
 
+    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync> {
+        self.durable_ctx.component_service()
+    }
+
+    fn worker_fork(&self) -> Arc<dyn WorkerForkService + Send + Sync> {
+        self.durable_ctx.worker_fork()
+    }
+
     async fn generate_unique_local_worker_id(
         &mut self,
         remote_worker_id: TargetWorkerId,
@@ -698,9 +709,5 @@ impl WorkerCtx for Context {
         self.durable_ctx
             .generate_unique_local_worker_id(remote_worker_id)
             .await
-    }
-
-    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync> {
-        self.durable_ctx.component_service()
     }
 }

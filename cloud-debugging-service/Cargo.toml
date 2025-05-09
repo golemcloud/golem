@@ -29,7 +29,7 @@ async-trait = { workspace = true }
 async-dropper = { workspace = true }
 async-dropper-simple = { workspace = true }
 axum = { workspace = true, features = ["ws"] }
-axum-jrpc = {workspace = true}
+axum-jrpc = { workspace = true }
 bincode = { workspace = true }
 futures-util = { workspace = true }
 gethostname = { workspace = true }
@@ -37,12 +37,13 @@ log = { workspace = true }
 prometheus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-thiserror ={ workspace = true }
+thiserror = { workspace = true }
 uuid = { workspace = true }
 url = { workspace = true }
 

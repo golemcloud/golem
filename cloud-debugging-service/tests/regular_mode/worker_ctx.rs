@@ -16,6 +16,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, WitValue};
+use golem_worker_executor_base::services::worker_fork::WorkerForkService;
 use golem_worker_executor_base::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
     InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
@@ -91,6 +92,7 @@ impl WorkerCtx for TestWorkerCtx {
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
+        worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -114,6 +116,7 @@ impl WorkerCtx for TestWorkerCtx {
             execution_status,
             file_loader,
             plugins,
+            worker_fork,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -161,6 +164,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
         self.durable_ctx.worker_proxy()
+    }
+
+    fn worker_fork(&self) -> Arc<dyn WorkerForkService + Send + Sync> {
+        self.durable_ctx.worker_fork()
     }
 
     async fn generate_unique_local_worker_id(

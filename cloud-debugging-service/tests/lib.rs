@@ -36,6 +36,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
 use std::time::Duration;
+use tempfile::TempDir;
 use test_r::test_dep;
 use tracing::Level;
 
@@ -141,6 +142,7 @@ pub struct RegularWorkerExecutorPerTestDependencies {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
+    component_temp_directory: Arc<TempDir>,
 }
 
 #[async_trait]
@@ -194,6 +196,10 @@ impl TestDependencies for RegularWorkerExecutorPerTestDependencies {
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
     }
+
+    fn component_temp_directory(&self) -> &Path {
+        self.component_temp_directory.path()
+    }
 }
 
 pub struct RegularWorkerExecutorTestDependencies {
@@ -204,6 +210,7 @@ pub struct RegularWorkerExecutorTestDependencies {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
+    component_temp_directory: Arc<TempDir>,
 }
 
 impl Debug for RegularWorkerExecutorTestDependencies {
@@ -251,6 +258,7 @@ impl RegularWorkerExecutorTestDependencies {
             blob_storage,
             plugin_wasm_files_service,
             initial_component_files_service,
+            component_temp_directory: Arc::new(TempDir::new().unwrap()),
         }
     }
 
@@ -285,6 +293,7 @@ impl RegularWorkerExecutorTestDependencies {
             blob_storage: self.blob_storage.clone(),
             initial_component_files_service: self.initial_component_files_service.clone(),
             plugin_wasm_files_service: self.plugin_wasm_files_service.clone(),
+            component_temp_directory: Arc::new(TempDir::new().unwrap()),
         }
     }
 }
@@ -339,5 +348,9 @@ impl TestDependencies for RegularWorkerExecutorTestDependencies {
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
+    }
+
+    fn component_temp_directory(&self) -> &Path {
+        self.component_temp_directory.path()
     }
 }
