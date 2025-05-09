@@ -116,22 +116,22 @@ pub trait WorkerCtx:
     async fn create(
         owned_worker_id: OwnedWorkerId,
         component_metadata: ComponentMetadata<Self::Types>,
-        promise_service: Arc<dyn PromiseService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        promise_service: Arc<dyn PromiseService>,
+        worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+            dyn worker_enumeration::WorkerEnumerationService,
         >,
-        key_value_service: Arc<dyn KeyValueService + Send + Sync>,
-        blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
+        key_value_service: Arc<dyn KeyValueService>,
+        blob_store_service: Arc<dyn BlobStoreService>,
+        rdbms_service: Arc<dyn RdbmsService>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         active_workers: Arc<ActiveWorkers<Self>>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        oplog: Arc<dyn Oplog + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
+        oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Self>>,
-        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        rpc: Arc<dyn Rpc + Send + Sync>,
-        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        scheduler_service: Arc<dyn SchedulerService>,
+        rpc: Arc<dyn Rpc>,
+        worker_proxy: Arc<dyn WorkerProxy>,
         component_service: Arc<dyn ComponentService<Self::Types>>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
@@ -139,7 +139,7 @@ pub trait WorkerCtx:
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<Self::Types>>,
-        worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
+        worker_fork: Arc<dyn WorkerForkService>,
     ) -> Result<Self, GolemError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
@@ -168,15 +168,15 @@ pub trait WorkerCtx:
     fn is_exit(error: &anyhow::Error) -> Option<i32>;
 
     /// Gets the worker-executor's WASM RPC implementation
-    fn rpc(&self) -> Arc<dyn Rpc + Send + Sync>;
+    fn rpc(&self) -> Arc<dyn Rpc>;
 
     /// Gets an interface to the worker-proxy which can direct calls to other worker executors
     /// in the cluster
-    fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync>;
+    fn worker_proxy(&self) -> Arc<dyn WorkerProxy>;
 
     fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync>;
 
-    fn worker_fork(&self) -> Arc<dyn WorkerForkService + Send + Sync>;
+    fn worker_fork(&self) -> Arc<dyn WorkerForkService>;
 
     async fn generate_unique_local_worker_id(
         &mut self,

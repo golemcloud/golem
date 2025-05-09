@@ -145,7 +145,7 @@ pub trait Rdbms<T: RdbmsType> {
     fn status(&self) -> RdbmsStatus;
 }
 
-pub trait RdbmsService {
+pub trait RdbmsService: Send + Sync {
     fn mysql(&self) -> Arc<dyn Rdbms<MysqlType> + Send + Sync>;
     fn postgres(&self) -> Arc<dyn Rdbms<PostgresType> + Send + Sync>;
 }
@@ -154,13 +154,13 @@ pub trait RdbmsTypeService<T: RdbmsType> {
     fn rdbms_type_service(&self) -> Arc<dyn Rdbms<T> + Send + Sync>;
 }
 
-impl RdbmsTypeService<MysqlType> for dyn RdbmsService + Send + Sync {
+impl RdbmsTypeService<MysqlType> for dyn RdbmsService {
     fn rdbms_type_service(&self) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
         self.mysql()
     }
 }
 
-impl RdbmsTypeService<PostgresType> for dyn RdbmsService + Send + Sync {
+impl RdbmsTypeService<PostgresType> for dyn RdbmsService {
     fn rdbms_type_service(&self) -> Arc<dyn Rdbms<PostgresType> + Send + Sync> {
         self.postgres()
     }

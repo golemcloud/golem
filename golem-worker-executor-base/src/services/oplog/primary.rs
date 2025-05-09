@@ -159,7 +159,7 @@ impl OplogService for PrimaryOplogService {
         initial_entry: OplogEntry,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    ) -> Arc<dyn Oplog> {
         record_oplog_call("create");
 
         let key = Self::oplog_key(&owned_worker_id.worker_id);
@@ -201,7 +201,7 @@ impl OplogService for PrimaryOplogService {
         last_oplog_index: OplogIndex,
         _initial_worker_metadata: WorkerMetadata,
         _execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    ) -> Arc<dyn Oplog> {
         record_oplog_call("open");
 
         let key = Self::oplog_key(&owned_worker_id.worker_id);
@@ -394,7 +394,7 @@ impl OplogConstructor for CreateOplogConstructor {
     async fn create_oplog(
         self,
         close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    ) -> Arc<dyn Oplog> {
         Arc::new(PrimaryOplog::new(
             self.indexed_storage,
             self.blob_storage,

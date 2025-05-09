@@ -26,7 +26,7 @@ use crate::metrics::sharding::*;
 use crate::model::ShardAssignmentCheck;
 
 /// Service for assigning shards to worker executors
-pub trait ShardService {
+pub trait ShardService: Send + Sync {
     fn is_ready(&self) -> bool;
     fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError>;
     fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError>;

@@ -25,7 +25,7 @@ use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, Exist
 
 /// Interface for storing blobs in a persistent storage.
 #[async_trait]
-pub trait BlobStoreService {
+pub trait BlobStoreService: Send + Sync {
     async fn clear(&self, account_id: AccountId, container_name: String) -> anyhow::Result<()>;
 
     async fn container_exists(

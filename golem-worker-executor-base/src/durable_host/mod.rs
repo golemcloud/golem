@@ -145,28 +145,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn create(
         owned_worker_id: OwnedWorkerId,
         component_metadata: ComponentMetadata<Ctx::Types>,
-        promise_service: Arc<dyn PromiseService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        promise_service: Arc<dyn PromiseService>,
+        worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+            dyn worker_enumeration::WorkerEnumerationService,
         >,
-        key_value_service: Arc<dyn KeyValueService + Send + Sync>,
-        blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        rdbms_service: Arc<dyn crate::services::rdbms::RdbmsService + Send + Sync>,
+        key_value_service: Arc<dyn KeyValueService>,
+        blob_store_service: Arc<dyn BlobStoreService>,
+        rdbms_service: Arc<dyn crate::services::rdbms::RdbmsService>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        oplog: Arc<dyn Oplog + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
+        oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Ctx>>,
-        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        rpc: Arc<dyn Rpc + Send + Sync>,
-        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        scheduler_service: Arc<dyn SchedulerService>,
+        rpc: Arc<dyn Rpc>,
+        worker_proxy: Arc<dyn WorkerProxy>,
         component_service: Arc<dyn ComponentService<Ctx::Types>>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<Ctx::Types>>,
-        worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
+        worker_fork: Arc<dyn WorkerForkService>,
     ) -> Result<Self, GolemError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -348,11 +348,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state.worker().update_status(status).await;
     }
 
-    pub fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+    pub fn rpc(&self) -> Arc<dyn Rpc> {
         self.state.rpc.clone()
     }
 
-    pub fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
+    pub fn worker_proxy(&self) -> Arc<dyn WorkerProxy> {
         self.state.worker_proxy.clone()
     }
 
@@ -360,11 +360,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.component_service.clone()
     }
 
-    pub fn worker_fork(&self) -> Arc<dyn WorkerForkService + Send + Sync> {
+    pub fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.state.worker_fork.clone()
     }
 
-    pub fn scheduler_service(&self) -> Arc<dyn SchedulerService + Send + Sync> {
+    pub fn scheduler_service(&self) -> Arc<dyn SchedulerService> {
         self.state.scheduler_service.clone()
     }
 
@@ -2041,22 +2041,22 @@ struct HttpRequestState {
 }
 
 struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
-    oplog: Arc<dyn Oplog + Send + Sync>,
-    promise_service: Arc<dyn PromiseService + Send + Sync>,
-    scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-    worker_service: Arc<dyn WorkerService + Send + Sync>,
-    worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
-    key_value_service: Arc<dyn KeyValueService + Send + Sync>,
-    blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-    rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
-    component_service: Arc<dyn ComponentService<Ctx::Types> + Send + Sync>,
+    oplog_service: Arc<dyn OplogService>,
+    oplog: Arc<dyn Oplog>,
+    promise_service: Arc<dyn PromiseService>,
+    scheduler_service: Arc<dyn SchedulerService>,
+    worker_service: Arc<dyn WorkerService>,
+    worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
+    key_value_service: Arc<dyn KeyValueService>,
+    blob_store_service: Arc<dyn BlobStoreService>,
+    rdbms_service: Arc<dyn RdbmsService>,
+    component_service: Arc<dyn ComponentService<Ctx::Types>>,
     plugins: Arc<dyn Plugins<Ctx::Types>>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     current_idempotency_key: Option<IdempotencyKey>,
-    rpc: Arc<dyn Rpc + Send + Sync>,
-    worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+    rpc: Arc<dyn Rpc>,
+    worker_proxy: Arc<dyn WorkerProxy>,
     resources: HashMap<WorkerResourceId, ResourceAny>,
     last_resource_id: WorkerResourceId,
     replay_state: ReplayState,
@@ -2079,33 +2079,33 @@ struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     current_span_id: SpanId,
     forward_trace_context_headers: bool,
 
-    worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
+    worker_fork: Arc<dyn WorkerForkService>,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     pub async fn new(
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        oplog: Arc<dyn Oplog + Send + Sync>,
-        promise_service: Arc<dyn PromiseService + Send + Sync>,
-        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
+        oplog: Arc<dyn Oplog>,
+        promise_service: Arc<dyn PromiseService>,
+        scheduler_service: Arc<dyn SchedulerService>,
+        worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
+            dyn worker_enumeration::WorkerEnumerationService,
         >,
-        key_value_service: Arc<dyn KeyValueService + Send + Sync>,
-        blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
-        component_service: Arc<dyn ComponentService<Ctx::Types> + Send + Sync>,
+        key_value_service: Arc<dyn KeyValueService>,
+        blob_store_service: Arc<dyn BlobStoreService>,
+        rdbms_service: Arc<dyn RdbmsService>,
+        component_service: Arc<dyn ComponentService<Ctx::Types>>,
         plugins: Arc<dyn Plugins<Ctx::Types>>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
-        rpc: Arc<dyn Rpc + Send + Sync>,
-        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        rpc: Arc<dyn Rpc>,
+        worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
         component_metadata: ComponentMetadata<Ctx::Types>,
         total_linear_memory_size: u64,
-        worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
+        worker_fork: Arc<dyn WorkerForkService>,
     ) -> Self {
         let replay_state = ReplayState::new(
             owned_worker_id.clone(),
@@ -2357,13 +2357,13 @@ impl<Ctx: WorkerCtx> ResourceStore for PrivateDurableWorkerState<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasOplogService for PrivateDurableWorkerState<Ctx> {
-    fn oplog_service(&self) -> Arc<dyn OplogService + Send + Sync> {
+    fn oplog_service(&self) -> Arc<dyn OplogService> {
         self.oplog_service.clone()
     }
 }
 
 impl<Ctx: WorkerCtx> HasOplog for PrivateDurableWorkerState<Ctx> {
-    fn oplog(&self) -> Arc<dyn Oplog + Send + Sync> {
+    fn oplog(&self) -> Arc<dyn Oplog> {
         self.oplog.clone()
     }
 }
@@ -2381,10 +2381,10 @@ impl<Ctx: WorkerCtx> HasPlugins<Ctx::Types> for PrivateDurableWorkerState<Ctx> {
 }
 
 pub struct PublicDurableWorkerState<Ctx: WorkerCtx> {
-    promise_service: Arc<dyn PromiseService + Send + Sync>,
+    promise_service: Arc<dyn PromiseService>,
     event_service: Arc<dyn WorkerEventService + Send + Sync>,
     invocation_queue: Weak<Worker<Ctx>>,
-    oplog: Arc<dyn Oplog + Send + Sync>,
+    oplog: Arc<dyn Oplog>,
 }
 
 impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
@@ -2417,7 +2417,7 @@ impl<Ctx: WorkerCtx> HasWorker<Ctx> for PublicDurableWorkerState<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasOplog for PublicDurableWorkerState<Ctx> {
-    fn oplog(&self) -> Arc<dyn Oplog + Send + Sync> {
+    fn oplog(&self) -> Arc<dyn Oplog> {
         self.oplog.clone()
     }
 }

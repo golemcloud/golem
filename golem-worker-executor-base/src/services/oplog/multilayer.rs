@@ -41,7 +41,7 @@ use golem_common::model::{
 };
 
 #[async_trait]
-pub trait OplogArchiveService: Debug {
+pub trait OplogArchiveService: Debug + Send + Sync {
     /// Opens an oplog archive for writing
     async fn open(&self, owned_worker_id: &OwnedWorkerId) -> Arc<dyn OplogArchive + Send + Sync>;
 
@@ -115,8 +115,8 @@ pub trait OplogArchive: Debug {
 
 #[derive(Debug)]
 pub struct MultiLayerOplogService {
-    pub primary: Arc<dyn OplogService + Send + Sync>,
-    pub lower: NEVec<Arc<dyn OplogArchiveService + Send + Sync>>,
+    pub primary: Arc<dyn OplogService>,
+    pub lower: NEVec<Arc<dyn OplogArchiveService>>,
 
     oplogs: OpenOplogs,
 
@@ -126,8 +126,8 @@ pub struct MultiLayerOplogService {
 
 impl MultiLayerOplogService {
     pub fn new(
-        primary: Arc<dyn OplogService + Send + Sync>,
-        lower: NEVec<Arc<dyn OplogArchiveService + Send + Sync>>,
+        primary: Arc<dyn OplogService>,
+        lower: NEVec<Arc<dyn OplogArchiveService>>,
         entry_count_limit: u64,
         max_operations_before_commit_ephemeral: u64,
     ) -> Self {
@@ -157,7 +157,7 @@ impl Clone for MultiLayerOplogService {
 struct CreateOplogConstructor {
     owned_worker_id: OwnedWorkerId,
     initial_entry: Option<OplogEntry>,
-    primary: Arc<dyn OplogService + Send + Sync>,
+    primary: Arc<dyn OplogService>,
     service: MultiLayerOplogService,
     last_oplog_index: OplogIndex,
     initial_worker_metadata: WorkerMetadata,
@@ -168,7 +168,7 @@ impl CreateOplogConstructor {
     fn new(
         owned_worker_id: OwnedWorkerId,
         initial_entry: Option<OplogEntry>,
-        primary: Arc<dyn OplogService + Send + Sync>,
+        primary: Arc<dyn OplogService>,
         service: MultiLayerOplogService,
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
@@ -191,7 +191,7 @@ impl OplogConstructor for CreateOplogConstructor {
     async fn create_oplog(
         self,
         close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    ) -> Arc<dyn Oplog> {
         let component_type = self.execution_status.read().unwrap().component_type();
 
         match component_type {
@@ -261,7 +261,7 @@ impl OplogService for MultiLayerOplogService {
         initial_entry: OplogEntry,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
                 &owned_worker_id.worker_id,
@@ -284,7 +284,7 @@ impl OplogService for MultiLayerOplogService {
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
                 &owned_worker_id.worker_id,
@@ -466,7 +466,7 @@ impl OplogService for MultiLayerOplogService {
 
 pub struct MultiLayerOplog {
     owned_worker_id: OwnedWorkerId,
-    primary: Arc<dyn Oplog + Send + Sync>,
+    primary: Arc<dyn Oplog>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     multi_layer_oplog_service: MultiLayerOplogService,
     transfer_fiber: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -479,10 +479,10 @@ impl MultiLayerOplog {
     #[allow(clippy::new_ret_no_self)]
     pub async fn new(
         owned_worker_id: OwnedWorkerId,
-        primary: Arc<dyn Oplog + Send + Sync>,
+        primary: Arc<dyn Oplog>,
         multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    ) -> Arc<dyn Oplog> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
@@ -516,7 +516,7 @@ impl MultiLayerOplog {
             primary_length: AtomicU64::new(initial_primary_length),
             close_fn: Some(close),
         });
-        let result_oplog: Arc<dyn Oplog + Send + Sync> = result.clone();
+        let result_oplog: Arc<dyn Oplog> = result.clone();
 
         result.set_background_transfer(tokio::spawn(
             Self::background_transfer(
@@ -538,7 +538,7 @@ impl MultiLayerOplog {
 
     async fn background_transfer(
         owned_worker_id: OwnedWorkerId,
-        primary: Weak<dyn Oplog + Send + Sync>,
+        primary: Weak<dyn Oplog>,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         multi_layer_oplog_service: MultiLayerOplogService,
         mut rx: UnboundedReceiver<BackgroundTransferMessage>,
@@ -603,12 +603,12 @@ impl MultiLayerOplog {
         }
     }
 
-    pub async fn try_archive(this: &Arc<dyn Oplog + Send + Sync>) -> Option<bool> {
+    pub async fn try_archive(this: &Arc<dyn Oplog>) -> Option<bool> {
         let this = downcast_oplog::<MultiLayerOplog>(this)?;
         Some(Self::archive(this, false).await)
     }
 
-    pub async fn try_archive_blocking(this: &Arc<dyn Oplog + Send + Sync>) -> Option<bool> {
+    pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> Option<bool> {
         let this = downcast_oplog::<MultiLayerOplog>(this)?;
         Some(Self::archive(this, true).await)
     }
@@ -763,13 +763,13 @@ impl Oplog for MultiLayerOplog {
 enum BackgroundTransferMessage {
     TransferFromPrimary {
         last_transferred_idx: OplogIndex,
-        keep_alive: Option<Arc<dyn Oplog + Send + Sync>>,
+        keep_alive: Option<Arc<dyn Oplog>>,
         done: Option<Sender<()>>,
     },
     TransferFromLower {
         source: usize,
         last_transferred_idx: OplogIndex,
-        keep_alive: Option<Arc<dyn Oplog + Send + Sync>>,
+        keep_alive: Option<Arc<dyn Oplog>>,
         done: Option<Sender<()>>,
     },
 }
@@ -876,7 +876,7 @@ struct BackgroundTransferFromPrimary {
     owned_worker_id: OwnedWorkerId,
     last_transferred_idx: OplogIndex,
     multi_layer_oplog_service: MultiLayerOplogService,
-    primary: Arc<dyn Oplog + Send + Sync>,
+    primary: Arc<dyn Oplog>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
 }
 
@@ -885,7 +885,7 @@ impl BackgroundTransferFromPrimary {
         owned_worker_id: OwnedWorkerId,
         last_transferred_idx: OplogIndex,
         multi_layer_oplog_service: MultiLayerOplogService,
-        primary: Arc<dyn Oplog + Send + Sync>,
+        primary: Arc<dyn Oplog>,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     ) -> Self {
         Self {

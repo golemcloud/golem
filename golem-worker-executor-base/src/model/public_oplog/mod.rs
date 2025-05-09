@@ -95,7 +95,7 @@ pub struct PublicOplogChunk {
 
 pub async fn get_public_oplog_chunk<T: GolemTypes>(
     component_service: Arc<dyn ComponentService<T>>,
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
+    oplog_service: Arc<dyn OplogService>,
     plugins: Arc<dyn Plugins<T>>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentVersion,
@@ -148,7 +148,7 @@ pub struct PublicOplogSearchResult {
 
 pub async fn search_public_oplog<T: GolemTypes>(
     component_service: Arc<dyn ComponentService<T>>,
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
+    oplog_service: Arc<dyn OplogService>,
     plugin_service: Arc<dyn Plugins<T>>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentVersion,
@@ -202,7 +202,7 @@ pub async fn search_public_oplog<T: GolemTypes>(
 }
 
 pub async fn find_component_version_at(
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
+    oplog_service: Arc<dyn OplogService>,
     owned_worker_id: &OwnedWorkerId,
     start: OplogIndex,
 ) -> Result<ComponentVersion, GolemError> {
@@ -232,7 +232,7 @@ pub async fn find_component_version_at(
 pub trait PublicOplogEntryOps<T: GolemTypes>: Sized {
     async fn from_oplog_entry(
         value: OplogEntry,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService<T>>,
         plugins: Arc<dyn Plugins<T>>,
         owned_worker_id: &OwnedWorkerId,
@@ -244,7 +244,7 @@ pub trait PublicOplogEntryOps<T: GolemTypes>: Sized {
 impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
     async fn from_oplog_entry(
         value: OplogEntry,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService<T>>,
         plugins: Arc<dyn Plugins<T>>,
         owned_worker_id: &OwnedWorkerId,

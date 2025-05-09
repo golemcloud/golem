@@ -35,7 +35,7 @@ impl DockerWorkerExecutorCluster {
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + 'static>,
         verbosity: Level,
         shared_client: bool,
     ) -> Arc<DockerWorkerExecutor> {
@@ -57,7 +57,7 @@ impl DockerWorkerExecutorCluster {
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + 'static>,
         verbosity: Level,
         shared_client: bool,
     ) -> Self {
