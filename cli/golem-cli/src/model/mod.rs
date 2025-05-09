@@ -660,14 +660,6 @@ impl FromStr for ProjectPolicyId {
 pub enum Role {
     Admin,
     MarketingAdmin,
-    ViewProject,
-    DeleteProject,
-    CreateProject,
-    InstanceServer,
-    UpdateProject,
-    ViewPlugin,
-    CreatePlugin,
-    DeletePlugin,
 }
 
 impl Display for Role {
@@ -675,14 +667,6 @@ impl Display for Role {
         let s = match self {
             Role::Admin => "Admin",
             Role::MarketingAdmin => "MarketingAdmin",
-            Role::ViewProject => "ViewProject",
-            Role::DeleteProject => "DeleteProject",
-            Role::CreateProject => "CreateProject",
-            Role::InstanceServer => "InstanceServer",
-            Role::UpdateProject => "UpdateProject",
-            Role::ViewPlugin => "ViewPlugin",
-            Role::CreatePlugin => "CreatePlugin",
-            Role::DeletePlugin => "DeletePlugin",
         };
 
         Display::fmt(s, f)
@@ -696,13 +680,6 @@ impl FromStr for Role {
         match s {
             "Admin" => Ok(Role::Admin),
             "MarketingAdmin" => Ok(Role::MarketingAdmin),
-            "ViewProject" => Ok(Role::ViewProject),
-            "DeleteProject" => Ok(Role::DeleteProject),
-            "CreateProject" => Ok(Role::CreateProject),
-            "InstanceServer" => Ok(Role::InstanceServer),
-            "UpdateProject" => Ok(Role::UpdateProject),
-            "ViewPlugin" => Ok(Role::ViewPlugin),
-            "CreatePlugin" => Ok(Role::CreatePlugin),
             _ => {
                 let all = Role::iter()
                     .map(|x| format!("\"{x}\""))
@@ -719,14 +696,6 @@ impl From<Role> for golem_cloud_client::model::Role {
         match value {
             Role::Admin => golem_cloud_client::model::Role::Admin,
             Role::MarketingAdmin => golem_cloud_client::model::Role::MarketingAdmin,
-            Role::ViewProject => golem_cloud_client::model::Role::ViewProject,
-            Role::DeleteProject => golem_cloud_client::model::Role::DeleteProject,
-            Role::CreateProject => golem_cloud_client::model::Role::CreateProject,
-            Role::InstanceServer => golem_cloud_client::model::Role::InstanceServer,
-            Role::UpdateProject => golem_cloud_client::model::Role::UpdateProject,
-            Role::ViewPlugin => golem_cloud_client::model::Role::ViewPlugin,
-            Role::CreatePlugin => golem_cloud_client::model::Role::CreatePlugin,
-            Role::DeletePlugin => golem_cloud_client::model::Role::DeletePlugin,
         }
     }
 }
@@ -736,14 +705,6 @@ impl From<golem_cloud_client::model::Role> for Role {
         match value {
             golem_cloud_client::model::Role::Admin => Role::Admin,
             golem_cloud_client::model::Role::MarketingAdmin => Role::MarketingAdmin,
-            golem_cloud_client::model::Role::ViewProject => Role::ViewProject,
-            golem_cloud_client::model::Role::DeleteProject => Role::DeleteProject,
-            golem_cloud_client::model::Role::CreateProject => Role::CreateProject,
-            golem_cloud_client::model::Role::InstanceServer => Role::InstanceServer,
-            golem_cloud_client::model::Role::UpdateProject => Role::UpdateProject,
-            golem_cloud_client::model::Role::ViewPlugin => Role::ViewPlugin,
-            golem_cloud_client::model::Role::CreatePlugin => Role::CreatePlugin,
-            golem_cloud_client::model::Role::DeletePlugin => Role::DeletePlugin,
         }
     }
 }
@@ -761,6 +722,23 @@ pub enum ProjectAction {
     ViewProjectGrants,
     CreateProjectGrants,
     DeleteProjectGrants,
+    ViewApiDefinition,
+    CreateApiDefinition,
+    UpdateApiDefinition,
+    DeleteApiDefinition,
+    DeleteProject,
+    ViewProject,
+    ViewPluginInstallations,
+    CreatePluginInstallation,
+    UpdatePluginInstallation,
+    DeletePluginInstallation,
+    UpsertApiDeployment,
+    ViewApiDeployment,
+    DeleteApiDeployment,
+    UpsertApiDomain,
+    ViewApiDomain,
+    DeleteApiDomain,
+    BatchUpdatePluginInstallations,
 }
 
 impl Display for ProjectAction {
@@ -777,6 +755,23 @@ impl Display for ProjectAction {
             ProjectAction::ViewProjectGrants => "ViewProjectGrants",
             ProjectAction::CreateProjectGrants => "CreateProjectGrants",
             ProjectAction::DeleteProjectGrants => "DeleteProjectGrants",
+            ProjectAction::ViewApiDefinition => "ViewApiDefinition",
+            ProjectAction::CreateApiDefinition => "CreateApiDefinition",
+            ProjectAction::UpdateApiDefinition => "UpdateApiDefinition",
+            ProjectAction::DeleteApiDefinition => "DeleteApiDefinition",
+            ProjectAction::DeleteProject => "DeleteProject",
+            ProjectAction::ViewProject => "ViewProject",
+            ProjectAction::ViewPluginInstallations => "ViewPluginInstallations",
+            ProjectAction::CreatePluginInstallation => "CreatePluginInstallation",
+            ProjectAction::UpdatePluginInstallation => "UpdatePluginInstallation",
+            ProjectAction::DeletePluginInstallation => "DeletePluginInstallation",
+            ProjectAction::UpsertApiDeployment => "UpsertApiDeployment",
+            ProjectAction::ViewApiDeployment => "ViewApiDeployment",
+            ProjectAction::DeleteApiDeployment => "DeleteApiDeployment",
+            ProjectAction::UpsertApiDomain => "UpsertApiDomain",
+            ProjectAction::ViewApiDomain => "ViewApiDomain",
+            ProjectAction::DeleteApiDomain => "DeleteApiDomain",
+            ProjectAction::BatchUpdatePluginInstallations => "BatchUpdatePluginInstallations",
         };
 
         Display::fmt(s, f)
@@ -812,29 +807,44 @@ impl FromStr for ProjectAction {
 
 impl From<ProjectAction> for golem_cloud_client::model::ProjectAction {
     fn from(value: ProjectAction) -> Self {
+        use golem_cloud_client::model::ProjectAction as ClientProjectAction;
+
         match value {
-            ProjectAction::ViewComponent => golem_cloud_client::model::ProjectAction::ViewComponent,
-            ProjectAction::CreateComponent => {
-                golem_cloud_client::model::ProjectAction::CreateComponent
+            ProjectAction::ViewComponent => ClientProjectAction::ViewComponent,
+            ProjectAction::CreateComponent => ClientProjectAction::CreateComponent,
+            ProjectAction::UpdateComponent => ClientProjectAction::UpdateComponent,
+            ProjectAction::DeleteComponent => ClientProjectAction::DeleteComponent,
+            ProjectAction::ViewWorker => ClientProjectAction::ViewWorker,
+            ProjectAction::CreateWorker => ClientProjectAction::CreateWorker,
+            ProjectAction::UpdateWorker => ClientProjectAction::UpdateWorker,
+            ProjectAction::DeleteWorker => ClientProjectAction::DeleteWorker,
+            ProjectAction::ViewProjectGrants => ClientProjectAction::ViewProjectGrants,
+            ProjectAction::CreateProjectGrants => ClientProjectAction::CreateProjectGrants,
+            ProjectAction::DeleteProjectGrants => ClientProjectAction::DeleteProjectGrants,
+            ProjectAction::ViewApiDefinition => ClientProjectAction::ViewApiDefinition,
+            ProjectAction::CreateApiDefinition => ClientProjectAction::CreateApiDefinition,
+            ProjectAction::UpdateApiDefinition => ClientProjectAction::UpdateApiDefinition,
+            ProjectAction::DeleteApiDefinition => ClientProjectAction::DeleteApiDefinition,
+            ProjectAction::DeleteProject => ClientProjectAction::DeleteProject,
+            ProjectAction::ViewProject => ClientProjectAction::ViewProject,
+            ProjectAction::ViewPluginInstallations => ClientProjectAction::ViewPluginInstallations,
+            ProjectAction::CreatePluginInstallation => {
+                ClientProjectAction::CreatePluginInstallation
             }
-            ProjectAction::UpdateComponent => {
-                golem_cloud_client::model::ProjectAction::UpdateComponent
+            ProjectAction::UpdatePluginInstallation => {
+                ClientProjectAction::UpdatePluginInstallation
             }
-            ProjectAction::DeleteComponent => {
-                golem_cloud_client::model::ProjectAction::DeleteComponent
+            ProjectAction::DeletePluginInstallation => {
+                ClientProjectAction::DeletePluginInstallation
             }
-            ProjectAction::ViewWorker => golem_cloud_client::model::ProjectAction::ViewWorker,
-            ProjectAction::CreateWorker => golem_cloud_client::model::ProjectAction::CreateWorker,
-            ProjectAction::UpdateWorker => golem_cloud_client::model::ProjectAction::UpdateWorker,
-            ProjectAction::DeleteWorker => golem_cloud_client::model::ProjectAction::DeleteWorker,
-            ProjectAction::ViewProjectGrants => {
-                golem_cloud_client::model::ProjectAction::ViewProjectGrants
-            }
-            ProjectAction::CreateProjectGrants => {
-                golem_cloud_client::model::ProjectAction::CreateProjectGrants
-            }
-            ProjectAction::DeleteProjectGrants => {
-                golem_cloud_client::model::ProjectAction::DeleteProjectGrants
+            ProjectAction::UpsertApiDeployment => ClientProjectAction::UpsertApiDeployment,
+            ProjectAction::ViewApiDeployment => ClientProjectAction::ViewApiDeployment,
+            ProjectAction::DeleteApiDeployment => ClientProjectAction::DeleteApiDeployment,
+            ProjectAction::UpsertApiDomain => ClientProjectAction::UpsertApiDomain,
+            ProjectAction::ViewApiDomain => ClientProjectAction::ViewApiDomain,
+            ProjectAction::DeleteApiDomain => ClientProjectAction::DeleteApiDomain,
+            ProjectAction::BatchUpdatePluginInstallations => {
+                ClientProjectAction::BatchUpdatePluginInstallations
             }
         }
     }

@@ -172,6 +172,7 @@ impl PluginCommandHandler {
                                     None,
                                     None::<File>,
                                     None,
+                                    None, // TODO: component env
                                 )
                                 .await
                                 .map(Component::from)
@@ -190,6 +191,7 @@ impl PluginCommandHandler {
                                     None,
                                     None::<File>,
                                     None,
+                                    None, // TODO: component env
                                 )
                                 .await
                                 .map(Component::from)

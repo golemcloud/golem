@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::{AccountId, ProjectId};
+use crate::cloud::ProjectId;
 use crate::command::cloud::project::{ProjectActionsOrPolicyId, ProjectSubcommand};
 use crate::command_handler::Handlers;
 use crate::config::ProfileKind;
@@ -54,12 +54,12 @@ impl CloudProjectCommandHandler {
             ProjectSubcommand::GetDefault => self.cmd_get_default().await,
             ProjectSubcommand::Grant {
                 project_reference,
-                recipient_account_id,
+                recipient_email,
                 project_actions_or_policy_id,
             } => {
                 self.cmd_grant(
                     project_reference,
-                    recipient_account_id,
+                    recipient_email,
                     project_actions_or_policy_id,
                 )
                 .await
@@ -259,7 +259,7 @@ impl CloudProjectCommandHandler {
     async fn cmd_grant(
         &self,
         project_reference: ProjectReference,
-        account_id: AccountId,
+        account_email: String,
         actions_or_policy_id: ProjectActionsOrPolicyId,
     ) -> anyhow::Result<()> {
         let grant = self
@@ -270,7 +270,8 @@ impl CloudProjectCommandHandler {
             .create_project_grant(
                 &self.select_project(&project_reference).await?.project_id.0,
                 &ProjectGrantDataRequest {
-                    grantee_account_id: account_id.0,
+                    grantee_account_id: None,
+                    grantee_email: Some(account_email),
                     project_policy_id: actions_or_policy_id.policy_id.map(|id| id.0),
                     project_actions: actions_or_policy_id
                         .action
