@@ -18,6 +18,7 @@ use bincode::{Decode, Encode};
 use golem_common::model::{IdempotencyKey, ScheduleId, WorkerId};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{ValueAndType, WitValue};
+use golem_wasm_rpc_derive::IntoValue;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum SerializableInvokeResultV1 {
@@ -50,7 +51,8 @@ pub struct SerializableScheduleInvocationRequest {
     pub datetime: SerializableDateTime,
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
+#[flatten_value]
 pub struct SerializableScheduleId {
     pub data: Vec<u8>,
 }

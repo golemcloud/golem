@@ -39,69 +39,54 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
-
+use golem_wasm_rpc_derive::IntoValue;
 use super::plugin::{PluginDefinition, PluginOwner, PluginScope};
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[flatten_value]
 pub struct SnapshotBasedUpdateParameters {
     pub payload: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicUpdateDescription {
+    #[unit_case]
     Automatic(Empty),
     SnapshotBased(SnapshotBasedUpdateParameters),
 }
 
-impl IntoValue for PublicUpdateDescription {
-    fn into_value(self) -> Value {
-        match self {
-            PublicUpdateDescription::Automatic(_) => Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            PublicUpdateDescription::SnapshotBased(params) => Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(params.payload.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        variant(vec![
-            unit_case("auto-update"),
-            case("snapshot-based", list(u8())),
-        ])
-    }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[flatten_value]
 pub struct WriteRemoteBatchedParameters {
     pub index: Option<OplogIndex>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicDurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
     /// random generator, etc.)
+    #[unit_case]
     ReadLocal(Empty),
     /// The side-effect writes to the worker's local state (for example local file system)
+    #[unit_case]
     WriteLocal(Empty),
     /// The side-effect reads from external state (for example a key-value store)
+    #[unit_case]
     ReadRemote(Empty),
     /// The side-effect manipulates external state (for example an RPC call)
+    #[unit_case]
     WriteRemote(Empty),
     /// The side-effect manipulates external state through multiple invoked functions (for example
     /// a HTTP request where reading the response involves multiple host function calls)
@@ -129,43 +114,6 @@ impl From<DurableFunctionType> for PublicDurableFunctionType {
     }
 }
 
-impl IntoValue for PublicDurableFunctionType {
-    fn into_value(self) -> Value {
-        match self {
-            PublicDurableFunctionType::ReadLocal(_) => Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            PublicDurableFunctionType::WriteLocal(_) => Value::Variant {
-                case_idx: 1,
-                case_value: None,
-            },
-            PublicDurableFunctionType::ReadRemote(_) => Value::Variant {
-                case_idx: 2,
-                case_value: None,
-            },
-            PublicDurableFunctionType::WriteRemote(_) => Value::Variant {
-                case_idx: 3,
-                case_value: None,
-            },
-            PublicDurableFunctionType::WriteRemoteBatched(params) => Value::Variant {
-                case_idx: 4,
-                case_value: Some(Box::new(params.index.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        variant(vec![
-            unit_case("read-local"),
-            unit_case("write-local"),
-            unit_case("read-remote"),
-            unit_case("write-remote"),
-            case("write-remote-batched", option(u64())),
-        ])
-    }
-}
-
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
@@ -174,7 +122,7 @@ pub struct DetailsParameter {
     pub details: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -197,28 +145,6 @@ impl From<RetryConfig> for PublicRetryConfig {
             multiplier: retry_config.multiplier,
             max_jitter_factor: retry_config.max_jitter_factor,
         }
-    }
-}
-
-impl IntoValue for PublicRetryConfig {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.max_attempts.into_value(),
-            self.min_delay.into_value(),
-            self.max_delay.into_value(),
-            self.multiplier.into_value(),
-            self.max_jitter_factor.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("max-attempts", u32()),
-            field("min-delay", u64()),
-            field("max-delay", u64()),
-            field("multiplier", f64()),
-            field("max-jitter-factor", option(f64())),
-        ])
     }
 }
 
@@ -256,15 +182,16 @@ impl IntoValue for ExportedFunctionParameters {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[flatten_value]
 pub struct ManualUpdateParameters {
     pub target_version: ComponentVersion,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
@@ -273,29 +200,7 @@ pub enum PublicWorkerInvocation {
     ManualUpdate(ManualUpdateParameters),
 }
 
-impl IntoValue for PublicWorkerInvocation {
-    fn into_value(self) -> Value {
-        match self {
-            PublicWorkerInvocation::ExportedFunction(params) => Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(params.into_value())),
-            },
-            PublicWorkerInvocation::ManualUpdate(params) => Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(params.target_version.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        variant(vec![
-            case("exported-function", ExportedFunctionParameters::get_type()),
-            case("manual-update", ComponentVersion::get_type()),
-        ])
-    }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -319,31 +224,6 @@ impl PluginInstallationDescription {
             parameters: installation.parameters.into_iter().collect(),
             registered: !definition.deleted,
         }
-    }
-}
-
-impl IntoValue for PluginInstallationDescription {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.installation_id.into_value(),
-            self.plugin_name.into_value(),
-            self.plugin_version.into_value(),
-            Value::List(
-                self.parameters
-                    .into_iter()
-                    .map(|(k, v)| Value::Tuple(vec![k.into_value(), v.into_value()]))
-                    .collect::<Vec<Value>>(),
-            ),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("installation_id", PluginInstallationId::get_type()),
-            field("name", str()),
-            field("version", str()),
-            field("parameters", list(tuple(vec![str(), str()]))),
-        ])
     }
 }
 

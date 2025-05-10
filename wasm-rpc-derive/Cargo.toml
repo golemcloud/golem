@@ -1,0 +1,26 @@
+[package]
+name = "golem-wasm-rpc-derive"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Golem WASM RPC derivation macros"
+
+include = []
+
+[lib]
+path = "src/lib.rs"
+proc-macro = true
+harness = false
+
+[dependencies]
+heck = "0.5.0"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+test-r = { workspace = true }
+
+[build-dependencies]

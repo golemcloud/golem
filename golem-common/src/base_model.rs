@@ -14,6 +14,7 @@
 
 use crate::newtype_uuid;
 use bincode::{Decode, Encode};
+use golem_wasm_rpc_derive::IntoValue;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -307,7 +308,7 @@ impl From<&WorkerId> for TargetWorkerId {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
-#[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize, golem_wasm_rpc_derive::IntoValue))]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[cfg_attr(feature = "model", serde(rename_all = "camelCase"))]
@@ -328,27 +329,12 @@ impl Display for PromiseId {
     }
 }
 
-#[cfg(feature = "model")]
-impl golem_wasm_rpc::IntoValue for PromiseId {
-    fn into_value(self) -> golem_wasm_rpc::Value {
-        golem_wasm_rpc::Value::Record(vec![
-            self.worker_id.into_value(),
-            self.oplog_idx.into_value(),
-        ])
-    }
-
-    fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
-        use golem_wasm_ast::analysis::analysed_type::{field, record};
-        record(vec![
-            field("worker_id", WorkerId::get_type()),
-            field("oplog_idx", OplogIndex::get_type()),
-        ])
-    }
-}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, Default)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
-#[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "model",
+    derive(serde::Serialize, serde::Deserialize, golem_wasm_rpc_derive::IntoValue)
+)]
 pub struct OplogIndex(pub(crate) u64);
 
 impl OplogIndex {
@@ -385,17 +371,6 @@ impl Display for OplogIndex {
 impl From<OplogIndex> for u64 {
     fn from(value: OplogIndex) -> Self {
         value.0
-    }
-}
-
-#[cfg(feature = "model")]
-impl golem_wasm_rpc::IntoValue for OplogIndex {
-    fn into_value(self) -> golem_wasm_rpc::Value {
-        golem_wasm_rpc::Value::U64(self.0)
-    }
-
-    fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
-        golem_wasm_ast::analysis::analysed_type::u64()
     }
 }
 

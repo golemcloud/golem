@@ -2383,21 +2383,6 @@ impl IntoValue for GolemError {
     }
 }
 
-impl IntoValue for InterruptKind {
-    fn into_value(self) -> Value {
-        match self {
-            InterruptKind::Interrupt => Value::Enum(0),
-            InterruptKind::Restart => Value::Enum(1),
-            InterruptKind::Suspend => Value::Enum(2),
-            InterruptKind::Jump => Value::Enum(3),
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        r#enum(&["Interrupt", "Restart", "Suspend", "Jump"])
-    }
-}
-
 impl IntoValue for WorkerProxyError {
     fn into_value(self) -> Value {
         match self {
@@ -2467,16 +2452,6 @@ impl IntoValue for SerializableDateTime {
 
     fn get_type() -> AnalysedType {
         record(vec![field("seconds", u64()), field("nanoseconds", u32())])
-    }
-}
-
-impl IntoValue for SerializableIpAddresses {
-    fn into_value(self) -> Value {
-        Value::List(self.0.into_iter().map(|v| v.into_value()).collect())
-    }
-
-    fn get_type() -> AnalysedType {
-        list(SerializableIpAddress::get_type())
     }
 }
 
@@ -2649,16 +2624,6 @@ impl IntoValueAndType for SerializableScheduleInvocationRequest {
                 field("datetime", SerializableDateTime::get_type()),
             ]),
         )
-    }
-}
-
-impl IntoValue for SerializableScheduleId {
-    fn into_value(self) -> Value {
-        Value::List(self.data.into_iter().map(Value::U8).collect())
-    }
-
-    fn get_type() -> AnalysedType {
-        list(u8())
     }
 }
 

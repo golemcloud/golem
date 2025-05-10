@@ -568,7 +568,7 @@ impl From<SerializableIpAddress> for IpAddress {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
 pub struct SerializableIpAddresses(pub Vec<SerializableIpAddress>);
 
 impl From<Vec<IpAddress>> for SerializableIpAddresses {

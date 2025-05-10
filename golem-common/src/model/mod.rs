@@ -37,7 +37,7 @@ use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
-
+use golem_wasm_rpc_derive::IntoValue;
 pub use crate::base_model::*;
 
 pub mod base64;
@@ -426,7 +426,8 @@ impl Display for ShardAssignment {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Encode, Decode, Eq, Hash, PartialEq, IntoValue)]
+#[flatten_value]
 pub struct IdempotencyKey {
     pub value: String,
 }
@@ -484,16 +485,6 @@ impl<'de> Deserialize<'de> for IdempotencyKey {
     {
         let value = String::deserialize(deserializer)?;
         Ok(IdempotencyKey { value })
-    }
-}
-
-impl IntoValue for IdempotencyKey {
-    fn into_value(self) -> Value {
-        Value::String(self.value)
-    }
-
-    fn get_type() -> AnalysedType {
-        str()
     }
 }
 
@@ -750,7 +741,7 @@ pub struct SuccessfulUpdateRecord {
 ///
 /// This is always recorded together with the current oplog index, and it can only be used
 /// as a source of truth if there are no newer oplog entries since the record.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
 pub enum WorkerStatus {
     /// The worker is running an invoked function
@@ -842,32 +833,6 @@ impl From<WorkerStatus> for i32 {
             WorkerStatus::Failed => 5,
             WorkerStatus::Exited => 6,
         }
-    }
-}
-
-impl IntoValue for WorkerStatus {
-    fn into_value(self) -> Value {
-        match self {
-            WorkerStatus::Running => Value::Enum(0),
-            WorkerStatus::Idle => Value::Enum(1),
-            WorkerStatus::Suspended => Value::Enum(2),
-            WorkerStatus::Interrupted => Value::Enum(3),
-            WorkerStatus::Retrying => Value::Enum(4),
-            WorkerStatus::Failed => Value::Enum(5),
-            WorkerStatus::Exited => Value::Enum(6),
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        r#enum(&[
-            "running",
-            "idle",
-            "suspended",
-            "interrupted",
-            "retrying",
-            "failed",
-            "exited",
-        ])
     }
 }
 
@@ -1025,6 +990,7 @@ pub struct TimestampedWorkerInvocation {
     Deserialize,
     Encode,
     Decode,
+    IntoValue
 )]
 #[serde(transparent)]
 pub struct AccountId {
@@ -1056,16 +1022,6 @@ impl From<&str> for AccountId {
 impl Display for AccountId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", &self.value)
-    }
-}
-
-impl IntoValue for AccountId {
-    fn into_value(self) -> Value {
-        Value::Record(vec![Value::String(self.value)])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![field("value", str())])
     }
 }
 
