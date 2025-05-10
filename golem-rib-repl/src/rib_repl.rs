@@ -29,6 +29,7 @@ use rustyline::{Config, Editor};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
+use golem_wasm_ast::analysis::analysed_type::tuple;
 use golem_wasm_ast::analysis::AnalysedType;
 
 /// The REPL environment for Rib, providing an interactive shell for executing Rib code.
@@ -170,19 +171,16 @@ impl RibRepl {
                     let result = eval(compilation.rib_byte_code, &mut self.repl_state).await;
                     match result {
                         Ok(result) => {
-                            self.printer.print_rib_result(&result);
                             Ok(Some(result))
                         }
                         Err(err) => {
                             self.remove_rib_text_in_session();
-                            self.printer.print_rib_runtime_error(&err);
                             Err(RibExecutionError::RibRuntimeError(err))
                         }
                     }
                 }
                 Err(err) => {
                     self.remove_rib_text_in_session();
-                    self.printer.print_rib_compilation_error(&err);
                     Err(RibExecutionError::RibCompilationError(err))
                 }
             }
@@ -211,8 +209,70 @@ impl RibRepl {
         loop {
             let readline = self.read_line();
             match readline {
+                Ok(input) if input.starts_with(":") => {
+                   let rest =  input.strip_prefix(":");
+                   match rest {
+                       None => continue,
+                       Some(rest) => {
+                           let rest = rest.trim();
+                           let possible_rib = rest.strip_prefix("type");
+
+                           match possible_rib {
+                               Some(rib) => {
+                                   let rib = rib.trim();
+                                   let result = self.execute_rib(&rib).await;
+
+                                   match result {
+                                       Ok(Some(result)) => {
+                                           match &result {
+                                               RibResult::Val(value_and_type) => {
+                                                   self.printer.print_wasm_value_type(&value_and_type.typ);
+                                               }
+                                               RibResult::Unit => {
+                                                   self.printer.print_wasm_value_type(&tuple(vec![]));
+                                               }
+                                           }
+                                       }
+
+                                       Ok(None) => {},
+                                       Err(err) => {
+                                           match err {
+                                               RibExecutionError::RibRuntimeError(runtime_error) => {
+                                                   self.printer.print_rib_runtime_error(&runtime_error);
+                                               }
+                                               RibExecutionError::RibCompilationError(runtime_error) => {
+                                                   self.printer.print_rib_compilation_error(&runtime_error);
+                                               }
+                                           }
+                                       }
+                                   }
+                               }
+
+                               None => continue
+                           }
+                       }
+                   }
+
+                }
                 Ok(rib) => {
-                    let _ = self.execute_rib(&rib).await;
+                    let result = self.execute_rib(&rib).await;
+                    match result {
+                        Ok(Some(result)) => {
+                            self.printer.print_rib_result(&result);
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            match err {
+                                RibExecutionError::RibRuntimeError(runtime_error) => {
+                                    self.printer.print_rib_runtime_error(&runtime_error);
+                                }
+                                RibExecutionError::RibCompilationError(runtime_error) => {
+                                    self.printer.print_rib_compilation_error(&runtime_error);
+                                }
+                            }
+                        }
+                    }
+
                 }
                 Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => break,
                 Err(_) => continue,

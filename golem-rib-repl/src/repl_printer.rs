@@ -14,6 +14,7 @@
 
 use crate::rib_repl::ReplBootstrapError;
 use colored::Colorize;
+use golem_wasm_ast::analysis::AnalysedType;
 use rib::{RibCompilationError, RibResult, RibRuntimeError};
 
 pub trait ReplPrinter {
@@ -21,6 +22,7 @@ pub trait ReplPrinter {
     fn print_rib_compilation_error(&self, error: &RibCompilationError);
     fn print_bootstrap_error(&self, error: &ReplBootstrapError);
     fn print_rib_runtime_error(&self, error: &RibRuntimeError);
+    fn print_wasm_value_type(&self, analysed_type: &AnalysedType);
 }
 
 #[derive(Clone)]
@@ -113,5 +115,9 @@ impl ReplPrinter for DefaultReplResultPrinter {
 
     fn print_rib_runtime_error(&self, error: &RibRuntimeError) {
         println!("{} {}", "[runtime error]".red(), error.to_string().white());
+    }
+
+    fn print_wasm_value_type(&self, analysed_type: &AnalysedType) {
+        println!("{}", wasm_wave::wasm::DisplayType(analysed_type).to_string().yellow());
     }
 }

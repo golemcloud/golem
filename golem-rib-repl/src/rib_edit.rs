@@ -355,6 +355,11 @@ impl Validator for RibEdit {
         context: &mut rustyline::validate::ValidationContext,
     ) -> rustyline::Result<ValidationResult> {
         let input = context.input();
+
+        if input.starts_with(":") {
+            return Ok(ValidationResult::Valid(None));
+        }
+
         let expr = Expr::from_text(input.strip_suffix(";").unwrap_or(input));
 
         match expr {
