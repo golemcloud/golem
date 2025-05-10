@@ -405,7 +405,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
     ) -> Result<(), GolemError> {
         self.state
-            .pre_commit_transaction_function(function_type)
+            .pre_rollback_transaction_function(function_type)
             .await
     }
 

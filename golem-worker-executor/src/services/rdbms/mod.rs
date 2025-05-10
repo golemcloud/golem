@@ -30,8 +30,9 @@ use golem_wasm_rpc_derive::IntoValue;
 use itertools::Itertools;
 use mac_address::MacAddress;
 use std::collections::{Bound, HashMap, HashSet};
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
@@ -147,6 +148,20 @@ pub trait Rdbms<T: RdbmsType> {
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
     ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, Error>;
+
+    async fn get_transaction_status(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+        transaction_id: &RdbmsTransactionId,
+    ) -> Result<RdbmsTransactionStatus, Error>;
+
+    async fn cleanup_transaction(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+        transaction_id: &RdbmsTransactionId,
+    ) -> Result<(), Error>;
 
     fn status(&self) -> RdbmsStatus;
 }
@@ -680,5 +695,38 @@ impl IntoValue for RdbmsTransactionId {
 
     fn get_type() -> AnalysedType {
         analysed_type::str()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RdbmsTransactionStatus {
+    InProgress,
+    Committed,
+    RolledBack,
+    NotFound,
+}
+
+impl Display for RdbmsTransactionStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RdbmsTransactionStatus::InProgress => write!(f, "InProgress"),
+            RdbmsTransactionStatus::Committed => write!(f, "Committed"),
+            RdbmsTransactionStatus::RolledBack => write!(f, "RolledBack"),
+            RdbmsTransactionStatus::NotFound => write!(f, "NotFound"),
+        }
+    }
+}
+
+impl FromStr for RdbmsTransactionStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "InProgress" => Ok(RdbmsTransactionStatus::InProgress),
+            "Committed" => Ok(RdbmsTransactionStatus::Committed),
+            "RolledBack" => Ok(RdbmsTransactionStatus::RolledBack),
+            "NotFound" => Ok(RdbmsTransactionStatus::NotFound),
+            _ => Err(format!("Unknown transaction status: {}", s)),
+        }
     }
 }

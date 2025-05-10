@@ -14,15 +14,19 @@
 
 use crate::durable_host::rdbms::serialized::{RdbmsRequest, RdbmsTransactionRequest};
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::{
+    Durability, DurabilityHost, DurableWorkerCtx, RemoteTransactionFinalizer,
+};
+use crate::error::GolemError;
 use crate::services::rdbms::{
     Error as RdbmsError, RdbmsService, RdbmsTransactionId, RdbmsTypeService,
 };
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsType};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
+use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
-use golem_common::model::oplog::DurableFunctionType;
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -1313,4 +1317,45 @@ fn get_begin_oplog_index<Ctx: WorkerCtx>(
         anyhow!("No matching BeginRemoteWrite index was found for the open Rdbms request")
     })?;
     Ok(begin_oplog_idx)
+}
+
+struct RdbmsRemoteTransactionFinalizer<T: RdbmsType> {
+    pool_key: RdbmsPoolKey,
+    transaction_id: RdbmsTransactionId,
+    rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
+    _owner: PhantomData<T>,
+}
+
+impl<T> RdbmsRemoteTransactionFinalizer<T>
+where
+    T: RdbmsType + Send + Sync + Clone + 'static,
+    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+{
+    fn new(
+        pool_key: RdbmsPoolKey,
+        transaction_id: RdbmsTransactionId,
+        rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
+    ) -> Self {
+        Self {
+            pool_key,
+            transaction_id,
+            rdbms_service,
+            _owner: PhantomData,
+        }
+    }
+}
+
+#[async_trait]
+impl<T> RemoteTransactionFinalizer for RdbmsRemoteTransactionFinalizer<T>
+where
+    T: RdbmsType + Send + Sync + Clone + 'static,
+    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+{
+    async fn get_pre_commit_final_entries(&self) -> Result<Vec<OplogEntry>, GolemError> {
+        todo!()
+    }
+
+    async fn get_pre_rollback_final_entries(&self) -> Result<Vec<OplogEntry>, GolemError> {
+        todo!()
+    }
 }

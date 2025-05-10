@@ -19,11 +19,12 @@ use crate::services::rdbms::postgres::types::{
 };
 use crate::services::rdbms::postgres::{PostgresType, POSTGRES};
 use crate::services::rdbms::sqlx_common::{
-    create_db_result, BeginTransactionSupport, DbTransactionStatus, PoolCreator, QueryExecutor,
-    QueryParamsBinder, SqlxDbResultStream, SqlxDbTransaction, SqlxRdbms, TransactionSupport,
+    create_db_result, BeginTransactionSupport, PoolCreator, QueryExecutor, QueryParamsBinder,
+    SqlxDbResultStream, SqlxDbTransaction, SqlxRdbms, TransactionSupport,
 };
 use crate::services::rdbms::{
     DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionId,
+    RdbmsTransactionStatus,
 };
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
@@ -117,9 +118,9 @@ impl TransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
 
     async fn get_transaction_status(
         pool: &Pool<sqlx::Postgres>,
-        id: RdbmsTransactionId,
-    ) -> Result<DbTransactionStatus, Error> {
-        let query = sqlx::query("SELECT txid_status($1::bigint)").bind(id.0);
+        id: &RdbmsTransactionId,
+    ) -> Result<RdbmsTransactionStatus, Error> {
+        let query = sqlx::query("SELECT txid_status($1::bigint)").bind(id.0.clone());
         let row = pool
             .fetch_optional(query)
             .await
@@ -127,22 +128,22 @@ impl TransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
         if let Some(row) = row {
             let status: &str = row.try_get(0).map_err(Error::query_response_failure)?;
             match status {
-                "in progress" => Ok(DbTransactionStatus::InProgress),
-                "committed" => Ok(DbTransactionStatus::Committed),
-                "aborted" => Ok(DbTransactionStatus::RolledBack),
+                "in progress" => Ok(RdbmsTransactionStatus::InProgress),
+                "committed" => Ok(RdbmsTransactionStatus::Committed),
+                "aborted" => Ok(RdbmsTransactionStatus::RolledBack),
                 _ => Err(Error::query_response_failure(format!(
                     "Unknown transaction status: {}",
                     status
                 ))),
             }
         } else {
-            Ok(DbTransactionStatus::NotFound)
+            Ok(RdbmsTransactionStatus::NotFound)
         }
     }
 
     async fn cleanup_transaction(
         _pool: &Pool<sqlx::Postgres>,
-        _id: RdbmsTransactionId,
+        _id: &RdbmsTransactionId,
     ) -> Result<(), Error> {
         Ok(())
     }

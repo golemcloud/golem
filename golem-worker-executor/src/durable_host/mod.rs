@@ -2761,3 +2761,10 @@ macro_rules! get_oplog_entry {
         }
     };
 }
+
+#[async_trait]
+pub trait RemoteTransactionFinalizer {
+    async fn get_pre_commit_final_entries(&self) -> Result<Vec<OplogEntry>, GolemError>;
+
+    async fn get_pre_rollback_final_entries(&self) -> Result<Vec<OplogEntry>, GolemError>;
+}

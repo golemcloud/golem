@@ -16,10 +16,12 @@ use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::mysql::types::{DbColumn, DbColumnType, DbValue};
 use crate::services::rdbms::mysql::{MysqlType, MYSQL};
 use crate::services::rdbms::sqlx_common::{
-    create_db_result, DbTransactionStatus, PoolCreator, QueryExecutor, QueryParamsBinder,
-    SqlxDbResultStream, SqlxRdbms, TransactionTableRepo,
+    create_db_result, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxDbResultStream, SqlxRdbms,
+    TransactionTableRepo,
 };
-use crate::services::rdbms::{DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey};
+use crate::services::rdbms::{
+    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionStatus,
+};
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
@@ -87,7 +89,7 @@ impl TransactionTableRepo<sqlx::MySql> for MysqlType {
     {
         let query = sqlx::query("INSERT INTO golem_transactions(id, status) VALUES (?, ?)")
             .bind(id)
-            .bind(DbTransactionStatus::InProgress.to_string());
+            .bind(RdbmsTransactionStatus::InProgress.to_string());
         let _res = query
             .execute(executor)
             .await
@@ -109,7 +111,7 @@ impl TransactionTableRepo<sqlx::MySql> for MysqlType {
 
     async fn update_transaction_status<'c, E>(
         id: String,
-        status: DbTransactionStatus,
+        status: RdbmsTransactionStatus,
         executor: E,
     ) -> Result<bool, Error>
     where
@@ -128,7 +130,7 @@ impl TransactionTableRepo<sqlx::MySql> for MysqlType {
     async fn get_transaction_status<'c, E>(
         id: String,
         executor: E,
-    ) -> Result<DbTransactionStatus, Error>
+    ) -> Result<RdbmsTransactionStatus, Error>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
@@ -139,9 +141,9 @@ impl TransactionTableRepo<sqlx::MySql> for MysqlType {
             .map_err(Error::query_execution_failure)?;
         if let Some(row) = row {
             let status: &str = row.try_get(0).map_err(Error::query_response_failure)?;
-            DbTransactionStatus::from_str(status).map_err(Error::query_response_failure)
+            RdbmsTransactionStatus::from_str(status).map_err(Error::query_response_failure)
         } else {
-            Ok(DbTransactionStatus::NotFound)
+            Ok(RdbmsTransactionStatus::NotFound)
         }
     }
 }

@@ -16,7 +16,7 @@ use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig, RdbmsQueryConf
 use crate::services::rdbms::metrics::record_rdbms_metrics;
 use crate::services::rdbms::{
     DbResult, DbResultStream, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey, RdbmsStatus,
-    RdbmsTransactionId, RdbmsType,
+    RdbmsTransactionId, RdbmsTransactionStatus, RdbmsType,
 };
 use async_dropper_simple::AsyncDrop;
 use async_trait::async_trait;
@@ -30,10 +30,9 @@ use itertools::Either;
 use sqlx::pool::PoolConnection;
 use sqlx::{Database, Describe, Execute, Pool, Row, TransactionManager};
 use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
 use std::fmt::Formatter;
-use std::fmt::{Debug, Display};
 use std::ops::{Deref, DerefMut};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info};
@@ -336,6 +335,70 @@ where
             e
         });
         self.record_metrics("begin-transaction", start, result)
+    }
+
+    async fn get_transaction_status(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+        transaction_id: &RdbmsTransactionId,
+    ) -> Result<RdbmsTransactionStatus, Error> {
+        let start = Instant::now();
+        debug!(
+            rdbms_type = self.rdbms_type.to_string(),
+            pool_key = key.to_string(),
+            transaction_id = transaction_id.to_string(),
+            "get transaction status",
+        );
+
+        let result = {
+            let pool = self.get_or_create(key, worker_id).await?;
+            T::get_transaction_status(pool.deref(), transaction_id).await
+        };
+
+        let result = result.map_err(|e| {
+            error!(
+                rdbms_type = self.rdbms_type.to_string(),
+                pool_key = key.to_string(),
+                transaction_id = transaction_id.to_string(),
+                "get transaction status - error: {}",
+                e
+            );
+            e
+        });
+        self.record_metrics("get-transaction-status", start, result)
+    }
+
+    async fn cleanup_transaction(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+        transaction_id: &RdbmsTransactionId,
+    ) -> Result<(), Error> {
+        let start = Instant::now();
+        debug!(
+            rdbms_type = self.rdbms_type.to_string(),
+            pool_key = key.to_string(),
+            transaction_id = transaction_id.to_string(),
+            "cleanup transaction",
+        );
+
+        let result = {
+            let pool = self.get_or_create(key, worker_id).await?;
+            T::cleanup_transaction(pool.deref(), transaction_id).await
+        };
+
+        let result = result.map_err(|e| {
+            error!(
+                rdbms_type = self.rdbms_type.to_string(),
+                pool_key = key.to_string(),
+                transaction_id = transaction_id.to_string(),
+                "cleanup transaction - error: {}",
+                e
+            );
+            e
+        });
+        self.record_metrics("cleanup-transaction", start, result)
     }
 
     fn status(&self) -> RdbmsStatus {
@@ -937,39 +1000,6 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum DbTransactionStatus {
-    InProgress,
-    Committed,
-    RolledBack,
-    NotFound,
-}
-
-impl Display for DbTransactionStatus {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DbTransactionStatus::InProgress => write!(f, "InProgress"),
-            DbTransactionStatus::Committed => write!(f, "Committed"),
-            DbTransactionStatus::RolledBack => write!(f, "RolledBack"),
-            DbTransactionStatus::NotFound => write!(f, "NotFound"),
-        }
-    }
-}
-
-impl FromStr for DbTransactionStatus {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "InProgress" => Ok(DbTransactionStatus::InProgress),
-            "Committed" => Ok(DbTransactionStatus::Committed),
-            "RolledBack" => Ok(DbTransactionStatus::RolledBack),
-            "NotFound" => Ok(DbTransactionStatus::NotFound),
-            _ => Err(format!("Unknown transaction status: {}", s)),
-        }
-    }
-}
-
 #[async_trait]
 pub(crate) trait BeginTransactionSupport<T: RdbmsType, DB: Database> {
     async fn begin_transaction(
@@ -1031,10 +1061,10 @@ pub(crate) trait TransactionSupport<T: RdbmsType, DB: Database> {
 
     async fn get_transaction_status(
         pool: &Pool<DB>,
-        id: RdbmsTransactionId,
-    ) -> Result<DbTransactionStatus, Error>;
+        id: &RdbmsTransactionId,
+    ) -> Result<RdbmsTransactionStatus, Error>;
 
-    async fn cleanup_transaction(pool: &Pool<DB>, id: RdbmsTransactionId) -> Result<(), Error>;
+    async fn cleanup_transaction(pool: &Pool<DB>, id: &RdbmsTransactionId) -> Result<(), Error>;
 }
 
 #[async_trait]
@@ -1051,7 +1081,7 @@ where
         let id = db_transaction.transaction_id();
         let _res = <T as TransactionTableRepo<DB>>::update_transaction_status(
             id.0,
-            DbTransactionStatus::Committed,
+            RdbmsTransactionStatus::Committed,
             db_transaction.tx_connection.clone(),
         )
         .await?;
@@ -1065,7 +1095,7 @@ where
         let id = db_transaction.transaction_id();
         let _res = <T as TransactionTableRepo<DB>>::update_transaction_status(
             id.0,
-            DbTransactionStatus::RolledBack,
+            RdbmsTransactionStatus::RolledBack,
             pool,
         )
         .await?;
@@ -1074,13 +1104,13 @@ where
 
     async fn get_transaction_status(
         pool: &Pool<DB>,
-        id: RdbmsTransactionId,
-    ) -> Result<DbTransactionStatus, Error> {
-        <T as TransactionTableRepo<DB>>::get_transaction_status(id.0, pool).await
+        id: &RdbmsTransactionId,
+    ) -> Result<RdbmsTransactionStatus, Error> {
+        <T as TransactionTableRepo<DB>>::get_transaction_status(id.0.clone(), pool).await
     }
 
-    async fn cleanup_transaction(pool: &Pool<DB>, id: RdbmsTransactionId) -> Result<(), Error> {
-        <T as TransactionTableRepo<DB>>::delete_transaction(id.0, pool).await?;
+    async fn cleanup_transaction(pool: &Pool<DB>, id: &RdbmsTransactionId) -> Result<(), Error> {
+        <T as TransactionTableRepo<DB>>::delete_transaction(id.0.clone(), pool).await?;
         Ok(())
     }
 }
@@ -1101,7 +1131,7 @@ pub(crate) trait TransactionTableRepo<DB: Database> {
 
     async fn update_transaction_status<'c, E>(
         id: String,
-        status: DbTransactionStatus,
+        status: RdbmsTransactionStatus,
         executor: E,
     ) -> Result<bool, Error>
     where
@@ -1110,7 +1140,7 @@ pub(crate) trait TransactionTableRepo<DB: Database> {
     async fn get_transaction_status<'c, E>(
         id: String,
         executor: E,
-    ) -> Result<DbTransactionStatus, Error>
+    ) -> Result<RdbmsTransactionStatus, Error>
     where
         E: sqlx::Executor<'c, Database = DB>;
 }
