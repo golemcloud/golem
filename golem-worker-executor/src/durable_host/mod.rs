@@ -2305,6 +2305,14 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                             .add_and_commit(OplogEntry::jump(deleted_region))
                             .await;
                     }
+                    // else {
+                    //     let pre_index = self
+                    //         .replay_state
+                    //         .try_get_oplog_entry(|e| e.is_pre_remote_transaction(begin_index))
+                    //         .await;
+                    //     self.replay_state.switch_to_live();
+                    //     // TODO handle transaction end
+                    // }
 
                     Ok(begin_index)
                 } else {

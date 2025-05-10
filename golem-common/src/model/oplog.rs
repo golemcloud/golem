@@ -838,6 +838,10 @@ impl OplogEntry {
         matches!(self, OplogEntry::PreRollbackRemoteTransaction { begin_index, .. } if *begin_index == idx)
     }
 
+    pub fn is_pre_remote_transaction(&self, idx: OplogIndex) -> bool {
+        self.is_pre_commit_remote_transaction(idx) || self.is_pre_rollback_remote_transaction(idx)
+    }
+
     pub fn is_committed_remote_transaction(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::CommitedRemoteTransaction { begin_index, .. } if *begin_index == idx)
     }
