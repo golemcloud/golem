@@ -16,9 +16,10 @@ use heck::*;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, Variant};
+use syn::parse::{Parse, ParseStream};
+use syn::{Attribute, Data, DeriveInput, Fields, LitStr, Type, Variant};
 
-#[proc_macro_derive(IntoValue, attributes(flatten_value, unit_case))]
+#[proc_macro_derive(IntoValue, attributes(flatten_value, unit_case, wit_field))]
 pub fn derive_into_value(input: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(input).expect("derive input");
     let ident = &ast.ident;
@@ -207,28 +208,28 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                     .collect::<Vec<_>>();
 
                 let case_defs = data.variants.iter()
-                .map(|variant| {
-                    let case_name = variant.ident.to_string().to_kebab_case();
-                    if is_unit_case(variant) {
-                        quote! {
+                    .map(|variant| {
+                        let case_name = variant.ident.to_string().to_kebab_case();
+                        if is_unit_case(variant) {
+                            quote! {
                                 golem_wasm_ast::analysis::analysed_type::unit_case(#case_name)
                             }
-                    } else if has_single_anonymous_field(&variant.fields) {
-                        let single_field = variant.fields.iter().next().unwrap();
-                        let typ = &single_field.ty;
+                        } else if has_single_anonymous_field(&variant.fields) {
+                            let single_field = variant.fields.iter().next().unwrap();
+                            let typ = &single_field.ty;
 
-                        quote! {
+                            quote! {
                                 golem_wasm_ast::analysis::analysed_type::case(#case_name, <#typ as golem_wasm_rpc::IntoValue>::get_type())
                             }
-                    } else {
-                        let (_, inner_get_type) = record_or_tuple(&variant.fields);
+                        } else {
+                            let (_, inner_get_type) = record_or_tuple(&variant.fields);
 
-                        quote! {
+                            quote! {
                                 golem_wasm_ast::analysis::analysed_type::case(#case_name, #inner_get_type)
                             }
-                    }
-                })
-                .collect::<Vec<_>>();
+                        }
+                    })
+                    .collect::<Vec<_>>();
 
                 let into_value = quote! {
                     match self {
@@ -268,24 +269,57 @@ fn record_or_tuple(fields: &Fields) -> (proc_macro2::TokenStream, proc_macro2::T
     let all_fields_has_names = fields.iter().all(|field| field.ident.is_some());
 
     if all_fields_has_names {
-        let field_values = fields
+        let wit_fields = fields
             .iter()
             .map(|field| {
-                let field_name = field.ident.as_ref().unwrap();
-                quote! { self.#field_name.into_value() }
+                field
+                    .attrs
+                    .iter()
+                    .find(|attr| attr.path().is_ident("wit_field"))
+                    .map(parse_wit_field_attribute)
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>();
+
+        let field_values = fields
+            .iter()
+            .zip(&wit_fields)
+            .filter_map(|(field, wit_field)| {
+                if wit_field.skip {
+                    None
+                } else {
+                    let field_name = field.ident.as_ref().unwrap();
+
+                    match &wit_field.convert {
+                        Some(convert_to) => Some(
+                            quote! { Into::<#convert_to>::into(self.#field_name).into_value() },
+                        ),
+                        None => Some(quote! { self.#field_name.into_value() }),
+                    }
+                }
             })
             .collect::<Vec<_>>();
 
         let field_defs = fields
             .iter()
-            .map(|field| {
-                let field_name = field.ident.as_ref().unwrap().to_string().to_kebab_case();
-                let field_type = &field.ty;
-                quote! {
-                    golem_wasm_ast::analysis::analysed_type::field(
-                        #field_name,
-                        <#field_type as golem_wasm_rpc::IntoValue>::get_type()
-                    )
+            .zip(wit_fields)
+            .filter_map(|(field, wit_field)| {
+                if wit_field.skip {
+                    None
+                } else {
+                    let field_name = wit_field.rename.map(|lit| lit.value()).unwrap_or_else(|| {
+                        field.ident.as_ref().unwrap().to_string().to_kebab_case()
+                    });
+                    let field_type = match wit_field.convert {
+                        Some(convert_to) => convert_to,
+                        None => field.ty.clone(),
+                    };
+                    Some(quote! {
+                        golem_wasm_ast::analysis::analysed_type::field(
+                            #field_name,
+                            <#field_type as golem_wasm_rpc::IntoValue>::get_type()
+                        )
+                    })
                 }
             })
             .collect::<Vec<_>>();
@@ -350,4 +384,45 @@ fn is_unit_case(variant: &Variant) -> bool {
             .attrs
             .iter()
             .any(|attr| attr.path().is_ident("unit_case"))
+}
+
+#[derive(Debug, Default)]
+struct WitField {
+    skip: bool,
+    rename: Option<LitStr>,
+    convert: Option<Type>,
+}
+
+fn parse_wit_field_attribute(attr: &Attribute) -> WitField {
+    attr.parse_args_with(WitField::parse)
+        .expect("failed to parse wit_field attribute")
+}
+
+impl Parse for WitField {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut skip = false;
+        let mut rename = None;
+        let mut convert = None;
+
+        while !input.is_empty() {
+            let ident: Ident = input.parse()?;
+            if ident == "skip" {
+                skip = true;
+            } else if ident == "rename" {
+                input.parse::<syn::Token![=]>()?;
+                rename = Some(input.parse()?);
+            } else if ident == "convert" {
+                input.parse::<syn::Token![=]>()?;
+                convert = Some(input.parse()?);
+            } else {
+                return Err(syn::Error::new(ident.span(), "unexpected attribute"));
+            }
+        }
+
+        Ok(WitField {
+            skip,
+            rename,
+            convert,
+        })
+    }
 }

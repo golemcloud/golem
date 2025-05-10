@@ -24,6 +24,7 @@ use std::time::{Duration, SystemTime};
 use wasmtime_wasi::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::bindings::{filesystem, sockets};
 use wasmtime_wasi::{FsError, SocketError, StreamError};
+use golem_wasm_rpc_derive::IntoValue;
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct SerializableDateTime {

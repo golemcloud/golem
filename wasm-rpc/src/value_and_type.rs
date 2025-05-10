@@ -20,7 +20,7 @@ use golem_wasm_ast::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameTypePair, TypeEnum,
     TypeFlags,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Bound;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -374,6 +374,16 @@ impl<K: IntoValue, V: IntoValue> IntoValue for BTreeMap<K, V> {
 
     fn get_type() -> AnalysedType {
         list(tuple(vec![K::get_type(), V::get_type()]))
+    }
+}
+
+impl<T: IntoValue> IntoValue for BTreeSet<T> {
+    fn into_value(self) -> Value {
+        Value::List(self.into_iter().map(IntoValue::into_value).collect())
+    }
+
+    fn get_type() -> AnalysedType {
+        list(T::get_type())
     }
 }
 

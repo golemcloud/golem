@@ -18,6 +18,7 @@ mod protobuf;
 #[cfg(test)]
 mod tests;
 
+use super::plugin::{PluginDefinition, PluginOwner, PluginScope};
 use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{
@@ -34,13 +35,12 @@ use golem_wasm_ast::analysis::analysed_type::{
 };
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
+use golem_wasm_rpc_derive::IntoValue;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
-use golem_wasm_rpc_derive::IntoValue;
-use super::plugin::{PluginDefinition, PluginOwner, PluginScope};
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
@@ -176,8 +176,8 @@ impl IntoValue for ExportedFunctionParameters {
     fn get_type() -> AnalysedType {
         record(vec![
             field("idempotency-key", IdempotencyKey::get_type()),
-            field("full-function-name", str()),
-            field("function-input", option(list(WitValue::get_type()))),
+            field("function-name", str()),
+            field("input", option(list(WitValue::get_type()))),
         ])
     }
 }
@@ -227,7 +227,7 @@ impl PluginInstallationDescription {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -244,86 +244,18 @@ pub struct CreateParameters {
     pub initial_active_plugins: BTreeSet<PluginInstallationDescription>,
 }
 
-impl IntoValue for CreateParameters {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.timestamp.into_value(),
-            self.worker_id.into_value(),
-            self.component_version.into_value(),
-            self.args.into_value(),
-            Value::List(
-                self.env
-                    .into_iter()
-                    .map(|(k, v)| Value::Tuple(vec![k.into_value(), v.into_value()]))
-                    .collect::<Vec<Value>>(),
-            ),
-            self.account_id.into_value(),
-            self.parent.into_value(),
-            self.component_size.into_value(),
-            self.initial_total_linear_memory_size.into_value(),
-            self.initial_active_plugins
-                .into_iter()
-                .collect::<Vec<_>>()
-                .into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("timestamp", Timestamp::get_type()),
-            field("worker_id", WorkerId::get_type()),
-            field("component_version", ComponentVersion::get_type()),
-            field("args", list(str())),
-            field("env", list(tuple(vec![str(), str()]))),
-            field("account_id", AccountId::get_type()),
-            field("parent", option(WorkerId::get_type())),
-            field("component_size", u64()),
-            field("initial_total_linear_memory_size", u64()),
-            field(
-                "initial_active_plugins",
-                list(PluginInstallationDescription::get_type()),
-            ),
-        ])
-    }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ImportedFunctionInvokedParameters {
     pub timestamp: Timestamp,
     pub function_name: String,
+    #[wit_field(convert = WitValue)]
     pub request: ValueAndType,
+    #[wit_field(convert = WitValue)]
     pub response: ValueAndType,
     pub wrapped_function_type: PublicDurableFunctionType, // TODO: rename in Golem 2.0
-}
-
-impl IntoValue for ImportedFunctionInvokedParameters {
-    fn into_value(self) -> Value {
-        let request_wit_value: WitValue = self.request.into();
-        let response_wit_value: WitValue = self.response.into();
-        Value::Record(vec![
-            self.timestamp.into_value(),
-            self.function_name.into_value(),
-            request_wit_value.into_value(),
-            response_wit_value.into_value(),
-            self.wrapped_function_type.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("timestamp", Timestamp::get_type()),
-            field("function_name", str()),
-            field("request", WitValue::get_type()),
-            field("response", WitValue::get_type()),
-            field(
-                "wrapped_function_type",
-                PublicDurableFunctionType::get_type(),
-            ),
-        ])
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -334,27 +266,12 @@ pub struct StringAttributeValue {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicAttributeValue {
     String(StringAttributeValue),
-}
-
-impl IntoValue for PublicAttributeValue {
-    fn into_value(self) -> Value {
-        match self {
-            Self::String(value) => Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(Value::String(value.value))),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        analysed_type::variant(vec![analysed_type::case("string", analysed_type::str())])
-    }
 }
 
 impl From<AttributeValue> for PublicAttributeValue {
@@ -367,7 +284,7 @@ impl From<AttributeValue> for PublicAttributeValue {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -380,42 +297,7 @@ pub struct PublicLocalSpanData {
     pub inherited: bool,
 }
 
-impl IntoValue for PublicLocalSpanData {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.span_id.into_value(),
-            self.start.into_value(),
-            self.parent_id.into_value(),
-            self.linked_context.into_value(),
-            Value::List(
-                self.attributes
-                    .into_iter()
-                    .map(|(k, v)| Value::Record(vec![k.into_value(), v.into_value()]))
-                    .collect::<Vec<Value>>(),
-            ),
-            self.inherited.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("span-id", SpanId::get_type()),
-            field("start", Timestamp::get_type()),
-            field("parent-id", option(SpanId::get_type())),
-            field("linked-context", option(u64())),
-            field(
-                "attributes",
-                list(record(vec![
-                    field("key", str()),
-                    field("value", PublicAttributeValue::get_type()),
-                ])),
-            ),
-            field("inherited", bool()),
-        ])
-    }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -423,17 +305,7 @@ pub struct PublicExternalSpanData {
     pub span_id: SpanId,
 }
 
-impl IntoValue for PublicExternalSpanData {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.span_id.into_value()])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![field("span-id", SpanId::get_type())])
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
@@ -451,35 +323,14 @@ impl PublicSpanData {
     }
 }
 
-impl IntoValue for PublicSpanData {
-    fn into_value(self) -> Value {
-        match self {
-            PublicSpanData::LocalSpan(data) => Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(data.into_value())),
-            },
-            PublicSpanData::ExternalSpan(data) => Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(data.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        variant(vec![
-            case("local-span", PublicLocalSpanData::get_type()),
-            case("external-span", PublicExternalSpanData::get_type()),
-        ])
-    }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ExportedFunctionInvokedParameters {
     pub timestamp: Timestamp,
     pub function_name: String,
+    #[wit_field(convert = Vec<WitValue>)]
     pub request: Vec<ValueAndType>,
     pub idempotency_key: IdempotencyKey,
     pub trace_id: TraceId,
@@ -487,63 +338,15 @@ pub struct ExportedFunctionInvokedParameters {
     pub invocation_context: Vec<Vec<PublicSpanData>>,
 }
 
-impl IntoValue for ExportedFunctionInvokedParameters {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.timestamp.into_value(),
-            self.function_name.into_value(),
-            self.request
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<WitValue>>()
-                .into_value(),
-            self.idempotency_key.into_value(),
-            self.trace_id.into_value(),
-            self.trace_states.into_value(),
-            self.invocation_context.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("timestamp", Timestamp::get_type()),
-            field("function_name", str()),
-            field("request", list(WitValue::get_type())),
-            field("idempotency-key", IdempotencyKey::get_type()),
-            field("trace-id", TraceId::get_type()),
-            field("trace-states", list(str())),
-            field("invocation-context", list(list(PublicSpanData::get_type()))),
-        ])
-    }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ExportedFunctionCompletedParameters {
     pub timestamp: Timestamp,
+    #[wit_field(convert = WitValue)]
     pub response: ValueAndType,
     pub consumed_fuel: i64,
-}
-
-impl IntoValue for ExportedFunctionCompletedParameters {
-    fn into_value(self) -> Value {
-        let wit_value: WitValue = self.response.into();
-        Value::Record(vec![
-            self.timestamp.into_value(),
-            wit_value.into_value(),
-            self.consumed_fuel.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("timestamp", Timestamp::get_type()),
-            field("response", WitValue::get_type()),
-            field("consumed-fuel", s64()),
-        ])
-    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -554,26 +357,13 @@ pub struct TimestampParameter {
     pub timestamp: Timestamp,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorParameters {
     pub timestamp: Timestamp,
     pub error: String,
-}
-
-impl IntoValue for ErrorParameters {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.timestamp.into_value(), self.error.into_value()])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("timestamp", Timestamp::get_type()),
-            field("error", str()),
-        ])
-    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
