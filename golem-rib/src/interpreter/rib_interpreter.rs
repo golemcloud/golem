@@ -212,8 +212,8 @@ impl Interpreter {
                     internal::run_create_function_name_instruction(site, function_type, stack)?;
                 }
 
-                RibIR::InvokeFunction(worker_type, arg_size, _) => {
-                    internal::run_call_instruction(arg_size, worker_type, stack, interpreter_env)
+                RibIR::InvokeFunction(worker_type, arg_size, return_type) => {
+                    internal::run_call_instruction(arg_size, worker_type, stack, interpreter_env, return_type)
                         .await?;
                 }
 
@@ -321,12 +321,7 @@ mod internal {
     use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::stack::InterpreterStack;
-    use crate::{
-        bail_corrupted_state, internal_corrupted_state, CoercedNumericValue, EvaluatedFnArgs,
-        EvaluatedFqFn, EvaluatedWorkerName, FunctionReferenceType, InstructionId,
-        ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke,
-        RibFunctionInvokeResult, RibInterpreterResult, TypeHint, VariableId, WorkerNamePresence,
-    };
+    use crate::{bail_corrupted_state, internal_corrupted_state, AnalysedTypeWithUnit, CoercedNumericValue, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, FunctionReferenceType, InstructionId, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, RibFunctionInvokeResult, RibInterpreterResult, TypeHint, VariableId, WorkerNamePresence};
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
@@ -352,6 +347,7 @@ mod internal {
             _worker_name: Option<EvaluatedWorkerName>,
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
+            _return_type: AnalysedType
         ) -> RibFunctionInvokeResult {
             Ok(ValueAndType {
                 value: Value::Tuple(vec![]),
@@ -1230,6 +1226,7 @@ mod internal {
         worker_type: WorkerNamePresence,
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
+        return_type: AnalysedTypeWithUnit
     ) -> RibInterpreterResult<()> {
         let function_name = interpreter_stack
             .pop_str()
@@ -1262,7 +1259,7 @@ mod internal {
             .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
         let result = interpreter_env
-            .invoke_worker_function_async(worker_name, function_name_cloned, parameter_values)
+            .invoke_worker_function_async(worker_name, function_name_cloned, parameter_values, AnalysedType::try_from(return_type).unwrap())
             .await
             .map_err(|err| function_invoke_fail(function_name.as_str(), err))?;
 

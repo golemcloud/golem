@@ -29,6 +29,7 @@ use rustyline::{Config, Editor};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
+use golem_wasm_ast::analysis::AnalysedType;
 
 /// The REPL environment for Rib, providing an interactive shell for executing Rib code.
 pub struct RibRepl {
@@ -346,6 +347,7 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
+        return_type: AnalysedType
     ) -> RibFunctionInvokeResult {
         let component_id = self.component_dependency.component_id;
         let component_name = &self.component_dependency.component_name;
@@ -357,6 +359,7 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
                 worker_name.map(|x| x.0),
                 function_name.0.as_str(),
                 args.0,
+                return_type
             )
             .await
             .map_err(|e| e.into())

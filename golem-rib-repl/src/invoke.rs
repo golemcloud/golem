@@ -15,6 +15,7 @@
 use async_trait::async_trait;
 use golem_wasm_rpc::ValueAndType;
 use uuid::Uuid;
+use golem_wasm_ast::analysis::AnalysedType;
 
 #[async_trait]
 pub trait WorkerFunctionInvoke {
@@ -25,5 +26,6 @@ pub trait WorkerFunctionInvoke {
         worker_name: Option<String>,
         function_name: &str,
         args: Vec<ValueAndType>,
+        return_type: AnalysedType
     ) -> anyhow::Result<ValueAndType>;
 }
