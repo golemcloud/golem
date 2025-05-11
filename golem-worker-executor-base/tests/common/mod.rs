@@ -1030,7 +1030,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn rdbms::RdbmsService>,
-        worker_activator: Arc<dyn WorkerActivator<TestWorkerCtx> + Send + Sync>,
+        worker_activator: Arc<dyn WorkerActivator<TestWorkerCtx>>,
         oplog_service: Arc<dyn OplogService>,
         scheduler_service: Arc<dyn SchedulerService>,
         worker_proxy: Arc<dyn WorkerProxy>,

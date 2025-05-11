@@ -19,20 +19,20 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Attribute, Data, DeriveInput, Fields, LitStr, Type, Variant};
 
-#[proc_macro_derive(IntoValue, attributes(flatten_value, unit_case, wit_field))]
+#[proc_macro_derive(IntoValue, attributes(wit_transparent, unit_case, wit_field))]
 pub fn derive_into_value(input: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(input).expect("derive input");
     let ident = &ast.ident;
-    let flatten_value = ast
+    let wit_transparent = ast
         .attrs
         .iter()
-        .any(|attr| attr.path().is_ident("flatten_value"));
+        .any(|attr| attr.path().is_ident("wit_transparent"));
 
     let (into_value, get_type) = match ast.data {
         Data::Struct(data) => {
             let newtype_result = if data.fields.len() == 1 {
                 let field = data.fields.iter().next().unwrap().clone();
-                if field.ident.is_none() || flatten_value {
+                if field.ident.is_none() || wit_transparent {
                     // single field without an identifier, we consider this a newtype
                     let field_type = field.ty;
 
@@ -108,7 +108,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                         let case_ident = &variant.ident;
                         let idx = idx as u32;
 
-                        if variant.fields.len() == 0 {
+                        if variant.fields.is_empty() {
                             quote! {
                                 #ident::#case_ident => golem_wasm_rpc::Value::Variant {
                                     case_idx: #idx,
@@ -290,11 +290,14 @@ fn record_or_tuple(fields: &Fields) -> (proc_macro2::TokenStream, proc_macro2::T
                 } else {
                     let field_name = field.ident.as_ref().unwrap();
 
-                    match &wit_field.convert {
-                        Some(convert_to) => Some(
+                    match (&wit_field.convert, &wit_field.convert_vec) {
+                        (Some(convert_to), None) => Some(
                             quote! { Into::<#convert_to>::into(self.#field_name).into_value() },
                         ),
-                        None => Some(quote! { self.#field_name.into_value() }),
+                        (None, Some(convert_to)) => Some(
+                            quote! { self.#field_name.into_iter().map(Into::<#convert_to>::into).collect::<Vec<_>>().into_value() },
+                        ),
+                        _ => Some(quote! { self.#field_name.into_value() }),
                     }
                 }
             })
@@ -310,9 +313,13 @@ fn record_or_tuple(fields: &Fields) -> (proc_macro2::TokenStream, proc_macro2::T
                     let field_name = wit_field.rename.map(|lit| lit.value()).unwrap_or_else(|| {
                         field.ident.as_ref().unwrap().to_string().to_kebab_case()
                     });
-                    let field_type = match wit_field.convert {
-                        Some(convert_to) => convert_to,
-                        None => field.ty.clone(),
+                    let field_type = match (&wit_field.convert, &wit_field.convert_vec) {
+                        (Some(convert_to), None) => quote! { #convert_to },
+                        (None, Some(convert_to)) => quote! { Vec<#convert_to> },
+                        _ => {
+                            let ty = &field.ty;
+                            quote! { #ty }
+                        }
                     };
                     Some(quote! {
                         golem_wasm_ast::analysis::analysed_type::field(
@@ -379,7 +386,7 @@ fn has_only_named_fields(fields: &Fields) -> bool {
 }
 
 fn is_unit_case(variant: &Variant) -> bool {
-    variant.fields.len() == 0
+    variant.fields.is_empty()
         || variant
             .attrs
             .iter()
@@ -391,6 +398,7 @@ struct WitField {
     skip: bool,
     rename: Option<LitStr>,
     convert: Option<Type>,
+    convert_vec: Option<Type>,
 }
 
 fn parse_wit_field_attribute(attr: &Attribute) -> WitField {
@@ -403,6 +411,7 @@ impl Parse for WitField {
         let mut skip = false;
         let mut rename = None;
         let mut convert = None;
+        let mut convert_vec = None;
 
         while !input.is_empty() {
             let ident: Ident = input.parse()?;
@@ -414,6 +423,9 @@ impl Parse for WitField {
             } else if ident == "convert" {
                 input.parse::<syn::Token![=]>()?;
                 convert = Some(input.parse()?);
+            } else if ident == "convert_vec" {
+                input.parse::<syn::Token![=]>()?;
+                convert_vec = Some(input.parse()?);
             } else {
                 return Err(syn::Error::new(ident.span(), "unexpected attribute"));
             }
@@ -423,6 +435,7 @@ impl Parse for WitField {
             skip,
             rename,
             convert,
+            convert_vec,
         })
     }
 }

@@ -19,14 +19,14 @@ use crate::services::worker_proxy::WorkerProxyError;
 use anyhow::anyhow;
 use bincode::{Decode, Encode};
 use chrono::{DateTime, Timelike, Utc};
+use golem_wasm_rpc_derive::IntoValue;
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
 use wasmtime_wasi::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::bindings::{filesystem, sockets};
 use wasmtime_wasi::{FsError, SocketError, StreamError};
-use golem_wasm_rpc_derive::IntoValue;
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
 pub struct SerializableDateTime {
     pub seconds: u64,
     pub nanoseconds: u32,
@@ -93,7 +93,7 @@ impl From<DateTime<Utc>> for SerializableDateTime {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
 pub enum SerializableError {
     Generic { message: String },
     FsError { code: u8 },
@@ -472,7 +472,7 @@ impl From<SerializableError> for WorkerProxyError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
 pub enum SerializableStreamError {
     Closed,
     LastOperationFailed(SerializableError),
@@ -584,7 +584,7 @@ impl From<SerializableIpAddresses> for Vec<IpAddress> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
 pub struct SerializableFileTimes {
     pub data_access_timestamp: Option<SerializableDateTime>,
     pub data_modification_timestamp: Option<SerializableDateTime>,

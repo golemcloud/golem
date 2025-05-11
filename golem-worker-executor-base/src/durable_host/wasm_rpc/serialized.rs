@@ -34,25 +34,27 @@ pub enum SerializableInvokeResult {
     Completed(Result<TypeAnnotatedValue, RpcError>),
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
 pub struct SerializableInvokeRequest {
     pub remote_worker_id: WorkerId,
     pub idempotency_key: IdempotencyKey,
     pub function_name: String,
+    #[wit_field(convert_vec = WitValue)]
     pub function_params: Vec<ValueAndType>,
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
 pub struct SerializableScheduleInvocationRequest {
     pub remote_worker_id: WorkerId,
     pub idempotency_key: IdempotencyKey,
     pub function_name: String,
+    #[wit_field(convert_vec = WitValue)]
     pub function_params: Vec<ValueAndType>,
     pub datetime: SerializableDateTime,
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
-#[flatten_value]
+#[wit_transparent]
 pub struct SerializableScheduleId {
     pub data: Vec<u8>,
 }

@@ -22,6 +22,7 @@ use bincode::{Decode, Encode};
 use golem_common::model::AccountId;
 
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
+use golem_wasm_rpc_derive::IntoValue;
 
 /// Interface for storing blobs in a persistent storage.
 #[async_trait]
@@ -416,7 +417,7 @@ impl BlobStoreService for DefaultBlobStoreService {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
 pub struct ObjectMetadata {
     pub name: String,
     pub container: String,

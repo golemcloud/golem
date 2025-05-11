@@ -29,6 +29,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::num::{NonZeroU128, NonZeroU64};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
+use golem_wasm_rpc_derive::IntoValue;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct TraceId(pub NonZeroU128);
@@ -258,7 +259,7 @@ impl poem_openapi::types::ToJSON for SpanId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
 pub enum AttributeValue {
     String(String),
 }
@@ -268,21 +269,6 @@ impl Display for AttributeValue {
         match self {
             Self::String(value) => write!(f, "{}", value),
         }
-    }
-}
-
-impl IntoValue for AttributeValue {
-    fn into_value(self) -> Value {
-        match self {
-            Self::String(value) => Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(Value::String(value))),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        analysed_type::variant(vec![analysed_type::case("string", analysed_type::str())])
     }
 }
 

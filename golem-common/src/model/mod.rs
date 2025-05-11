@@ -22,7 +22,7 @@ use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 
 use crate::model::invocation_context::InvocationContextStack;
-use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, str, tuple, u32, u64};
+use golem_wasm_ast::analysis::analysed_type::{field, list, record, str, tuple, u32, u64};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, Value};
 use http::Uri;
@@ -427,7 +427,7 @@ impl Display for ShardAssignment {
 }
 
 #[derive(Clone, Debug, Encode, Decode, Eq, Hash, PartialEq, IntoValue)]
-#[flatten_value]
+#[wit_transparent]
 pub struct IdempotencyKey {
     pub value: String,
 }

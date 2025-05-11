@@ -41,6 +41,7 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::debug;
 use uuid::Uuid;
+use golem_wasm_rpc_derive::IntoValue;
 
 #[async_trait]
 pub trait WorkerProxy: Send + Sync {
@@ -92,7 +93,7 @@ pub trait WorkerProxy: Send + Sync {
     ) -> Result<(), WorkerProxyError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
 pub enum WorkerProxyError {
     BadRequest(Vec<String>),
     Unauthorized(String),

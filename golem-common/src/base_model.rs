@@ -14,7 +14,6 @@
 
 use crate::newtype_uuid;
 use bincode::{Decode, Encode};
-use golem_wasm_rpc_derive::IntoValue;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;

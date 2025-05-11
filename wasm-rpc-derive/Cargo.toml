@@ -10,9 +10,7 @@ description = "Golem WASM RPC derivation macros"
 include = []
 
 [lib]
-path = "src/lib.rs"
 proc-macro = true
-harness = false
 
 [dependencies]
 heck = "0.5.0"

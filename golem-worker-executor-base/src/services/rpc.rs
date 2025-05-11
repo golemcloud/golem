@@ -43,6 +43,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::WitValue;
 use tokio::runtime::Handle;
 use tracing::debug;
+use golem_wasm_rpc_derive::IntoValue;
 
 #[async_trait]
 pub trait Rpc: Send + Sync {
@@ -78,7 +79,7 @@ pub trait Rpc: Send + Sync {
     ) -> Result<WorkerId, GolemError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
 pub enum RpcError {
     ProtocolError { details: String },
     Denied { details: String },
