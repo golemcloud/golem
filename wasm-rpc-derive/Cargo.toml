@@ -7,8 +7,6 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Golem WASM RPC derivation macros"
 
-include = []
-
 [lib]
 proc-macro = true
 
