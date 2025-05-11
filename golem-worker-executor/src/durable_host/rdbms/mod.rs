@@ -18,9 +18,7 @@ use crate::durable_host::{
     Durability, DurabilityHost, DurableWorkerCtx, RemoteTransactionFinalizer,
 };
 use crate::error::GolemError;
-use crate::services::rdbms::{
-    Error as RdbmsError, RdbmsService, RdbmsTransactionId, RdbmsTypeService,
-};
+use crate::services::rdbms::{Error as RdbmsError, RdbmsService, RdbmsTransactionId, RdbmsTransactionStatus, RdbmsTypeService};
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsType};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
@@ -32,6 +30,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::IoView;
+use golem_common::model::WorkerId;
 
 pub mod mysql;
 pub mod postgres;
@@ -1321,6 +1320,7 @@ fn get_begin_oplog_index<Ctx: WorkerCtx>(
 
 struct RdbmsRemoteTransactionFinalizer<T: RdbmsType> {
     pool_key: RdbmsPoolKey,
+    worker_id: WorkerId,
     transaction_id: RdbmsTransactionId,
     rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
     _owner: PhantomData<T>,
@@ -1333,15 +1333,21 @@ where
 {
     fn new(
         pool_key: RdbmsPoolKey,
+        worker_id: WorkerId,
         transaction_id: RdbmsTransactionId,
         rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
     ) -> Self {
         Self {
             pool_key,
+            worker_id,
             transaction_id,
             rdbms_service,
             _owner: PhantomData,
         }
+    }
+
+    async fn get_transaction_status(&self) -> Result<RdbmsTransactionStatus, RdbmsError> {
+        self.rdbms_service.rdbms_type_service().get_transaction_status(&self.pool_key, &self.worker_id, &self.transaction_id).await
     }
 }
 

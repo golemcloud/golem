@@ -1012,7 +1012,7 @@ pub(crate) trait BeginTransactionSupport<T: RdbmsType, DB: Database> {
 #[async_trait]
 impl<T, DB> BeginTransactionSupport<T, DB> for T
 where
-    T: RdbmsType + Sync + QueryExecutor<T, DB> + TransactionTableRepo<DB> + 'static,
+    T: RdbmsType + Sync + QueryExecutor<T, DB> + GolemTransactionRepo<DB> + 'static,
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
 {
@@ -1029,7 +1029,7 @@ where
 
         let id = RdbmsTransactionId::generate();
 
-        <T as TransactionTableRepo<DB>>::create_transaction(id.0.clone(), pool.deref()).await?;
+        <T as GolemTransactionRepo<DB>>::create_transaction(&id, pool.deref()).await?;
 
         DB::TransactionManager::begin(&mut connection)
             .await
@@ -1070,7 +1070,7 @@ pub(crate) trait TransactionSupport<T: RdbmsType, DB: Database> {
 #[async_trait]
 impl<T, DB> TransactionSupport<T, DB> for T
 where
-    T: RdbmsType + Sync + QueryExecutor<T, DB> + TransactionTableRepo<DB> + 'static,
+    T: RdbmsType + Sync + QueryExecutor<T, DB> + GolemTransactionRepo<DB> + 'static,
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
 {
@@ -1079,8 +1079,8 @@ where
         db_transaction: &SqlxDbTransaction<T, DB>,
     ) -> Result<(), Error> {
         let id = db_transaction.transaction_id();
-        let _res = <T as TransactionTableRepo<DB>>::update_transaction_status(
-            id.0,
+        let _res = <T as GolemTransactionRepo<DB>>::update_transaction_status(
+            &id,
             RdbmsTransactionStatus::Committed,
             db_transaction.tx_connection.clone(),
         )
@@ -1093,8 +1093,8 @@ where
         db_transaction: &SqlxDbTransaction<T, DB>,
     ) -> Result<(), Error> {
         let id = db_transaction.transaction_id();
-        let _res = <T as TransactionTableRepo<DB>>::update_transaction_status(
-            id.0,
+        let _res = <T as GolemTransactionRepo<DB>>::update_transaction_status(
+            &id,
             RdbmsTransactionStatus::RolledBack,
             pool,
         )
@@ -1106,31 +1106,31 @@ where
         pool: &Pool<DB>,
         id: &RdbmsTransactionId,
     ) -> Result<RdbmsTransactionStatus, Error> {
-        <T as TransactionTableRepo<DB>>::get_transaction_status(id.0.clone(), pool).await
+        <T as GolemTransactionRepo<DB>>::get_transaction_status(id, pool).await
     }
 
     async fn cleanup_transaction(pool: &Pool<DB>, id: &RdbmsTransactionId) -> Result<(), Error> {
-        <T as TransactionTableRepo<DB>>::delete_transaction(id.0.clone(), pool).await?;
+        <T as GolemTransactionRepo<DB>>::delete_transaction(id, pool).await?;
         Ok(())
     }
 }
 
 #[async_trait]
-pub(crate) trait TransactionTableRepo<DB: Database> {
+pub(crate) trait GolemTransactionRepo<DB: Database> {
     async fn create_transaction_table<'c, E>(executor: E) -> Result<(), Error>
     where
         E: sqlx::Executor<'c, Database = DB>;
 
-    async fn create_transaction<'c, E>(id: String, executor: E) -> Result<(), Error>
+    async fn create_transaction<'c, E>(id: &RdbmsTransactionId, executor: E) -> Result<(), Error>
     where
         E: sqlx::Executor<'c, Database = DB>;
 
-    async fn delete_transaction<'c, E>(id: String, executor: E) -> Result<bool, Error>
+    async fn delete_transaction<'c, E>(id: &RdbmsTransactionId, executor: E) -> Result<bool, Error>
     where
         E: sqlx::Executor<'c, Database = DB>;
 
     async fn update_transaction_status<'c, E>(
-        id: String,
+        id: &RdbmsTransactionId,
         status: RdbmsTransactionStatus,
         executor: E,
     ) -> Result<bool, Error>
@@ -1138,7 +1138,7 @@ pub(crate) trait TransactionTableRepo<DB: Database> {
         E: sqlx::Executor<'c, Database = DB>;
 
     async fn get_transaction_status<'c, E>(
-        id: String,
+        id: &RdbmsTransactionId,
         executor: E,
     ) -> Result<RdbmsTransactionStatus, Error>
     where

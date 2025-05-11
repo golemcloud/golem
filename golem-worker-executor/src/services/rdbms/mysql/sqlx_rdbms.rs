@@ -16,11 +16,12 @@ use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::mysql::types::{DbColumn, DbColumnType, DbValue};
 use crate::services::rdbms::mysql::{MysqlType, MYSQL};
 use crate::services::rdbms::sqlx_common::{
-    create_db_result, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxDbResultStream, SqlxRdbms,
-    TransactionTableRepo,
+    create_db_result, GolemTransactionRepo, PoolCreator, QueryExecutor, QueryParamsBinder,
+    SqlxDbResultStream, SqlxRdbms,
 };
 use crate::services::rdbms::{
-    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionStatus,
+    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionId,
+    RdbmsTransactionStatus,
 };
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
@@ -60,7 +61,7 @@ impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
 }
 
 #[async_trait]
-impl TransactionTableRepo<sqlx::MySql> for MysqlType {
+impl GolemTransactionRepo<sqlx::MySql> for MysqlType {
     async fn create_transaction_table<'c, E>(executor: E) -> Result<(), Error>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
@@ -83,12 +84,12 @@ impl TransactionTableRepo<sqlx::MySql> for MysqlType {
         Ok(())
     }
 
-    async fn create_transaction<'c, E>(id: String, executor: E) -> Result<(), Error>
+    async fn create_transaction<'c, E>(id: &RdbmsTransactionId, executor: E) -> Result<(), Error>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
         let query = sqlx::query("INSERT INTO golem_transactions(id, status) VALUES (?, ?)")
-            .bind(id)
+            .bind(id.0.clone())
             .bind(RdbmsTransactionStatus::InProgress.to_string());
         let _res = query
             .execute(executor)
@@ -97,11 +98,11 @@ impl TransactionTableRepo<sqlx::MySql> for MysqlType {
         Ok(())
     }
 
-    async fn delete_transaction<'c, E>(id: String, executor: E) -> Result<bool, Error>
+    async fn delete_transaction<'c, E>(id: &RdbmsTransactionId, executor: E) -> Result<bool, Error>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
-        let query = sqlx::query("DELETE FROM golem_transactions WHERE id = ?").bind(id);
+        let query = sqlx::query("DELETE FROM golem_transactions WHERE id = ?").bind(id.0.clone());
         let res = query
             .execute(executor)
             .await
@@ -110,7 +111,7 @@ impl TransactionTableRepo<sqlx::MySql> for MysqlType {
     }
 
     async fn update_transaction_status<'c, E>(
-        id: String,
+        id: &RdbmsTransactionId,
         status: RdbmsTransactionStatus,
         executor: E,
     ) -> Result<bool, Error>
@@ -119,7 +120,7 @@ impl TransactionTableRepo<sqlx::MySql> for MysqlType {
     {
         let query = sqlx::query("UPDATE golem_transactions SET status = ? WHERE id = ?")
             .bind(status.to_string())
-            .bind(id);
+            .bind(id.0.clone());
         let res = query
             .execute(executor)
             .await
@@ -128,13 +129,14 @@ impl TransactionTableRepo<sqlx::MySql> for MysqlType {
     }
 
     async fn get_transaction_status<'c, E>(
-        id: String,
+        id: &RdbmsTransactionId,
         executor: E,
     ) -> Result<RdbmsTransactionStatus, Error>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
-        let query = sqlx::query("SELECT status FROM golem_transactions WHERE id = ?").bind(id);
+        let query =
+            sqlx::query("SELECT status FROM golem_transactions WHERE id = ?").bind(id.0.clone());
         let row = query
             .fetch_optional(executor)
             .await
