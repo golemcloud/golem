@@ -60,19 +60,19 @@ impl ReplPrinter for DefaultReplResultPrinter {
                 let cause = &compilation_error.cause;
                 let position = compilation_error.expr.source_span();
 
-                println!("{}", "[compilation error]".red());
+                println!("{}", "[compilation error]".red().bold());
                 println!("{} {}", "[position]".yellow(), position.start_column());
                 println!("{} {}", "[cause]".yellow(), cause.bright_red().bold());
 
                 if !compilation_error.additional_error_details.is_empty() {
                     for detail in &compilation_error.additional_error_details {
-                        println!("{}", detail.white());
+                        println!("{} {}", "[help]".yellow(), detail.cyan());
                     }
                 }
 
                 if !compilation_error.help_messages.is_empty() {
                     for message in &compilation_error.help_messages {
-                        println!("{} {}", "help:".blue(), message.white());
+                        println!("{} {}", "[help]".yellow(), message.cyan());
                     }
                 }
             }
