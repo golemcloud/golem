@@ -21,10 +21,12 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 
+pub use crate::base_model::*;
 use crate::model::invocation_context::InvocationContextStack;
 use golem_wasm_ast::analysis::analysed_type::{field, list, record, str, tuple, u32, u64};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm_rpc_derive::IntoValue;
 use http::Uri;
 use rand::prelude::IteratorRandom;
 use serde::de::Unexpected;
@@ -37,8 +39,6 @@ use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
-use golem_wasm_rpc_derive::IntoValue;
-pub use crate::base_model::*;
 
 pub mod base64;
 pub mod component;
@@ -990,7 +990,7 @@ pub struct TimestampedWorkerInvocation {
     Deserialize,
     Encode,
     Decode,
-    IntoValue
+    IntoValue,
 )]
 #[serde(transparent)]
 pub struct AccountId {

@@ -147,9 +147,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         component_metadata: ComponentMetadata<Ctx::Types>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
-        worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService,
-        >,
+        worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn crate::services::rdbms::RdbmsService>,
@@ -2089,9 +2087,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         promise_service: Arc<dyn PromiseService>,
         scheduler_service: Arc<dyn SchedulerService>,
         worker_service: Arc<dyn WorkerService>,
-        worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService,
-        >,
+        worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,

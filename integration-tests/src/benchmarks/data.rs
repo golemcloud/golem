@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
+use golem_wasm_rpc_derive::IntoValue;
 use rand::distr::{Alphanumeric, SampleString};
 use rand::rng;
-use golem_wasm_rpc_derive::IntoValue;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue)]
 pub struct Data {
@@ -35,4 +35,3 @@ impl Data {
         (0..count).map(|_| Self::generate()).collect()
     }
 }
-

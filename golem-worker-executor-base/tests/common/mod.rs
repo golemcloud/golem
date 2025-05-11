@@ -250,9 +250,7 @@ impl TestDependencies for TestWorkerExecutor {
 
     fn worker_service(
         &self,
-    ) -> Arc<
-        dyn golem_test_framework::components::worker_service::WorkerService + 'static,
-    > {
+    ) -> Arc<dyn golem_test_framework::components::worker_service::WorkerService + 'static> {
         self.deps.worker_service()
     }
 

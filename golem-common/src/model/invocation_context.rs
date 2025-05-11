@@ -21,6 +21,7 @@ use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm_rpc_derive::IntoValue;
 use nonempty_collections::NEVec;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -29,7 +30,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::num::{NonZeroU128, NonZeroU64};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
-use golem_wasm_rpc_derive::IntoValue;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct TraceId(pub NonZeroU128);

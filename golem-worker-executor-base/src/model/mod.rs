@@ -29,6 +29,7 @@ use golem_common::model::{
     WorkerStatusRecord,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc_derive::IntoValue;
 use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -37,7 +38,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::Trap;
-use golem_wasm_rpc_derive::IntoValue;
 
 pub trait ShardAssignmentCheck {
     fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError>;
@@ -57,7 +57,9 @@ impl ShardAssignmentCheck for ShardAssignment {
     }
 }
 
-#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(
+    Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, IntoValue,
+)]
 pub enum InterruptKind {
     Interrupt,
     Restart,

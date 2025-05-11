@@ -74,8 +74,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
     pub worker_service: Arc<dyn worker::WorkerService>,
     pub worker_proxy: Arc<dyn WorkerProxy>,
-    pub worker_enumeration_service:
-        Arc<dyn worker_enumeration::WorkerEnumerationService>,
+    pub worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
     pub running_worker_enumeration_service:
         Arc<dyn worker_enumeration::RunningWorkerEnumerationService>,
     pub promise_service: Arc<dyn promise::PromiseService>,
@@ -125,9 +124,7 @@ impl<Ctx: WorkerCtx> HasWorkerService for DefaultWorkerFork<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasWorkerEnumerationService for DefaultWorkerFork<Ctx> {
-    fn worker_enumeration_service(
-        &self,
-    ) -> Arc<dyn worker_enumeration::WorkerEnumerationService> {
+    fn worker_enumeration_service(&self) -> Arc<dyn worker_enumeration::WorkerEnumerationService> {
         self.worker_enumeration_service.clone()
     }
 }
@@ -294,9 +291,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
         worker_service: Arc<dyn worker::WorkerService>,
         worker_proxy: Arc<dyn WorkerProxy>,
-        worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService,
-        >,
+        worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
         running_worker_enumeration_service: Arc<
             dyn worker_enumeration::RunningWorkerEnumerationService,
         >,

@@ -16,14 +16,14 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use crate::model::InterruptKind;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use golem_wasm_rpc::wasmtime::EncodingError;
-use tonic::Status;
 use golem_wasm_rpc_derive::IntoValue;
-use crate::model::InterruptKind;
+use tonic::Status;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode, IntoValue)]
 pub enum GolemError {

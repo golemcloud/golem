@@ -32,6 +32,7 @@ use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, Retry
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, WitValue};
+use golem_wasm_rpc_derive::IntoValue;
 use http::Uri;
 use std::collections::HashMap;
 use std::error::Error;
@@ -41,7 +42,6 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::debug;
 use uuid::Uuid;
-use golem_wasm_rpc_derive::IntoValue;
 
 #[async_trait]
 pub trait WorkerProxy: Send + Sync {

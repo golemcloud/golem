@@ -26,6 +26,7 @@ use bincode::{BorrowDecode, Decode, Encode};
 use golem_common::model::WorkerId;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
+use golem_wasm_rpc_derive::IntoValue;
 use itertools::Itertools;
 use mac_address::MacAddress;
 use std::collections::{Bound, HashMap, HashSet};
@@ -33,7 +34,6 @@ use std::fmt::{Debug, Display};
 use std::net::IpAddr;
 use std::sync::Arc;
 use url::Url;
-use golem_wasm_rpc_derive::IntoValue;
 
 pub trait RdbmsType: Debug + Display + Default + Send {
     type DbColumn: Clone

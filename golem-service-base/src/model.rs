@@ -27,12 +27,12 @@ use golem_common::model::{
 };
 use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc_derive::IntoValue;
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
-use golem_wasm_rpc_derive::IntoValue;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]
@@ -731,7 +731,7 @@ impl From<RevertToOplogIndex> for golem_api_grpc::proto::golem::common::RevertTo
     Serialize,
     Deserialize,
     Object,
-    IntoValue
+    IntoValue,
 )]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]

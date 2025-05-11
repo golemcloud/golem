@@ -392,10 +392,7 @@ impl<T: GolemTypes> CreateOplogConstructor<T> {
 
 #[async_trait]
 impl<T: GolemTypes> OplogConstructor for CreateOplogConstructor<T> {
-    async fn create_oplog(
-        self,
-        close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog> {
+    async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
         let inner = if let Some(initial_entry) = self.initial_entry {
             self.inner
                 .create(

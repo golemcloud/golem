@@ -72,9 +72,7 @@ pub trait HasWorkerService {
 }
 
 pub trait HasWorkerEnumerationService {
-    fn worker_enumeration_service(
-        &self,
-    ) -> Arc<dyn worker_enumeration::WorkerEnumerationService>;
+    fn worker_enumeration_service(&self) -> Arc<dyn worker_enumeration::WorkerEnumerationService>;
 }
 
 pub trait HasRunningWorkerEnumerationService {
@@ -296,9 +294,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
         worker_fork: Arc<dyn worker_fork::WorkerForkService>,
         worker_service: Arc<dyn worker::WorkerService>,
-        worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService,
-        >,
+        worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
         running_worker_enumeration_service: Arc<
             dyn worker_enumeration::RunningWorkerEnumerationService,
         >,
@@ -432,9 +428,7 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerService for T {
 }
 
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerEnumerationService for T {
-    fn worker_enumeration_service(
-        &self,
-    ) -> Arc<dyn worker_enumeration::WorkerEnumerationService> {
+    fn worker_enumeration_service(&self) -> Arc<dyn worker_enumeration::WorkerEnumerationService> {
         self.all().worker_enumeration_service.clone()
     }
 }

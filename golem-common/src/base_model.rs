@@ -307,7 +307,10 @@ impl From<&WorkerId> for TargetWorkerId {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
-#[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize, golem_wasm_rpc_derive::IntoValue))]
+#[cfg_attr(
+    feature = "model",
+    derive(serde::Serialize, serde::Deserialize, golem_wasm_rpc_derive::IntoValue)
+)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[cfg_attr(feature = "model", serde(rename_all = "camelCase"))]

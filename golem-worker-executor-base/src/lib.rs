@@ -414,9 +414,10 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
 
     let mut oplog_archives: Vec<Arc<dyn OplogArchiveService>> = Vec::new();
     for idx in 1..golem_config.oplog.indexed_storage_layers {
-        let svc: Arc<dyn OplogArchiveService> = Arc::new(
-            CompressedOplogArchiveService::new(indexed_storage.clone(), idx),
-        );
+        let svc: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            idx,
+        ));
         oplog_archives.push(svc);
     }
     for idx in 0..golem_config.oplog.blob_storage_layers {

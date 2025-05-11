@@ -20,12 +20,12 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use crate::durable_host::serialized::SerializableError;
+use golem_wasm_rpc_derive::IntoValue;
 use wasmtime_wasi_http::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, Method, TlsAlertReceivedPayload,
 };
 use wasmtime_wasi_http::body::HostIncomingBody;
 use wasmtime_wasi_http::types::{FieldMap, HostIncomingResponse};
-use golem_wasm_rpc_derive::IntoValue;
 
 #[derive(Debug, Clone, Encode, Decode)]
 pub enum SerializedHttpVersion {

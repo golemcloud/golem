@@ -41,9 +41,9 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::WitValue;
+use golem_wasm_rpc_derive::IntoValue;
 use tokio::runtime::Handle;
 use tracing::debug;
-use golem_wasm_rpc_derive::IntoValue;
 
 #[async_trait]
 pub trait Rpc: Send + Sync {
@@ -173,10 +173,7 @@ pub struct RemoteInvocationRpc {
 }
 
 impl RemoteInvocationRpc {
-    pub fn new(
-        worker_proxy: Arc<dyn WorkerProxy>,
-        shard_service: Arc<dyn ShardService>,
-    ) -> Self {
+    pub fn new(worker_proxy: Arc<dyn WorkerProxy>, shard_service: Arc<dyn ShardService>) -> Self {
         Self {
             worker_proxy,
             shard_service,
@@ -367,9 +364,7 @@ impl<Ctx: WorkerCtx> HasWorkerService for DirectWorkerInvocationRpc<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasWorkerEnumerationService for DirectWorkerInvocationRpc<Ctx> {
-    fn worker_enumeration_service(
-        &self,
-    ) -> Arc<dyn worker_enumeration::WorkerEnumerationService> {
+    fn worker_enumeration_service(&self) -> Arc<dyn worker_enumeration::WorkerEnumerationService> {
         self.worker_enumeration_service.clone()
     }
 }
@@ -504,9 +499,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
         worker_fork: Arc<dyn worker_fork::WorkerForkService>,
         worker_service: Arc<dyn worker::WorkerService>,
-        worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService,
-        >,
+        worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
         running_worker_enumeration_service: Arc<
             dyn worker_enumeration::RunningWorkerEnumerationService,
         >,

@@ -18,8 +18,8 @@ use bincode::{Decode, Encode};
 use bit_vec::BitVec;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
-use std::fmt::Display;
 use golem_wasm_rpc_derive::IntoValue;
+use std::fmt::Display;
 
 #[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue)]
 pub enum DbColumnType {

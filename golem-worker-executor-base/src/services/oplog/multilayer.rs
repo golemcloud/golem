@@ -188,10 +188,7 @@ impl CreateOplogConstructor {
 
 #[async_trait]
 impl OplogConstructor for CreateOplogConstructor {
-    async fn create_oplog(
-        self,
-        close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog> {
+    async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
         let component_type = self.execution_status.read().unwrap().component_type();
 
         match component_type {

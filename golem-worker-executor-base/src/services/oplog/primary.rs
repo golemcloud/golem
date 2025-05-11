@@ -391,10 +391,7 @@ impl CreateOplogConstructor {
 
 #[async_trait]
 impl OplogConstructor for CreateOplogConstructor {
-    async fn create_oplog(
-        self,
-        close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog> {
+    async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
         Arc::new(PrimaryOplog::new(
             self.indexed_storage,
             self.blob_storage,

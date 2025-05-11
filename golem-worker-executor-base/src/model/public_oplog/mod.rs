@@ -58,18 +58,14 @@ use golem_common::model::public_oplog::{
     SuccessfulUpdateParameters, TimestampParameter,
 };
 use golem_common::model::{
-    ComponentId, ComponentVersion, Empty, OwnedWorkerId, PromiseId,
-    WorkerId, WorkerInvocation,
+    ComponentId, ComponentVersion, Empty, OwnedWorkerId, PromiseId, WorkerId, WorkerInvocation,
 };
 use golem_common::serialization::try_deserialize as core_try_deserialize;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_ast::analysis::analysed_type::{
-    case, field, list, option, record, result, result_err, str, u64,
-    unit_case, variant,
+    case, field, list, option, record, result, result_err, str, u64, unit_case, variant,
 };
-use golem_wasm_ast::analysis::{
-    AnalysedFunctionParameter, AnalysedType,
-};
+use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedType};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{
     parse_type_annotated_value, IntoValue, IntoValueAndType, Value, ValueAndType, WitValue,

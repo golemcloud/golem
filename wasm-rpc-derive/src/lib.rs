@@ -393,7 +393,7 @@ fn is_unit_case(variant: &Variant) -> bool {
             .any(|attr| attr.path().is_ident("unit_case"))
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct WitField {
     skip: bool,
     rename: Option<LitStr>,
