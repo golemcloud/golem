@@ -222,13 +222,8 @@ async fn python_http_client(
             *capture = Some(body_str.clone());
             info!("captured body: {}", body_str);
         }
-        let header = headers.get("X-Test");
-        format!(
-            "test-response: {}",
-            header
-                .map(|h| h.to_str().unwrap().to_string())
-                .unwrap_or("no X-Test header".to_string()),
-        )
+        let header = headers.get("X-Test").unwrap().to_str().unwrap();
+        format!("\"test-response: {header}\"")
     }
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
@@ -259,7 +254,11 @@ async fn python_http_client(
         .await;
 
     let result = executor
-        .invoke_and_await(&worker_id, "run", vec![])
+        .invoke_and_await(
+            &worker_id,
+            "golem:it-python-http-client-exports/golem-it-python-http-client-api.{run}",
+            vec![],
+        )
         .await
         .unwrap();
 
@@ -271,5 +270,5 @@ async fn python_http_client(
     http_server.abort();
 
     check!(result == vec![Value::String("test-response: test-header".to_string())]);
-    check!(captured_body == "test-body".to_string());
+    check!(captured_body == "\"test-body\"".to_string());
 }
