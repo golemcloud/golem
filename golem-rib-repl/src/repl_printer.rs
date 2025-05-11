@@ -58,11 +58,11 @@ impl ReplPrinter for DefaultReplResultPrinter {
             }
             RibCompilationError::RibTypeError(compilation_error) => {
                 let cause = &compilation_error.cause;
-                let position = compilation_error.expr.source_span().start_column();
+                let position = compilation_error.expr.source_span();
 
                 println!("{}", "[compilation error]".red());
-                println!("{} {}", "position:".yellow(), position.to_string().white());
-                println!("{} {}", "cause:".yellow(), cause.white());
+                println!("{} {}", "[position]".yellow(), position.start_column());
+                println!("{} {}", "[cause]".yellow(), cause.bright_red().bold());
 
                 if !compilation_error.additional_error_details.is_empty() {
                     for detail in &compilation_error.additional_error_details {
