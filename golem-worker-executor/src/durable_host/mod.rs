@@ -2438,7 +2438,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         ) {
             if self.is_live() {
                 self.oplog
-                    .add_and_commit(OplogEntry::abort_remote_transaction(begin_index))
+                    .add_and_commit(OplogEntry::aborted_remote_transaction(begin_index))
                     .await;
                 Ok(())
             } else {
@@ -2764,7 +2764,13 @@ macro_rules! get_oplog_entry {
 
 #[async_trait]
 pub trait RemoteTransactionFinalizer {
-    async fn get_pre_commit_final_entries(&self) -> Result<Vec<OplogEntry>, GolemError>;
+    async fn get_pre_commit_final_entries(
+        &self,
+        begin_index: OplogIndex,
+    ) -> Result<Vec<OplogEntry>, GolemError>;
 
-    async fn get_pre_rollback_final_entries(&self) -> Result<Vec<OplogEntry>, GolemError>;
+    async fn get_pre_rollback_final_entries(
+        &self,
+        begin_index: OplogIndex,
+    ) -> Result<Vec<OplogEntry>, GolemError>;
 }

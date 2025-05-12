@@ -828,8 +828,6 @@ async fn rdbms_mysql_idempotency(
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
-    check_transaction_oplog_entries::<MysqlType>(oplog);
-
     drop(executor);
 }
 

@@ -18,19 +18,21 @@ use crate::durable_host::{
     Durability, DurabilityHost, DurableWorkerCtx, RemoteTransactionFinalizer,
 };
 use crate::error::GolemError;
-use crate::services::rdbms::{Error as RdbmsError, RdbmsService, RdbmsTransactionId, RdbmsTransactionStatus, RdbmsTypeService};
+use crate::services::rdbms::{
+    Error as RdbmsError, RdbmsService, RdbmsTransactionId, RdbmsTransactionStatus, RdbmsTypeService,
+};
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsType};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
+use golem_common::model::WorkerId;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::IoView;
-use golem_common::model::WorkerId;
 
 pub mod mysql;
 pub mod postgres;
@@ -1136,7 +1138,7 @@ where
         .map(|e| e.state.clone());
 
     match state {
-        Ok(RdbmsTransactionState::Open(transaction)) => transaction.pre_rollback().await,
+        Ok(RdbmsTransactionState::Open(transaction)) => transaction.pre_commit().await,
         Ok(_) => Ok(()),
         Err(error) => Err(RdbmsError::other_response_failure(error)),
     }
@@ -1186,7 +1188,7 @@ where
         .map(|e| e.state.clone());
 
     match state {
-        Ok(RdbmsTransactionState::Open(transaction)) => transaction.pre_commit().await,
+        Ok(RdbmsTransactionState::Open(transaction)) => transaction.pre_rollback().await,
         Ok(_) => Ok(()),
         Err(error) => Err(RdbmsError::other_response_failure(error)),
     }
@@ -1346,8 +1348,12 @@ where
         }
     }
 
-    async fn get_transaction_status(&self) -> Result<RdbmsTransactionStatus, RdbmsError> {
-        self.rdbms_service.rdbms_type_service().get_transaction_status(&self.pool_key, &self.worker_id, &self.transaction_id).await
+    async fn get_transaction_status(&self) -> Result<RdbmsTransactionStatus, GolemError> {
+        self.rdbms_service
+            .rdbms_type_service()
+            .get_transaction_status(&self.pool_key, &self.worker_id, &self.transaction_id)
+            .await
+            .map_err(|e| GolemError::runtime(e.to_string()))
     }
 }
 
@@ -1357,11 +1363,29 @@ where
     T: RdbmsType + Send + Sync + Clone + 'static,
     dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
 {
-    async fn get_pre_commit_final_entries(&self) -> Result<Vec<OplogEntry>, GolemError> {
-        todo!()
+    async fn get_pre_commit_final_entries(
+        &self,
+        begin_index: OplogIndex,
+    ) -> Result<Vec<OplogEntry>, GolemError> {
+        let transaction_status = self.get_transaction_status().await?;
+        if transaction_status == RdbmsTransactionStatus::Committed {
+            Ok(vec![OplogEntry::commited_remote_transaction(begin_index)])
+        } else {
+            Ok(vec![OplogEntry::aborted_remote_transaction(begin_index)])
+        }
     }
 
-    async fn get_pre_rollback_final_entries(&self) -> Result<Vec<OplogEntry>, GolemError> {
-        todo!()
+    async fn get_pre_rollback_final_entries(
+        &self,
+        begin_index: OplogIndex,
+    ) -> Result<Vec<OplogEntry>, GolemError> {
+        let transaction_status = self.get_transaction_status().await?;
+        if transaction_status == RdbmsTransactionStatus::RolledBack {
+            Ok(vec![OplogEntry::rolled_back_remote_transaction(
+                begin_index,
+            )])
+        } else {
+            Ok(vec![OplogEntry::aborted_remote_transaction(begin_index)])
+        }
     }
 }
