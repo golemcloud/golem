@@ -113,6 +113,7 @@ wasm-wave = "0.227.1"
 wax = "0.6.0"
 wasm-metadata = "=0.227.1"
 wit-bindgen-rust = "=0.40.0"
+wit-component = "=0.227.1"
 wit-encoder = "=0.227.1"
 wit-parser = "=0.227.1"
 

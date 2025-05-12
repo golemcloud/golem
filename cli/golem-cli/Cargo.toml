@@ -111,6 +111,7 @@ wasm-metadata = { workspace = true }
 wasm-wave = { workspace = true }
 wax = { workspace = true }
 wit-bindgen-rust = { workspace = true }
+wit-component = { workspace = true }
 wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
 

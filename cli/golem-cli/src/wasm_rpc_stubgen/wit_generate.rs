@@ -15,7 +15,9 @@
 use crate::fs;
 use crate::fs::{OverwriteSafeAction, OverwriteSafeActions, PathExtra};
 use crate::log::{log_action, log_action_plan, log_warn_action, LogColorize, LogIndent};
-use crate::wasm_rpc_stubgen::naming::wit::package_dep_dir_name_from_encoder;
+use crate::wasm_rpc_stubgen::naming::wit::{
+    package_dep_dir_name_from_encoder, package_dep_dir_name_from_parser,
+};
 use crate::wasm_rpc_stubgen::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, StubDefinition,
 };
@@ -26,15 +28,16 @@ use crate::wasm_rpc_stubgen::{GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION};
 use anyhow::{anyhow, bail, Context};
 use itertools::Itertools;
 use semver::Version;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use wit_component::WitPrinter;
 use wit_encoder::{
     packages_from_parsed, Ident, Interface, InterfaceItem, Package, PackageItem, Params,
     ResourceFunc, ResourceFuncKind, StandaloneFunc, Type, TypeDef, TypeDefKind, Use, World,
     WorldItem,
 };
-use wit_parser::{PackageId, Resolve, UnresolvedPackageGroup};
+use wit_parser::{PackageId, PackageName, Resolve, UnresolvedPackageGroup};
 
 use super::stub::StubbedEntity;
 
@@ -1073,6 +1076,67 @@ fn extract_exports_package(
     }
 
     Ok((package.clone(), exports_package))
+}
+
+pub fn extract_wasm_interface_as_wit_dep(
+    dep_name: &str,
+    wasm: &Path,
+    wit_dir: &Path,
+) -> anyhow::Result<BTreeSet<PackageName>> {
+    log_action(
+        "Extracting",
+        format!(
+            "WIT package from WASM library dependency {} into wit directory {}",
+            dep_name.log_color_highlight(),
+            wit_dir.log_color_highlight()
+        ),
+    );
+    let _indent = LogIndent::new();
+
+    let component_bytes = std::fs::read(wasm)?;
+    let wasm = wit_parser::decoding::decode(&component_bytes)?;
+
+    let mut result = BTreeSet::new();
+    let pkg_group = UnresolvedPackageGroup::parse_dir(wit_dir)?;
+    for (id, package) in wasm.resolve().packages.iter() {
+        let contains = pkg_group.nested.iter().any(|pkg| pkg.name == package.name);
+
+        if !contains {
+            log_action(
+                "Adding",
+                format!(
+                    "package {} from dependency {}",
+                    package.name.to_string().log_color_highlight(),
+                    dep_name.log_color_highlight(),
+                ),
+            );
+
+            let target_dir = wit_dir
+                .join(naming::wit::DEPS_DIR)
+                .join(package_dep_dir_name_from_parser(&package.name));
+            fs::create_dir_all(&target_dir)?;
+            let file_name = format!("{}.wit", package.name.name);
+
+            let mut wit_printer = WitPrinter::default();
+            wit_printer.emit_docs(true);
+
+            wit_printer.print(wasm.resolve(), id, &[])?;
+            std::fs::write(target_dir.join(file_name), wit_printer.output.to_string())?;
+
+            result.insert(package.name.clone());
+        } else {
+            log_action(
+                "Skipping",
+                format!(
+                    "package {} from dependency {}",
+                    package.name.to_string().log_color_highlight(),
+                    dep_name.log_color_highlight()
+                ),
+            );
+        }
+    }
+
+    Ok(result)
 }
 
 trait UsedTypeIdents {
