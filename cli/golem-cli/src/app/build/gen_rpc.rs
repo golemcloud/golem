@@ -126,7 +126,11 @@ async fn create_generated_base_wit(
                 )?;
                 copy_wit_sources(&component_source_wit, &component_generated_base_wit)?;
 
+                let mut missing_package_deps = ctx
+                    .wit
+                    .missing_generic_source_package_deps(component_name)?;
                 let mut packages_from_lib_deps = BTreeSet::new();
+
                 {
                     let library_dependencies = ctx
                         .application
@@ -151,7 +155,8 @@ async fn create_generated_base_wit(
                                 BinaryComponentSource::AppComponent { .. }
                             ) {
                                 let path = ctx.resolve_binary_component_source(library_dep).await?;
-                                let packages = extract_wasm_interface_as_wit_dep(
+                                let result = extract_wasm_interface_as_wit_dep(
+                                    ctx.common_wit_deps()?,
                                     &library_dep.source.to_string(),
                                     &path,
                                     &component_generated_base_wit,
@@ -162,16 +167,14 @@ async fn create_generated_base_wit(
                                         library_dep.source.to_string().log_color_highlight()
                                     )
                                 })?;
-                                packages_from_lib_deps.extend(packages);
+                                packages_from_lib_deps.extend(result.new_packages);
+                                missing_package_deps.extend(result.required_common_packages);
                             }
                         }
                     }
                 }
 
                 {
-                    let mut missing_package_deps = ctx
-                        .wit
-                        .missing_generic_source_package_deps(component_name)?;
                     missing_package_deps.retain(|name| !packages_from_lib_deps.contains(name));
 
                     if !missing_package_deps.is_empty() {

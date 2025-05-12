@@ -22,7 +22,7 @@ use crate::wasm_rpc_stubgen::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, StubDefinition,
 };
 use crate::wasm_rpc_stubgen::wit_encode::EncodedWitDir;
-use crate::wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
+use crate::wasm_rpc_stubgen::wit_resolve::{ResolvedWitDir, WitDepsResolver};
 use crate::wasm_rpc_stubgen::{cargo, naming};
 use crate::wasm_rpc_stubgen::{GOLEM_RPC_WIT_VERSION, WASI_WIT_VERSION};
 use anyhow::{anyhow, bail, Context};
@@ -1078,11 +1078,17 @@ fn extract_exports_package(
     Ok((package.clone(), exports_package))
 }
 
+pub struct ExtractWasmInterfaceResult {
+    pub new_packages: BTreeSet<PackageName>,
+    pub required_common_packages: BTreeSet<PackageName>,
+}
+
 pub fn extract_wasm_interface_as_wit_dep(
+    common_deps: &WitDepsResolver,
     dep_name: &str,
     wasm: &Path,
     wit_dir: &Path,
-) -> anyhow::Result<BTreeSet<PackageName>> {
+) -> anyhow::Result<ExtractWasmInterfaceResult> {
     log_action(
         "Extracting",
         format!(
@@ -1096,34 +1102,51 @@ pub fn extract_wasm_interface_as_wit_dep(
     let component_bytes = std::fs::read(wasm)?;
     let wasm = wit_parser::decoding::decode(&component_bytes)?;
 
-    let mut result = BTreeSet::new();
+    let mut result = ExtractWasmInterfaceResult {
+        new_packages: BTreeSet::new(),
+        required_common_packages: BTreeSet::new(),
+    };
     let pkg_group = UnresolvedPackageGroup::parse_dir(wit_dir)?;
+
     for (id, package) in wasm.resolve().packages.iter() {
         let contains = pkg_group.nested.iter().any(|pkg| pkg.name == package.name);
 
         if !contains {
-            log_action(
-                "Adding",
-                format!(
-                    "package {} from dependency {}",
-                    package.name.to_string().log_color_highlight(),
-                    dep_name.log_color_highlight(),
-                ),
-            );
+            if common_deps.package(&package.name).is_ok() {
+                log_action(
+                    "Copying",
+                    format!(
+                        "package {} the common WIT directory for dependency {}",
+                        package.name.to_string().log_color_highlight(),
+                        dep_name.log_color_highlight(),
+                    ),
+                );
 
-            let target_dir = wit_dir
-                .join(naming::wit::DEPS_DIR)
-                .join(package_dep_dir_name_from_parser(&package.name));
-            fs::create_dir_all(&target_dir)?;
-            let file_name = format!("{}.wit", package.name.name);
+                result.required_common_packages.insert(package.name.clone());
+            } else {
+                log_action(
+                    "Adding",
+                    format!(
+                        "package {} from dependency {}",
+                        package.name.to_string().log_color_highlight(),
+                        dep_name.log_color_highlight(),
+                    ),
+                );
 
-            let mut wit_printer = WitPrinter::default();
-            wit_printer.emit_docs(true);
+                let target_dir = wit_dir
+                    .join(naming::wit::DEPS_DIR)
+                    .join(package_dep_dir_name_from_parser(&package.name));
+                fs::create_dir_all(&target_dir)?;
+                let file_name = format!("{}.wit", package.name.name);
 
-            wit_printer.print(wasm.resolve(), id, &[])?;
-            std::fs::write(target_dir.join(file_name), wit_printer.output.to_string())?;
+                let mut wit_printer = WitPrinter::default();
+                wit_printer.emit_docs(true);
 
-            result.insert(package.name.clone());
+                wit_printer.print(wasm.resolve(), id, &[])?;
+                std::fs::write(target_dir.join(file_name), wit_printer.output.to_string())?;
+
+                result.new_packages.insert(package.name.clone());
+            }
         } else {
             log_action(
                 "Skipping",
