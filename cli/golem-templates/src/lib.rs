@@ -430,6 +430,7 @@ fn transform(str: impl AsRef<str>, parameters: &TemplateParameters, mode: Transf
         .replace("PackNs", &parameters.package_name.namespace_title_case())
         .replace("__pack__", &parameters.package_name.namespace_snake_case())
         .replace("__name__", &parameters.package_name.name_snake_case())
+        .replace("__cn__", "componentName")
     };
 
     let transform_manifest_hints = |str: &str| -> String {

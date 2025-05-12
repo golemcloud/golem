@@ -16,7 +16,7 @@ dev = [
 package = false
 override-dependencies = [
   # Golem fork of urllib3 that enables usage with WASI
-  "urllib3 @ git+https://github.com/golemcloud/urllib3@1273c71ff7fccfdb5d1415118fa43e786b9d1818"
+  "urllib3 @ git+https://github.com/golemcloud/urllib3@799b3c60acca32fe4a17407f06a30cbadc0f129e"
 ]
 
 [tool.uv.sources]
