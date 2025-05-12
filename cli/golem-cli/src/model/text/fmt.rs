@@ -15,6 +15,7 @@
 use crate::fuzzy::Match;
 use crate::log::{log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::deploy_diff::DiffSerialize;
+use crate::model::text::component::is_sensitive_env_var_name;
 use crate::model::{Format, WorkerNameMatch};
 use anyhow::Context;
 use cli_table::{Row, Title, WithTitle};
@@ -297,6 +298,19 @@ pub fn format_ifs_entry(files: &[InitialComponentFile]) -> String {
                 file.path.as_path().as_str().log_color_highlight(),
                 file.key.0.as_str().black()
             )
+        })
+        .join("\n")
+}
+
+pub fn format_env(show_sensitive: bool, env: &BTreeMap<String, String>) -> String {
+    let hidden = "*****".log_color_highlight();
+    env.iter()
+        .map(|(k, v)| {
+            if is_sensitive_env_var_name(show_sensitive, k) {
+                format!("{}={}", k, hidden)
+            } else {
+                format!("{}={}", k, v.log_color_highlight())
+            }
         })
         .join("\n")
 }

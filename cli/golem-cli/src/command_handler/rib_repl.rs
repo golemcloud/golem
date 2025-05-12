@@ -16,6 +16,7 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::logln;
+use crate::model::component::ComponentView;
 use crate::model::text::component::ComponentReplStartedView;
 use crate::model::text::fmt::log_error;
 use crate::model::{ComponentName, ComponentNameMatchKind, IdempotencyKey, WorkerName};
@@ -99,7 +100,10 @@ impl RibReplHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ComponentReplStartedView(component.into()));
+            .log_view(&ComponentReplStartedView(ComponentView::new(
+                self.ctx.show_sensitive(),
+                component,
+            )));
 
         logln("");
 

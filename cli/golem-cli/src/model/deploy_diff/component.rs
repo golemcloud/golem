@@ -15,11 +15,12 @@
 use crate::model::app::AppComponentName;
 use crate::model::component::Component;
 use crate::model::deploy_diff::DiffSerialize;
+use crate::model::text::component::is_sensitive_env_var_name;
 use crate::model::ComponentName;
 use golem_client::model::{DynamicLinkedInstance, DynamicLinking};
 use golem_common::model::{ComponentFilePermissions, ComponentType};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -38,10 +39,13 @@ pub struct DiffableComponent {
     pub files: BTreeMap<String, DiffableComponentFile>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dynamic_linking: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
 }
 
 impl DiffableComponent {
     pub fn from_server(
+        show_sensitive: bool,
         component: &Component,
         component_hash: String,
         files: BTreeMap<String, DiffableComponentFile>,
@@ -70,15 +74,18 @@ impl DiffableComponent {
                     )
                 })
                 .collect(),
+            env: masked_env(show_sensitive, &component.env),
         })
     }
 
     pub fn from_manifest(
+        show_sensitive: bool,
         component_name: &AppComponentName,
         component_hash: String,
         component_type: ComponentType,
         files: BTreeMap<String, DiffableComponentFile>,
         dynamic_linking: Option<&DynamicLinking>,
+        env: Option<&HashMap<String, String>>,
     ) -> anyhow::Result<Self> {
         Ok(DiffableComponent {
             component_name: component_name.as_str().into(),
@@ -104,6 +111,9 @@ impl DiffableComponent {
                     })
                 })
                 .collect(),
+            env: env
+                .map(|env| masked_env(show_sensitive, env))
+                .unwrap_or_default(),
         })
     }
 }
@@ -112,4 +122,22 @@ impl DiffSerialize for DiffableComponent {
     fn to_diffable_string(&self) -> anyhow::Result<String> {
         Ok(serde_yaml::to_string(&self)?)
     }
+}
+
+fn masked_env<'a, I: IntoIterator<Item = (&'a String, &'a String)>>(
+    show_sensitive: bool,
+    env: I,
+) -> BTreeMap<String, String> {
+    env.into_iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                if is_sensitive_env_var_name(show_sensitive, k) {
+                    format!("<hashed-value:{}>", blake3::hash(v.as_bytes()).to_hex())
+                } else {
+                    v.clone()
+                },
+            )
+        })
+        .collect()
 }

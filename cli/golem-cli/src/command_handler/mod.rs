@@ -66,7 +66,7 @@ mod api;
 mod app;
 mod cloud;
 mod component;
-mod interactive;
+pub(crate) mod interactive;
 mod log;
 mod partial_match;
 mod plugin;
@@ -105,9 +105,12 @@ pub struct CommandHandler<Hooks: CommandHandlerHooks> {
 }
 
 impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
+    // NOTE: setting log_output_for_help also means that we are loading the context for showing
+    //       help or messages with help, meaning validation warns and confirms should be silenced
+    //       for the manifest
     async fn new(
         global_flags: GolemCliGlobalFlags,
-        log_output: Option<Output>,
+        log_output_for_help: Option<Output>,
         hooks: Arc<Hooks>,
     ) -> anyhow::Result<Self> {
         let start_local_server_yes = Arc::new(tokio::sync::RwLock::new(global_flags.yes));
@@ -115,7 +118,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             ctx: Arc::new(
                 Context::new(
                     global_flags,
-                    log_output,
+                    log_output_for_help,
                     start_local_server_yes.clone(),
                     Self::start_local_server_hook(start_local_server_yes),
                 )
@@ -159,10 +162,10 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
     async fn new_with_init_hint_error_handler(
         global_flags: GolemCliGlobalFlags,
-        log_output: Option<Output>,
+        log_output_for_help: Option<Output>,
         hooks: Arc<Hooks>,
     ) -> anyhow::Result<Self> {
-        match Self::new(global_flags.clone(), log_output, hooks).await {
+        match Self::new(global_flags.clone(), log_output_for_help, hooks).await {
             Ok(ok) => Ok(ok),
             Err(error) => {
                 set_log_output(Output::Stderr);

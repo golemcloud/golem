@@ -107,6 +107,12 @@ pub enum TemplateKind {
     },
 }
 
+impl TemplateKind {
+    pub fn is_common(&self) -> bool {
+        matches!(self, TemplateKind::ComposableAppCommon { .. })
+    }
+}
+
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, EnumIter, Serialize, Deserialize,
 )]
@@ -428,7 +434,7 @@ pub struct Template {
     pub transform: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TemplateParameters {
     pub component_name: ComponentName,
     pub package_name: PackageName,

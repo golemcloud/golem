@@ -17,11 +17,12 @@ use crate::auth::{Auth, CloudAuthentication};
 use crate::cloud::{AccountId, CloudAuthenticationConfig};
 use crate::command::shared_args::UpdateOrRedeployArgs;
 use crate::command::GolemCliGlobalFlags;
+use crate::command_handler::interactive::InteractiveHandler;
 use crate::config::{
     ClientConfig, CloudProfile, Config, HttpClientConfig, NamedProfile, OssProfile, Profile,
     ProfileConfig, ProfileKind, ProfileName,
 };
-use crate::error::{ContextInitHintError, HintError};
+use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
 use crate::model::app::{AppBuildStep, ApplicationSourceMode};
 use crate::model::app::{ApplicationConfig, BuildProfileName as AppBuildProfileName};
@@ -86,6 +87,7 @@ pub struct Context {
     project: Option<ProjectReference>,
     client_config: ClientConfig,
     yes: bool,
+    show_sensitive: bool,
     #[allow(unused)]
     start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
 
@@ -105,7 +107,7 @@ pub struct Context {
 impl Context {
     pub async fn new(
         global_flags: GolemCliGlobalFlags,
-        log_output: Option<Output>,
+        log_output_for_help: Option<Output>,
         start_local_server_yes: Arc<tokio::sync::RwLock<bool>>,
         start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
     ) -> anyhow::Result<Self> {
@@ -115,17 +117,26 @@ impl Context {
         let config_dir = global_flags.config_dir();
         let custom_cloud_profile_name = global_flags.custom_global_cloud_profile.clone();
         let local_server_auto_start = global_flags.local_server_auto_start;
+        let show_sensitive = global_flags.show_sensitive;
 
         let mut yes = global_flags.yes;
         let mut update_or_redeploy = UpdateOrRedeployArgs::none();
 
         let mut app_context_config = ApplicationContextConfig::new(global_flags);
 
-        let (manifest_profiles, app_source_mode) =
-            ApplicationContext::preload_sources_and_get_profiles(
-                app_context_config.app_source_mode(),
-            )?;
-        let manifest_profiles = manifest_profiles.unwrap_or_default();
+        let preloaded_app = ApplicationContext::preload_sources_and_get_profiles(
+            app_context_config.app_source_mode(),
+        )?;
+
+        if preloaded_app.loaded_with_warnings
+            && log_output_for_help.is_none()
+            && !InteractiveHandler::confirm_manifest_profile_warning(yes)?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
+        let app_source_mode = preloaded_app.source_mode;
+        let manifest_profiles = preloaded_app.profiles.unwrap_or_default();
 
         let (available_profile_names, profile, manifest_profile) = load_merged_profiles(
             &config_dir,
@@ -177,7 +188,7 @@ impl Context {
         };
 
         let format = format.unwrap_or_else(|| profile.profile.format().unwrap_or(Format::Text));
-        let log_output = log_output.unwrap_or(match format {
+        let log_output = log_output_for_help.unwrap_or(match format {
             Format::Json => Output::Stderr,
             Format::Yaml => Output::Stderr,
             Format::Text => Output::Stdout,
@@ -219,12 +230,14 @@ impl Context {
             auth_token_override: auth_token,
             project,
             yes,
+            show_sensitive,
             start_local_server,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
             file_download_client,
             templates: std::sync::OnceLock::new(),
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
+                yes,
                 app_source_mode,
             )),
             rib_repl_state: tokio::sync::RwLock::default(),
@@ -254,6 +267,10 @@ impl Context {
 
     pub fn yes(&self) -> bool {
         self.yes
+    }
+
+    pub fn show_sensitive(&self) -> bool {
+        self.show_sensitive
     }
 
     pub fn update_or_redeploy(&self) -> &UpdateOrRedeployArgs {
@@ -401,13 +418,13 @@ impl Context {
             &self.available_profile_names,
             &self.app_context_config,
             self.file_download_client.clone(),
-        );
+        )?;
         Ok(state)
     }
 
     pub async fn unload_app_context(&self) {
         let mut state = self.app_context_state.write().await;
-        *state = ApplicationContextState::new(self.app_context_config.app_source_mode());
+        *state = ApplicationContextState::new(self.yes, self.app_context_config.app_source_mode());
     }
 
     async fn set_app_ctx_init_config<T>(
@@ -746,6 +763,7 @@ impl ApplicationContextConfig {
 
 #[derive()]
 pub struct ApplicationContextState {
+    yes: bool,
     app_source_mode: Option<ApplicationSourceMode>,
     pub silent_init: bool,
     pub skip_up_to_date_checks: bool,
@@ -757,8 +775,9 @@ pub struct ApplicationContextState {
 }
 
 impl ApplicationContextState {
-    pub fn new(source_mode: ApplicationSourceMode) -> Self {
+    pub fn new(yes: bool, source_mode: ApplicationSourceMode) -> Self {
         Self {
+            yes,
             app_source_mode: Some(source_mode),
             silent_init: false,
             skip_up_to_date_checks: false,
@@ -774,9 +793,9 @@ impl ApplicationContextState {
         available_profile_names: &BTreeSet<ProfileName>,
         config: &ApplicationContextConfig,
         file_download_client: reqwest::Client,
-    ) {
+    ) -> anyhow::Result<()> {
         if self.app_context.is_some() {
-            return;
+            return Ok(());
         }
 
         let _log_output = self
@@ -803,7 +822,19 @@ impl ApplicationContextState {
                 file_download_client,
             )
             .map_err(Arc::new),
-        )
+        );
+
+        if !self.silent_init {
+            if let Some(Ok(Some(app_ctx))) = &self.app_context {
+                if app_ctx.loaded_with_warnings
+                    && !InteractiveHandler::confirm_manifest_app_warning(self.yes)?
+                {
+                    bail!(NonSuccessfulExit)
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub fn opt(&self) -> anyhow::Result<Option<&ApplicationContext>> {

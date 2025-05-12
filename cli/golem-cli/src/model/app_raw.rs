@@ -80,6 +80,27 @@ pub struct ComponentTemplate {
     pub default_profile: Option<String>,
 }
 
+impl ComponentTemplate {
+    pub fn merge_common_properties_into_profiles(self) -> Self {
+        Self {
+            component_properties: self.component_properties.clone(),
+            profiles: self
+                .profiles
+                .into_iter()
+                .map(|(name, profile)| {
+                    (
+                        name,
+                        self.component_properties
+                            .clone()
+                            .merge_with_overrides(profile),
+                    )
+                })
+                .collect(),
+            default_profile: self.default_profile,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Component {
@@ -91,6 +112,36 @@ pub struct Component {
     pub profiles: HashMap<String, ComponentProperties>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<String>,
+}
+
+impl Component {
+    pub fn merge_common_properties_into_profiles<'a, I: IntoIterator<Item = &'a String>>(
+        mut self,
+        profile_names: I,
+    ) -> Self {
+        Self {
+            template: self.template.clone(),
+            component_properties: self.component_properties.clone(),
+            profiles: {
+                profile_names
+                    .into_iter()
+                    .map(|name| {
+                        (
+                            name.clone(),
+                            match self.profiles.remove(name) {
+                                Some(profile) => self
+                                    .component_properties
+                                    .clone()
+                                    .merge_with_overrides(profile),
+                                None => self.component_properties.clone(),
+                            },
+                        )
+                    })
+                    .collect()
+            },
+            default_profile: self.default_profile,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -223,49 +274,53 @@ pub struct ComponentProperties {
     pub files: Vec<InitialComponentFile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginInstallation>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, String>,
 }
 
 impl ComponentProperties {
-    pub fn defined_property_names(&self) -> Vec<&str> {
-        let mut vec = Vec::<&str>::new();
-
-        if self.source_wit.is_some() {
-            vec.push("sourceWit");
+    pub fn merge_with_overrides(mut self, overrides: ComponentProperties) -> Self {
+        if overrides.source_wit.is_some() {
+            self.source_wit = overrides.source_wit;
         }
 
-        if self.generated_wit.is_some() {
-            vec.push("generatedWit");
+        if overrides.generated_wit.is_some() {
+            self.generated_wit = overrides.generated_wit;
         }
 
-        if self.component_wasm.is_some() {
-            vec.push("componentWasm");
+        if overrides.component_wasm.is_some() {
+            self.component_wasm = overrides.component_wasm;
         }
 
-        if self.linked_wasm.is_some() {
-            vec.push("linkedWasm");
+        if overrides.linked_wasm.is_some() {
+            self.linked_wasm = overrides.linked_wasm;
         }
 
-        if !self.build.is_empty() {
-            vec.push("build");
+        if !overrides.build.is_empty() {
+            self.build = overrides.build;
         }
 
-        if !self.custom_commands.is_empty() {
-            vec.push("customCommands");
+        if !overrides.custom_commands.is_empty() {
+            self.custom_commands.extend(overrides.custom_commands)
         }
 
-        if self.component_type.is_some() {
-            vec.push("componentType");
+        if overrides.component_type.is_some() {
+            self.component_type = overrides.component_type;
         }
 
-        if !self.files.is_empty() {
-            vec.push("files");
+        if !overrides.files.is_empty() {
+            self.files.extend(overrides.files);
         }
 
-        if !self.plugins.is_empty() {
-            vec.push("plugins");
+        if !overrides.plugins.is_empty() {
+            self.plugins.extend(overrides.plugins);
         }
 
-        vec
+        if !overrides.env.is_empty() {
+            self.env.extend(overrides.env);
+        }
+
+        self
     }
 }
 

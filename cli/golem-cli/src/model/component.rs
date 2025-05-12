@@ -71,6 +71,7 @@ pub struct Component {
     pub project_id: Option<ProjectId>,
     pub created_at: Option<DateTime<Utc>>,
     pub files: Vec<InitialComponentFile>,
+    pub env: BTreeMap<String, String>,
 }
 
 impl From<golem_client::model::Component> for Component {
@@ -84,6 +85,7 @@ impl From<golem_client::model::Component> for Component {
             project_id: None,
             created_at: Some(value.created_at),
             files: value.files,
+            env: value.env.into_iter().collect(),
         }
     }
 }
@@ -99,6 +101,7 @@ impl From<golem_cloud_client::model::Component> for Component {
             created_at: Some(value.created_at),
             component_type: value.component_type,
             files: value.files,
+            env: value.env.into_iter().collect(),
         }
     }
 }
@@ -164,6 +167,9 @@ impl ComponentUpsertResult {
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentView {
+    #[serde(skip)]
+    pub show_sensitive: bool,
+
     pub component_name: ComponentName,
     pub component_id: Uuid,
     pub component_type: ComponentType,
@@ -176,27 +182,14 @@ pub struct ComponentView {
     pub exports: Vec<String>,
     pub dynamic_linking: BTreeMap<String, BTreeMap<String, String>>,
     pub files: Vec<InitialComponentFile>,
+    pub env: BTreeMap<String, String>,
 }
 
-impl TrimDateTime for ComponentView {
-    fn trim_date_time_ms(self) -> Self {
-        Self {
-            created_at: self.created_at.trim_date_time_ms(),
-            ..self
-        }
-    }
-}
-
-impl From<Component> for ComponentView {
-    fn from(value: Component) -> Self {
-        (&value).into()
-    }
-}
-
-impl From<&Component> for ComponentView {
-    fn from(value: &Component) -> Self {
+impl ComponentView {
+    pub fn new(show_sensitive: bool, value: Component) -> Self {
         ComponentView {
-            component_name: value.component_name.clone(),
+            show_sensitive,
+            component_name: value.component_name,
             component_id: value.versioned_component_id.component_id,
             component_type: value.component_type,
             component_version: value.versioned_component_id.version,
@@ -207,10 +200,10 @@ impl From<&Component> for ComponentView {
             dynamic_linking: value
                 .metadata
                 .dynamic_linking
-                .iter()
+                .into_iter()
                 .map(|(name, link)| {
                     (
-                        name.clone(),
+                        name,
                         match link {
                             DynamicLinkedInstance::WasmRpc(links) => links
                                 .targets
@@ -223,7 +216,17 @@ impl From<&Component> for ComponentView {
                     )
                 })
                 .collect(),
-            files: value.files.clone(),
+            files: value.files,
+            env: value.env,
+        }
+    }
+}
+
+impl TrimDateTime for ComponentView {
+    fn trim_date_time_ms(self) -> Self {
+        Self {
+            created_at: self.created_at.trim_date_time_ms(),
+            ..self
         }
     }
 }

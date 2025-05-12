@@ -324,15 +324,14 @@ pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum ResolvedComponentProperties {
-    Properties {
+    NonProfiled {
         template_name: Option<TemplateName>,
-        any_template_overrides: bool,
         properties: ComponentProperties,
     },
-    BuildProfiles {
+    Profiled {
         template_name: Option<TemplateName>,
-        any_template_overrides: HashMap<BuildProfileName, bool>,
         default_profile: BuildProfileName,
         profiles: HashMap<BuildProfileName, ComponentProperties>,
     },
@@ -341,8 +340,6 @@ pub enum ResolvedComponentProperties {
 pub struct ComponentEffectivePropertySource<'a> {
     pub template_name: Option<&'a TemplateName>,
     pub profile: Option<&'a BuildProfileName>,
-    pub is_requested_profile: bool,
-    pub any_template_overrides: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -689,8 +686,8 @@ impl Application {
         component_name: &AppComponentName,
     ) -> BTreeSet<BuildProfileName> {
         match &self.component(component_name).properties {
-            ResolvedComponentProperties::Properties { .. } => BTreeSet::new(),
-            ResolvedComponentProperties::BuildProfiles { profiles, .. } => {
+            ResolvedComponentProperties::NonProfiled { .. } => BTreeSet::new(),
+            ResolvedComponentProperties::Profiled { profiles, .. } => {
                 profiles.keys().cloned().collect()
             }
         }
@@ -702,19 +699,14 @@ impl Application {
         profile: Option<&'a BuildProfileName>,
     ) -> ComponentEffectivePropertySource<'a> {
         match &self.component(component_name).properties {
-            ResolvedComponentProperties::Properties {
+            ResolvedComponentProperties::NonProfiled { template_name, .. } => {
+                ComponentEffectivePropertySource {
+                    template_name: template_name.as_ref(),
+                    profile: None,
+                }
+            }
+            ResolvedComponentProperties::Profiled {
                 template_name,
-                any_template_overrides,
-                ..
-            } => ComponentEffectivePropertySource {
-                template_name: template_name.as_ref(),
-                profile: None,
-                is_requested_profile: false,
-                any_template_overrides: *any_template_overrides,
-            },
-            ResolvedComponentProperties::BuildProfiles {
-                template_name,
-                any_template_overrides,
                 default_profile,
                 profiles,
             } => {
@@ -728,17 +720,9 @@ impl Application {
                     })
                     .unwrap_or_else(|| default_profile);
 
-                let is_requested_profile = Some(&effective_profile) == profile.as_ref();
-
-                let any_template_overrides = any_template_overrides
-                    .get(effective_profile)
-                    .cloned()
-                    .unwrap_or_default();
                 ComponentEffectivePropertySource {
                     template_name: template_name.as_ref(),
                     profile: Some(effective_profile),
-                    is_requested_profile,
-                    any_template_overrides,
                 }
             }
         }
@@ -750,8 +734,8 @@ impl Application {
         profile: Option<&BuildProfileName>,
     ) -> &ComponentProperties {
         match &self.component(component_name).properties {
-            ResolvedComponentProperties::Properties { properties, .. } => properties,
-            ResolvedComponentProperties::BuildProfiles {
+            ResolvedComponentProperties::NonProfiled { properties, .. } => properties,
+            ResolvedComponentProperties::Profiled {
                 default_profile,
                 profiles,
                 ..
@@ -970,9 +954,10 @@ pub struct ComponentProperties {
     pub build: Vec<app_raw::ExternalCommand>,
     pub custom_commands: HashMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
-    pub component_type: AppComponentType,
+    pub component_type: Option<AppComponentType>,
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
+    pub env: HashMap<String, String>,
 }
 
 impl ComponentProperties {
@@ -992,9 +977,10 @@ impl ComponentProperties {
             build: raw.build,
             custom_commands: raw.custom_commands,
             clean: raw.clean,
-            component_type: raw.component_type.unwrap_or_default(),
+            component_type: raw.component_type,
             files,
             plugins,
+            env: Self::validate_and_normalize_env(validation, raw.env),
         })
     }
 
@@ -1017,47 +1003,38 @@ impl ComponentProperties {
         validation: &mut ValidationBuilder,
         source: &Path,
         overrides: app_raw::ComponentProperties,
-    ) -> anyhow::Result<Option<(Self, bool)>> {
-        let mut any_overrides = false;
+    ) -> anyhow::Result<Option<Self>> {
         let mut any_errors = false;
 
         if let Some(source_wit) = overrides.source_wit {
             self.source_wit = source_wit;
-            any_overrides = true;
         }
 
         if let Some(generated_wit) = overrides.generated_wit {
             self.generated_wit = generated_wit;
-            any_overrides = true;
         }
 
         if let Some(component_wasm) = overrides.component_wasm {
             self.component_wasm = component_wasm;
-            any_overrides = true;
         }
 
         if overrides.linked_wasm.is_some() {
             self.linked_wasm = overrides.linked_wasm;
-            any_overrides = true;
         }
 
         if !overrides.build.is_empty() {
             self.build = overrides.build;
-            any_overrides = true;
         }
 
         if !overrides.custom_commands.is_empty() {
-            any_overrides = true;
             self.custom_commands.extend(overrides.custom_commands)
         }
 
-        if let Some(component_type) = overrides.component_type {
-            self.component_type = component_type;
-            any_overrides = true;
+        if overrides.component_type.is_some() {
+            self.component_type = overrides.component_type;
         }
 
         if !overrides.files.is_empty() {
-            any_overrides = true;
             match InitialComponentFile::from_raw_vec(validation, source, overrides.files) {
                 Some(files) => {
                     self.files.extend(files);
@@ -1069,7 +1046,6 @@ impl ComponentProperties {
         }
 
         if !overrides.plugins.is_empty() {
-            any_overrides = true;
             match PluginInstallation::from_raw_vec(validation, source, overrides.plugins) {
                 Some(plugins) => {
                     self.plugins.extend(plugins);
@@ -1080,19 +1056,57 @@ impl ComponentProperties {
             }
         }
 
-        Ok((!any_errors).then_some((self, any_overrides)))
+        if !overrides.env.is_empty() {
+            self.env
+                .extend(Self::validate_and_normalize_env(validation, overrides.env));
+        }
+
+        Ok((!any_errors).then_some(self))
+    }
+
+    pub fn component_type(&self) -> AppComponentType {
+        self.component_type.unwrap_or_default()
     }
 
     pub fn is_ephemeral(&self) -> bool {
-        self.component_type == AppComponentType::Ephemeral
+        self.component_type() == AppComponentType::Ephemeral
     }
 
     pub fn is_durable(&self) -> bool {
-        self.component_type == AppComponentType::Durable
+        self.component_type() == AppComponentType::Durable
     }
 
     pub fn is_deployable(&self) -> bool {
-        self.component_type.as_deployable_component_type().is_some()
+        self.component_type()
+            .as_deployable_component_type()
+            .is_some()
+    }
+
+    fn validate_and_normalize_env(
+        validation: &mut ValidationBuilder,
+        env: HashMap<String, String>,
+    ) -> HashMap<String, String> {
+        env.into_iter()
+            .map(|(key, value)| {
+                let upper_case_key = key.to_uppercase();
+                if upper_case_key != key {
+                    validation.add_error(format!(
+                        "Only uppercase environment variable names are allowed, found: {}",
+                        key.log_color_highlight()
+                    ));
+                }
+                if upper_case_key.starts_with("GOLEM_") {
+                    validation.add_warn(format!(
+                        concat!(
+                        "Using environment names starting with 'GOLEM_' ({}) is not recommended, ",
+                        "as those are reserved for variables set by Golem and might be overridden."
+                        ),
+                        key.log_color_highlight()
+                    ));
+                }
+                (upper_case_key, value)
+            })
+            .collect::<HashMap<_, _>>()
     }
 }
 
@@ -1529,7 +1543,12 @@ mod app_builder {
                     }
 
                     for (template_name, template) in app.application.templates {
-                        self.add_raw_template(validation, &app.source, template_name, template);
+                        self.add_and_resolve_raw_template(
+                            validation,
+                            &app.source,
+                            template_name,
+                            template,
+                        );
                     }
 
                     for (component_name, component) in app.application.components {
@@ -1725,52 +1744,55 @@ mod app_builder {
             }
         }
 
-        fn add_raw_template(
+        fn add_and_resolve_raw_template(
             &mut self,
             validation: &mut ValidationBuilder,
             source: &Path,
             template_name: String,
             template: app_raw::ComponentTemplate,
         ) {
-            let valid =
-                validation.with_context(vec![("template", template_name.clone())], |validation| {
-                    if template.profiles.is_empty() {
-                        if template.default_profile.is_some() {
-                            validation.add_error(format!(
-                                "When {} is not defined then {} should not be defined",
-                                "profiles".log_color_highlight(),
-                                "defaultProfile".log_color_highlight()
-                            ));
-                        }
-                    } else {
-                        let defined_property_names =
-                            template.component_properties.defined_property_names();
-                        if !defined_property_names.is_empty() {
-                            for property_name in defined_property_names {
+            let template = template.merge_common_properties_into_profiles();
+
+            validation.with_context(vec![("template", template_name.clone())], |validation| {
+                if template.profiles.is_empty() {
+                    if template.default_profile.is_some() {
+                        validation.add_error(format!(
+                            "Property {} is not allowed if no {} are defined",
+                            "defaultProfile".log_color_highlight(),
+                            "profiles".log_color_highlight(),
+                        ));
+                    }
+                } else {
+                    match &template.default_profile {
+                        Some(default_profile) => {
+                            if !template.profiles.contains_key(default_profile) {
                                 validation.add_error(format!(
-                                    "When {} is defined then {} should not be defined",
-                                    "profiles".log_color_highlight(),
-                                    property_name.log_color_highlight()
-                                ));
+                                    "Unknown {}: {}\n\n{}",
+                                    "defaultProfile".log_color_highlight(),
+                                    default_profile.log_color_highlight(),
+                                    self.available_profiles(
+                                        template.profiles.keys().map(|s| s.as_str()),
+                                        default_profile
+                                    ),
+                                ))
                             }
                         }
-
-                        if template.default_profile.is_none() {
+                        None => {
                             validation.add_error(format!(
-                                "When {} is defined then {} is mandatory",
+                                "Property {} is mandatory when using {}",
+                                "defaultProfile".log_color_highlight(),
                                 "profiles".log_color_highlight(),
-                                "defaultProfile".log_color_highlight()
                             ));
                         }
                     }
-                });
+                }
+            });
 
             let template_name = TemplateName::from(template_name);
             if self.add_entity_source(
                 UniqueSourceCheckedEntityKey::Template(template_name.clone()),
                 source,
-            ) && valid
-            {
+            ) {
                 self.templates.insert(template_name, template);
             }
         }
@@ -1789,8 +1811,8 @@ mod app_builder {
                         let binary_component_source = match (dependency.target, dependency.path, dependency.url) {
                             (Some(target_name), None, None) => {
                                 Some(BinaryComponentSource::AppComponent {
-                                                    name: target_name.into(),
-                                                })
+                                    name: target_name.into(),
+                                })
                             }
                             (None, Some(path), None) => {
                                 Some(BinaryComponentSource::LocalFile { path: Path::new(&path).to_path_buf() })
@@ -2017,8 +2039,8 @@ mod app_builder {
                     let properties = match &component.template {
                         Some(template_name) => {
                             let template_name = TemplateName::from(template_name.clone());
-                            match self.templates.get_mut(&template_name) {
-                                Some(template) => Self::resolve_templated_component_properties(
+                            match self.templates.get(&template_name) {
+                                Some(template) => self.resolve_templated_component_properties(
                                     validation,
                                     &source,
                                     template_env,
@@ -2037,7 +2059,7 @@ mod app_builder {
                                 }
                             }
                         }
-                        None => Self::resolve_directly_defined_component_properties(
+                        None => self.resolve_directly_defined_component_properties(
                             validation, &source, component,
                         ),
                     };
@@ -2050,82 +2072,39 @@ mod app_builder {
         }
 
         fn resolve_templated_component_properties(
+            &self,
             validation: &mut ValidationBuilder,
             source: &Path,
             template_env: &minijinja::Environment,
             template_name: TemplateName,
-            template: &mut app_raw::ComponentTemplate,
+            template: &app_raw::ComponentTemplate,
             component_name: AppComponentName,
             component: app_raw::Component,
         ) -> Option<ResolvedComponentProperties> {
             let (properties, _) = validation.with_context_returning(
                 vec![("template", template_name.to_string())],
                 |validation| {
-                    let overrides_compatible = validation.with_context(vec![], |validation| {
-                        let defined_property_names = component.component_properties.defined_property_names();
-
-                        if !template.profiles.is_empty() && !defined_property_names.is_empty() {
-                            for property_name in defined_property_names {
-                                validation.add_error(
-                                    format!(
-                                        "Property {} cannot be used, as the component uses a template with profiles",
-                                        property_name.log_color_highlight()
-                                    )
-                                );
-                            }
-                        }
-
-                        for profile_name in component.profiles.keys() {
-                            if !template.profiles.contains_key(profile_name) {
-                                validation.add_error(
-                                    format!(
-                                        "Profile {} cannot be used, as the component uses template {} with the following profiles: {}",
-                                        profile_name.log_color_highlight(),
-                                        template_name.as_str().log_color_highlight(),
-                                        template.profiles.keys().map(|s| s.log_color_highlight()).join(", ")
-                                    )
-                                );
-                            }
-                        }
-
-                        if let Some(default_profile) = &component.default_profile {
-                            if !template.profiles.contains_key(default_profile) {
-                                validation.add_error(
-                                    format!(
-                                        "Default profile override {} cannot be used, as the component uses template {} with the following profiles: {}",
-                                        default_profile.log_color_highlight(),
-                                        template_name.as_str().log_color_highlight(),
-                                        template.profiles.keys().map(|s| s.log_color_highlight()).join(", ")
-                                    )
-                                );
-                            }
-                        }
-                    });
-
-                    overrides_compatible.then(|| {
-                        if template.profiles.is_empty() {
-                            Self::resolve_templated_non_profiled_component_properties(
-                                validation,
-                                source,
-                                template_env,
-                                template_name,
-                                template,
-                                component_name,
-                                component.component_properties,
-                            )
-                        } else {
-                            Self::resolve_templated_profiled_component_properties(
-                                validation,
-                                source,
-                                template_env,
-                                template_name,
-                                template,
-                                component_name,
-                                component.profiles,
-                                component.default_profile,
-                            )
-                        }
-                    }).flatten()
+                    if template.profiles.is_empty() {
+                        self.resolve_templated_non_profiled_component_properties(
+                            validation,
+                            source,
+                            template_env,
+                            template_name,
+                            template,
+                            component_name,
+                            component.component_properties,
+                        )
+                    } else {
+                        self.resolve_templated_profiled_component_properties(
+                            validation,
+                            source,
+                            template_env,
+                            template_name,
+                            template,
+                            component_name,
+                            component,
+                        )
+                    }
                 },
             );
 
@@ -2133,6 +2112,7 @@ mod app_builder {
         }
 
         fn resolve_templated_non_profiled_component_properties(
+            &self,
             validation: &mut ValidationBuilder,
             source: &Path,
             template_env: &minijinja::Environment,
@@ -2141,7 +2121,7 @@ mod app_builder {
             component_name: AppComponentName,
             component_properties: app_raw::ComponentProperties,
         ) -> Option<ResolvedComponentProperties> {
-            Self::convert_and_validate_templated_component_properties(
+            self.convert_and_validate_templated_component_properties(
                 validation,
                 source,
                 template_env,
@@ -2150,69 +2130,74 @@ mod app_builder {
                 &component_name,
                 Some(component_properties),
             )
-            .map(|(properties, any_template_overrides)| {
-                ResolvedComponentProperties::Properties {
-                    template_name: Some(template_name),
-                    any_template_overrides,
-                    properties,
-                }
+            .map(|properties| ResolvedComponentProperties::NonProfiled {
+                template_name: Some(template_name),
+                properties,
             })
         }
 
         fn resolve_templated_profiled_component_properties(
+            &self,
             validation: &mut ValidationBuilder,
             source: &Path,
             template_env: &minijinja::Environment,
             template_name: TemplateName,
             template: &app_raw::ComponentTemplate,
             component_name: AppComponentName,
-            mut profiles: HashMap<String, app_raw::ComponentProperties>,
-            default_profile: Option<String>,
+            component: app_raw::Component,
         ) -> Option<ResolvedComponentProperties> {
-            let ((profiles, any_template_overrides), valid) =
-                validation.with_context_returning(vec![], |validation| {
-                    let mut resolved_overrides = HashMap::<BuildProfileName, bool>::new();
-                    let mut resolved_profiles =
-                        HashMap::<BuildProfileName, ComponentProperties>::new();
+            let mut component =
+                component.merge_common_properties_into_profiles(template.profiles.keys());
 
-                    for (profile_name, template_component_properties) in &template.profiles {
-                        validation.with_context(
-                            vec![("profile", profile_name.to_string())],
-                            |validation| {
-                                let component_properties = profiles.remove(profile_name);
-                                Self::convert_and_validate_templated_component_properties(
-                                    validation,
-                                    source,
-                                    template_env,
-                                    &template_name,
-                                    template_component_properties,
-                                    &component_name,
-                                    component_properties,
-                                )
-                                .into_iter()
-                                .for_each(
-                                    |(component_properties, any_template_overrides)| {
-                                        resolved_overrides.insert(
-                                            profile_name.clone().into(),
-                                            any_template_overrides,
-                                        );
-                                        resolved_profiles.insert(
-                                            profile_name.clone().into(),
-                                            component_properties,
-                                        );
-                                    },
-                                );
-                            },
-                        );
+            let (profiles, valid) = validation.with_context_returning(vec![], |validation| {
+                let mut resolved_profiles = HashMap::<BuildProfileName, ComponentProperties>::new();
+
+                for (profile_name, template_component_properties) in &template.profiles {
+                    validation.with_context(
+                        vec![("profile", profile_name.to_string())],
+                        |validation| {
+                            let component_properties = component.profiles.remove(profile_name);
+                            self.convert_and_validate_templated_component_properties(
+                                validation,
+                                source,
+                                template_env,
+                                &template_name,
+                                template_component_properties,
+                                &component_name,
+                                component_properties,
+                            )
+                            .into_iter()
+                            .for_each(|component_properties| {
+                                resolved_profiles
+                                    .insert(profile_name.clone().into(), component_properties);
+                            });
+                        },
+                    );
+                }
+
+                if let Some(default_profile) = &component.default_profile {
+                    if !resolved_profiles
+                        .contains_key(&BuildProfileName::from(default_profile.as_str()))
+                    {
+                        validation.add_error(format!(
+                            "Unknown {}: {}\n\n{}",
+                            "defaultProfile".log_color_highlight(),
+                            default_profile.log_color_highlight(),
+                            self.available_profiles(
+                                component.profiles.keys().map(|s| s.as_str()),
+                                default_profile
+                            ),
+                        ))
                     }
+                }
 
-                    (resolved_profiles, resolved_overrides)
-                });
+                resolved_profiles
+            });
 
-            valid.then(|| ResolvedComponentProperties::BuildProfiles {
+            valid.then(|| ResolvedComponentProperties::Profiled {
                 template_name: Some(template_name),
-                any_template_overrides,
-                default_profile: default_profile
+                default_profile: component
+                    .default_profile
                     .or(template.default_profile.clone())
                     .clone()
                     .expect("Missing template default profile")
@@ -2222,22 +2207,24 @@ mod app_builder {
         }
 
         fn resolve_directly_defined_component_properties(
+            &self,
             validation: &mut ValidationBuilder,
             source: &Path,
             component: app_raw::Component,
         ) -> Option<ResolvedComponentProperties> {
             if component.profiles.is_empty() {
-                Self::resolve_directly_defined_non_profiled_component_properties(
+                self.resolve_directly_defined_non_profiled_component_properties(
                     validation, source, component,
                 )
             } else {
-                Self::resolve_directly_defined_profiled_component_properties(
+                self.resolve_directly_defined_profiled_component_properties(
                     validation, source, component,
                 )
             }
         }
 
         fn resolve_directly_defined_profiled_component_properties(
+            &self,
             validation: &mut ValidationBuilder,
             source: &Path,
             component: app_raw::Component,
@@ -2247,28 +2234,27 @@ mod app_builder {
                     Some(default_profile) => {
                         if !component.profiles.contains_key(default_profile) {
                             validation.add_error(format!(
-                                "Default profile {} not found in available profiles: {}",
+                                "Unknown {}: {}\n\n{}",
+                                "defaultProfile".log_color_highlight(),
                                 default_profile.log_color_highlight(),
-                                component
-                                    .profiles
-                                    .keys()
-                                    .map(|s| s.log_color_highlight())
-                                    .join(", ")
-                            ));
+                                self.available_profiles(
+                                    component.profiles.keys().map(|s| s.as_str()),
+                                    default_profile
+                                ),
+                            ))
                         }
                     }
                     None => {
                         validation.add_error(format!(
-                            "When {} is defined then {} is mandatory",
+                            "Property {} is not allowed if no {} are defined",
+                            "defaultProfile".log_color_highlight(),
                             "profiles".log_color_highlight(),
-                            "defaultProfile".log_color_highlight()
                         ));
                     }
                 });
 
-            valid.then(|| ResolvedComponentProperties::BuildProfiles {
+            valid.then(|| ResolvedComponentProperties::Profiled {
                 template_name: None,
-                any_template_overrides: Default::default(),
                 default_profile: component
                     .default_profile
                     .map(BuildProfileName::from)
@@ -2281,7 +2267,7 @@ mod app_builder {
                             let (properties, _) = validation.with_context_returning(
                                 vec![("profile", profile_name.to_string())],
                                 |validation| {
-                                    Self::convert_and_validate_component_properties(
+                                    self.convert_and_validate_component_properties(
                                         validation, source, properties,
                                     )
                                 },
@@ -2296,6 +2282,7 @@ mod app_builder {
         }
 
         fn resolve_directly_defined_non_profiled_component_properties(
+            &self,
             validation: &mut ValidationBuilder,
             source: &Path,
             component: app_raw::Component,
@@ -2303,30 +2290,30 @@ mod app_builder {
             let valid = validation.with_context(vec![], |validation| {
                 if component.default_profile.is_some() {
                     validation.add_error(format!(
-                        "When {} is not defined then {} should not be defined",
+                        "Property {} is not allowed if no {} are defined",
+                        "defaultProfile".log_color_highlight(),
                         "profiles".log_color_highlight(),
-                        "defaultProfile".log_color_highlight()
                     ));
                 }
             });
 
             valid
                 .then(|| {
-                    Self::convert_and_validate_component_properties(
+                    self.convert_and_validate_component_properties(
                         validation,
                         source,
                         component.component_properties,
                     )
                 })
                 .flatten()
-                .map(|properties| ResolvedComponentProperties::Properties {
+                .map(|properties| ResolvedComponentProperties::NonProfiled {
                     template_name: None,
-                    any_template_overrides: false,
                     properties,
                 })
         }
 
         fn convert_and_validate_templated_component_properties(
+            &self,
             validation: &mut ValidationBuilder,
             source: &Path,
             template_env: &minijinja::Environment,
@@ -2334,7 +2321,7 @@ mod app_builder {
             template_properties: &app_raw::ComponentProperties,
             component_name: &AppComponentName,
             component_properties: Option<app_raw::ComponentProperties>,
-        ) -> Option<(ComponentProperties, bool)> {
+        ) -> Option<ComponentProperties> {
             ComponentProperties::from_raw_template(
                 validation,
                 source,
@@ -2364,17 +2351,18 @@ mod app_builder {
                             })
                             .ok()
                             .flatten(),
-                        None => Some((rendered_template_properties, false)),
+                        None => Some(rendered_template_properties),
                     },
                     None => None,
                 },
             )
-            .inspect(|(properties, _)| {
+            .inspect(|properties| {
                 Self::validate_resolved_component_properties(validation, properties)
             })
         }
 
         fn convert_and_validate_component_properties(
+            &self,
             validation: &mut ValidationBuilder,
             source: &Path,
             component_properties: app_raw::ComponentProperties,
@@ -2552,7 +2540,10 @@ mod app_builder {
                     validation.add_warn(format!(
                         "Unknown profile in manifest: {}\n\n{}",
                         profile.0.log_color_highlight(),
-                        self.available_profiles(available_profiles, &profile.0)
+                        self.available_profiles(
+                            available_profiles.iter().map(|p| p.0.as_str()),
+                            &profile.0
+                        )
                     ));
                 }
 
@@ -2618,17 +2609,12 @@ mod app_builder {
             }
         }
 
-        fn available_profiles(
+        fn available_profiles<'a, I: IntoIterator<Item = &'a str>>(
             &self,
-            available_profiles: &BTreeSet<ProfileName>,
+            available_profiles: I,
             unknown: &str,
         ) -> String {
-            self.available_options_help(
-                "profiles",
-                "profile names",
-                unknown,
-                available_profiles.iter().map(|name| name.0.as_str()),
-            )
+            self.available_options_help("profiles", "profile names", unknown, available_profiles)
         }
 
         fn available_templates(&self, unknown: &str) -> String {
@@ -2658,14 +2644,14 @@ mod app_builder {
             )
         }
 
-        fn available_options_help<'a, I: Iterator<Item = &'a str>>(
+        fn available_options_help<'a, I: IntoIterator<Item = &'a str>>(
             &self,
             entity_plural: &str,
             entity_name_plural: &str,
             unknown_option: &str,
             name_options: I,
         ) -> String {
-            let options = name_options.collect::<Vec<_>>();
+            let options = name_options.into_iter().collect::<Vec<_>>();
             if options.is_empty() {
                 return format!("No {} are defined", entity_plural);
             }
@@ -2717,5 +2703,104 @@ mod app_builder {
             ));
         }
         !is_empty
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::model::app::{AppComponentName, Application, BuildProfileName};
+    use crate::model::app_raw;
+    use crate::model::component::AppComponentType;
+    use assert2::{assert, check};
+    use indoc::indoc;
+    use test_r::test;
+
+    #[test]
+    fn component_property_profiles_overrides() {
+        let manifest = indoc! {"
+            templates:
+              template-profiled:
+                sourceWit: common-a-source-wit
+                generatedWit: common-a-generated-wit
+                defaultProfile: debug
+                profiles:
+                  debug:
+                    build:
+                    - command: debug-a-build
+                    sourceWit: debug-a-source-wit
+                    componentWasm: debug-a-component-wasm
+                    linkedWasm: debug-a-linked-wasm
+                    env:
+                      A: debug-a-env-var
+                  release:
+                    build:
+                    - command: release-a-build
+                    componentWasm: release-a-component-wasm
+                    generatedWit: release-a-generated-wit
+                    linkedWasm: release-a-linked-wasm
+                    env:
+                      A: release-a-env-var
+                  release-custom:
+                    build:
+                    - command: release-custom-a-build
+                    componentWasm: release-custom-a-component-wasm
+                    generatedWit: release-custom-a-generated-wit
+                    linkedWasm: release-custom-a-linked-wasm
+                    env:
+                      A: release-custom-a-env-var
+                    componentType: ephemeral
+
+            components:
+              app:comp-profiled-a:
+                template: template-profiled
+                profiles:
+                  release-custom:
+                    componentType: durable
+                    componentWasm: release-comp-a-component-wasm
+                componentType: ephemeral
+                componentWasm: comp-a-component-wasm
+        "};
+
+        let app = Application::from_raw_apps(
+            &Default::default(),
+            vec![app_raw::ApplicationWithSource::from_yaml_string(
+                "dummy-source".into(),
+                manifest.to_string(),
+            )
+            .unwrap()],
+        );
+
+        let (app, warns, errors) = app.into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let app = app.unwrap();
+
+        let component_name_profiled_a = AppComponentName::from("app:comp-profiled-a");
+        let debug_profile = BuildProfileName::from("debug");
+        let release_profile = BuildProfileName::from("release");
+        let release_custom_profile = BuildProfileName::from("release-custom");
+
+        let debug_props =
+            app.component_properties(&component_name_profiled_a, Some(&debug_profile));
+        let release_props =
+            app.component_properties(&component_name_profiled_a, Some(&release_profile));
+        let release_custom_props =
+            app.component_properties(&component_name_profiled_a, Some(&release_custom_profile));
+
+        check!(debug_props.source_wit == "debug-a-source-wit");
+        check!(release_props.source_wit == "common-a-source-wit");
+        check!(release_custom_props.source_wit == "common-a-source-wit");
+
+        check!(debug_props.generated_wit == "common-a-generated-wit");
+        check!(release_props.generated_wit == "release-a-generated-wit");
+        check!(release_custom_props.generated_wit == "release-custom-a-generated-wit");
+
+        check!(debug_props.component_type() == AppComponentType::Ephemeral);
+        check!(release_props.component_type() == AppComponentType::Ephemeral);
+        check!(release_custom_props.component_type() == AppComponentType::Durable);
+
+        check!(debug_props.component_wasm == "comp-a-component-wasm");
+        check!(release_props.component_wasm == "comp-a-component-wasm");
+        check!(release_custom_props.component_wasm == "release-comp-a-component-wasm");
     }
 }

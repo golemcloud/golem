@@ -19,7 +19,7 @@ use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
 use crate::app::remote_components::RemoteComponents;
 use crate::config::ProfileName;
 use crate::fs::{compile_and_collect_globs, PathExtra};
-use crate::log::{log_action, log_warn_action, logln, LogColorize, LogIndent, LogOutput, Output};
+use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
     includes_from_yaml_file, AppComponentName, Application, ApplicationComponentSelectMode,
     ApplicationConfig, ApplicationSourceMode, BinaryComponentSource, BuildProfileName,
@@ -40,6 +40,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 pub struct ApplicationContext {
+    pub loaded_with_warnings: bool,
     pub config: ApplicationConfig,
     pub application: Application,
     pub wit: ResolvedWitApplication,
@@ -51,25 +52,32 @@ pub struct ApplicationContext {
     remote_components: RemoteComponents,
 }
 
+pub struct ApplicationPreloadResult {
+    pub source_mode: ApplicationSourceMode,
+    pub loaded_with_warnings: bool,
+    pub profiles: Option<BTreeMap<ProfileName, app_raw::Profile>>,
+}
+
 impl ApplicationContext {
     pub fn preload_sources_and_get_profiles(
         source_mode: ApplicationSourceMode,
-    ) -> anyhow::Result<(
-        Option<BTreeMap<ProfileName, app_raw::Profile>>,
-        ApplicationSourceMode,
-    )> {
+    ) -> anyhow::Result<ApplicationPreloadResult> {
         let _output = LogOutput::new(Output::None);
 
         match load_profiles(source_mode) {
-            Some(profiles_and_new_source_mode) => {
-                let (profiles, new_source_mode) = to_anyhow(
-                    "Failed to load application manifest profiles, see problems above",
-                    profiles_and_new_source_mode,
-                )?;
-
-                Ok((Some(profiles), new_source_mode))
-            }
-            None => Ok((None, ApplicationSourceMode::None)),
+            Some(profiles) => to_anyhow(
+                "Failed to load application manifest profiles, see problems above",
+                profiles,
+                Some(|mut profiles| {
+                    profiles.loaded_with_warnings = true;
+                    profiles
+                }),
+            ),
+            None => Ok(ApplicationPreloadResult {
+                source_mode: ApplicationSourceMode::None,
+                loaded_with_warnings: false,
+                profiles: None,
+            }),
         }
     }
 
@@ -90,6 +98,7 @@ impl ApplicationContext {
                     let temp_dir = application.temp_dir();
                     let offline = config.offline;
                     move |wit| ApplicationContext {
+                        loaded_with_warnings: false,
                         config,
                         application,
                         wit,
@@ -106,184 +115,41 @@ impl ApplicationContext {
                     }
                 })
             }),
+            Some(|mut app_ctx| {
+                app_ctx.loaded_with_warnings = true;
+                app_ctx
+            }),
         )?;
 
-        ctx.select_and_validate_profiles()?;
+        ctx.validate_build_profile()?;
 
         if ctx.config.offline {
-            log_action("Selected", "offline mode");
+            log_action("Using", "offline mode");
         }
 
         Ok(Some(ctx))
     }
 
-    fn select_and_validate_profiles(&self) -> anyhow::Result<()> {
-        match &self.config.build_profile {
-            Some(profile) => {
-                let all_profiles = self.application.all_build_profiles();
-                if all_profiles.is_empty() {
-                    bail!(
-                        "Build profile {} not found, no available build profiles",
-                        profile.as_str().log_color_error_highlight(),
-                    );
-                } else if !all_profiles.contains(profile) {
-                    bail!(
-                        "Build profile {} not found, available build profiles: {}",
-                        profile.as_str().log_color_error_highlight(),
-                        all_profiles
-                            .into_iter()
-                            .map(|s| s.as_str().log_color_highlight())
-                            .join(", ")
-                    );
-                }
-                log_action(
-                    "Selecting",
-                    format!(
-                        "build profiles, requested profile: {}",
-                        profile.as_str().log_color_highlight()
-                    ),
-                );
-            }
-            None => {
-                log_action(
-                    "Selecting",
-                    "build profiles, no build profile was requested",
-                );
-            }
-        }
+    fn validate_build_profile(&self) -> anyhow::Result<()> {
+        let Some(profile) = &self.config.build_profile else {
+            return Ok(());
+        };
 
-        let _indent = LogIndent::new();
-        for component_name in self.application.component_names() {
-            let selection = self
-                .application
-                .component_effective_property_source(component_name, self.build_profile());
-
-            // TODO: simplify this
-            let message = match (
-                selection.profile,
-                selection.template_name,
-                self.build_profile().is_some(),
-                selection.is_requested_profile,
-            ) {
-                (None, None, false, _) => {
-                    format!(
-                        "default build profile for {}",
-                        component_name.as_str().log_color_highlight()
-                    )
-                }
-                (None, None, true, _) => {
-                    format!(
-                        "default build profile for {}, component has no profiles",
-                        component_name.as_str().log_color_highlight()
-                    )
-                }
-                (None, Some(template), false, _) => {
-                    format!(
-                        "default build profile for {} using template {}{}",
-                        component_name.as_str().log_color_highlight(),
-                        template.as_str().log_color_highlight(),
-                        if selection.any_template_overrides {
-                            " with overrides"
-                        } else {
-                            ""
-                        }
-                    )
-                }
-                (None, Some(template), true, _) => {
-                    format!(
-                        "default build profile for {} using template {}{}, component has no profiles",
-                        component_name.as_str().log_color_highlight(),
-                        template.as_str().log_color_highlight(),
-                        if selection.any_template_overrides {
-                            " with overrides"
-                        } else {
-                            ""
-                        }
-                    )
-                }
-                (Some(profile), None, false, false) => {
-                    format!(
-                        "default build profile {} for {}",
-                        profile.as_str().log_color_highlight(),
-                        component_name.as_str().log_color_highlight()
-                    )
-                }
-                (Some(profile), None, true, false) => {
-                    format!(
-                        "default build profile {} for {}, component has no matching requested profile",
-                        profile.as_str().log_color_highlight(),
-                        component_name.as_str().log_color_highlight()
-                    )
-                }
-                (Some(profile), Some(template), false, false) => {
-                    format!(
-                        "default build profile {} for {} using template {}{}",
-                        profile.as_str().log_color_highlight(),
-                        component_name.as_str().log_color_highlight(),
-                        template.as_str().log_color_highlight(),
-                        if selection.any_template_overrides {
-                            " with overrides"
-                        } else {
-                            ""
-                        }
-                    )
-                }
-                (Some(profile), Some(template), true, false) => {
-                    format!(
-                        "default build profile {} for {} using template {}{}, component has no matching requested profile",
-                        profile.as_str().log_color_highlight(),
-                        component_name.as_str().log_color_highlight(),
-                        template.as_str().log_color_highlight(),
-                        if selection.any_template_overrides {
-                            " with overrides"
-                        } else {
-                            ""
-                        }
-                    )
-                }
-                (Some(profile), None, false, true) => {
-                    format!(
-                        "build profile {} for {}",
-                        profile.as_str().log_color_highlight(),
-                        component_name.as_str().log_color_highlight()
-                    )
-                }
-                (Some(profile), None, true, true) => {
-                    format!(
-                        "requested build profile {} for {}",
-                        profile.as_str().log_color_highlight(),
-                        component_name.as_str().log_color_highlight()
-                    )
-                }
-                (Some(profile), Some(template), false, true) => {
-                    format!(
-                        "build profile {} for {} using template {}{}",
-                        profile.as_str().log_color_highlight(),
-                        component_name.as_str().log_color_highlight(),
-                        template.as_str().log_color_highlight(),
-                        if selection.any_template_overrides {
-                            " with overrides"
-                        } else {
-                            ""
-                        }
-                    )
-                }
-                (Some(profile), Some(template), true, true) => {
-                    format!(
-                        "requested build profile {} for {} using template {}{}",
-                        profile.as_str().log_color_highlight(),
-                        component_name.as_str().log_color_highlight(),
-                        template.as_str().log_color_highlight(),
-                        if selection.any_template_overrides {
-                            " with overrides"
-                        } else {
-                            ""
-                        }
-                    )
-                }
-            };
-
-            log_action("Selected", message);
+        let all_profiles = self.application.all_build_profiles();
+        if all_profiles.is_empty() {
+            bail!(
+                "Build profile {} not found, no available build profiles",
+                profile.as_str().log_color_error_highlight(),
+            );
+        } else if !all_profiles.contains(profile) {
+            bail!(
+                "Build profile {} not found, available build profiles: {}",
+                profile.as_str().log_color_error_highlight(),
+                all_profiles
+                    .into_iter()
+                    .map(|s| s.as_str().log_color_highlight())
+                    .join(", ")
+            );
         }
 
         Ok(())
@@ -299,6 +165,7 @@ impl ApplicationContext {
             ResolvedWitApplication::new(&self.application, self.build_profile()).map(|wit| {
                 self.wit = wit;
             }),
+            None,
         )
     }
 
@@ -456,6 +323,7 @@ impl ApplicationContext {
         let selected_component_names = to_anyhow(
             "Failed to select requested components",
             selected_component_names,
+            None,
         )?;
 
         if self.application.component_names().next().is_none() {
@@ -473,20 +341,58 @@ impl ApplicationContext {
             )
         }
 
-        let components_formatted = selected_component_names
-            .iter()
-            .map(|s| s.as_str().log_color_highlight())
-            .join(", ");
-        match component_select_mode {
-            ApplicationComponentSelectMode::CurrentDir => log_action(
-                "Selected",
-                format!("components based on current dir: {} ", components_formatted),
-            ),
-            ApplicationComponentSelectMode::All => log_action("Selected", "all components"),
-            ApplicationComponentSelectMode::Explicit(_) => log_action(
-                "Selected",
-                format!("components based on request: {} ", components_formatted),
-            ),
+        {
+            log_action("Selected", "components:");
+            let _indent = LogIndent::new();
+
+            let padding = selected_component_names
+                .iter()
+                .map(|name| name.as_str().len())
+                .max()
+                .unwrap_or(0)
+                + 1;
+
+            for component_name in &selected_component_names {
+                let property_source = self
+                    .application
+                    .component_effective_property_source(component_name, self.build_profile());
+
+                let property_configuration = {
+                    if property_source.template_name.is_none() && property_source.profile.is_none()
+                    {
+                        None
+                    } else {
+                        let mut configuration = String::with_capacity(10);
+                        if let Some(template_name) = &property_source.template_name {
+                            configuration.push_str(
+                                &template_name.as_str().log_color_highlight().to_string(),
+                            );
+                        }
+                        if property_source.template_name.is_some()
+                            && property_source.profile.is_some()
+                        {
+                            configuration.push(':');
+                        }
+                        if let Some(profile) = &property_source.profile {
+                            configuration
+                                .push_str(&profile.as_str().log_color_highlight().to_string());
+                        }
+
+                        Some(configuration)
+                    }
+                };
+
+                match property_configuration {
+                    Some(config) => logln(format!(
+                        "{} {}",
+                        format!("{:<padding$}", format!("{}:", component_name.as_str())).blue(),
+                        config
+                    )),
+                    None => {
+                        logln(component_name.as_str().blue().to_string());
+                    }
+                }
+            }
         }
 
         self.selected_component_names = selected_component_names;
@@ -617,7 +523,7 @@ impl ApplicationContext {
                         LABEL_COMPONENT_TYPE,
                         self.application
                             .component_properties(component_name, None)
-                            .component_type
+                            .component_type()
                             .to_string()
                             .bold()
                             .to_string(),
@@ -745,22 +651,18 @@ fn load_app(
 
 fn load_profiles(
     source_mode: ApplicationSourceMode,
-) -> Option<
-    ValidatedResult<(
-        BTreeMap<ProfileName, app_raw::Profile>,
-        ApplicationSourceMode,
-    )>,
-> {
+) -> Option<ValidatedResult<ApplicationPreloadResult>> {
     load_raw_apps(source_mode).map(|raw_apps_and_calling_working_dir| {
         raw_apps_and_calling_working_dir.and_then(|(raw_apps, calling_working_dir)| {
-            Application::profiles_from_raw_apps(raw_apps.as_slice()).map(|app| {
-                (
-                    app,
-                    ApplicationSourceMode::Preloaded {
+            Application::profiles_from_raw_apps(raw_apps.as_slice()).map(|profiles| {
+                ApplicationPreloadResult {
+                    source_mode: ApplicationSourceMode::Preloaded {
                         raw_apps,
                         calling_working_dir,
                     },
-                )
+                    loaded_with_warnings: false,
+                    profiles: Some(profiles),
+                }
             })
         })
     })
@@ -886,12 +788,22 @@ fn find_main_source() -> Option<PathBuf> {
     last_source
 }
 
-fn to_anyhow<T>(message: &str, result: ValidatedResult<T>) -> anyhow::Result<T> {
+fn to_anyhow<T>(
+    message: &str,
+    result: ValidatedResult<T>,
+    mark_had_warns: Option<fn(T) -> T>,
+) -> anyhow::Result<T> {
     match result {
         ValidatedResult::Ok(value) => Ok(value),
-        ValidatedResult::OkWithWarns(components, warns) => {
-            log_warn_action("App validation warnings:\n", format_warns(&warns));
-            Ok(components)
+        ValidatedResult::OkWithWarns(value, warns) => {
+            logln("");
+            for line in format_warns(&warns).lines() {
+                logln(line);
+            }
+            Ok(match mark_had_warns {
+                Some(mark_had_warns) => mark_had_warns(value),
+                None => value,
+            })
         }
         ValidatedResult::WarnsAndErrors(warns, errors) => Err(anyhow!(AppValidationError {
             message: message.to_string(),

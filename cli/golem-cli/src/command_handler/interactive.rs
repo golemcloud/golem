@@ -55,14 +55,33 @@ impl InteractiveHandler {
         Self { ctx }
     }
 
-    // NOTE: this one is static because local server hook has limited access
-    //       to state
+    // NOTE: static because local server hook has limited access to state
     pub fn confirm_auto_start_local_server(yes: bool) -> anyhow::Result<bool> {
         confirm(
             yes,
             true,
             "Do you want to use the local server for the current session?",
             Some("Tip: you can also use the 'golem server run' command in another terminal to keep the local server running for local development!"),
+        )
+    }
+
+    // NOTE: static because happens during context construction
+    pub fn confirm_manifest_profile_warning(yes: bool) -> anyhow::Result<bool> {
+        confirm(
+            yes,
+            true,
+            "Profiles defined in the application manifest were loaded with warnings.\nDo you want to continue?",
+            None,
+        )
+    }
+
+    // NOTE: static because happens inside app context lock
+    pub fn confirm_manifest_app_warning(yes: bool) -> anyhow::Result<bool> {
+        confirm(
+            yes,
+            true,
+            "Application manifest was loaded with warnings.\nDo you want to continue?",
+            None,
         )
     }
 
@@ -280,7 +299,7 @@ impl InteractiveHandler {
                 Ok(app_ctx
                     .application
                     .component_properties(component_name, self.ctx.build_profile())
-                    .component_type)
+                    .component_type())
             };
 
         fn validate_component_type_for_dependency_type(
@@ -434,12 +453,12 @@ impl InteractiveHandler {
                     target_component_type,
                 ) {
                     log_error(
-                            format!(
-                                "The target component type {} is not compatible with the selected dependency type {}!",
-                                target_component_type.to_string().log_color_highlight(),
-                                dependency_type.as_str().log_color_highlight(),
-                            )
-                        );
+                        format!(
+                            "The target component type {} is not compatible with the selected dependency type {}!",
+                            target_component_type.to_string().log_color_highlight(),
+                            dependency_type.as_str().log_color_highlight(),
+                        )
+                    );
                     logln("");
                     logln("Use a different target component or dependency type.");
                 }
@@ -461,7 +480,7 @@ impl InteractiveHandler {
                                 app_ctx
                                     .application
                                     .component_properties(component_name, self.ctx.build_profile())
-                                    .component_type,
+                                    .component_type(),
                             )
                         })
                         .cloned()
@@ -654,10 +673,7 @@ impl InteractiveHandler {
         message: M,
         extra_hint: Option<&str>,
     ) -> anyhow::Result<bool> {
-        logln("");
-        let result = confirm(self.ctx.yes(), default, message, extra_hint)?;
-        logln("");
-        Ok(result)
+        confirm(self.ctx.yes(), default, message, extra_hint)
     }
 }
 
@@ -735,6 +751,8 @@ fn confirm<M: AsRef<str>>(
 ) -> anyhow::Result<bool> {
     const YES_FLAG_HINT: &str = "To automatically confirm such questions use the '--yes' flag.";
 
+    logln("");
+
     if yes {
         log_warn_action("Auto confirming", "");
         for line in message.as_ref().cyan().lines() {
@@ -748,7 +766,7 @@ fn confirm<M: AsRef<str>>(
         None => YES_FLAG_HINT.to_string(),
     };
 
-    match Confirm::new(message.as_ref())
+    let result = match Confirm::new(message.as_ref())
         .with_help_message(&hint)
         .with_default(default)
         .prompt()
@@ -764,7 +782,11 @@ fn confirm<M: AsRef<str>>(
                 Err(error.into())
             }
         }
-    }
+    };
+
+    logln("");
+
+    result
 }
 
 struct TemplateOption {

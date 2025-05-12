@@ -59,6 +59,9 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
         .fmt_field_option("Project ID", &view.project_id, format_id)
         .fmt_field("Component size", &view.component_size, format_binary_size)
         .fmt_field_option("Created at", &view.created_at, |d| d.to_string())
+        .fmt_field_optional("Environment", &view.env, !&view.env.is_empty(), |env| {
+            format_env(view.show_sensitive, env)
+        })
         .fmt_field("Exports", &view.exports, |e| format_exports(e.as_slice()))
         .fmt_field_optional(
             "Dynamic WASM RPC links",
@@ -139,5 +142,27 @@ impl MessageWithFields for ComponentReplStartedView {
 
     fn fields(&self) -> Vec<(String, String)> {
         component_view_fields(&self.0)
+    }
+}
+
+const SENSITIVE_ENV_VAR_NAME_PATTERNS: &[&str] = &[
+    "CREDENTIAL",
+    "CREDENTIALS",
+    "KEY",
+    "PASS",
+    "PASSWORD",
+    "PWD",
+    "SECRET",
+    "TOKEN",
+];
+
+// NOTE: Keys are expected to be already uppercase
+pub fn is_sensitive_env_var_name(show_sensitive: bool, name: &str) -> bool {
+    if show_sensitive {
+        false
+    } else {
+        SENSITIVE_ENV_VAR_NAME_PATTERNS
+            .iter()
+            .any(|pattern| name.contains(pattern))
     }
 }

@@ -47,12 +47,14 @@ use crate::model::{
 };
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use golem_client::api::ComponentClient as ComponentClientOss;
+use golem_client::model::ComponentEnv as ComponentEnvOss;
 use golem_client::model::ComponentSearch as ComponentSearchOss;
 use golem_client::model::ComponentSearchParameters as ComponentSearchParametersOss;
 use golem_client::model::DynamicLinkedInstance as DynamicLinkedInstanceOss;
 use golem_client::model::DynamicLinkedWasmRpc as DynamicLinkedWasmRpcOss;
 use golem_client::model::DynamicLinking as DynamicLinkingOss;
 use golem_cloud_client::api::ComponentClient as ComponentClientCloud;
+use golem_cloud_client::model::ComponentEnv as ComponentEnvCloud;
 use golem_cloud_client::model::ComponentQuery;
 use golem_cloud_client::model::ComponentSearch as ComponentSearchCloud;
 use golem_cloud_client::model::ComponentSearchParameters as ComponentSearchParametersCloud;
@@ -311,6 +313,8 @@ impl ComponentCommandHandler {
     }
 
     async fn cmd_list(&self, component_name: Option<ComponentName>) -> anyhow::Result<()> {
+        let show_sensitive = self.ctx.show_sensitive();
+
         let selected_component_names = self
             .opt_select_components_by_app_dir_or_name(component_name.as_ref())
             .await?;
@@ -328,7 +332,7 @@ impl ComponentCommandHandler {
                     component_views.extend(
                         results
                             .into_iter()
-                            .map(|meta| ComponentView::from(Component::from(meta))),
+                            .map(|meta| ComponentView::new(show_sensitive, Component::from(meta))),
                     );
                 }
                 GolemClients::Cloud(clients) => {
@@ -346,7 +350,7 @@ impl ComponentCommandHandler {
                     component_views.extend(
                         results
                             .into_iter()
-                            .map(|meta| ComponentView::from(Component::from(meta))),
+                            .map(|meta| ComponentView::new(show_sensitive, Component::from(meta))),
                     );
                 }
             }
@@ -359,7 +363,7 @@ impl ComponentCommandHandler {
                         .await
                         .map_service_error()?
                         .into_iter()
-                        .map(|meta| ComponentView::from(Component::from(meta)))
+                        .map(|meta| ComponentView::new(show_sensitive, Component::from(meta)))
                         .collect::<Vec<_>>(),
                     GolemClients::Cloud(clients) => clients
                         .component
@@ -373,7 +377,7 @@ impl ComponentCommandHandler {
                         .await
                         .map_service_error()?
                         .into_iter()
-                        .map(|meta| ComponentView::from(Component::from(meta)))
+                        .map(|meta| ComponentView::new(show_sensitive, Component::from(meta)))
                         .collect::<Vec<_>>(),
                 };
                 if results.is_empty() {
@@ -446,7 +450,7 @@ impl ComponentCommandHandler {
                 .await?;
 
             if let Some(component) = component {
-                component_views.push(component.into());
+                component_views.push(ComponentView::new(self.ctx.show_sensitive(), component));
             }
         }
 
@@ -802,7 +806,10 @@ impl ComponentCommandHandler {
                                 ifs_properties,
                                 ifs_archive,
                                 deploy_properties.dynamic_linking.as_ref(),
-                                None, // TODO: component env
+                                deploy_properties
+                                    .env
+                                    .map(|env| ComponentEnvOss { key_values: env })
+                                    .as_ref(),
                             )
                             .await
                             .map_service_error()?;
@@ -821,7 +828,10 @@ impl ComponentCommandHandler {
                                     .dynamic_linking
                                     .map(|dl| dl.to_cloud())
                                     .as_ref(),
-                                None, // TODO: component env
+                                deploy_properties
+                                    .env
+                                    .map(|env| ComponentEnvCloud { key_values: env })
+                                    .as_ref(),
                             )
                             .await
                             .map_service_error()?;
@@ -830,7 +840,10 @@ impl ComponentCommandHandler {
                 };
                 self.ctx
                     .log_handler()
-                    .log_view(&ComponentUpdateView(ComponentView::from(component.clone())));
+                    .log_view(&ComponentUpdateView(ComponentView::new(
+                        self.ctx.show_sensitive(),
+                        component.clone(),
+                    )));
                 component
             }
             None => {
@@ -852,7 +865,10 @@ impl ComponentCommandHandler {
                                 ifs_properties,
                                 ifs_archive,
                                 deploy_properties.dynamic_linking.as_ref(),
-                                None, // TODO: component env
+                                deploy_properties
+                                    .env
+                                    .map(|env| ComponentEnvOss { key_values: env })
+                                    .as_ref(),
                             )
                             .await
                             .map_service_error()?;
@@ -874,7 +890,10 @@ impl ComponentCommandHandler {
                                     .dynamic_linking
                                     .map(|dl| dl.to_cloud())
                                     .as_ref(),
-                                None, // TODO: component env
+                                deploy_properties
+                                    .env
+                                    .map(|env| ComponentEnvCloud { key_values: env })
+                                    .as_ref(),
                             )
                             .await
                             .map_service_error()?;
@@ -883,7 +902,10 @@ impl ComponentCommandHandler {
                 };
                 self.ctx
                     .log_handler()
-                    .log_view(&ComponentCreateView(ComponentView::from(component.clone())));
+                    .log_view(&ComponentCreateView(ComponentView::new(
+                        self.ctx.show_sensitive(),
+                        component.clone(),
+                    )));
 
                 component
             }
@@ -1478,11 +1500,13 @@ impl ComponentCommandHandler {
         };
 
         DiffableComponent::from_manifest(
+            self.ctx.show_sensitive(),
             component_name,
             component_hash,
             properties.component_type,
             files,
             properties.dynamic_linking.as_ref(),
+            properties.env.as_ref(),
         )
     }
 
@@ -1540,7 +1564,7 @@ impl ComponentCommandHandler {
             }
         };
 
-        DiffableComponent::from_server(component, component_hash, files)
+        DiffableComponent::from_server(self.ctx.show_sensitive(), component, component_hash, files)
     }
 
     async fn server_component_hash(
@@ -1694,6 +1718,7 @@ struct ComponentDeployProperties {
     linked_wasm_path: PathBuf,
     files: Vec<InitialComponentFile>,
     dynamic_linking: Option<DynamicLinkingOss>,
+    env: Option<HashMap<String, String>>,
 }
 
 fn component_deploy_properties(
@@ -1704,14 +1729,15 @@ fn component_deploy_properties(
     let linked_wasm_path = app_ctx
         .application
         .component_final_linked_wasm(component_name, build_profile);
-    let component_properties = &app_ctx
+    let component_properties = app_ctx
         .application
         .component_properties(component_name, build_profile);
     let component_type = component_properties
-        .component_type
+        .component_type()
         .as_deployable_component_type()
         .ok_or_else(|| anyhow!("Component {component_name} is not deployable"))?;
     let files = component_properties.files.clone();
+    let env = (!component_properties.env.is_empty()).then(|| component_properties.env.clone());
     let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
     Ok(ComponentDeployProperties {
@@ -1719,6 +1745,7 @@ fn component_deploy_properties(
         linked_wasm_path,
         files,
         dynamic_linking,
+        env,
     })
 }
 

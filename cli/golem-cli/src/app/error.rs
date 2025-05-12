@@ -14,7 +14,7 @@
 
 use colored::Colorize;
 use itertools::Itertools;
-use std::fmt::{Display, Write};
+use std::fmt::Display;
 
 #[derive(Debug, Clone)]
 pub struct AppValidationError {
@@ -25,15 +25,8 @@ pub struct AppValidationError {
 
 impl Display for AppValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fn with_new_line_if_not_empty(mut str: String) -> String {
-            if !str.is_empty() {
-                str.write_char('\n').unwrap()
-            }
-            str
-        }
-
-        let warns = with_new_line_if_not_empty(format_warns(&self.warns));
-        let errors = with_new_line_if_not_empty(format_errors(&self.errors));
+        let warns = format_warns(&self.warns);
+        let errors = format_errors(&self.errors);
 
         write!(f, "\n{}{}\n{}", warns, errors, &self.message)
     }
@@ -45,16 +38,16 @@ pub fn format_warns(warns: &[String]) -> String {
     let label = "warning:".yellow().bold().to_string();
     warns
         .iter()
-        .map(|msg| format_message_with_level(&label, msg))
-        .join("\n\n")
+        .map(|msg| ensure_ends_with_empty_new_line(format_message_with_level(&label, msg)))
+        .join("")
 }
 
 pub fn format_errors(errors: &[String]) -> String {
     let label = "error:".red().bold().to_string();
     errors
         .iter()
-        .map(|msg| format_message_with_level(&label, msg))
-        .join("\n\n")
+        .map(|msg| ensure_ends_with_empty_new_line(format_message_with_level(&label, msg)))
+        .join("")
 }
 
 fn format_message_with_level(level: &str, message: &str) -> String {
@@ -66,6 +59,16 @@ fn format_message_with_level(level: &str, message: &str) -> String {
         )
     } else {
         format!("{} {}", level, message)
+    }
+}
+
+fn ensure_ends_with_empty_new_line(str: String) -> String {
+    if str.ends_with("\n\n") {
+        str
+    } else if str.ends_with('\n') {
+        str + "\n"
+    } else {
+        str + "\n\n"
     }
 }
 

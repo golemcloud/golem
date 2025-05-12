@@ -33,7 +33,7 @@ use crate::model::text::api_definition::{
     ApiDefinitionGetView, ApiDefinitionNewView, ApiDefinitionUpdateView,
 };
 use crate::model::text::fmt::{log_deploy_diff, log_error, log_warn};
-use crate::model::{ComponentName, PathBufOrStdin, ProjectRefAndId};
+use crate::model::{ComponentName, ProjectRefAndId};
 use anyhow::{bail, Context as AnyhowContext};
 use golem_client::api::ApiDefinitionClient as ApiDefinitionClientOss;
 use golem_client::model::{HttpApiDefinitionRequest, HttpApiDefinitionResponseData};
@@ -61,10 +61,6 @@ impl ApiDefinitionCommandHandler {
                 self.cmd_deploy(http_api_definition_name, update_or_redeploy)
                     .await
             }
-            ApiDefinitionSubcommand::Import {
-                project,
-                definition,
-            } => self.cmd_import(project, definition).await,
             ApiDefinitionSubcommand::Get {
                 project,
                 id,
@@ -182,46 +178,6 @@ impl ApiDefinitionCommandHandler {
                 bail!(NonSuccessfulExit)
             }
         }
-    }
-
-    // TODO: drop or make it a client side feature?
-    async fn cmd_import(
-        &self,
-        project: ProjectOptionalFlagArg,
-        definition: PathBufOrStdin,
-    ) -> anyhow::Result<()> {
-        let project = self
-            .ctx
-            .cloud_project_handler()
-            .opt_select_project(project.project.as_ref())
-            .await?;
-
-        let result = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_definition
-                .import_open_api_json(&read_and_parse_api_definition(definition)?)
-                .await
-                .map_service_error()?,
-            GolemClients::Cloud(clients) => clients
-                .api_definition
-                .import_open_api_json(
-                    &self
-                        .ctx
-                        .cloud_project_handler()
-                        .selected_project_id_or_default(project.as_ref())
-                        .await?
-                        .0,
-                    &read_and_parse_api_definition(definition)?,
-                )
-                .await
-                .map_service_error()?,
-        };
-
-        self.ctx
-            .log_handler()
-            .log_view(&ApiDefinitionUpdateView(result));
-
-        Ok(())
     }
 
     async fn cmd_list(
@@ -720,8 +676,4 @@ impl ApiDefinitionCommandHandler {
 
 fn parse_api_definition<T: DeserializeOwned>(input: &str) -> anyhow::Result<T> {
     serde_yaml::from_str(input).context("Failed to parse API definition")
-}
-
-fn read_and_parse_api_definition<T: DeserializeOwned>(source: PathBufOrStdin) -> anyhow::Result<T> {
-    parse_api_definition(&source.read_to_string()?)
 }

@@ -19,6 +19,7 @@ use crate::model::{
 };
 use anyhow::Context;
 use include_dir::{include_dir, Dir, DirEntry};
+use indoc::indoc;
 use itertools::Itertools;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -33,6 +34,25 @@ test_r::enable!();
 static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
 static ADAPTERS: Dir<'_> = include_dir!("$OUT_DIR/golem-wit/adapters");
 static WIT: Dir<'_> = include_dir!("$OUT_DIR/golem-wit/wit/deps");
+
+static APP_MANIFEST_HEADER: &str = indoc! {"
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.2.2-dev.1/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.2.2-dev.1/golem.schema.json
+
+# See https://learn.golem.cloud/docs/app-manifest#field-reference for field reference
+"};
+
+static APP_MANIFEST_COMPONENT_HINTS_TEMPLATE: &str = indoc! {"
+# Example for adding dependencies for Worker to Worker communication:
+# See https://learn.golem.cloud/docs/app-manifest#fields_dependencies for more information
+#
+#dependencies:
+#  componentname:
+#  - target: <target component name to be called>
+#    type: wasm-rpc
+"};
 
 fn all_templates() -> Vec<Template> {
     let mut result: Vec<Template> = vec![];
@@ -237,7 +257,11 @@ pub fn render_template_instructions(
     template: &Template,
     parameters: &TemplateParameters,
 ) -> String {
-    transform(&template.instructions, parameters)
+    transform(
+        &template.instructions,
+        parameters,
+        TransformMode::PackageAndComponentOnly,
+    )
 }
 
 fn instantiate_directory(
@@ -269,12 +293,31 @@ fn instantiate_directory(
                     )?;
                 }
                 DirEntry::File(file) => {
+                    // TODO: solve this more nicely, for now golem.yaml-s are always transformed,
+                    //       even if transform is set to false
+                    let transform = if file
+                        .path()
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        == "golem.yaml"
+                    {
+                        if template.kind.is_common() {
+                            Some(TransformMode::ManifestHintsOnly)
+                        } else {
+                            Some(TransformMode::All)
+                        }
+                    } else {
+                        (template.transform && !template.transform_exclude.contains(&name))
+                            .then_some(TransformMode::PackageAndComponentOnly)
+                    };
+
                     instantiate_file(
                         catalog,
                         file.path(),
                         &target.join(&name),
                         parameters,
-                        template.transform && !template.transform_exclude.contains(&name),
+                        transform,
                         resolve_mode,
                     )?;
                 }
@@ -289,12 +332,12 @@ fn instantiate_file(
     source: &Path,
     target: &Path,
     parameters: &TemplateParameters,
-    transform_contents: bool,
+    transform_contents: Option<TransformMode>,
     resolve_mode: TargetExistsResolveMode,
 ) -> io::Result<()> {
     match get_resolved_contents(catalog, source, target, resolve_mode)? {
         Some(contents) => {
-            if transform_contents {
+            if let Some(transform_mode) = transform_contents {
                 fs::write(
                     target,
                     transform(
@@ -306,6 +349,7 @@ fn instantiate_file(
                             ))
                         })?,
                         parameters,
+                        transform_mode,
                     ),
                 )
             } else {
@@ -355,9 +399,15 @@ fn copy_all(
     Ok(())
 }
 
-fn transform(str: impl AsRef<str>, parameters: &TemplateParameters) -> String {
-    str.as_ref()
-        .replace(
+enum TransformMode {
+    All,
+    PackageAndComponentOnly,
+    ManifestHintsOnly,
+}
+
+fn transform(str: impl AsRef<str>, parameters: &TemplateParameters, mode: TransformMode) -> String {
+    let transform_pack_and_comp = |str: &str| -> String {
+        str.replace(
             "componentnameapi",
             &format!("{}api", parameters.component_name.parts().join("")),
         )
@@ -380,10 +430,30 @@ fn transform(str: impl AsRef<str>, parameters: &TemplateParameters) -> String {
         .replace("PackNs", &parameters.package_name.namespace_title_case())
         .replace("__pack__", &parameters.package_name.namespace_snake_case())
         .replace("__name__", &parameters.package_name.name_snake_case())
+    };
+
+    let transform_manifest_hints = |str: &str| -> String {
+        str.replace("# golem-app-manifest-header\n", APP_MANIFEST_HEADER)
+            .replace(
+                "# golem-app-manifest-component-hints\n",
+                &transform(
+                    APP_MANIFEST_COMPONENT_HINTS_TEMPLATE,
+                    parameters,
+                    TransformMode::PackageAndComponentOnly,
+                ),
+            )
+    };
+
+    match mode {
+        TransformMode::All => transform_manifest_hints(&transform_pack_and_comp(str.as_ref())),
+        TransformMode::PackageAndComponentOnly => transform_pack_and_comp(str.as_ref()),
+        TransformMode::ManifestHintsOnly => transform_manifest_hints(str.as_ref()),
+    }
 }
 
 fn file_name_transform(str: impl AsRef<str>, parameters: &TemplateParameters) -> String {
-    transform(str, parameters).replace("Cargo.toml._", "Cargo.toml") // HACK because cargo package ignores every subdirectory containing a Cargo.toml
+    transform(str, parameters, TransformMode::PackageAndComponentOnly)
+        .replace("Cargo.toml._", "Cargo.toml") // HACK because cargo package ignores every subdirectory containing a Cargo.toml
 }
 
 fn check_target(

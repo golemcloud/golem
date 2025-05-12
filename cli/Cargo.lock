@@ -4023,6 +4023,7 @@ dependencies = [
  "golem-wit",
  "heck 0.5.0",
  "include_dir",
+ "indoc",
  "itertools 0.14.0",
  "nanoid",
  "regex",
