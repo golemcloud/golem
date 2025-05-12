@@ -15,7 +15,7 @@ dependencies:
 httpApi:
   definitions:
     componentname:
-      version: '3'
+      version: '0'
       routes:
       - method: POST
         path: /v1/sessions/{session-id}

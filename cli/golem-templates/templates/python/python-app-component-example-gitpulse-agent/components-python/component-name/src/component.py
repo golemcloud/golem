@@ -48,6 +48,10 @@ def get_state() -> State:
 
 class ComponentNameApi(exports.ComponentNameApi):
     def initialize(self, args: InitializeArgs) -> None:
+        # check that OPENAI_API_KEY is defined and nonempty, otherwise model api calls will fail.
+        if not os.getenv("OPENAI_API_KEY"):
+            raise ValueError("OPENAI_API_KEY env var is empty or not defined")
+
         global state
         state = State(
             last_checked=None,
