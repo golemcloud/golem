@@ -46,7 +46,7 @@ message OplogEntry {
     FinishSpanParameters FinishSpan = 31;
     SetSpanAttributeParameters SetSpanAttribute = 32;
     ChangePersistenceLevelParameters ChangePersistenceLevel = 33;
-    TimestampParameter BeginRemoteTransaction = 34;
+    BeginRemoteTransactionParameters BeginRemoteTransaction = 34;
     RemoteTransactionParameters PreCommitRemoteTransaction = 35;
     RemoteTransactionParameters PreRollbackRemoteTransaction = 36;
     RemoteTransactionParameters CommitedRemoteTransaction = 37;
@@ -155,6 +155,11 @@ message ExportedFunctionInvocationParameters {
   string trace_id = 5;
   repeated string trace_states = 6;
   repeated InvocationSpan invocation_context = 7;
+}
+
+message BeginRemoteTransactionParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  string transaction_id = 2;
 }
 
 message RemoteTransactionParameters {

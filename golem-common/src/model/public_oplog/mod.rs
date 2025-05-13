@@ -121,14 +121,6 @@ impl From<DurableFunctionType> for PublicDurableFunctionType {
                 PublicDurableFunctionType::WriteRemoteTransaction(
                     WriteRemoteTransactionParameters { index },
                 )
-                // match params {
-                //     WriteRemoteTransaction::Begin(_) => PublicDurableFunctionType::WriteRemoteTransaction(WriteRemoteTransactionParameters::Begin(Empty {})),
-                //     WriteRemoteTransaction::PreCommit(_) => PublicDurableFunctionType::WriteRemoteTransaction(WriteRemoteTransactionParameters::PreCommit(Empty {})),
-                //     WriteRemoteTransaction::Commited(_) => PublicDurableFunctionType::WriteRemoteTransaction(WriteRemoteTransactionParameters::Commited(Empty {})),
-                //     WriteRemoteTransaction::PreRollback(_) => PublicDurableFunctionType::WriteRemoteTransaction(WriteRemoteTransactionParameters::PreRollback(Empty {})),
-                //     WriteRemoteTransaction::RolledBack(_) => PublicDurableFunctionType::WriteRemoteTransaction(WriteRemoteTransactionParameters::RolledBack(Empty {})),
-                //     WriteRemoteTransaction::Abort(_) => PublicDurableFunctionType::WriteRemoteTransaction(WriteRemoteTransactionParameters::Abort(Empty {})),
-                // }
             }
         }
     }
@@ -611,6 +603,25 @@ pub struct ChangePersistenceLevelParameters {
     pub persistence_level: PersistenceLevel,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteTransactionParameters {
+    pub timestamp: Timestamp,
+    pub begin_index: OplogIndex,
+}
+
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct BeginRemoteTransactionParameters {
+    pub timestamp: Timestamp,
+    pub transaction_id: String,
+}
+
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
 ///
 /// Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
@@ -699,7 +710,7 @@ pub enum PublicOplogEntry {
     SetSpanAttribute(SetSpanAttributeParameters),
     /// Change the current persistence level
     ChangePersistenceLevel(ChangePersistenceLevelParameters),
-    BeginRemoteTransaction(TimestampParameter),
+    BeginRemoteTransaction(BeginRemoteTransactionParameters),
     PreCommitRemoteTransaction(RemoteTransactionParameters),
     PreRollbackRemoteTransaction(RemoteTransactionParameters),
     CommitedRemoteTransaction(RemoteTransactionParameters),

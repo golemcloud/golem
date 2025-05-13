@@ -312,9 +312,7 @@ pub enum OplogEntry {
         consumed_fuel: i64,
     },
     /// Worker suspended
-    Suspend {
-        timestamp: Timestamp,
-    },
+    Suspend { timestamp: Timestamp },
     /// Worker failed
     Error {
         timestamp: Timestamp,
@@ -322,9 +320,7 @@ pub enum OplogEntry {
     },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
     /// more predictable.
-    NoOp {
-        timestamp: Timestamp,
-    },
+    NoOp { timestamp: Timestamp },
     /// The worker needs to recover up to the given target oplog index and continue running from
     /// the source oplog index from there
     /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
@@ -335,13 +331,9 @@ pub enum OplogEntry {
     },
     /// Indicates that the worker has been interrupted at this point.
     /// Only used to recompute the worker's (cached) status, has no effect on execution.
-    Interrupted {
-        timestamp: Timestamp,
-    },
+    Interrupted { timestamp: Timestamp },
     /// Indicates that the worker has been exited using WASI's exit function.
-    Exited {
-        timestamp: Timestamp,
-    },
+    Exited { timestamp: Timestamp },
     /// Overrides the worker's retry policy
     ChangeRetryPolicy {
         timestamp: Timestamp,
@@ -349,9 +341,7 @@ pub enum OplogEntry {
     },
     /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
     /// recovery except if there is a corresponding `EndAtomicRegion` entry.
-    BeginAtomicRegion {
-        timestamp: Timestamp,
-    },
+    BeginAtomicRegion { timestamp: Timestamp },
     /// Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
     /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
     /// compaction.
@@ -362,9 +352,7 @@ pub enum OplogEntry {
     /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
     /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
     /// unfinished remote writes cannot be recovered.
-    BeginRemoteWrite {
-        timestamp: Timestamp,
-    },
+    BeginRemoteWrite { timestamp: Timestamp },
     /// Marks the end of a remote write operation. Only used when idempotence mode is off.
     EndRemoteWrite {
         timestamp: Timestamp,
@@ -396,10 +384,7 @@ pub enum OplogEntry {
         details: Option<String>,
     },
     /// Increased total linear memory size
-    GrowMemory {
-        timestamp: Timestamp,
-        delta: u64,
-    },
+    GrowMemory { timestamp: Timestamp, delta: u64 },
     /// Created a resource instance
     CreateResource {
         timestamp: Timestamp,
@@ -424,9 +409,7 @@ pub enum OplogEntry {
         message: String,
     },
     /// Marks the point where the worker was restarted from clean initial state
-    Restart {
-        timestamp: Timestamp,
-    },
+    Restart { timestamp: Timestamp },
     /// The worker invoked a host function
     ImportedFunctionInvoked {
         timestamp: Timestamp,
@@ -512,6 +495,7 @@ pub enum OplogEntry {
     },
     BeginRemoteTransaction {
         timestamp: Timestamp,
+        transaction_id: String,
     },
     PreCommitRemoteTransaction {
         timestamp: Timestamp,
@@ -781,9 +765,10 @@ impl OplogEntry {
         }
     }
 
-    pub fn begin_remote_transaction() -> OplogEntry {
+    pub fn begin_remote_transaction(transaction_id: String) -> OplogEntry {
         OplogEntry::BeginRemoteTransaction {
             timestamp: Timestamp::now_utc(),
+            transaction_id,
         }
     }
 

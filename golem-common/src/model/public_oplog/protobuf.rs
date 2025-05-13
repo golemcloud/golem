@@ -15,9 +15,9 @@
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
 use crate::model::public_oplog::{
-    ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
-    ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters,
-    DescribeResourceParameters, EndRegionParameters, ErrorParameters,
+    ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters,
+    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateParameters,
+    DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters,
     ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
@@ -479,8 +479,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 },
             )),
             oplog_entry::Entry::BeginRemoteTransaction(value) => Ok(
-                PublicOplogEntry::BeginRemoteTransaction(TimestampParameter {
+                PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParameters {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                    transaction_id: value.transaction_id,
                 }),
             ),
             oplog_entry::Entry::PreCommitRemoteTransaction(value) => Ok(
@@ -916,8 +917,9 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
             PublicOplogEntry::BeginRemoteTransaction(begin_remote_write) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::BeginRemoteTransaction(
-                        golem_api_grpc::proto::golem::worker::TimestampParameter {
+                        golem_api_grpc::proto::golem::worker::BeginRemoteTransactionParameters {
                             timestamp: Some(begin_remote_write.timestamp.into()),
+                            transaction_id: begin_remote_write.transaction_id,
                         },
                     )),
                 }

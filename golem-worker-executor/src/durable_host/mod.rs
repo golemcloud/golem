@@ -2258,70 +2258,77 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         }
     }
 
-    pub async fn begin_transaction_function(
+    pub async fn begin_transaction_function<Tx, Err>(
         &mut self,
         function_type: &DurableFunctionType,
-    ) -> Result<OplogIndex, GolemError> {
+        handler: impl RemoteTransactionHandler<Tx, Err>,
+    ) -> Result<(OplogIndex, Tx), Err>
+    where
+        Err: From<GolemError>,
+    {
         if matches!(
             *function_type,
             DurableFunctionType::WriteRemoteTransaction(None)
         ) {
             if self.is_live() {
+                let (tx_id, tx) = handler.create_new().await?;
                 self.oplog
-                    .add_and_commit(OplogEntry::begin_remote_transaction())
+                    .add_and_commit(OplogEntry::begin_remote_transaction(tx_id))
                     .await;
                 let begin_index = self.oplog.current_oplog_index().await;
-                Ok(begin_index)
+                Ok((begin_index, tx))
             } else {
-                let (begin_index, _) =
+                let (begin_index, begin_entry) =
                     crate::get_oplog_entry!(self.replay_state, OplogEntry::BeginRemoteTransaction)?;
-                if matches!(
-                    *function_type,
-                    DurableFunctionType::WriteRemoteTransaction(None)
-                ) {
-                    let end_index = self
-                        .replay_state
-                        .lookup_oplog_entry_with_condition(
-                            begin_index,
-                            OplogEntry::is_end_remote_transaction,
-                            OplogEntry::no_concurrent_side_effect,
-                        )
+
+                let tx_id = match begin_entry {
+                    OplogEntry::BeginRemoteTransaction {
+                        timestamp: _,
+                        transaction_id,
+                    } => Ok(transaction_id),
+                    _ => Err(GolemError::runtime("Unexpected oplog entry").into()),
+                }?;
+
+                let (_, tx) = handler.create_replay(tx_id).await?;
+
+                let end_index = self
+                    .replay_state
+                    .lookup_oplog_entry_with_condition(
+                        begin_index,
+                        OplogEntry::is_end_remote_transaction,
+                        OplogEntry::no_concurrent_side_effect,
+                    )
+                    .await;
+                if end_index.is_none() {
+                    // We need to jump to the end of the oplog
+                    self.replay_state.switch_to_live();
+
+                    // But this is not enough, because if the retried batched write operation succeeds,
+                    // and later we replay it, we need to skip the first attempt and only replay the second.
+                    // Se we add a Jump entry to the oplog that registers a deleted region.
+                    let deleted_region = OplogRegion {
+                        start: begin_index.next(), // need to keep the BeginAtomicRegion entry
+                        end: self.replay_state.replay_target().next(), // skipping the Jump entry too
+                    };
+                    self.replay_state
+                        .add_skipped_region(deleted_region.clone())
                         .await;
-                    if end_index.is_none() {
-                        // We need to jump to the end of the oplog
-                        self.replay_state.switch_to_live();
-
-                        // But this is not enough, because if the retried batched write operation succeeds,
-                        // and later we replay it, we need to skip the first attempt and only replay the second.
-                        // Se we add a Jump entry to the oplog that registers a deleted region.
-                        let deleted_region = OplogRegion {
-                            start: begin_index.next(), // need to keep the BeginAtomicRegion entry
-                            end: self.replay_state.replay_target().next(), // skipping the Jump entry too
-                        };
-                        self.replay_state
-                            .add_skipped_region(deleted_region.clone())
-                            .await;
-                        self.oplog
-                            .add_and_commit(OplogEntry::jump(deleted_region))
-                            .await;
-                    }
-                    // else {
-                    //     let pre_index = self
-                    //         .replay_state
-                    //         .try_get_oplog_entry(|e| e.is_pre_remote_transaction(begin_index))
-                    //         .await;
-                    //     self.replay_state.switch_to_live();
-                    //     // TODO handle transaction end
-                    // }
-
-                    Ok(begin_index)
-                } else {
-                    Ok(begin_index)
+                    self.oplog
+                        .add_and_commit(OplogEntry::jump(deleted_region))
+                        .await;
                 }
+                // else {
+                //     let pre_index = self
+                //         .replay_state
+                //         .try_get_oplog_entry(|e| e.is_pre_remote_transaction(begin_index))
+                //         .await;
+                //     self.replay_state.switch_to_live();
+                //     // TODO handle transaction end
+                // }
+                Ok((begin_index, tx))
             }
         } else {
-            let begin_index = self.oplog.current_oplog_index().await;
-            Ok(begin_index)
+            Err(GolemError::runtime("Unexpected durable function type").into())
         }
     }
 
@@ -2763,14 +2770,15 @@ macro_rules! get_oplog_entry {
 }
 
 #[async_trait]
-pub trait RemoteTransactionFinalizer {
-    async fn get_pre_commit_final_entries(
-        &self,
-        begin_index: OplogIndex,
-    ) -> Result<Vec<OplogEntry>, GolemError>;
+pub trait RemoteTransactionHandler<Tx, Err>
+where
+    Err: From<GolemError>,
+{
+    async fn create_new(&self) -> Result<(String, Tx), Err>;
 
-    async fn get_pre_rollback_final_entries(
-        &self,
-        begin_index: OplogIndex,
-    ) -> Result<Vec<OplogEntry>, GolemError>;
+    async fn create_replay(&self, transaction_id: String) -> Result<(String, Tx), Err>;
+
+    async fn is_committed(&self, transaction_id: String) -> Result<bool, Err>;
+
+    async fn is_rolled_back(&self, transaction_id: String) -> Result<bool, Err>;
 }

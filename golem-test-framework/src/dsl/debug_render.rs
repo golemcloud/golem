@@ -367,6 +367,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         PublicOplogEntry::BeginRemoteTransaction(params) => {
             let _ = writeln!(result, "BEGIN REMOTE TRANSACTION");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}transaction id:    {}", &params.transaction_id);
         }
         PublicOplogEntry::PreCommitRemoteTransaction(params) => {
             let _ = writeln!(result, "PRE COMMIT REMOTE TRANSACTION");

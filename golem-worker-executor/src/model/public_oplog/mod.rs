@@ -45,9 +45,9 @@ use golem_common::model::invocation_context::TraceId;
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
-    ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
-    ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters,
-    DescribeResourceParameters, EndRegionParameters, ErrorParameters,
+    ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters,
+    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateParameters,
+    DeactivatePluginParameters, DescribeResourceParameters, EndRegionParameters, ErrorParameters,
     ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
@@ -859,9 +859,15 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     persistence_level: level,
                 }),
             ),
-            OplogEntry::BeginRemoteTransaction { timestamp } => Ok(
-                PublicOplogEntry::BeginRemoteTransaction(TimestampParameter { timestamp }),
-            ),
+            OplogEntry::BeginRemoteTransaction {
+                timestamp,
+                transaction_id,
+            } => Ok(PublicOplogEntry::BeginRemoteTransaction(
+                BeginRemoteTransactionParameters {
+                    timestamp,
+                    transaction_id,
+                },
+            )),
             OplogEntry::PreCommitRemoteTransaction {
                 timestamp,
                 begin_index,
