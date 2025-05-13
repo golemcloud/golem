@@ -185,7 +185,7 @@ impl AppCommandHandler {
                             );
                         }
                         Err(error) => {
-                            bail!("Failed to add common template for new app: {}", error)
+                            bail!("Failed to add common template for new app: {:#}", error)
                         }
                     }
                 }

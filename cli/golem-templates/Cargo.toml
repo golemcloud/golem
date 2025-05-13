@@ -16,6 +16,7 @@ clap = { workspace = true }
 colored = { workspace = true }
 fancy-regex = { workspace = true }
 fs_extra = { workspace = true }
+golem-rdbms = { workspace = true }
 golem-wit = { workspace = true }
 heck = { workspace = true }
 include_dir = { workspace = true }

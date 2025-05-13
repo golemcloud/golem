@@ -3867,6 +3867,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-rdbms"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1270134f61673cd221121fad55752b4692a5bc3f7a5f9b30e4d45d7b2e044946"
+
+[[package]]
 name = "golem-rib"
 version = "0.0.0"
 source = "git+https://github.com/golemcloud/golem.git?tag=v1.2.2-dev.15#90e1bd4c407a55919d935e94f8f84390246a7de0"
@@ -4021,6 +4027,7 @@ dependencies = [
  "dir-diff",
  "fancy-regex",
  "fs_extra",
+ "golem-rdbms",
  "golem-wit",
  "heck 0.5.0",
  "include_dir",

@@ -10,6 +10,7 @@ exclude = ["desktop-app/src-tauri"]
 # Golem dep
 golem-client = "=1.2.2-dev.15"
 golem-common = "=1.2.2-dev.15"
+golem-rdbms = "=0.0.2"
 golem-rib = "=1.2.2-dev.15"
 golem-rib-repl = "=1.2.2-dev.15"
 golem-service-base = "=1.2.2-dev.15"
