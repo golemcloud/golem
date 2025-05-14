@@ -37,8 +37,7 @@ Parameters:
 
 | Parameter               | Required | Type   | Description                                                                                                                                                                                                                                                         |
 | ----------------------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| component.name | true     | string | Name of the component to invoke                                                                                                                                       |
-| component.version     | false     | number | Version of the component to invoke. If not provided, the latest version is used.                                                                                                                                 |
+| componentName | true     | string | Name of the component to invoke                                                                                                                                       |
 | workerName              | false    | rib    | Script used to compute the name of the worker that will be invoked. The script has access to the request input. If not provided, an ephemeral worker is used.                                                                                                       |
 | idempotencyKey          | false    | rib    | Script used to compute the idempotency key. The script has access to the request input. If not provided an idempotency key will be generated.                                                                                                                       |
 | response                | true     | rib    | Script that is used to compute the response that will be returned to the user. The script has access to the request and worker inputs and can call worker functions. The result of the script has to be an object with status and optional headers and body fields. |
@@ -71,16 +70,33 @@ routes:
         {status: 200u64, body: "Hello World"}
 ```
 
-Parameters:
+For customisation of CORS parameters, provide  `response` Rib script which should be a record with CORS headers as keys
 
-| Parameter        | Required | Type   | Description                                                                                                      |
-| ---------------- | -------- | ------ | ---------------------------------------------------------------------------------------------------------------- |
-| allowOrigin      | false    | string | Value of the Access-Control-Allow-Origin header. Defaults to "\*" if not provided.                               |
-| allowMethods     | false    | string | Value of the Access-Control-Allow-Methods header. Defaults to "GET, POST, PUT, DELETE, OPTIONS" if not provided. |
-| allowHeaders     | false    | string | Value of the Access-Control-Allow-Headers header. Defaults to "Content-Type, Authorization" if not provided.     |
-| exposeHeaders    | false    | string | Value of the Access-Control-Expose-Headers.                                                                      |
-| maxAge           | false    | string | Value of the Access-Control-Max-Age header.                                                                      |
-| allowCredentials | false    | string | Value of the Access-Control-Allow-Credentials header.                                                            |
+```yaml
+routes:
+  - method: Options
+    path: /users/{user-id}
+    binding:
+      type: cors-preflight
+      response: |
+      {
+        Access-Control-Allow-Origin: "mysite.com",
+        Access-Control-Allow-Methods: "GET, POST, PUT, DELETE, OPTIONS",
+        Access-Control-Allow-Headers: "Content-Type, Authorization",
+        Access-Control-Expose-Headers: "Content-Length, X-Requested-With",
+        Access-Control-Allow-Credentials: true,
+        Access-Control-Max-Age: 86400u64
+      }
+    # Another definition for the same route and a different method.
+    # The cors-preflight binding will enable cors for this binding.
+  - method: Get
+    path: /users/{user-id}
+    binding:
+      componentName: example-component
+      response: |
+        {status: 200u64, body: "Hello World"}
+```
+                                                     |
 
 ### File Server
 
@@ -110,8 +126,7 @@ Parameters:
 
 | Parameter               | Required | Type   | Description                                                                                                                                                         |
 | ----------------------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| component.name | true     | string | Name of the component to invoke                                                                                                                                       |
-| component.version     | false     | number | Version of the component to invoke. If not provided, the latest version is used.                                                                                                                                 |
+| componentName | true     | string | Name of the component to invoke                                                                                                                                       |
 | workerName              | false    | rib    | Script used to compute the name of the worker that will be invoked. The script has access to the request input. If not provided, an ephemeral worker is used.       |
 | idempotencyKey          | false    | rib    | Script used to compute the idempotency key. The script has access to the request input. If not provided an idempotency key will be generated.                       |
 | response                | true     | rib    | Script that is used to compute the file to retrieve and the response to send to users. See the dedicatedc [section](#file-server-response-object) for more details. |
@@ -160,7 +175,6 @@ Parameters:
 
 | Parameter               | Required | Type   | Description                                                                                                                                                   |
 | ----------------------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| component.name | true     | string | Name of the component to invoke                                                                                                                                       |
-| component.version     | false     | number | Version of the component to invoke. If not provided, the latest version is used.                                                                                                                                 |
+| componentName | true     | string | Name of the component to invoke                                                                                                                                       |
 | workerName              | false    | rib    | Script used to compute the name of the worker that will be invoked. The script has access to the request input. If not provided, an ephemeral worker is used. |
 | idempotencyKey          | false    | rib    | Script used to compute the idempotency key. The script has access to the request input. If not provided an idempotency key will be generated.                 |
