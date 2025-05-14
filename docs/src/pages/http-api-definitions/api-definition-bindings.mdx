@@ -1,8 +1,8 @@
-# Worker Binding Types
+# API definition Binding Types
 
 ## Overview
 
-The Worker Binding Types are a collection of different ways that a worker can be exposed to the outside world as part of an api definition.
+The binding types are a collection of different ways that a worker can be exposed to the outside world as part of an api definition.
 
 To get a basic introduction of what api-definitions are and how bindings fit into them, please read the defining custom apis [guide](/invoke/making-custom-apis).
 
@@ -18,20 +18,16 @@ The default and most basic binding type that allows invoking workers in custom w
 Example:
 
 ```yaml
-id: example-api
-version: 0.0.1
-createdAt: 2024-08-21T07:42:15.696Z
 routes:
   - method: Get
     # Define the path that the route will apply to. {var} patterns capture the path segments and make it available for scripts.
     path: /carts/{cart-id}/checkout
     binding:
-      component:
-        name: checkout-component
-      # Use the variable captured from the path to resolve the worker to call
-      worker-name: 'let name: string = request.path.cart-id; name'
-      # Invoke functions on the worker to handle the request and construct the response
+      type: default
+      componentName: checkout-component
       response: |
+        let name = request.path.cart-id;
+        let worker = instance(name);
         let response = golem:it/api.{{checkout}}();
         let status: u64 = 200;
         {{headers: {{ContentType: "json"}}, body: response, status: status}}
@@ -60,21 +56,17 @@ regarding CORS, see the [mdn docs](https://developer.mozilla.org/en-US/docs/Glos
 Example:
 
 ```yaml
-id: example-api
-version: 0.0.1
-createdAt: 2024-08-21T07:42:15.696Z
 routes:
   - method: Options
     path: /users/{user-id}
     binding:
-      bindingType: cors-preflight
+      type: cors-preflight
     # Another definition for the same route and a different method.
     # The cors-preflight binding will enable cors for this binding.
   - method: Get
     path: /users/{user-id}
     binding:
-      component:
-        name: example-component
+      componentName: example-component
       response: |
         {status: 200u64, body: "Hello World"}
 ```
@@ -103,18 +95,13 @@ To learn more about the worker filesystem, check out the [dedicated guide](/comm
 Example:
 
 ```yaml
-id: example-api
-version: 0.0.1
-createdAt: 2024-08-21T07:42:15.696Z
 routes:
   - method: Get
     # {+var} patterns capture all remaining path segments
     path: /workers/{worker-name}/files/{+file}
     binding:
-      bindingType: file-server
-      component:
-        name: example-component
-      workerName: 'let name: string = request.path.worker-name; name'
+      type: file-server
+      componentName: example-component
       # retrieve the path /files/${{file}} from the worker and return the content.
       response: 'let file: string = request.path.file; "/files/${{file}}"'
 ```
@@ -152,27 +139,20 @@ The binding will forward the incoming requests to the worker and return the resp
 Example:
 
 ```yaml
-id: example-api
-version: 0.0.1
-createdAt: 2024-08-21T07:42:15.696Z
 # Each user has it's own worker that directly implements the user api using wasi:http/incoming-handler.
 # Define routes to forward the traffic to the workers.
 routes:
   - method: Get
     path: /users/{user}
     binding:
-      bindingType: http-handler
-      component:
-        name: user-component
-        version: 0
+      type: http-handler
+      componentName: user-component
       workerName: 'let name: string = request.path.user; name'
   - method: Get
     path: /users/{user}/{+user-route}
     binding:
-      bindingType: http-handler
-      component:
-        name: user-component
-        version: 0
+      type: http-handler
+      componentName: user-component
       workerName: 'let name: string = request.path.user; name'
 ```
 

@@ -1,4 +1,4 @@
-## Expose Http APIs for your Golem App
+## Expose HTTP APIs for your Golem App
 
 The first step to exposing your the functions in your component (in short, worker functions) as http apis,
 is to edit the manifest golem.yaml to add an API definition.
@@ -90,7 +90,7 @@ Let's break down the binding object.
 | `component`   | Specifies the component's name and version                                                                                                                                                                                                                                                                                          |
 | `response`    | The `response` field here is a Rib expression that allows you to call any worker function and manipulates its output.                                                                                                                                                                                                                                                                            |
 
-See the [binding type reference](/http-api-definitions/worker-binding-types) for more details on the supported binding types.
+See the [binding type reference](/http-api-definitions/api-definition-bindings) for more details on the supported binding types.
 
 If your worker name is a constant, the you can simply make it a constant string such as `"foo"`. Please note that it has to be quoted for it a valid Rib string.
 See the [Rib reference](/rib) for the full reference of the binding language.
