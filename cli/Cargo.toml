@@ -8,18 +8,23 @@ exclude = ["desktop-app/src-tauri"]
 [workspace.dependencies]
 
 # Golem dep
-golem-client = "=1.2.2-dev.15"
-golem-common = "=1.2.2-dev.15"
+golem-client = "=1.2.2"
+golem-common = "=1.2.2"
 golem-rdbms = "=0.0.2"
-golem-rib = "=1.2.2-dev.15"
-golem-rib-repl = "=1.2.2-dev.15"
-golem-service-base = "=1.2.2-dev.15"
-golem-wasm-ast = { version = "=1.2.2-dev.15", default-features = false, features = ["analysis", "wave"] }
-golem-wasm-rpc = { version = "=1.2.2-dev.15", default-features = false, features = ["host"] }
+golem-rib = "=1.2.2"
+golem-rib-repl = "=1.2.2"
+golem-service-base = "=1.2.2"
+golem-wasm-ast = { version = "=1.2.2", default-features = false, features = [
+    "analysis",
+    "wave",
+] }
+golem-wasm-rpc = { version = "=1.2.2", default-features = false, features = [
+    "host",
+] }
 golem-wit = "=1.2.2-dev.11"
 
 # Golem cloud deps
-golem-cloud-client = "=1.2.2-dev.17"
+golem-cloud-client = "=1.2.2"
 
 # External deps
 anyhow = "1.0.97"
@@ -119,13 +124,13 @@ wit-encoder = "=0.227.1"
 wit-parser = "=0.227.1"
 
 [patch.crates-io]
-golem-client = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2-dev.15" }
-golem-common = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2-dev.15" }
-golem-rib = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2-dev.15" }
-golem-rib-repl = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2-dev.15" }
-golem-service-base = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2-dev.15" }
-golem-wasm-ast = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2-dev.15" }
-golem-wasm-rpc = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2-dev.15" }
+golem-client = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2" }
+golem-common = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2" }
+golem-rib = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2" }
+golem-rib-repl = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2" }
+golem-service-base = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2" }
+golem-wasm-ast = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2" }
+golem-wasm-rpc = { git = "https://github.com/golemcloud/golem.git", tag = "v1.2.2" }
 
 redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }
 wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
