@@ -8,6 +8,8 @@ github.com/golemcloud/golem-go v1.3.1 h1:oHsnHCJL8juR5Uop1gKOQ8DyBM5Diu6XpoPKQv+
 github.com/golemcloud/golem-go v1.3.1/go.mod h1:jcJmXGDyYDUh9gQaVwEZa047SDZbadSJTIZe19Y3cs4=
 github.com/golemcloud/golem-go v1.3.2 h1:I2XCmqnqhi0oDLI6P9R9jcIfuL5f5KHW08X+ZAPJbFc=
 github.com/golemcloud/golem-go v1.3.2/go.mod h1:jcJmXGDyYDUh9gQaVwEZa047SDZbadSJTIZe19Y3cs4=
+github.com/golemcloud/golem-go v1.3.3 h1:yns1ZCPdW1IjVf8vCJZzqkISZwPN+SRFqNjIPakB3EU=
+github.com/golemcloud/golem-go v1.3.3/go.mod h1:jcJmXGDyYDUh9gQaVwEZa047SDZbadSJTIZe19Y3cs4=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/klauspost/compress v1.17.11 h1:In6xLpyWOi1+C7tXUUWv2ot1QvBjxevKAaI6IXrJmUc=

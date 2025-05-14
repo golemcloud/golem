@@ -152,7 +152,7 @@ fn process_pull_request_notification(
 ) -> EnhancedNotification {
     let pull_request = get_notification_subject::<github::PullRequest>(state, &notification);
 
-    if (pull_request.comments_url.is_none()) {
+    if pull_request.comments_url.is_none() {
         panic!("body: {}", serde_json::to_string(&notification).unwrap());
     };
 

@@ -14,7 +14,7 @@ dependencies:
 
 httpApi:
   definitions:
-    componentname:
+    component-name:
       version: '0'
       routes:
       - method: POST
@@ -57,6 +57,6 @@ httpApi:
   #   local:
   #   - host: localhost:9006
   #     definitions:
-  #     - componentname
+  #     - component-name
 
   # golem-app-manifest-component-hints
