@@ -15,7 +15,7 @@ use cloud_worker_executor::services::plugins::CloudPluginsWrapper;
 use cloud_worker_executor::CloudGolemTypes;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
-use golem_worker_executor_base::preview2::golem_api_1_x;
+use golem_worker_executor_base::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::ComponentService;
@@ -305,6 +305,9 @@ pub fn create_debug_wasmtime_linker<T: GolemTypes>(
 ) -> anyhow::Result<Linker<DebugContext<T>>> {
     let mut linker = create_linker(engine, get_durable_ctx)?;
     golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+    golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+    golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+    golem_durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     golem_wasm_rpc::golem_rpc_0_2_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     Ok(linker)
 }
