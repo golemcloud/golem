@@ -97,7 +97,35 @@ To unregister an available plugin, use the following command:
 golem plugin unregister --plugin-name <PLUGIN-NAME> --version <PLUGIN-VERSION>
 ```
 
-## Manage a component's plugins
+## Manage a component's plugins using the app manifest
+
+The recommended way to apply plugins to components is to define them in the **app manifest**.
+
+The set of **installed plugins** can be set for each component in the app manifest under the `plugins` key:
+
+```yaml
+components:
+  my:example:
+      template: ts
+      plugins:
+          - name: component-transformer-1
+            version: v1
+            parameters:
+              x: 1
+              y: 2
+```
+
+The `name` and `version` fields of each installed component must match one of the available components installed to the system with the `golem plugin` commands described above.
+
+The `parameters` field contains an arbitrary set of key-value pairs, their meaning depending on the actual plugin.
+
+It is possible to install *multiple plugins* to a component, and the order they are going to be applied is going to match the order of the elements in the app manifest.
+
+To apply the changes, use one of the `golem app deploy` or the `golem component deploy` commands.
+
+## Manage a component's plugins explicitly
+
+There are CLI commands to explicitly install, uninstall or update a component's set of installed plugins. These commands may get deprecated in the future in favor of using the app manifest as described above.
 
 A subset of the registered plugins can be installed for a component using te `golem component plugin` commands.
 
@@ -133,7 +161,13 @@ The **installation ID** is a unique identifier assigned every time a plugin is i
 
 ### Updating a plugin's priority or configuration
 
-TODO
+To update a plugin's priority or set of configuration parameters, use the following command:
+
+```shell copy
+golem component plugin update --installation-id <INSTALLATION_ID> --priority <NEW_PRIORITY> --param <KEY=VALUE> [...--param <KEY=VALUE>] [COMPONENT_NAME]
+```
+
+The **installation ID** is a unique identifier assigned every time a plugin is installed to a given component version, or its configuration has been changed.
 
 ## Manage a project's plugins
 
@@ -143,13 +177,19 @@ In _Golem Cloud_ it is also possible to install plugins for a **project**. Every
 
 To get the list of installed plugins for a project, use the following command:
 
-TODO
+```shell copy
+golem project plugin get [PROJECT_NAME]
+```
+
+The `PROJECT_NAME` parameter can be either a project's name (if it is not ambigous), or it can be prefixed by the project's owner account's email address.
 
 ### Install a plugin
 
 To install a plugin for a project, use the following command:
 
-TODO
+```shell copy
+golem project plugin install --plugin-name <PLUGIN_NAME> --plugin-version <PLUGIN_VERSION> --priority <PRIORITY> --param <KEY=VALUE> [...--param <KEY=VALUE>] [PROJECT_NAME]
+```
 
 Many plugins require per-installation **configuration**. These are key-value pairs that can be passed as arguments to the `install` command as `--param <KEY=VAL>`.
 
@@ -159,13 +199,22 @@ The **priority** is a number that determines the order in which plugins are appl
 
 To uninstall a plugin from a project, use the following command:
 
-TODO
+```shell copy
+golem project plugin uninstall --installation-id <INSTALLATION_ID> [COMPONENT_NAME]
+```
 
 The **installation ID** is a unique identifier assigned every time a plugin is installed for a component. It is not enough to use the plugin name and version here, because one plugin can be installed multiple times (for exampel with different configuration) for a component.
+```
 
 ### Updating a plugin's priority or configuration
 
-TODO
+To update a plugin's priority or set of configuration parameters, use the following command:
+
+```shell copy
+golem project plugin update --installation-id <INSTALLATION_ID> --priority <NEW_PRIORITY> --param <KEY=VALUE> [...--param <KEY=VALUE>] [PROJECT_NAME]
+```
+
+The **installation ID** is a unique identifier assigned every time a plugin is installed to a given component version, or its configuration has been changed.
 
 ## Controlling oplog processor plugins per worker
 

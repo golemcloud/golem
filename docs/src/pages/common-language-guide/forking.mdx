@@ -1,0 +1,116 @@
+import { Tabs } from "nextra/components"
+
+# Forking Workers
+
+## Explanation
+
+Golem workers are single threaded. To achieve parallel execution, it is possible to spawn _child workers_ and communicate with them using RPC, as described on the [Worker to Worker communication page](/common-language-guide/rpc).
+
+A simpler way is to use the **fork API**. The fork API consists of a single host function, defined as the following:
+
+```wit
+/// Indicates which worker the code is running on after `fork`
+enum fork-result {
+    /// The original worker that called `fork`
+    original,
+    /// The new worker
+    forked
+}
+
+/// Forks the current worker at the current execution point. The new worker gets the `new-name` worker name,
+/// and this worker continues running as well. The return value is going to be different in this worker and
+/// the forked worker.
+fork: func(new-name: string) -> fork-result;
+```
+
+When called, a new _worker_ is created using the given name, with exactly the same state as the one that called the `fork` function. The execution continues in both the original and the new workers, with a different `fork-result` result value in each.
+
+## Usage
+
+Using this `fork` function from a component that was created from Golem's built-in templates is straightforward because access to the Golem specific host functions is already set up.
+
+The following code snippet demonstrates calling `fork` and continuing on two different parallel branches based on its result value:
+
+<Tabs items={["Rust", "TypeScript", "Go", "Python", "C", "JavaScript", "Zig", "MoonBit", "Scala.js"]}>
+  <Tabs.Tab>
+  ```rust
+  use golem_rust::{fork, ForkResult};
+
+  match fork("new-worker") {
+      ForkResult::Original => {
+          // ...
+      }
+      ForkResult::Forked => {
+          // ...
+      }
+  }
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```typescript
+  import { fork, type ForkResult } from "@golemcloud/golem-ts"
+
+  switch (fork("new-name")) {
+    case "original": {
+      // ...
+      break;
+    }
+    case "forked": {
+      // ...
+      break;
+    }
+  }
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```go
+  switch golemhost.Fork("new-name") {
+	case host.ForkResultOriginal:
+		{
+			// ...
+		}
+	case host.ForkResultForked:
+		{
+			// ...
+		}
+	}
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```python
+  from my_component.imports import host
+
+  if host.fork("new-name") == host.ForkResult.ORIGINAL:
+      # ...
+      pass
+  else:
+      # ...
+      pass
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```c
+  // TODO: Code example is not available yet
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```javascript
+  // TODO: Code example is not available yet
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```zig
+  // TODO: Code example is not available yet
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```moonbit
+  // TODO: Code example is not available yet
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```scala.js
+  // TODO: Code example is not available yet
+  ```
+  </Tabs.Tab>
+</Tabs>

@@ -53,6 +53,7 @@
   "app-manifest": "Application Manifest",
   "function-names": "Function names",
   "golem-host-functions": "Golem Host Functions",
+  "installing-webassembly-tooling": "Installing WebAssembly Tooling",
   "json-wave-mapping": "JSON-WAVE Mapping",
   "rest-api": "REST API",
   "rib": "Rib",

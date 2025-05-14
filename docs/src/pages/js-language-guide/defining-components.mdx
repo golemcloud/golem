@@ -104,6 +104,24 @@ export const api = {
 ```
 
 <Callout type="info">
+    Note that both sync and async functions are valid implementations of the wit and a promise returned by the implementation will be awaited.
+    Therefore the following code would also work:
+    ```javascript
+    let state = BigInt(0)
+
+    export const api = {
+      async add(value) {
+          console.log(`Adding ${value} to the counter`)
+          state += value
+      },
+      async get() {
+          return state
+      },
+    }
+    ```
+</Callout>
+
+<Callout type="info">
     During [componentization](/js-language-guide/golem-js-sdk) the exported objects and functions are checked against the `wit` world, eg. if the get function were not part of the `api` objects, we would get an error similar to this:
 
     ```
@@ -147,14 +165,7 @@ world example {
 ```
 
 Resources can have multiple instances within a worker. Their constructor returns a _handle_ which is then used to call the methods on the resource. Learn more about how resources can be implicitly created and invoked through Golem's APIs in the [Invocations page](/concepts/invocations).
-
-To implement the above defined WIT resource in JavaScript a few new steps must be taken:
-
-- define a class representing the resource - it can contain data!
-- implement the interface generated as the resource's interface for this class named `CounterInstance`
-- implement the constructor on the component class as defined by the interface `CounterStatic`
-
-Let's see in code:
+WIT Resources are implemented in JavaScript using classes:
 
 ```javascript
 class Counter {
@@ -205,11 +216,33 @@ The following table shows an example of each `WIT` data type and its correspondi
 | flags                                | interface                | Each flag becomes an optional boolean property                 |
 | resource                             | class                    | Methods become class methods                                   |
 
+#### Results
+
 The `Result` type above is expected to be a discriminated union:
 
 ```javascript
 const okResult = { tag: "ok", val: "hello" }
 const errorResult = { tag: "err", val: "error" }
+```
+
+A special case applies when a function returns a result.
+In this case the JavaScript code should either return the plain success value or throw the error value.
+
+E.g. the following wit
+```wit
+assert-even: func(val: u32) -> result<u32, string>;
+```
+
+Could be implemented in javascript like this:
+
+```javascript
+function assertEven(val) {
+    if (val % 2 === 0) {
+      return val;
+    } else {
+      throw "not even";
+    }
+}
 ```
 
 ### WIT records
@@ -335,7 +368,7 @@ Environment variables can be specified when a worker is **explicitly created**, 
 - `GOLEM_COMPONENT_ID` - the ID of the worker's component
 - `GOLEM_COMPONENT_VERSION` - the version of the component used for this worker
 
-In addition to these, when using [Worker to Worker communication](rpc), workers created by remote calls **inherit the environment variables of the caller**.
+In addition to these, when using [Worker to Worker communication](/common-language-guide/rpc), workers created by remote calls **inherit the environment variables of the caller**.
 
 This feature makes environment variables a good fit for passing configuration such as hostnames, ports, or access tokens to trees of workers.
 

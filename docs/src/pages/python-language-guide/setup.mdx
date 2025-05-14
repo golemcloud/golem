@@ -1,43 +1,21 @@
-import { Callout } from "nextra/components"
-import { Steps } from "nextra/components"
+import { MultiPlatformCommand } from "@/components/multi-platform-command"
 
 ## Setup development environment for Python
 
-Python programs can be compiled into WASM components using the tool `componentize-py`. For **Golem** you should use our forked version of this tool, as it pins all its dependencies to the one required by Golem Cloud.
+Golem's Python toolchain is using [uv](https://docs.astral.sh/uv/) as the underlying build tool.
+Install it with the following command:
 
-First install Python 3 to your system and once you have access to the `pip` package manager, install `componentize-py` using:
-
-```shell
-$ pip install componentize-py==0.16.0
-
-$ componentize-py --version
-componentize-py 0.16.0
-```
-
-## Install WebAssembly tooling for Worker to Worker communication
-
-Using [Worker to Worker communication](/python-language-guide/rpc) requires **Rust** and **WASM** tooling, because _golem RPC client stubs_ are generated and implemented as _Rust_ components.
-
-<Steps>
-
-### Install Rust
-
-Install rustup
-
-```bash copy
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-Install the latest stable version of Rust
-
-```bash copy
-rustup install stable && rustup default stable
-```
-
-Add the WASI target
-
-```bash copy
-rustup target add wasm32-wasip1
-```
-
-</Steps>
+<MultiPlatformCommand
+  commands={[
+    {
+      label: "macOS/Linux",
+      command:
+        'curl -LsSf https://astral.sh/uv/0.6.17/install.sh | sh',
+    },
+    {
+      label: "Windows",
+      command:
+        'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/0.6.17/install.ps1 | iex"',
+    },
+  ]}
+/>

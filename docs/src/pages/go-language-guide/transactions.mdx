@@ -1,4 +1,10 @@
+import { Callout } from "nextra/components"
+
 # High level transactions in Go
+
+<Callout type="warning">
+    Check the [page about setting up the Golem Go SDK](/go-language-guide/golem-go-sdk) to make sure the SDK is available in your component.
+</Callout>
 
 On top of the [durability controls](/go-language-guide/durability) and [retry controls](/go-language-guide/retries), the [golem-go](https://github.com/golemcloud/golem-go) library also provides a high level functions for defining transactions supporting **compensation actions** in case of getting reverted.
 

@@ -49,10 +49,14 @@ world example {
 To implement this function in TypeScript we simply have to export a function with matching names and types in `main.ts`:
 
 ```typescript
-export function helloWorld(): string {
+export async function helloWorld(): Promise<string> {
   return "hello"
 }
 ```
+<Callout type="info">
+  Both async and sync functions are supported as implementations of a wit function export.
+  As it's more flexible, Golem generates types for the async version by default.
+</Callout>
 
 <Callout type="warning">
   Note that in WIT, identifiers are using the `kebab-case` naming convention, while TypeScript uses
@@ -82,16 +86,16 @@ world example {
 This is similar to having the two exported functions directly exported from the `world` section, but there is a corresponding TypeScript **interface** generated that needs to be separately implemented and exported:
 
 ```typescript
-import { Api } from "./generated/example.js"
+import * as world from "golem:dome/world"
 
 let state = BigInt(0)
 
-export const api: Api = {
-  add(value: bigint) {
+export const api: typeof world.api = {
+  async add(value: bigint) {
     console.log(`Adding ${value} to the counter`)
     state += value
   },
-  get(): bigint {
+  async get(): bigint {
     return state
   },
 }
@@ -129,24 +133,12 @@ world example {
 ```
 
 Resources can have multiple instances within a worker. Their constructor returns a _handle_ which is then used to call the methods on the resource. Learn more about how resources can be implicitly created and invoked through Golem's APIs in the [Invocations page](/concepts/invocations).
-
-To implement the above defined WIT resource in TypeScript a few new steps must be taken:
-
-- define a class representing the resource - it can contain data!
-- implement the interface generated as the resource's interface for this class named `CounterInstance`
-- implement the constructor on the component class as defined by the interface `CounterStatic`
-
-<Callout type={"warning"}>
-  The `CounterStatic` interface cannot be implemented by the `Counter` class, but the `constructor`
-  in `Counter` will be checked against the `new` method defined in `CounterStatic`.
-</Callout>
-
-Let's see in code:
+WIT resource are implemented in TypeScript as a class. Make sure to add the appropriate implements clause referencing the generated type to get support from your IDE and allowing the compiler to check that the types line up.
 
 ```typescript
-import { Api, CounterInstance, CounterStatic } from "./generated/example.js"
+import type * as world from 'golem:demo/example'
 
-class Counter implements CounterInstance {
+class Counter implements world.api.Counter {
   name: string
   state = BigInt(0)
 
@@ -154,17 +146,16 @@ class Counter implements CounterInstance {
     this.name = name
   }
 
-  add(value: bigint): void {
-    this.state += value
-  }
-
-  get(): bigint {
+  async get(): Promise<bigint> {
     return this.state
+  }
+  async add(value: bigint): Promise<void> {
+    this.state += value
   }
 }
 
-export const api: Api = {
-  Counter: Counter,
+export const api: typeof world.api = {
+  Counter
 }
 ```
 
@@ -204,6 +195,26 @@ export type Option<T> = { tag: "none" } | { tag: "some"; val: T }
 
 ```typescript
 export type Result<T, E> = { tag: "ok"; val: T } | { tag: "err"; val: E }
+```
+
+A special case applies when a function returns a result.
+In this case the TypeScript code should either return the plain success value or throw the error value.
+
+E.g. the following wit
+```wit
+assert-even: func(val: u32) -> result<u32, string>;
+```
+
+Could be implemented in javascript like this:
+
+```typescript
+function assertEven(val: number) {
+    if (val % 2 === 0) {
+      return val;
+    } else {
+      throw "not even";
+    }
+}
 ```
 
 ### WIT records
@@ -348,7 +359,7 @@ Environment variables can be specified when a worker is **explicitly created**, 
 - `GOLEM_COMPONENT_ID` - the ID of the worker's component
 - `GOLEM_COMPONENT_VERSION` - the version of the component used for this worker
 
-In addition to these, when using [Worker to Worker communication](/ts-language-guide/rpc), workers created by remote calls **inherit the environment variables of the caller**.
+In addition to these, when using [Worker to Worker communication](/common-language-guide/rpc), workers created by remote calls **inherit the environment variables of the caller**.
 
 This feature makes environment variables a good fit for passing configuration such as hostnames, ports, or access tokens to trees of workers.
 

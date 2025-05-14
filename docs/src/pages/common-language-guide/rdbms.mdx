@@ -1,0 +1,121 @@
+import { Tabs } from "nextra/components"
+
+# Using Relational Databases
+
+Golem provides WIT packages to integrate with popular relational database systems from any of the supported languages.
+The currently supported databases are:
+
+- PostgreSQL - see [the WIT package](https://github.com/golemcloud/golem-rdbms/blob/main/wit/postgres.wit)
+- MySQL - see [the WIT package](https://github.com/golemcloud/golem-rdbms/blob/main/wit/mysql.wit)
+
+## Adding RDBMS support to a component
+
+The WIT packages are already in the application's root `wit/deps` if it was created with `golem app new`; to use it, import it in the component's WIT:
+
+```wit
+import golem:rdbms/mysql@0.0.1;
+```
+
+or
+
+```wit
+import golem:rdbms/postgres@0.0.1;
+```
+
+### Executing SQL statements
+
+To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` resource and call `execute` on it:
+
+
+<Tabs items={["Rust", "TypeScript", "Go", "Python", "C", "JavaScript", "Zig", "MoonBit", "Scala.js"]}>
+  <Tabs.Tab>
+```rust
+use golem_rust::bindings::golem::rdbms::mysql::DbConnection;
+
+let db = DbConnection::open("localhost:3006").expect("Failed to connect to the database");
+db.execute(
+    r#"CREATE TABLE IF NOT EXISTS test_users
+       (
+         user_id             varchar(25)    NOT NULL,
+         name                varchar(255)    NOT NULL,
+         created_on          timestamp NOT NULL DEFAULT NOW(),
+         PRIMARY KEY (user_id)
+       );"#,
+    &[],
+).expect("CREATE TABLE failed");
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```typescript
+  import { DbConnection } from "golem:rdbms/mysql@0.0.1";
+
+  const conn = DbConnection.open("localhost:3006");
+  conn.execute(
+    `CREATE TABLE IF NOT EXISTS test_users
+      (
+          user_id             varchar(25)    NOT NULL,
+          name                varchar(255)    NOT NULL,
+          created_on          timestamp NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id)
+            );`, [])
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```go
+  import (
+  	mysql "app/components-go/my-component/binding/golem/rdbms/mysql"
+  )
+
+  conn, err, isErr := mysql.DbConnectionOpen("localhost:3006").Result()
+	if isErr {
+		panic(err)
+	}
+	n, err, isErr := conn.Execute(`CREATE TABLE IF NOT EXISTS test_users
+    (
+        user_id             varchar(25)    NOT NULL,
+        name                varchar(255)    NOT NULL,
+        created_on          timestamp NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id)
+    );`, cm.ToList([]mysql.DbValue{})).Result()
+	if isErr {
+		panic(err)
+	}
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```python
+  # TODO: Code example is not available yet
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```c
+  // TODO: Code example is not available yet
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```javascript
+  // TODO: Code example is not available yet
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```zig
+  // TODO: Code example is not available yet
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```moonbit
+  // TODO: Code example is not available yet
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```scala.js
+  // TODO: Code example is not available yet
+  ```
+  </Tabs.Tab>
+</Tabs>
+
+Additionally you can:
+
+- `query` executes a SQL statement and returns a result
+- `query-stream` executs a SQL statement and returns a streaming result
+- `begin-transaction` creates a transaction resource on which, in addition to the `query` and `execute` functions, there is also a `commit` and a `rollback` method.

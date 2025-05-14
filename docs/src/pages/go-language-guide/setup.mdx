@@ -1,5 +1,6 @@
 import { Callout } from "nextra/components"
 import { Steps } from "nextra/components"
+import { MultiPlatformCommand } from "@/components/multi-platform-command"
 
 # Setup Go
 
@@ -31,41 +32,6 @@ brew install tinygo
 
 ## Install WebAssembly tooling
 
-First of all, to install `wasm-tools` via `cargo`, you need to install the latest stable version of Rust. The recommended way to do so is using [https://rustup.rs](https://rustup.rs/):
+You will need both `wasm-tools` and `wit-bindgen` to work on Go WebAssembly projects.
+Consult the [dedicated page](/installing-webassembly-tooling) for instructions on how to install them.
 
-<Steps>
-
-### Install Rust
-
-Install rustup
-
-```bash copy
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-Install the latest stable version of Rust
-
-```bash copy
-rustup install stable && rustup default stable
-```
-
-Add the WASI target
-
-```bash copy
-rustup target add wasm32-wasip1
-```
-
-### Install `wasm-tools`
-
-```bash copy
-cargo install --force --locked  wasm-tools@1.227.1
-```
-
-Confirm the installation:
-
-```bash
-wasm-tools --version
-wasm-tools 1.227.1
-```
-
-</Steps>

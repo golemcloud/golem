@@ -2,6 +2,10 @@ import { Callout } from "nextra/components"
 
 # Working with Golem Promises in Go
 
+<Callout type="warning">
+    Check the [page about setting up the Golem Go SDK](/go-language-guide/golem-go-sdk) to make sure the SDK is available in your component.
+</Callout>
+
 Golem **promises** provide a way for Golem workers to wait on an external condition. The worker creates the promise and somehow sends its identifier to the external system responsible for **completing** the promise. Then the worker can **await** the promise, being suspended until the external system completes the promise using Golem's REST API.
 
 It is also possible to complete a promise from within a Golem worker using the Golem SDK.

@@ -99,12 +99,11 @@ world py-example {
 This is equivalent to having the two exported functions directly exported from the `world` section, so the implementation in Python is once again requires to implement the two exported functions as an implementation of an abstract class:
 
 ```python
-import py_example
 from py_example import exports
 
 state: int = 0
 
-class Api(exports.Api):
+class Api(exports.PyExampleApi):
     def add(self, value: int):
       global state
       state = state + value
@@ -154,16 +153,14 @@ To implement the above defined WIT resource in Python a few new steps must be ta
 Let's see in code:
 
 ```python filename="main.py"
-import py_example
 from py_example import exports
 
-class Api(exports.Api):
+class Api(exports.PyExampleApi):
     pass
 
 ```
 
 ```python filename="api.py"
-import py_example
 import py_example.exports
 from py_example.exports import api
 
@@ -240,7 +237,7 @@ Environment variables can be specified when a worker is **explicitly created**, 
 - `GOLEM_COMPONENT_ID` - the ID of the worker's component
 - `GOLEM_COMPONENT_VERSION` - the version of the component used for this worker
 
-In addition to these, when using [Worker to Worker communication](/python-language-guide/rpc), workers created by remote calls **inherit the environment variables of the caller**.
+In addition to these, when using [Worker to Worker communication](/common-language-guide/rpc), workers created by remote calls **inherit the environment variables of the caller**.
 
 This feature makes environment variables a good fit for passing configuration such as hostnames, ports, or access tokens to trees of workers.
 

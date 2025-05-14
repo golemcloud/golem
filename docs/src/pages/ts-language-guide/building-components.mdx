@@ -2,7 +2,15 @@ import { Callout } from "nextra/components"
 import { Steps } from "nextra/components"
 
 # Building Golem Components in TypeScript
-Building Golem components having an [application manifest](/app-manifest) is straightforward, just use the `golem` command line interface:
+Building Golem components having an [application manifest](/app-manifest) is straightforward.
+
+First (or after changing the `package.json` file) we have to install the `npm` dependencies with a custom command defined in the Golem TypeScript template:
+
+```shell copy
+golem app ts-npm-install
+```
+
+Then just use the `golem` command line interface to run the build:
 
 ```shell copy
 golem app build
