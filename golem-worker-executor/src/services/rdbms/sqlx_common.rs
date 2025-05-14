@@ -735,7 +735,7 @@ where
             "pre-commit transaction"
         );
 
-        let result = T::pre_commit_transaction(&self.pool.deref(), &self)
+        let result = T::pre_commit_transaction(self.pool.deref(), self)
             .await
             .map_err(|e| {
                 error!(
@@ -759,7 +759,7 @@ where
             "pre-rollback transaction"
         );
 
-        let result = T::pre_rollback_transaction(&self.pool.deref(), &self)
+        let result = T::pre_rollback_transaction(self.pool.deref(), self)
             .await
             .map_err(|e| {
                 error!(

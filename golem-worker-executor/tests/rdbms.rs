@@ -23,8 +23,8 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_common::model::public_oplog::{
-    EndRegionParameters, ImportedFunctionInvokedParameters, PublicDurableFunctionType,
-    PublicOplogEntry, TimestampParameter, WriteRemoteBatchedParameters,
+    BeginRemoteTransactionParameters, ImportedFunctionInvokedParameters, PublicDurableFunctionType,
+    PublicOplogEntry, RemoteTransactionParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::{ComponentId, IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
@@ -441,9 +441,11 @@ async fn rdbms_postgres_idempotency(
     check!(result2 == result1);
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
-    let oplog = serde_json::to_string(&oplog);
-    check!(oplog.is_ok());
-    println!("{}", oplog.unwrap());
+    let oplog_json = serde_json::to_string(&oplog);
+    check!(oplog_json.is_ok());
+    println!("{}", oplog_json.unwrap());
+
+    check_transaction_oplog_entries::<PostgresType>(oplog);
 
     drop(executor);
 }
@@ -827,6 +829,9 @@ async fn rdbms_mysql_idempotency(
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
+    // println!("{}", oplog.unwrap());
+
+    check_transaction_oplog_entries::<MysqlType>(oplog);
 
     drop(executor);
 }
@@ -1181,4 +1186,83 @@ fn query_ok_response(
 
 fn query_empty_ok_response() -> serde_json::Value {
     query_ok_response(vec![], vec![])
+}
+
+fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>) {
+    let mut begin_entry: Option<(usize, BeginRemoteTransactionParameters)> = None;
+    let mut pre_entry: Option<(usize, RemoteTransactionParameters)> = None;
+    let mut end_entry: Option<(usize, RemoteTransactionParameters)> = None;
+    let mut imported_function_invoked: Vec<(usize, ImportedFunctionInvokedParameters)> = vec![];
+
+    for (i, e) in entries.iter().enumerate() {
+        match begin_entry.clone() {
+            Some(_) => {
+                if pre_entry.is_none() {
+                    pre_entry =
+                        try_match!(e.clone(), PublicOplogEntry::PreCommitRemoteTransaction(v1))
+                            .or(try_match!(
+                                e.clone(),
+                                PublicOplogEntry::PreRollbackRemoteTransaction(v2)
+                            ))
+                            .ok()
+                            .map(|v| (i, v));
+                }
+
+                if end_entry.is_none() {
+                    if let Ok(v) =
+                        try_match!(e.clone(), PublicOplogEntry::ImportedFunctionInvoked(v))
+                    {
+                        imported_function_invoked.push((i, v));
+                    }
+
+                    end_entry =
+                        try_match!(e.clone(), PublicOplogEntry::CommitedRemoteTransaction(v1))
+                            .or(try_match!(
+                                e.clone(),
+                                PublicOplogEntry::RolledBackRemoteTransaction(v2)
+                            ))
+                            .or(try_match!(
+                                e.clone(),
+                                PublicOplogEntry::AbortedRemoteTransaction(v2)
+                            ))
+                            .ok()
+                            .map(|v| (i, v));
+                }
+            }
+            None => {
+                begin_entry = try_match!(e.clone(), PublicOplogEntry::BeginRemoteTransaction(v))
+                    .ok()
+                    .map(|v| (i, v));
+            }
+        }
+    }
+
+    check!(begin_entry.is_some());
+    check!(end_entry.is_some());
+    check!(pre_entry.is_some());
+    check!(!imported_function_invoked.is_empty());
+
+    let (begin_index, _) = begin_entry.unwrap();
+    let (pre_index, pre_entry) = pre_entry.unwrap();
+    let (end_index, end_entry) = end_entry.unwrap();
+
+    check!(pre_index > begin_index);
+    check!(end_index > pre_index);
+    check!(end_entry.begin_index == pre_entry.begin_index);
+
+    let fn_prefix = format!("rdbms::{}::db-transaction::", T::default());
+
+    for (i, v) in imported_function_invoked {
+        check!(i > begin_index);
+        check!(i < end_index);
+        check!(v.function_name.starts_with(fn_prefix.as_str()));
+        check!(
+            v.wrapped_function_type
+                == PublicDurableFunctionType::WriteRemoteTransaction(
+                    WriteRemoteTransactionParameters {
+                        index: Some(pre_entry.begin_index)
+                    }
+                )
+        );
+    }
 }

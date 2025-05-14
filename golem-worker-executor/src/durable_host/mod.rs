@@ -2286,7 +2286,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         timestamp: _,
                         transaction_id,
                     } => Ok(transaction_id),
-                    _ => Err(GolemError::runtime("Unexpected oplog entry").into()),
+                    _ => Err(GolemError::runtime("Unexpected oplog entry")),
                 }?;
 
                 let (tx_id, tx) = handler.create_replay(&tx_id).await?;
