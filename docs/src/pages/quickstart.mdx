@@ -42,21 +42,6 @@ To use the open source version of Golem in production you will need to deploy it
 
 It is also possible to use our _hosted version_ of Golem, available at [https://console.golem.cloud].
 
-### Creating a Profile
-
-To specify the Golem service location, run the following command:
-
-```shell copy
-golem init
-```
-
-This command starts an interactive configuration process. For non-interactive options - see [Golem CLI](cli) page.
-
-On the first step you'll see 3 options:
-
-- Golem Default. Use this options if you have started Golem locally using `golem server run`.
-- Golem. Use this option in case of a customised Golem installation in your own infrastructure.
-- Golem Cloud. Use this option for a hosted version of Golem.
 
 ### Building an Example
 
@@ -137,7 +122,8 @@ To get started, you create an application and a single component using your chos
   </Tabs.Tab>
 </Tabs>
 
-This will generate a new component in the current, ready to be compiled and deployed to Golem.
+This will generate a new component in the current, ready to be compiled and deployed to Golem. You can also use
+`golem app new` to get interactive shell and follow the prompts.
 
 <Callout type="warning">
     Each supported programming language may require additional setup before you can build your component. Refer to the [language specific guides](/develop-overview) for more information.
