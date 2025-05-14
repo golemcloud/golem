@@ -1,96 +1,202 @@
 ## Update API definitions and deployments
 
-### Deploying multiple definitions to the same site
+We will update the API definition by adding more routes to the existing API definition.
+
+
+```yaml
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.2.2-dev.1/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.2.2-dev.1/golem.schema.json
+
+# See https://learn.golem.cloud/docs/app-manifest#field-reference for field reference
+
+components:
+  amazon:shopping-cart:
+    template: rust
+
+httpApi:
+  definitions:
+    shopping-cart:
+      version: '0.0.2'
+      routes:
+        - method: POST
+          path: /v1/{user}/add-to-cart
+          binding:
+            type: default
+            componentName: "amazon:shopping-cart"
+            response: |
+              let user: u32 = request.path.user;
+              let worker = instance("cart-${user}");
+              worker.add-item(request.body);
+              "successfully added item to the cart"
+        - method: GET
+          path: /v1/{user}/contents
+          binding:
+            type: default
+            componentName: "amazon:shopping-cart"
+            response: |
+              let user: u32 = request.path.user;
+              let worker = instance("cart-${user}");
+              worker.get-cart-contents()
+        - method: POST
+          path: /v1/{user}/checkout
+          binding:
+            type: default
+            componentName: "amazon:shopping-cart"
+            response: |
+              let user: u32 = request.path.user;
+              let worker = instance("cart-${user}");
+              worker.checkout()
+
+  # Uncomment if you want to deploy your api
+  deployments:
+    local:
+    - host: localhost:9006
+      definitions:
+       - shopping-cart
+
+```
+
+Here we added more routes into the same API definition. Now simply redeploy
+using
+
+```sh
+golem api deploy
+
+```
+
+The interactive shell will force you to update the version of the API definition to not lose track of the changes,
+and keep a note that you can have advanced management of the APIs using `golem api definition` and `golem api deploy` commands
+allowing you to switch back to the previous API if needed.
+
+
+### Try out the updated APIs
+
+#### Route 1
+```sh
+curl -X POST http://localhost:9006/v1/100/add-to-cart -d '{"product-id": "foo", "name": "foo", "price": 42, "quantity": 42}' -H "accept: application/json"
+```
+
+```json
+"successfully added item to the cart
+```
+
+#### Route 2
+```sh
+curl -X GET http://localhost:9006/v1/100/contents -H "accept: Application/json"
+```
+```json
+[{"name":"foo","price":42.0,"product-id":"foo","quantity":42},{"name":"foo","price":42.0,"product-id":"foo","quantity":42},{"name":"foo","price":42.0,"product-id":"foo","quantity":42},{"name":"foo","price":42.0,"product-id":"foo","quantity":42},{"name":"foo","price":42.
+```
+
+#### Route 3
+
+```sh
+curl -X POST http://localhost:9006/v1/100/checkout
+```
+
+```json
+{"success":{"order-id":"238738674"}}⏎
+```
+
+### Deploying multiple definitions to the same site and route conflicts
 
 Multiple API definitions can be deployed to a specific site (subdomain.domain),
 as far their routes don't conflict.
 
-Example: Let's say we have an API definition with ID/version `my-shopping-cart/0.0.1` deployed in domain `localhost:9006` ,
-and we want to deploy another registered definition `my-todo-app/0.0.1` to the same domain.
+```yaml
 
-```shell copy
-golem api deployment deploy --host localhost:9006  my-todo-app/0.0.1
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.2.2-dev.1/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.2.2-dev.1/golem.schema.json
 
-API deployment on localhost:9006 with definition my-shopping-cart/0.0.1
-API deployment on localhost:9006 with definition my-todo-app/0.0.1
+# See https://learn.golem.cloud/docs/app-manifest#field-reference for field reference
+
+components:
+  amazon:shopping-cart:
+    template: rust
+
+httpApi:
+  definitions:
+    shopping-cart:
+      version: '0.0.2'
+      routes:
+        - method: POST
+          path: /v1/{user}/add-to-cart
+          binding:
+            type: default
+            componentName: "amazon:shopping-cart"
+            response: |
+              let user: u32 = request.path.user;
+              let worker = instance("cart-${user}");
+              worker.add-item(request.body);
+              "successfully added item to the cart"
+        - method: GET
+          path: /v1/{user}/contents
+          binding:
+            type: default
+            componentName: "amazon:shopping-cart"
+            response: |
+              let user: u32 = request.path.user;
+              let worker = instance("cart-${user}");
+              worker.get-cart-contents()
+        - method: POST
+          path: /v1/{user}/checkout
+          binding:
+            type: default
+            componentName: "amazon:shopping-cart"
+            response: |
+              let user: u32 = request.path.user;
+              let worker = instance("cart-${user}");
+              worker.checkout()
+
+    shopping-cart2:
+      version: '0.0.2'
+      routes:
+        - method: POST
+          path: /v2/{user}/add-to-cart
+          binding:
+            type: default
+            componentName: "amazon:shopping-cart"
+            response: |
+              let user: u32 = request.path.user;
+              let worker = instance("cart-${user}");
+              worker.add-item(request.body);
+              "successfully added item to the cart"
+
+  # Uncomment if you want to deploy your api
+  deployments:
+    local:
+    - host: localhost:9006
+      definitions:
+       - shopping-cart
+       - shopping-cart2
 
 ```
 
-Now all the routes are available under the same domain `localhost:9006`. If there are any conflicts between the
-routes of the two definitions, you will get a conflict error message.
+```sh
 
-If you try to deploy an API definition with routes that are already deployed and live,
-then you will get a conflict error.
+golem app deploy
 
-Example:
-
-```shell copy
-$ golem api deployment deploy --host localhost:9006 --definition my-todo-app/0.0.1
-
-API deployment definitions conflict error: /v1/healthcheck
 ```
 
-### Update a deployed API definition without bumping up it's version
+This will result in
 
-Let's say you want to update the existing API definition that is already deployed without changing its
-version number.
-
-```shell copy
-$ golem api definition update  my-shopping-cart --def-format my-shopping-cart.yaml
-
-API definition is not draft: my-shopping-cart
+```
+  Updating HTTP API deployment localhost:9006
+    API shopping-cart/0.0.2 deployed at localhost:9006
+    API shopping-cart2/0.0.2 deployed at localhost:9006
 ```
 
-API definition is not draft because the particular version is already deployed and you cannot
-update its routes and register with the same version. If the API definition is not in draft mode,
-and you tried to update the definition itself, then you will get an error message as shown above.
 
-### Update a deployed API definition by bumping up it's version
+However, if we routes conflict between API definitions, (example: both have `/v1/{user}/add-to-cart`),
+then you will get a conflict error as given below
 
-If you want to update the details of an API definition that is already deployed, you can bump up its version
-and registering it again. API Gateway will consider it as a new API definition, and allows you to deploy it
-as far as there are no conflicts with the existing routes.
 
-In the below example, lets assume we bumped up the version number from 0.0.1 to 0.0.2 in my-shopping-cart.yaml
-(and also updated its routes such that they don't conflict)
-
-```shell copy
-$ golem api definition new  my-shopping-cart.yaml
-$ golem api deployment deploy --host localhost:9006 my-shopping-cart/0.0.2                          Tue 10 Dec 14:57:22 2024
-
-API deployment on localhost:9006 with definition my-shopping-cart/0.0.1
-API deployment on localhost:9006 with definition my-shopping-cart/0.0.2
 ```
-
-You can see both versions are running now in the same domain `localhost:9006`.
-You can list all the deployments in a domain for a particular API definition ID (my-shopping-cart) as given below
-
-```shell copy
-curl -X GET 'http://localhost:9005/v1/api/deployments?api-definition-id=my-shopping-cart'
+error: API Deployment Service - Error: 400 Bad Request, API deployment definitions conflict error: /v1/{user}/
+     add-to-cart
+ !  ~/p/shopping-c
 ```
-
-```json
-[
-  {
-    "apiDefinitions": [
-      {
-        "id": "my-shopping-cart",
-        "version": "0.0.1"
-      },
-      {
-        "id": "my-shopping-cart",
-        "version": "0.0.2"
-      }
-    ],
-    "createdAt": "2024-12-10T04:21:54.872613+00:00",
-    "site": {
-      "host": "localhost:9006",
-      "subdomain": null
-    }
-  }
-]
-```
-
-As mentioned earlier, if you try to deploy a new version of an existing API definition or a completely new API definition,
-with conflicting routes, you will get a conflict error message during deployment.
-At this point, you can update the routes in the new API definition and try and deploy it again.

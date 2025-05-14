@@ -1,0 +1,32 @@
+## Golem REPL
+
+Once you have a component using `golem app` commands,
+you can spin up a REPL to interact with your functions.
+
+Golem REPL is backed by the language [Rib](/rib)
+
+
+```shell
+cd shopping-cart
+golem repl
+```
+
+```shell
+>>> let worker = instance("worker")
+()
+
+>>> worker.add-item({product-id: "foo", name: "foo", price: 42, quantity: 42})
+()
+
+>>> worker.add-item({product-id: "foo", name: "foo", price: 42, quantity: 42})
+()
+
+>>> worker.get-cart-contents()
+[{product-id: "foo", name: "foo", price: 42, quantity: 42}, {product-id: "foo", name: "foo", price: 42, quantity: 42}]
+
+>>> worker.checkout()
+success({order-id: "238738674"})
+```
+
+REPL is a great way to test the component and its functions,
+however note that it's a brand new feature and is experimental in nature.

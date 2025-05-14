@@ -1,7 +1,6 @@
 {
-  "define-api-definition": "Define API definition",
-  "register-api-definition": "Register API definition",
-  "deploy-api-definition": "Deploy API definition",
+  "create-simple-component": "Create a simple component",
+  "expose-http-apis": "Expose Http APIs",
   "try-out-deployed-api": "Invoke the deployed API",
   "update-api-deployment": "Update API definitions and deployments",
   "authentication": "Make APIs Secure",

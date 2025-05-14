@@ -1,0 +1,138 @@
+## Expose Http APIs for your Golem App
+
+The first step to exposing your the functions in your component (in short, worker functions) as http apis,
+is to edit the manifest golem.yaml to add an API definition.
+
+### Configure API definition and deployment
+If you are following the shopping-cart [example](/invoke/making-custom-apis/create-simple-component),
+then you already have a `golem.yaml` file in the `shopping-cart/components-rust/amazon-shopping-cart` directory.
+
+Below given is an example of updated `golem.yaml` with a definition, consisting of multiple routes
+
+The manifest also has API deployment details that specify the details of the server to which the requests should be routed.
+Since this example is making using of golem OSS, the only valid value is `http://localhost:9006/v1`
+because that's where the API gateway is running when you run the golem server.
+
+```yaml
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.2.2-dev.1/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.2.2-dev.1/golem.schema.json
+
+# See https://learn.golem.cloud/docs/app-manifest#field-reference for field reference
+
+components:
+  amazon:shopping-cart:
+    template: rust
+
+httpApi:
+  definitions:
+    shopping-cart:
+      version: '0.0.1'
+      routes:
+        - method: POST
+          path: /v1/{user}/add-to-cart
+          binding:
+            type: default
+            componentName: "amazon:shopping-cart"
+            response: |
+              let user: u32 = request.path.user;
+              let worker = instance("cart-${user}");
+              worker.add-item(request.body);
+             "successfully added item to cart"
+
+  deployments:
+    local:
+    - host: localhost:9006
+      definitions:
+       - shopping-cart
+```
+
+### Deploy and Test the API
+
+```shell
+golem api deploy
+```
+
+### Test the API
+
+```shell
+curl -X POST http://localhost:9006/v1/100/add-to-cart -d '{"product-id": "foo", "name": "foo", "price": 42, "quantity": 42}' -H "Accept: application/json"
+"successfully added item to the cart"
+```
+
+Please make sure to pass the content type header. While `application/json` will be automatically picked up many times,
+in certain cases, it will work only if you explicitly specify. More on this later.
+
+### More on Route parameters
+
+Please use this as a reference instead of using it with zero changes. For example, you might need to give a different
+version, component etc (explained below). You can get the `component` details including `name` and `version`
+by running `golem component list` command.
+
+The API definition's fields have the following meaning:
+
+| Field     | Description                                                                                                                                                                                                                                                           |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version` | This field indicates the version of the API definition. Here, it is set to "0.0.1".                                                                                                                                                                                   |
+| `routes`  | This field contains an array of route objects, each representing a specific endpoint definition.                                                                                                                                                                      |
+| `method`  | Indicates the HTTP method associated with the route. In this example, it is set to "Get", indicating that this route handles GET requests.                                                                                                                            |
+| `path`    | Specifies the URL path pattern for the route. It may include path parameters enclosed in curly braces. Here, the path is `/{user-id}/get-cart-contents`, indicating that this route handles requests to retrieve the contents of a shopping cart for a specific user. |
+| `binding` | This object contains information about how the request should be handled by the Golem worker. A typical Rib expression will create an `instance` of a worker, and then call a function on that instance with arguments. You can transform the input and output optionally using Rib itself, and the final result of this Rib script will be automatically mapped to a http response. Hence you don't need to write too many functions within the component to satisfy an ever changing http apis |                                                                                                                                                                    |
+
+### More on Binding
+
+Let's break down the binding object.
+
+| Field         | Description                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `type`        | Specifies the type of binding. Here, it is set to "default", indicating that the binding involves a Golem worker.                                                                                                                                                                                                                                                                             |
+| `component`   | Specifies the component's name and version                                                                                                                                                                                                                                                                                          |
+| `response`    | The `response` field here is a Rib expression that allows you to call any worker function and manipulates its output.                                                                                                                                                                                                                                                                            |
+
+See the [binding type reference](/http-api-definitions/worker-binding-types) for more details on the supported binding types.
+
+If your worker name is a constant, the you can simply make it a constant string such as `"foo"`. Please note that it has to be quoted for it a valid Rib string.
+See the [Rib reference](/rib) for the full reference of the binding language.
+
+
+### More on Rib script within a binding
+
+```rib
+let user: u32 = request.path.user;
+let worker = instance("cart-${user}");
+worker.add-item(request.body);
+"successfully added item to cart"
+```
+
+* The first line is about extracting the user-id from the path and assigning it to the variable user. For an HTTP request such as `/v1/100/add-to-cart`, the value of user will be 100.
+Note that user should be of type u32; otherwise, you will get a BadRequest error. This serves as an example of looking up the attributes of the HTTP request inside a Rib script.
+
+    Note that you can also extract the query parameters (request.query.user), headers (request.headers.user), and body (request.body) from the request object.
+
+    The `request` object is a record that contains all the information about the HTTP request.
+    This object is automatically passed to the Rib script through gateway when an API is invoked.
+    You can find more details about the `request` object in the [Rib documentation](/rib#http-request-input-and-field-selection),
+    which covers how to look up the path, query, header and body parameters in a Http Request using Rib.
+
+* The second line is about creating a worker instance with the name `cart-${user}`.
+  This means that when this route is called with a user-id 1, it creates a corresponding worker with the name worker-1.
+
+  Providing a name as an argument to the instance function means you are creating a durable worker.
+Skipping this name would result in an ephemeral worker.
+
+* The third line is about calling the function add-item in the component, and it will be invoked against the worker `cart-${user}`.
+
+* Finally, the last line is a Rib expression that returns the string "successfully added item to cart" as the response body.
+
+You need to specify the content type when invoking this route, since the final result is a primitive.
+The content type defaults to application/json for any complex types.
+
+
+### Ephemeral and Durable worker invocation
+
+The worker can be ephemeral or durable depending on whether you passed the worker-name argument into the `instance` function.
+You can find more details about the `instance` function in the [Rib reference](/rib).
+
+### Getting Started with Rib
+Please see the [Rib reference](/rib) to know more about Rib language.

@@ -1,5 +1,6 @@
 {
   "http": "HTTP",
   "cli": "CLI",
+  "repl": "REPL",
   "making-custom-apis": "Making Custom APIs"
 }
