@@ -2289,7 +2289,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                     _ => Err(GolemError::runtime("Unexpected oplog entry").into()),
                 }?;
 
-                let (tx_id, tx) = handler.create_replay(tx_id).await?;
+                let (tx_id, tx) = handler.create_replay(&tx_id).await?;
 
                 let pre_entry = self
                     .replay_state
@@ -2308,7 +2308,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
                     if end_index.is_none() {
                         if pre_entry.is_pre_commit_remote_transaction(begin_index) {
-                            let commited = handler.is_committed(tx_id).await?;
+                            let commited = handler.is_committed(&tx_id).await?;
                             let end_entry = if commited {
                                 OplogEntry::commited_remote_transaction(begin_index)
                             } else {
@@ -2317,7 +2317,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                             self.replay_state.switch_to_live();
                             self.oplog.add_and_commit(end_entry).await;
                         } else if pre_entry.is_pre_rollback_remote_transaction(begin_index) {
-                            let rolled_back = handler.is_rolled_back(tx_id).await?;
+                            let rolled_back = handler.is_rolled_back(&tx_id).await?;
                             let end_entry = if rolled_back {
                                 OplogEntry::rolled_back_remote_transaction(begin_index)
                             } else {
@@ -2326,6 +2326,8 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                             self.replay_state.switch_to_live();
                             self.oplog.add_and_commit(end_entry).await;
                         }
+
+                        let _ = handler.cleanup(&tx_id).await;
                     }
                 } else {
                     // We need to jump to the end of the oplog
@@ -2796,9 +2798,11 @@ where
 {
     async fn create_new(&self) -> Result<(String, Tx), Err>;
 
-    async fn create_replay(&self, transaction_id: String) -> Result<(String, Tx), Err>;
+    async fn create_replay(&self, transaction_id: &str) -> Result<(String, Tx), Err>;
 
-    async fn is_committed(&self, transaction_id: String) -> Result<bool, Err>;
+    async fn is_committed(&self, transaction_id: &str) -> Result<bool, Err>;
 
-    async fn is_rolled_back(&self, transaction_id: String) -> Result<bool, Err>;
+    async fn is_rolled_back(&self, transaction_id: &str) -> Result<bool, Err>;
+
+    async fn cleanup(&self, transaction_id: &str) -> Result<(), Err>;
 }

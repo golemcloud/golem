@@ -545,6 +545,7 @@ where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     E: From<RdbmsError>,
+    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
 {
     let interface = get_db_transaction_interface::<T>();
     let handle = entry.rep();
@@ -586,6 +587,10 @@ where
 
             rolled_back_durable_transaction_if_open(ctx, handle).await?;
 
+            if ctx.durable_execution_state().is_live {
+                let _ = db_transaction_cleanup(ctx, entry).await;
+            }
+
             Ok(result.map_err(|e| e.into()))
         }
         Err(error) => Ok(Err(error.into())),
@@ -600,6 +605,7 @@ where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     E: From<RdbmsError>,
+    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
 {
     let interface = get_db_transaction_interface::<T>();
     let handle = entry.rep();
@@ -640,6 +646,10 @@ where
             };
 
             commited_durable_transaction_if_open(ctx, handle).await?;
+
+            if ctx.durable_execution_state().is_live {
+                let _ = db_transaction_cleanup(ctx, entry).await;
+            }
 
             Ok(result.map_err(|e| e.into()))
         }
@@ -1169,6 +1179,34 @@ where
     }
 }
 
+async fn db_transaction_cleanup<Ctx, T>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsTransactionEntry<T>>,
+) -> Result<(), RdbmsError>
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + Clone + 'static,
+    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+{
+    let result = ctx
+        .as_wasi_view()
+        .table()
+        .get::<RdbmsTransactionEntry<T>>(entry)
+        .map(|e| (e.pool_key.clone(), e.transaction_id()));
+
+    match result {
+        Ok((pool_key, transaction_id)) => {
+            let worker_id = ctx.state.owned_worker_id.worker_id.clone();
+            ctx.state
+                .rdbms_service
+                .rdbms_type_service()
+                .cleanup_transaction(&pool_key, &worker_id, &transaction_id)
+                .await
+        }
+        Err(error) => Err(RdbmsError::other_response_failure(error)),
+    }
+}
+
 trait FromRdbmsValue<T>: Sized {
     fn from(value: T, resource_table: &mut ResourceTable) -> Result<Self, String>;
 }
@@ -1295,7 +1333,7 @@ where
 
     async fn get_transaction_status(
         &self,
-        transaction_id: String,
+        transaction_id: &str,
     ) -> Result<RdbmsTransactionStatus, RdbmsError> {
         self.rdbms_service
             .rdbms_type_service()
@@ -1333,21 +1371,33 @@ where
 
     async fn create_replay(
         &self,
-        transaction_id: String,
+        transaction_id: &str,
     ) -> Result<(String, RdbmsTransactionState<T>), RdbmsError> {
         Ok((
-            transaction_id.clone(),
+            transaction_id.to_string(),
             RdbmsTransactionState::Closed(RdbmsTransactionId::new(transaction_id)),
         ))
     }
 
-    async fn is_committed(&self, transaction_id: String) -> Result<bool, RdbmsError> {
+    async fn is_committed(&self, transaction_id: &str) -> Result<bool, RdbmsError> {
         let transaction_status = self.get_transaction_status(transaction_id).await?;
         Ok(transaction_status == RdbmsTransactionStatus::Committed)
     }
 
-    async fn is_rolled_back(&self, transaction_id: String) -> Result<bool, RdbmsError> {
+    async fn is_rolled_back(&self, transaction_id: &str) -> Result<bool, RdbmsError> {
         let transaction_status = self.get_transaction_status(transaction_id).await?;
         Ok(transaction_status == RdbmsTransactionStatus::RolledBack)
+    }
+
+    async fn cleanup(&self, transaction_id: &str) -> Result<(), RdbmsError> {
+        self.rdbms_service
+            .deref()
+            .rdbms_type_service()
+            .cleanup_transaction(
+                &self.pool_key,
+                &self.worker_id,
+                &RdbmsTransactionId::new(transaction_id),
+            )
+            .await
     }
 }
