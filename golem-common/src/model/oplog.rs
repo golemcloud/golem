@@ -1076,16 +1076,6 @@ pub enum DurableFunctionType {
     WriteRemoteTransaction(Option<OplogIndex>),
 }
 
-// #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-// pub enum WriteRemoteTransaction {
-//     Begin(Option<OplogIndex>),
-//     PreCommit(Option<OplogIndex>),
-//     Commited(Option<OplogIndex>),
-//     PreRollback(Option<OplogIndex>),
-//     RolledBack(Option<OplogIndex>),
-//     Abort(Option<OplogIndex>)
-// }
-
 /// Describes the error that occurred in the worker
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum WorkerError {

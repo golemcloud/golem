@@ -2289,17 +2289,45 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                     _ => Err(GolemError::runtime("Unexpected oplog entry").into()),
                 }?;
 
-                let (_, tx) = handler.create_replay(tx_id).await?;
+                let (tx_id, tx) = handler.create_replay(tx_id).await?;
 
-                let end_index = self
+                let pre_entry = self
                     .replay_state
-                    .lookup_oplog_entry_with_condition(
-                        begin_index,
-                        OplogEntry::is_end_remote_transaction,
-                        OplogEntry::no_concurrent_side_effect,
-                    )
+                    .try_get_oplog_entry(|e| e.is_pre_remote_transaction(begin_index))
                     .await;
-                if end_index.is_none() {
+
+                if let Some((_, pre_entry)) = pre_entry {
+                    let end_index = self
+                        .replay_state
+                        .lookup_oplog_entry_with_condition(
+                            begin_index,
+                            OplogEntry::is_end_remote_transaction,
+                            OplogEntry::no_concurrent_side_effect,
+                        )
+                        .await;
+
+                    if end_index.is_none() {
+                        if pre_entry.is_pre_commit_remote_transaction(begin_index) {
+                            let commited = handler.is_committed(tx_id).await?;
+                            let end_entry = if commited {
+                                OplogEntry::commited_remote_transaction(begin_index)
+                            } else {
+                                OplogEntry::aborted_remote_transaction(begin_index)
+                            };
+                            self.replay_state.switch_to_live();
+                            self.oplog.add_and_commit(end_entry).await;
+                        } else if pre_entry.is_pre_rollback_remote_transaction(begin_index) {
+                            let rolled_back = handler.is_rolled_back(tx_id).await?;
+                            let end_entry = if rolled_back {
+                                OplogEntry::rolled_back_remote_transaction(begin_index)
+                            } else {
+                                OplogEntry::aborted_remote_transaction(begin_index)
+                            };
+                            self.replay_state.switch_to_live();
+                            self.oplog.add_and_commit(end_entry).await;
+                        }
+                    }
+                } else {
                     // We need to jump to the end of the oplog
                     self.replay_state.switch_to_live();
 
@@ -2317,14 +2345,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         .add_and_commit(OplogEntry::jump(deleted_region))
                         .await;
                 }
-                // else {
-                //     let pre_index = self
-                //         .replay_state
-                //         .try_get_oplog_entry(|e| e.is_pre_remote_transaction(begin_index))
-                //         .await;
-                //     self.replay_state.switch_to_live();
-                //     // TODO handle transaction end
-                // }
                 Ok((begin_index, tx))
             }
         } else {
