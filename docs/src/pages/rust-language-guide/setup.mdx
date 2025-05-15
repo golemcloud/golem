@@ -44,8 +44,12 @@ The last step is installing the `cargo-component` extension for Rust's `cargo` b
 Install the version `0.20.0` of `cargo-component` with `cargo` itself:
 
 ```shell
-$ cargo install --force --locked cargo-component@0.20.0
+$ cargo install --force cargo-component@0.20.0
 ```
+
+<Callout type="warning">
+    There is a bug in one of `cargo-component`'s dependencies (`wit-component 0.220.0`), fixed by a patch release (`wit-component 0.220.1`). Make sure to NOT use `--locked` otherwise you get the wrong version of this dependency installed, which can lead to runtime errors regarding _misaligned pointer dereference_.
+</Callout>
 
 Verify that the correct version is installed:
 
