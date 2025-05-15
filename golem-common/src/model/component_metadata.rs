@@ -50,7 +50,7 @@ pub struct ComponentMetadata {
 impl ComponentMetadata {
     pub fn analyse_component(data: &[u8]) -> Result<ComponentMetadata, ComponentProcessingError> {
         let raw = RawComponentMetadata::analyse_component(data)?;
-        Ok(raw.into())
+        Ok(ComponentMetadata::from(raw))
     }
 }
 

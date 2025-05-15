@@ -20,6 +20,7 @@ use golem_wasm_rpc::ValueAndType;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
+use golem_wasm_ast::analysis::AnalysedType;
 
 pub struct InterpreterEnv {
     pub env: HashMap<EnvironmentKey, RibInterpreterStackValue>,
@@ -49,12 +50,14 @@ impl InterpreterEnv {
         worker_name: Option<String>,
         function_name: String,
         args: Vec<ValueAndType>,
+        return_type: AnalysedType
     ) -> Result<ValueAndType, Box<dyn std::error::Error + Send + Sync>> {
         self.call_worker_function_async
             .invoke(
                 worker_name.map(EvaluatedWorkerName),
                 EvaluatedFqFn(function_name),
                 EvaluatedFnArgs(args),
+                return_type
             )
             .await
     }
@@ -118,6 +121,7 @@ mod internal {
     use crate::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName};
     use async_trait::async_trait;
     use golem_wasm_ast::analysis::analysed_type::tuple;
+    use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::{Value, ValueAndType};
 
     pub(crate) struct NoopRibFunctionInvoke;
@@ -129,6 +133,7 @@ mod internal {
             _worker_name: Option<EvaluatedWorkerName>,
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
+            _return_type: AnalysedType
         ) -> Result<ValueAndType, Box<dyn std::error::Error + Send + Sync>> {
             Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])))
         }

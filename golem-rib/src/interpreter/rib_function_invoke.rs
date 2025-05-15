@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 
 #[async_trait]
@@ -8,6 +9,7 @@ pub trait RibFunctionInvoke {
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
+        return_type: AnalysedType
     ) -> RibFunctionInvokeResult;
 }
 
