@@ -17,11 +17,18 @@ use test_r::{inherit_test_dep, test};
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{check, let_assert};
+use axum::response::IntoResponse;
+use axum::routing::post;
+use axum::Router;
+use bytes::Bytes;
 use chrono::Datelike;
 use golem_test_framework::dsl::{events_to_lines, log_event_to_string, TestDslUnsafe};
 use golem_wasm_rpc::{IntoValueAndType, Value};
+use http::HeaderMap;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tracing::{info, Instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -189,4 +196,79 @@ async fn csharp_example_1(
     check!(lines.contains(&format!("GOLEM_COMPONENT_ID: {component_id}")));
     check!(lines.contains(&"GOLEM_WORKER_NAME: csharp-1".to_string()));
     check!(lines.contains(&"GOLEM_COMPONENT_VERSION: 0".to_string()));
+}
+
+#[test]
+#[tracing::instrument]
+async fn python_http_client(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let captured_body_clone = captured_body.clone();
+
+    async fn request_handler(
+        captured_body_clone: Arc<Mutex<Option<String>>>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> impl IntoResponse {
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        {
+            let mut capture = captured_body_clone.lock().unwrap();
+            *capture = Some(body_str.clone());
+            info!("captured body: {}", body_str);
+        }
+        let header = headers.get("X-Test").unwrap().to_str().unwrap();
+        format!("\"test-response: {header}\"")
+    }
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/post-example",
+                post(|headers, body| request_handler(captured_body_clone, headers, body)),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component_id = executor
+        .component("golem_it_python_http_client")
+        .store()
+        .await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .start_worker_with(&component_id, "python-http-client-1", vec![], env)
+        .await;
+
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it-python-http-client-exports/golem-it-python-http-client-api.{run}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let captured_body = captured_body.lock().unwrap().clone().unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    drop(executor);
+    http_server.abort();
+
+    check!(result == vec![Value::String("test-response: test-header".to_string())]);
+    check!(captured_body == "\"test-body\"".to_string());
 }
