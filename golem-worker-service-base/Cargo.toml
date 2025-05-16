@@ -76,7 +76,7 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true }
-indexmap = "2.2.0"
+indexmap = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }

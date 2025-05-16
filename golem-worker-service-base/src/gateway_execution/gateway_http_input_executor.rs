@@ -28,8 +28,7 @@ use crate::gateway_binding::{
     IdempotencyKeyCompiled, InvocationContextCompiled, ResponseMappingCompiled, StaticBinding,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
-use crate::gateway_execution::api_definition_lookup::ApiDefinitionLookupError;
-use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
+use crate::gateway_execution::api_definition_lookup::{ApiDefinitionLookupError, HttpApiDefinitionsLookup};
 use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackBindingHandler;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
@@ -545,36 +544,6 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     }
 }
 
-fn get_status_code_from_api_lookup_error<Namespace>(
-    error: &ApiDefinitionLookupError<Namespace>,
-) -> StatusCode {
-    match &error {
-        ApiDefinitionLookupError::ApiDeploymentError(err) => {
-            // In the context of APIDefinitionLookup (which occurs for an actual incoming request),
-            // we have a different set of http response status code
-            // for API deployment errors
-            match &err {
-                ApiDeploymentError::ApiDeploymentNotFound(_, _) => StatusCode::NOT_FOUND,
-
-                ApiDeploymentError::ApiDefinitionNotFound(_, _, _) => StatusCode::NOT_FOUND,
-
-                ApiDeploymentError::ApiDeploymentConflict(_) => StatusCode::INTERNAL_SERVER_ERROR,
-
-                ApiDeploymentError::ComponentConstraintCreateError(_) => {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-
-                ApiDeploymentError::ApiDefinitionsConflict(_) => StatusCode::INTERNAL_SERVER_ERROR,
-                ApiDeploymentError::InternalRepoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-                ApiDeploymentError::InternalConversionError { .. } => {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-            }
-        }
-        ApiDefinitionLookupError::UnknownSite(_) => StatusCode::NOT_FOUND,
-    }
-}
-
 #[async_trait]
 impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
     for DefaultGatewayInputExecutor<Namespace>
@@ -890,6 +859,37 @@ async fn resolve_rib_input(
         )),
 
         None => Ok(RibInput::default()),
+    }
+}
+
+
+fn get_status_code_from_api_lookup_error<Namespace>(
+    error: &ApiDefinitionLookupError<Namespace>,
+) -> StatusCode {
+    match &error {
+        ApiDefinitionLookupError::ApiDeploymentError(err) => {
+            // In the context of APIDefinitionLookup (which occurs for an actual incoming request),
+            // we have a different set of http response status code
+            // for API deployment errors
+            match &err {
+                ApiDeploymentError::ApiDeploymentNotFound(_, _) => StatusCode::NOT_FOUND,
+
+                ApiDeploymentError::ApiDefinitionNotFound(_, _, _) => StatusCode::NOT_FOUND,
+
+                ApiDeploymentError::ApiDeploymentConflict(_) => StatusCode::INTERNAL_SERVER_ERROR,
+
+                ApiDeploymentError::ComponentConstraintCreateError(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+
+                ApiDeploymentError::ApiDefinitionsConflict(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                ApiDeploymentError::InternalRepoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                ApiDeploymentError::InternalConversionError { .. } => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            }
+        }
+        ApiDefinitionLookupError::UnknownSite(_) => StatusCode::NOT_FOUND,
     }
 }
 
