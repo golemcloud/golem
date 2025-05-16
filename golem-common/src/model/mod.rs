@@ -27,7 +27,6 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, Value};
 use http::Uri;
 use rand::prelude::IteratorRandom;
-use serde::de::Unexpected;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -2071,7 +2070,11 @@ pub struct ComponentFileSystemNode {
     pub details: ComponentFileSystemNodeDetails,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Encode, Decode, Default)]
+// GatewayBindingType::WitWorker is now GatewayBindingType::Default
+// As we no longer use wit-worker gateway binding type,
+// and it is not in any examples, this does break backward compatibility
+// Custom Deserialize is replaced with Simple Deserialize
+#[derive(Debug, Clone, PartialEq, Serialize, Encode, Decode, Default, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
 #[serde(rename_all = "kebab-case")]
 #[cfg_attr(feature = "poem", oai(rename_all = "kebab-case"))]
@@ -2082,54 +2085,6 @@ pub enum GatewayBindingType {
     HttpHandler,
     CorsPreflight,
     SwaggerUi,
-}
-
-// To keep backward compatibility as we documented wit-worker to be default
-impl<'de> Deserialize<'de> for GatewayBindingType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct GatewayBindingTypeVisitor;
-
-        impl de::Visitor<'_> for GatewayBindingTypeVisitor {
-            type Value = GatewayBindingType;
-
-            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-                formatter.write_str("a string representing the binding type")
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                match value {
-                    "default" | "wit-worker" => Ok(GatewayBindingType::Default),
-                    "file-server" => Ok(GatewayBindingType::FileServer),
-                    "cors-preflight" => Ok(GatewayBindingType::CorsPreflight),
-                    "swagger-ui" => Ok(GatewayBindingType::SwaggerUi),
-                    _ => Err(de::Error::invalid_value(Unexpected::Str(value), &self)),
-                }
-            }
-        }
-
-        deserializer.deserialize_str(GatewayBindingTypeVisitor)
-    }
-}
-
-impl TryFrom<String> for GatewayBindingType {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        match value.as_str() {
-            "default" => Ok(GatewayBindingType::Default),
-            "file-server" => Ok(GatewayBindingType::FileServer),
-            "http-handler" => Ok(GatewayBindingType::HttpHandler),
-            "cors-preflight" => Ok(GatewayBindingType::CorsPreflight),
-            "swagger-ui" => Ok(GatewayBindingType::SwaggerUi),
-            _ => Err(format!("Invalid GatewayBindingType: {}", value)),
-        }
-    }
 }
 
 impl From<crate::model::WorkerId> for golem_wasm_rpc::WorkerId {

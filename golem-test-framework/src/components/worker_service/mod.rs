@@ -36,7 +36,7 @@ use golem_api_grpc::proto::golem::apidefinition::v1::{
     GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
 };
 use golem_api_grpc::proto::golem::apidefinition::v1::{
-    export_api_definition_response, ExportApiDefinitionRequest, ExportApiDefinitionResponse,
+    export_openapi_spec_response, ExportOpenapiSpecRequest, ExportOpenapiSpecResponse,
     OpenApiHttpApiDefinitionResponse,
 };
 use golem_api_grpc::proto::golem::apidefinition::{
@@ -1124,21 +1124,21 @@ pub trait WorkerService: WorkerServiceInternal {
         }
     }
 
-    async fn export_api_definition(
+    async fn export_openapi_spec(
         &self,
-        request: ExportApiDefinitionRequest,
-    ) -> crate::Result<ExportApiDefinitionResponse> {
+        request: ExportOpenapiSpecRequest,
+    ) -> crate::Result<ExportOpenapiSpecResponse> {
         match self.api_definition_client() {
             ApiDefinitionServiceClient::Grpc(mut client) => {
-                Ok(client.export_api_definition(request).await?.into_inner())
+                Ok(client.export_openapi_spec(request).await?.into_inner())
             }
             ApiDefinitionServiceClient::Http(client) => {
                 match client
                     .export_definition(&request.api_definition_id.unwrap().value, &request.version)
                     .await
                 {
-                    Ok(result) => Ok(ExportApiDefinitionResponse {
-                        result: Some(export_api_definition_response::Result::Success(
+                    Ok(result) => Ok(ExportOpenapiSpecResponse {
+                        result: Some(export_openapi_spec_response::Result::Success(
                             OpenApiHttpApiDefinitionResponse {
                                 id: Some(ApiDefinitionId { value: result.id }),
                                 version: result.version,

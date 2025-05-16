@@ -24,12 +24,12 @@ use golem_api_grpc::proto::golem::{
     apidefinition::v1::{
         api_definition_error, api_definition_service_server::ApiDefinitionService,
         create_api_definition_request, create_api_definition_response,
-        delete_api_definition_response, export_api_definition_response,
+        delete_api_definition_response, export_openapi_spec_response,
         get_all_api_definitions_response, get_api_definition_response,
         get_api_definition_versions_response, update_api_definition_request,
         update_api_definition_response, ApiDefinitionError, CreateApiDefinitionRequest,
         CreateApiDefinitionResponse, DeleteApiDefinitionRequest, DeleteApiDefinitionResponse,
-        ExportApiDefinitionRequest, ExportApiDefinitionResponse, GetAllApiDefinitionsRequest,
+        ExportOpenapiSpecRequest, ExportOpenapiSpecResponse, GetAllApiDefinitionsRequest,
         GetAllApiDefinitionsResponse, GetApiDefinitionRequest, GetApiDefinitionResponse,
         GetApiDefinitionVersionsRequest, GetApiDefinitionVersionsResponse,
         OpenApiHttpApiDefinitionResponse as GrpcOpenApiHttpApiDefinitionResponse,
@@ -253,13 +253,13 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         }))
     }
 
-    async fn export_api_definition(
+    async fn export_openapi_spec(
         &self,
-        request: tonic::Request<ExportApiDefinitionRequest>,
-    ) -> Result<tonic::Response<ExportApiDefinitionResponse>, tonic::Status> {
+        request: tonic::Request<ExportOpenapiSpecRequest>,
+    ) -> Result<tonic::Response<ExportOpenapiSpecResponse>, tonic::Status> {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
-            "export_api_definition",
+            "export_openapi_spec",
             api_definition_id = request
                 .api_definition_id
                 .as_ref()
@@ -267,15 +267,15 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
             version = request.version,
         );
 
-        let result = match self.export_api_definition(request).await {
-            Ok(result) => record.succeed(export_api_definition_response::Result::Success(result)),
+        let result = match self.export_openapi_spec(request).await {
+            Ok(result) => record.succeed(export_openapi_spec_response::Result::Success(result)),
             Err(error) => record.fail(
-                export_api_definition_response::Result::Error(error.clone()),
+                export_openapi_spec_response::Result::Error(error.clone()),
                 &ApiDefinitionTraceErrorKind(&error),
             ),
         };
 
-        Ok(tonic::Response::new(ExportApiDefinitionResponse {
+        Ok(tonic::Response::new(ExportOpenapiSpecResponse {
             result: Some(result),
         }))
     }
@@ -463,9 +463,9 @@ impl GrpcApiDefinitionService {
         Ok(())
     }
 
-    async fn export_api_definition(
+    async fn export_openapi_spec(
         &self,
-        request: ExportApiDefinitionRequest,
+        request: ExportOpenapiSpecRequest,
     ) -> Result<GrpcOpenApiHttpApiDefinitionResponse, ApiDefinitionError> {
         let api_definition_id = get_api_definition_id(request.api_definition_id)?;
         let version = ApiVersion(request.version);

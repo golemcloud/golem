@@ -574,11 +574,11 @@ fn add_common_binding_info(
     if let Some(versioned_component) = &route.binding.component {
         binding_info.insert(
             "component-name".to_string(),
-            serde_json::Value::String(versioned_component.name.clone()),
+            serde_json::Value::String(versioned_component.name().to_string()),
         );
         binding_info.insert(
             "component-version".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(versioned_component.version)),
+            serde_json::Value::Number(serde_json::Number::from(versioned_component.version())),
         );
     }
 
