@@ -606,6 +606,7 @@ impl GatewayBindingResponseData {
                 component: None,
                 worker_name: None,
                 idempotency_key: None,
+                invocation_context: None,
                 response: None,
                 binding_type: Some(GatewayBindingType::SwaggerUi),
                 response_mapping_input: None,
