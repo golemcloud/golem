@@ -18,8 +18,10 @@ use super::http_handler_binding_handler::{HttpHandlerBindingHandler, HttpHandler
 use super::request::{
     authority_from_request, split_resolved_route_entry, RichRequest, SplitResolvedRouteEntryResult,
 };
+use super::swagger_binding_handler::SwaggerBindingHandler;
 use super::to_response::GatewayHttpResult;
 use super::WorkerDetails;
+
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_binding::{
     resolve_gateway_binding, GatewayBindingCompiled, HttpHandlerBindingCompiled,
@@ -38,6 +40,7 @@ use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSucc
 use crate::gateway_rib_interpreter::WorkerServiceRibInterpreter;
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use crate::http_invocation_context::{extract_request_attributes, invocation_context_from_request};
+use crate::service::gateway::api_definition::ApiDefinitionService;
 use crate::service::gateway::api_deployment::ApiDeploymentError;
 use async_trait::async_trait;
 use golem_common::model::component::VersionedComponentId;
@@ -46,14 +49,17 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
+use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::headers::TraceContextHeaders;
 use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use http::StatusCode;
+
 use poem::Body;
 use rib::{RibInput, RibInputTypeInfo, RibResult, TypeName};
+
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -69,9 +75,12 @@ pub struct DefaultGatewayInputExecutor<Namespace> {
     pub file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
     pub auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler + Sync + Send>,
     pub http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send>,
+    pub swagger_binding_handler: Arc<dyn SwaggerBindingHandler<Namespace> + Sync + Send>,
     pub api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
     pub gateway_session_store: GatewaySessionStore,
     pub identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
+    pub definition_service:
+        Option<Arc<dyn ApiDefinitionService<EmptyAuthCtx, Namespace> + Sync + Send>>,
 }
 
 impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
@@ -80,18 +89,24 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
         auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler + Sync + Send>,
         http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send>,
+        swagger_binding_handler: Arc<dyn SwaggerBindingHandler<Namespace> + Sync + Send>,
         api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
         gateway_session_store: GatewaySessionStore,
         identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
+        definition_service: Option<
+            Arc<dyn ApiDefinitionService<EmptyAuthCtx, Namespace> + Sync + Send>,
+        >,
     ) -> Self {
         Self {
             evaluator,
             file_server_binding_handler,
             auth_call_back_binding_handler,
             http_handler_binding_handler,
+            swagger_binding_handler,
             api_definition_lookup_service,
             gateway_session_store,
             identity_provider,
+            definition_service,
         }
     }
 
@@ -541,16 +556,15 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             Err(err) => {
                 return poem::Response::builder()
                     .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from_string(err));
+                    .body(Body::from_string(err.to_string()));
             }
         };
 
-        let possible_api_definitions = self
+        let possible_api_definitions = match self
             .api_definition_lookup_service
             .get(&ApiSiteString(authority.clone()))
-            .await;
-
-        let possible_api_definitions = match possible_api_definitions {
+            .await
+        {
             Ok(api_defs) => api_defs,
             Err(api_defs_lookup_error) => {
                 error!(
@@ -648,6 +662,19 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                         &mut rich_request,
                         resolved_file_server_binding,
                     )
+                    .await;
+
+                let response = result
+                    .to_response(&rich_request, &self.gateway_session_store)
+                    .await;
+
+                maybe_apply_middlewares_out(response, &middlewares).await
+            }
+
+            GatewayBindingCompiled::SwaggerUi => {
+                let result = self
+                    .swagger_binding_handler
+                    .handle_swagger_binding_request(&namespace, &authority, &rich_request)
                     .await;
 
                 let response = result

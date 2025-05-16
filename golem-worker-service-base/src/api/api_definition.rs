@@ -314,6 +314,16 @@ pub struct ResolvedGatewayBindingComponent {
     version: u64,
 }
 
+// Getters for Component Name and Version, Used in OpenAPI Spec conversion
+impl ResolvedGatewayBindingComponent {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+}
+
 // GatewayBindingData is a user exposed structure of GatewayBinding
 // GatewayBindingData is flattened here only to keep the REST API backward compatibility.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -443,6 +453,8 @@ impl GatewayBindingData {
                     }
                 }
             }
+
+            Some(GatewayBindingType::SwaggerUi) => Ok(GatewayBinding::SwaggerUi),
         }
     }
 }
@@ -590,6 +602,19 @@ impl GatewayBindingResponseData {
                     response_mapping_output: None,
                 })
             }
+            GatewayBindingCompiled::SwaggerUi => Ok(GatewayBindingResponseData {
+                component: None,
+                worker_name: None,
+                idempotency_key: None,
+                invocation_context: None,
+                response: None,
+                binding_type: Some(GatewayBindingType::SwaggerUi),
+                response_mapping_input: None,
+                worker_name_input: None,
+                idempotency_key_input: None,
+                cors_preflight: None,
+                response_mapping_output: None,
+            }),
         }
     }
 
