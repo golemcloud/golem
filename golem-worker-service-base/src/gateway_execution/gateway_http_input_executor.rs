@@ -28,7 +28,9 @@ use crate::gateway_binding::{
     IdempotencyKeyCompiled, InvocationContextCompiled, ResponseMappingCompiled, StaticBinding,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
-use crate::gateway_execution::api_definition_lookup::{ApiDefinitionLookupError, HttpApiDefinitionsLookup};
+use crate::gateway_execution::api_definition_lookup::{
+    ApiDefinitionLookupError, HttpApiDefinitionsLookup,
+};
 use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackBindingHandler;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
@@ -861,7 +863,6 @@ async fn resolve_rib_input(
         None => Ok(RibInput::default()),
     }
 }
-
 
 fn get_status_code_from_api_lookup_error<Namespace>(
     error: &ApiDefinitionLookupError<Namespace>,
