@@ -1,0 +1,22 @@
+package golem:grpc@0.1.0;
+
+interface types {
+  record grpc-configuration {
+    url: string,
+    secret-token: string,
+  }
+
+  record grpc-metadata {
+    fds: list<u8>,
+    package-name: string,
+  }
+
+  resource grpc {
+    constructor();
+    invoke-and-await: func(function-name: string, service-full-name: string, method-full-name: string, params: string, grpc-configuration: grpc-configuration, grpc-metadata: grpc-metadata) -> result<string, string>;
+  }
+}
+
+world wit-value {
+  import types;
+}

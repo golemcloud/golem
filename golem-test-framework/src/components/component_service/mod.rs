@@ -1156,6 +1156,20 @@ fn to_http_dynamic_linking(
                                 },
                             )
                         }
+                        DynamicLinkedInstance::Grpc(link) => {
+                            golem_client::model::DynamicLinkedInstance::Grpc(
+                                golem_client::model::DynamicLinkedGrpc {
+                                    targets: link.targets.clone(),
+                                    metadata: golem_client::model::GrpcMetadata {
+                                        file_descriptor_set: link
+                                            .metadata
+                                            .file_descriptor_set
+                                            .clone(),
+                                        package_name: link.metadata.package_name.clone(),
+                                    },
+                                },
+                            )
+                        }
                     },
                 )
             })

@@ -1,0 +1,35 @@
+[package]
+name = "golem-grpc"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Golem GRPC support library"
+
+include = []
+
+[lib]
+path = "src/lib.rs"
+harness = false
+
+[dependencies]
+wit-bindgen-rt = { version = "=0.40.0", features = ["bitflags"] }
+wasmtime = { workspace = true }
+serde.workspace = true
+serde_json = { workspace = true }
+tonic = { workspace = true }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+prost-reflect = { version = "0.14.7", features = ["serde", "text-format"] }
+anyhow.workspace = true
+tokio.workspace = true
+
+[package.metadata.component]
+package = "golem:grpc"
+
+[package.metadata.component.target]
+path = "wit"
+world = "grpc"
+
+[package.metadata.component.target.dependencies]
+"golem:grpc" = { path = "wit/deps/golem-grpc" }
