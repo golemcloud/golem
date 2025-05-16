@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod api_definition;
 pub use api_definition::*;
 pub use common::*;
 pub use custom_http_request::*;
@@ -19,7 +20,6 @@ pub use error::*;
 pub use healthcheck::*;
 
 // Components and request data that can be reused for implementing server API endpoints
-pub mod api_definition;
 mod common;
 mod custom_http_request;
 mod error;

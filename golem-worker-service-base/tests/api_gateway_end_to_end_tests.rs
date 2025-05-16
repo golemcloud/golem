@@ -3266,10 +3266,9 @@ mod internal {
     }
 
     struct TestSwaggerBindingHandler {}
-
+    // Create a test swagger binding handler which outputs a static html page
     #[async_trait]
     impl<Namespace> SwaggerBindingHandler<Namespace> for TestSwaggerBindingHandler {
-        // Remove the explicit lifetime parameter
         async fn handle_swagger_binding_request(
             &self,
             _namespace: &Namespace,
@@ -3973,6 +3972,8 @@ async fn test_swagger_ui_binding() {
     let html_content = String::from_utf8(body.to_vec()).unwrap();
 
     // Verify the HTML contains the expected Swagger UI content
+    // The test checks whether the static html page
+    // is properly returned by the swagger binding handler
     assert!(html_content.contains("<html><body>Test Swagger UI</body></html>"));
 }
 

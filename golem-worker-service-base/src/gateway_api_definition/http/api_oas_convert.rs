@@ -182,6 +182,42 @@ fn create_operation(
 // Define a type alias for the parameter tuple
 type ParameterTuple = (String, openapiv3::Schema);
 
+// Helper function: Extracts parameters from a record and adds them to the appropriate collection
+fn extract_parameters_from_record(
+    record: &golem_wasm_ast::analysis::AnalysedType,
+    path_parameters: &mut Vec<ParameterTuple>,
+    query_parameters: &mut Vec<ParameterTuple>,
+) {
+    if let AnalysedType::Record(request_record) = record {
+        // Check for path field
+        if let Some(path_field) = request_record
+            .fields
+            .iter()
+            .find(|field| field.name == "path")
+        {
+            if let AnalysedType::Record(path_record) = &path_field.typ {
+                for field in &path_record.fields {
+                    let schema = create_schema_from_analysed_type(&field.typ);
+                    path_parameters.push((field.name.clone(), schema));
+                }
+            }
+        }
+        // Check for query field
+        if let Some(query_field) = request_record
+            .fields
+            .iter()
+            .find(|field| field.name == "query")
+        {
+            if let AnalysedType::Record(query_record) = &query_field.typ {
+                for field in &query_record.fields {
+                    let schema = create_schema_from_analysed_type(&field.typ);
+                    query_parameters.push((field.name.clone(), schema));
+                }
+            }
+        }
+    }
+}
+
 // Helper function: Gets path and query parameters with their types from route
 // Returns two separate lists: one for path parameters and one for query parameters
 fn get_parameters(route: &RouteResponseData) -> (Vec<ParameterTuple>, Vec<ParameterTuple>) {
@@ -190,67 +226,23 @@ fn get_parameters(route: &RouteResponseData) -> (Vec<ParameterTuple>, Vec<Parame
 
     // Check worker_name_input first
     if let Some(worker_name_input) = &route.binding.worker_name_input {
-        if let Some(AnalysedType::Record(request_record)) = worker_name_input.types.get("request") {
-            // Check for path field
-            if let Some(path_field) = request_record
-                .fields
-                .iter()
-                .find(|field| field.name == "path")
-            {
-                if let AnalysedType::Record(path_record) = &path_field.typ {
-                    for field in &path_record.fields {
-                        let schema = create_schema_from_analysed_type(&field.typ);
-                        path_parameters.push((field.name.clone(), schema));
-                    }
-                }
-            }
-            // Check for query field
-            if let Some(query_field) = request_record
-                .fields
-                .iter()
-                .find(|field| field.name == "query")
-            {
-                if let AnalysedType::Record(query_record) = &query_field.typ {
-                    for field in &query_record.fields {
-                        let schema = create_schema_from_analysed_type(&field.typ);
-                        query_parameters.push((field.name.clone(), schema));
-                    }
-                }
-            }
+        if let Some(request_record) = worker_name_input.types.get("request") {
+            extract_parameters_from_record(
+                request_record,
+                &mut path_parameters,
+                &mut query_parameters,
+            );
         }
     }
 
     // Check response_mapping_input
     if let Some(response_mapping_input) = &route.binding.response_mapping_input {
-        if let Some(AnalysedType::Record(request_record)) =
-            response_mapping_input.types.get("request")
-        {
-            // Check for path field
-            if let Some(path_field) = request_record
-                .fields
-                .iter()
-                .find(|field| field.name == "path")
-            {
-                if let AnalysedType::Record(path_record) = &path_field.typ {
-                    for field in &path_record.fields {
-                        let schema = create_schema_from_analysed_type(&field.typ);
-                        path_parameters.push((field.name.clone(), schema));
-                    }
-                }
-            }
-            // Check for query field
-            if let Some(query_field) = request_record
-                .fields
-                .iter()
-                .find(|field| field.name == "query")
-            {
-                if let AnalysedType::Record(query_record) = &query_field.typ {
-                    for field in &query_record.fields {
-                        let schema = create_schema_from_analysed_type(&field.typ);
-                        query_parameters.push((field.name.clone(), schema));
-                    }
-                }
-            }
+        if let Some(request_record) = response_mapping_input.types.get("request") {
+            extract_parameters_from_record(
+                request_record,
+                &mut path_parameters,
+                &mut query_parameters,
+            );
         }
     }
 
