@@ -268,7 +268,7 @@ fn test_basic_types_and_record_conversion() {
                         }
                     },
                     "responseMappingOutput": {
-                        "analysed_type": {
+                        "analysedType": {
                             "fields": [
                                 {
                                     "name": "body",
@@ -323,7 +323,7 @@ fn test_basic_types_and_record_conversion() {
                         }
                     },
                     "responseMappingOutput": {
-                        "analysed_type": {
+                        "analysedType": {
                             "fields": [
                                 {
                                     "name": "body",
@@ -390,7 +390,7 @@ fn test_basic_types_and_record_conversion() {
                         }
                     },
                     "responseMappingOutput": {
-                        "analysed_type": {
+                        "analysedType": {
                             "fields": [
                                 {
                                     "name": "body",
@@ -466,7 +466,7 @@ fn test_basic_types_and_record_conversion() {
                         }
                     },
                     "responseMappingOutput": {
-                        "analysed_type": {
+                        "analysedType": {
                             "fields": [
                                 {
                                     "name": "body",
@@ -820,7 +820,7 @@ fn test_complete_todo_structure_with_optional_and_oneof() {
                         }
                     },
                     "responseMappingOutput": {
-                        "analysed_type": {
+                        "analysedType": {
                             "fields": [
                                 {
                                     "name": "body",
@@ -1179,7 +1179,7 @@ fn test_oas_conversion_full_structure_shopping_cart() {
                         "types": {}
                     },
                     "responseMappingOutput": {
-                        "analysed_type": {
+                        "analysedType": {
                             "fields": [
                                 {
                                     "name": "body",
@@ -1468,7 +1468,7 @@ fn test_query_parameter_conversion() {
                         }
                     },
                     "responseMappingOutput": {
-                        "analysed_type": {
+                        "analysedType": {
                             "fields": [
                                 {
                                     "name": "status",
@@ -1560,7 +1560,7 @@ fn test_variant_output_structure() {
                         }
                     },
                     "responseMappingOutput": {
-                        "analysed_type": {
+                        "analysedType": {
                             "fields": [
                                 {
                                     "name": "status",

@@ -494,9 +494,7 @@ async fn test_export_openapi_spec_simple(deps: &EnvBasedTestDependencies) {
                         response: Some(to_grpc_rib_expr(
                             r#"
                                 {
-                                    headers: {
-                                        {ContentType: "application/json"}
-                                    },
+                                    headers: {ContentType: "application/json"},
                                     body: "Simple export test response",
                                     status: 200
                                 }
