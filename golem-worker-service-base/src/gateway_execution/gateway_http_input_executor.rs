@@ -864,6 +864,30 @@ async fn resolve_rib_input(
     }
 }
 
+async fn maybe_apply_middlewares_out(
+    mut response: poem::Response,
+    middlewares: &Option<HttpMiddlewares>,
+) -> poem::Response {
+    if let Some(middlewares) = middlewares {
+        let result = middlewares.process_middleware_out(&mut response).await;
+        match result {
+            Ok(_) => response,
+            Err(err) => err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR),
+        }
+    } else {
+        response
+    }
+}
+
+fn to_attribute_value(value: &ValueAndType) -> GatewayHttpResult<AttributeValue> {
+    match &value.value {
+        golem_wasm_rpc::Value::String(value) => Ok(AttributeValue::String(value.clone())),
+        _ => Err(GatewayHttpError::BadRequest(
+            "Invocation context values must be string".to_string(),
+        )),
+    }
+}
+
 fn get_status_code_from_api_lookup_error<Namespace>(
     error: &ApiDefinitionLookupError<Namespace>,
 ) -> StatusCode {
@@ -891,30 +915,6 @@ fn get_status_code_from_api_lookup_error<Namespace>(
             }
         }
         ApiDefinitionLookupError::UnknownSite(_) => StatusCode::NOT_FOUND,
-    }
-}
-
-async fn maybe_apply_middlewares_out(
-    mut response: poem::Response,
-    middlewares: &Option<HttpMiddlewares>,
-) -> poem::Response {
-    if let Some(middlewares) = middlewares {
-        let result = middlewares.process_middleware_out(&mut response).await;
-        match result {
-            Ok(_) => response,
-            Err(err) => err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR),
-        }
-    } else {
-        response
-    }
-}
-
-fn to_attribute_value(value: &ValueAndType) -> GatewayHttpResult<AttributeValue> {
-    match &value.value {
-        golem_wasm_rpc::Value::String(value) => Ok(AttributeValue::String(value.clone())),
-        _ => Err(GatewayHttpError::BadRequest(
-            "Invocation context values must be string".to_string(),
-        )),
     }
 }
 

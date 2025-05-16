@@ -109,17 +109,6 @@ impl From<WorkerBindingCompiled> for WorkerBinding {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResponseMapping(pub Expr);
 
-impl ResponseMapping {
-    pub fn expression_str(&self) -> String {
-        // Convert the Rib expression to a string for pattern matching
-        self.0.to_string()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.expression_str().is_empty()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResponseMappingCompiled {
     pub response_mapping_expr: Expr,
