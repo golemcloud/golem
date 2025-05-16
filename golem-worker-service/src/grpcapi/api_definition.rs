@@ -32,8 +32,7 @@ use golem_api_grpc::proto::golem::{
         ExportOpenapiSpecRequest, ExportOpenapiSpecResponse, GetAllApiDefinitionsRequest,
         GetAllApiDefinitionsResponse, GetApiDefinitionRequest, GetApiDefinitionResponse,
         GetApiDefinitionVersionsRequest, GetApiDefinitionVersionsResponse,
-        OpenApiHttpApiDefinitionResponse as GrpcOpenApiHttpApiDefinitionResponse,
-        UpdateApiDefinitionRequest, UpdateApiDefinitionResponse,
+        OpenApiHttpApiDefinitionResponse, UpdateApiDefinitionRequest, UpdateApiDefinitionResponse,
     },
     common::{Empty, ErrorBody, ErrorsBody},
 };
@@ -46,7 +45,6 @@ use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiDefinitionTraceErrorKind;
 use golem_worker_service_base::api::HttpApiDefinitionResponseData;
 use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinition;
-use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionResponse as InternalOpenApiHttpApiDefinitionResponse;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 
 #[derive(Clone)]
@@ -466,7 +464,7 @@ impl GrpcApiDefinitionService {
     async fn export_openapi_spec(
         &self,
         request: ExportOpenapiSpecRequest,
-    ) -> Result<GrpcOpenApiHttpApiDefinitionResponse, ApiDefinitionError> {
+    ) -> Result<OpenApiHttpApiDefinitionResponse, ApiDefinitionError> {
         let api_definition_id = get_api_definition_id(request.api_definition_id)?;
         let version = ApiVersion(request.version);
 
@@ -496,12 +494,12 @@ impl GrpcApiDefinitionService {
         .map_err(|e| internal_error(format!("Failed to convert to response data: {}", e)))?;
 
         let internal_response =
-            InternalOpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(
+            golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(
                 &response_data,
             )
             .map_err(|e| internal_error(format!("Failed to create OpenAPI response: {}", e)))?;
 
-        Ok(GrpcOpenApiHttpApiDefinitionResponse {
+        Ok(OpenApiHttpApiDefinitionResponse {
             id: Some(
                 golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId {
                     value: internal_response.id.0,

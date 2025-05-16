@@ -16,6 +16,15 @@ use golem_worker_service_base::api::api_definition::HttpApiDefinitionResponseDat
 use golem_worker_service_base::gateway_api_definition::http::api_oas_convert::OpenApiHttpApiDefinitionResponse;
 use serde_json::from_str;
 
+// Helper function to assert basic OpenAPI properties
+fn assert_basic_openapi_properties(yaml: &serde_yaml::Value, id: &str, version: &str) {
+    assert_eq!(yaml["openapi"], "3.0.0");
+    assert_eq!(yaml["info"]["title"], id);
+    assert_eq!(yaml["info"]["version"], version);
+    assert_eq!(yaml["x-golem-api-definition-id"], id);
+    assert_eq!(yaml["x-golem-api-definition-version"], version);
+}
+
 // Test that the conversion works for a simple API definition with no routes,
 // Test yaml values to confirm the structure is correct
 #[test]
@@ -41,11 +50,7 @@ fn test_simple_conversion() {
         serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
     // Verify basic properties
-    assert_eq!(yaml_value["openapi"], "3.0.0");
-    assert_eq!(yaml_value["info"]["title"], "shopping-cart");
-    assert_eq!(yaml_value["info"]["version"], "0.0.1");
-    assert_eq!(yaml_value["x-golem-api-definition-id"], "shopping-cart");
-    assert_eq!(yaml_value["x-golem-api-definition-version"], "0.0.1");
+    assert_basic_openapi_properties(&yaml_value, "shopping-cart", "0.0.1");
 
     // Verify empty paths
     assert!(yaml_value["paths"].is_mapping());
@@ -190,11 +195,7 @@ fn test_route_conversion_basic_fields() {
         serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
     // Verify basic properties
-    assert_eq!(yaml_value["openapi"], "3.0.0");
-    assert_eq!(yaml_value["info"]["title"], "shopping-cart");
-    assert_eq!(yaml_value["info"]["version"], "0.0.1");
-    assert_eq!(yaml_value["x-golem-api-definition-id"], "shopping-cart");
-    assert_eq!(yaml_value["x-golem-api-definition-version"], "0.0.1");
+    assert_basic_openapi_properties(&yaml_value, "shopping-cart", "0.0.1");
 
     // Verify path exists
     assert!(yaml_value["paths"]["/v0.0.1/{user}/add-item"].is_mapping());
@@ -504,9 +505,7 @@ fn test_basic_types_and_record_conversion() {
         serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
     // Verify basic properties
-    assert_eq!(yaml_value["openapi"], "3.0.0");
-    assert_eq!(yaml_value["info"]["title"], "simple-echo");
-    assert_eq!(yaml_value["info"]["version"], "0.0.1");
+    assert_basic_openapi_properties(&yaml_value, "simple-echo", "0.0.1");
 
     // Verify u64 route, request body, and response
     let u64_route = &yaml_value["paths"]["/v0.0.1/{user}/u64"]["post"];
@@ -943,9 +942,7 @@ fn test_complete_todo_structure_with_optional_and_oneof() {
         serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
     // Verify basic OpenAPI structure
-    assert_eq!(yaml_value["openapi"], "3.0.0");
-    assert_eq!(yaml_value["info"]["title"], "todo-list");
-    assert_eq!(yaml_value["info"]["version"], "0.0.1");
+    assert_basic_openapi_properties(&yaml_value, "todo-list", "0.0.1");
 
     // Verify path exists
     let path = &yaml_value["paths"]["/v0.0.1/{user}/add"];
@@ -1100,11 +1097,7 @@ fn test_user_time_conversion() {
         serde_yaml::from_str(&openapi_response.openapi_yaml).expect("Failed to parse OpenAPI YAML");
 
     // Verify basic properties
-    assert_eq!(yaml_value["openapi"], "3.0.0");
-    assert_eq!(yaml_value["info"]["title"], "delay-echo");
-    assert_eq!(yaml_value["info"]["version"], "0.0.1");
-    assert_eq!(yaml_value["x-golem-api-definition-id"], "delay-echo");
-    assert_eq!(yaml_value["x-golem-api-definition-version"], "0.0.1");
+    assert_basic_openapi_properties(&yaml_value, "delay-echo", "0.0.1");
 
     // Verify path exists
     assert!(yaml_value["paths"]["/v0.0.1/{user}/{time}/delay-echo"].is_mapping());

@@ -405,50 +405,53 @@ impl RegisterApiDefinitionApi {
             version = version.0.to_string()
         );
 
-        let response = {
-            let api_definition_id = id.0;
-            let api_version = version.0;
-
-            let data = self
-                .definition_service
-                .get(
-                    &api_definition_id,
-                    &api_version,
-                    &DefaultNamespace::default(),
-                    &EmptyAuthCtx::default(),
-                )
-                .instrument(record.span.clone())
-                .await?;
-
-            let compiled_definition = data.ok_or(ApiEndpointError::not_found(safe(format!(
-                "Can't find api definition with id {api_definition_id}, and version {api_version}"
-            ))))?;
-
-            let response_data = HttpApiDefinitionResponseData::from_compiled_http_api_definition(
-                compiled_definition,
-                &self
-                    .definition_service
-                    .conversion_context(&DefaultNamespace::default(), &EmptyAuthCtx::default()),
-            )
-            .await
-            .map_err(|e| {
-                error!("Failed to convert to response data {}", e);
-                ApiEndpointError::internal(safe(e.to_string()))
-            })?;
-
-            let response =
-                OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(
-                    &response_data,
-                )
-                .map_err(|e| {
-                    error!("Failed to convert to OpenAPI: {}", e);
-                    ApiEndpointError::internal(safe(e.to_string()))
-                })?;
-
-            Ok(Json(response))
-        };
-
+        let response = self
+            .export_internal(id.0, version.0)
+            .instrument(record.span.clone())
+            .await;
         record.result(response)
+    }
+
+    async fn export_internal(
+        &self,
+        api_definition_id: ApiDefinitionId,
+        api_version: ApiVersion,
+    ) -> Result<Json<OpenApiHttpApiDefinitionResponse>, ApiEndpointError> {
+        let data = self
+            .definition_service
+            .get(
+                &api_definition_id,
+                &api_version,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await?;
+
+        let compiled_definition = data.ok_or(ApiEndpointError::not_found(safe(format!(
+            "Can't find api definition with id {api_definition_id}, and version {api_version}"
+        ))))?;
+
+        let response_data = HttpApiDefinitionResponseData::from_compiled_http_api_definition(
+            compiled_definition,
+            &self
+                .definition_service
+                .conversion_context(&DefaultNamespace::default(), &EmptyAuthCtx::default()),
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to convert to response data {}", e);
+            ApiEndpointError::internal(safe(e.to_string()))
+        })?;
+
+        let response = OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(
+            &response_data,
+        )
+        .map_err(|e| {
+            error!("Failed to convert to OpenAPI: {}", e);
+            ApiEndpointError::internal(safe(e.to_string()))
+        })?;
+
+        Ok(Json(response))
     }
 }
 

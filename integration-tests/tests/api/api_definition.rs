@@ -15,9 +15,10 @@
 use crate::{to_grpc_rib_expr, Tracing};
 use assert2::{assert, check};
 use golem_api_grpc::proto::golem::apidefinition::v1::{
-    api_definition_request, create_api_definition_request, update_api_definition_request,
-    ApiDefinitionRequest, CreateApiDefinitionRequest, DeleteApiDefinitionRequest,
-    GetApiDefinitionRequest, GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
+    api_definition_request, create_api_definition_request, export_openapi_spec_response,
+    update_api_definition_request, ApiDefinitionRequest, CreateApiDefinitionRequest,
+    DeleteApiDefinitionRequest, ExportOpenapiSpecRequest, GetApiDefinitionRequest,
+    GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
 };
 use golem_api_grpc::proto::golem::apidefinition::{
     api_definition, ApiDefinition, ApiDefinitionId, GatewayBinding, GatewayBindingType,
@@ -527,23 +528,19 @@ async fn test_export_openapi_spec_simple(deps: &EnvBasedTestDependencies) {
     // Export the API definition
     let export_response = deps
         .worker_service()
-        .export_openapi_spec(
-            golem_api_grpc::proto::golem::apidefinition::v1::ExportOpenapiSpecRequest {
-                api_definition_id: Some(
-                    golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId {
-                        value: api_id.clone(),
-                    },
-                ),
-                version: "1.0".to_string(),
-            },
-        )
+        .export_openapi_spec(ExportOpenapiSpecRequest {
+            api_definition_id: Some(ApiDefinitionId {
+                value: api_id.clone(),
+            }),
+            version: "1.0".to_string(),
+        })
         .await
         .unwrap();
 
     // Verify the export response contains valid data
     let export_data = match export_response.result.unwrap() {
-        golem_api_grpc::proto::golem::apidefinition::v1::export_openapi_spec_response::Result::Success(data) => data,
-        golem_api_grpc::proto::golem::apidefinition::v1::export_openapi_spec_response::Result::Error(e) => {
+        export_openapi_spec_response::Result::Success(data) => data,
+        export_openapi_spec_response::Result::Error(e) => {
             panic!("Export API definition failed: {:?}", e);
         }
     };
@@ -663,23 +660,19 @@ async fn test_export_import_api_definition_fixed(deps: &EnvBasedTestDependencies
     // 3. Export the API definition to OpenAPI format
     let export_response = deps
         .worker_service()
-        .export_openapi_spec(
-            golem_api_grpc::proto::golem::apidefinition::v1::ExportOpenapiSpecRequest {
-                api_definition_id: Some(
-                    golem_api_grpc::proto::golem::apidefinition::ApiDefinitionId {
-                        value: api_id.clone(),
-                    },
-                ),
-                version: "1.0".to_string(),
-            },
-        )
+        .export_openapi_spec(ExportOpenapiSpecRequest {
+            api_definition_id: Some(ApiDefinitionId {
+                value: api_id.clone(),
+            }),
+            version: "1.0".to_string(),
+        })
         .await
         .unwrap();
 
     // Verify the export response
     let export_data = match export_response.result.unwrap() {
-        golem_api_grpc::proto::golem::apidefinition::v1::export_openapi_spec_response::Result::Success(data) => data,
-        golem_api_grpc::proto::golem::apidefinition::v1::export_openapi_spec_response::Result::Error(e) => {
+        export_openapi_spec_response::Result::Success(data) => data,
+        export_openapi_spec_response::Result::Error(e) => {
             panic!("Export API definition failed: {:?}", e);
         }
     };
