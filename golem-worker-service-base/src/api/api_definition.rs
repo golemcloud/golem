@@ -310,8 +310,18 @@ pub struct GatewayBindingComponent {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ResolvedGatewayBindingComponent {
-    pub name: String,
-    pub version: u64,
+    name: String,
+    version: u64,
+}
+
+// Getters for Component Name and Version, Used in OpenAPI Spec conversion
+impl ResolvedGatewayBindingComponent {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn version(&self) -> u64 {
+        self.version
+    }
 }
 
 // GatewayBindingData is a user exposed structure of GatewayBinding
