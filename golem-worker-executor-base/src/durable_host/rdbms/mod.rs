@@ -479,9 +479,7 @@ where
 {
     let handle = entry.rep();
     let interface = get_db_transaction_interface::<T>();
-    let begin_oplog_idx = ctx
-        .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
-        .await?;
+    let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
     let durability = Durability::<RdbmsRequest<T>, SerializableError>::new(
         ctx,
         interface.leak(),
