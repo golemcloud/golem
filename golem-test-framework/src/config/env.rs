@@ -168,7 +168,7 @@ pub struct EnvBasedTestDependencies {
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync + 'static>,
-    worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+    worker_service: Arc<dyn WorkerService + 'static>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
@@ -335,7 +335,7 @@ impl EnvBasedTestDependencies {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-    ) -> Arc<dyn WorkerService + Send + Sync + 'static> {
+    ) -> Arc<dyn WorkerService + 'static> {
         if config.golem_docker_services {
             Arc::new(
                 DockerWorkerService::new(
@@ -372,7 +372,7 @@ impl EnvBasedTestDependencies {
         config: Arc<EnvBasedTestDependenciesConfig>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + 'static>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         if config.golem_docker_services {
@@ -540,7 +540,7 @@ impl TestDependencies for EnvBasedTestDependencies {
         self.component_compilation_service.clone()
     }
 
-    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {
+    fn worker_service(&self) -> Arc<dyn WorkerService + 'static> {
         self.worker_service.clone()
     }
 

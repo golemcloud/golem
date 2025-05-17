@@ -29,13 +29,11 @@ use crate::services::golem_config::{ShardManagerServiceConfig, ShardManagerServi
 
 /// Service providing access to the shard manager service
 #[async_trait]
-pub trait ShardManagerService {
+pub trait ShardManagerService: Send + Sync {
     async fn register(&self, host: String, port: u16) -> Result<ShardAssignment, GolemError>;
 }
 
-pub fn configured(
-    config: &ShardManagerServiceConfig,
-) -> Arc<dyn ShardManagerService + Send + Sync> {
+pub fn configured(config: &ShardManagerServiceConfig) -> Arc<dyn ShardManagerService> {
     match config {
         ShardManagerServiceConfig::Grpc(config) => {
             Arc::new(ShardManagerServiceGrpc::new(config.clone()))

@@ -736,6 +736,7 @@ pub struct CompiledAuthCallBackRoute {
 }
 
 #[derive(Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum RouteCompilationErrors {
     MetadataNotFoundError(VersionedComponentId),
     RibError(RibCompilationError),

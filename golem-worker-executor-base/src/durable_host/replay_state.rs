@@ -33,8 +33,8 @@ use tracing::debug;
 #[derive(Clone)]
 pub struct ReplayState {
     owned_worker_id: OwnedWorkerId,
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
-    oplog: Arc<dyn Oplog + Send + Sync>,
+    oplog_service: Arc<dyn OplogService>,
+    oplog: Arc<dyn Oplog>,
     replay_target: AtomicOplogIndex,
     /// The oplog index of the last replayed entry
     last_replayed_index: AtomicOplogIndex,
@@ -53,8 +53,8 @@ struct InternalReplayState {
 impl ReplayState {
     pub async fn new(
         owned_worker_id: OwnedWorkerId,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        oplog: Arc<dyn Oplog + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
+        oplog: Arc<dyn Oplog>,
         skipped_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
     ) -> Self {

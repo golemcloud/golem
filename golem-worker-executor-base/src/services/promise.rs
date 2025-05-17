@@ -34,7 +34,7 @@ use crate::storage::keyvalue::{
 
 /// Service implementing creation, completion and polling of promises
 #[async_trait]
-pub trait PromiseService {
+pub trait PromiseService: Send + Sync {
     async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId;
 
     async fn wait_for(&self, promise_id: PromiseId) -> Result<Vec<u8>, GolemError>;

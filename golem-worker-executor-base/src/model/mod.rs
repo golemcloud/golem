@@ -29,6 +29,7 @@ use golem_common::model::{
     WorkerStatusRecord,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc_derive::IntoValue;
 use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -56,7 +57,9 @@ impl ShardAssignmentCheck for ShardAssignment {
     }
 }
 
-#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(
+    Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, IntoValue,
+)]
 pub enum InterruptKind {
     Interrupt,
     Restart,

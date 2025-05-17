@@ -1,12 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
-use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
-use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm_rpc_derive::IntoValue;
 use rand::distr::{Alphanumeric, SampleString};
 use rand::rng;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue)]
 pub struct Data {
     pub id: String,
     pub name: String,
@@ -34,25 +33,5 @@ impl Data {
 
     pub fn generate_list(count: usize) -> Vec<Self> {
         (0..count).map(|_| Self::generate()).collect()
-    }
-}
-
-impl IntoValue for Data {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            Value::String(self.id),
-            Value::String(self.name),
-            Value::String(self.desc),
-            Value::U64(self.timestamp),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("id", analysed_type::str()),
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("desc", analysed_type::str()),
-            analysed_type::field("timestamp", analysed_type::u64()),
-        ])
     }
 }

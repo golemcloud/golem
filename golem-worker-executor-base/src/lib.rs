@@ -187,24 +187,24 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         linker: Arc<Linker<Ctx>>,
         runtime: Handle,
         component_service: Arc<dyn ComponentService<Ctx::Types>>,
-        shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
-        worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
-        running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
-        promise_service: Arc<dyn PromiseService + Send + Sync>,
+        shard_manager_service: Arc<dyn ShardManagerService>,
+        worker_service: Arc<dyn WorkerService>,
+        worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
+        running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService>,
+        promise_service: Arc<dyn PromiseService>,
         golem_config: Arc<GolemConfig>,
-        shard_service: Arc<dyn ShardService + Send + Sync>,
-        key_value_service: Arc<dyn KeyValueService + Send + Sync>,
-        blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        shard_service: Arc<dyn ShardService>,
+        key_value_service: Arc<dyn KeyValueService>,
+        blob_store_service: Arc<dyn BlobStoreService>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService>,
+        worker_activator: Arc<dyn WorkerActivator<Ctx>>,
+        oplog_service: Arc<dyn OplogService>,
+        scheduler_service: Arc<dyn SchedulerService>,
+        worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<Ctx::Types>>,
-        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -408,25 +408,26 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
     );
 
     let golem_config = Arc::new(golem_config.clone());
-    let promise_service: Arc<dyn PromiseService + Send + Sync> =
+    let promise_service: Arc<dyn PromiseService> =
         Arc::new(DefaultPromiseService::new(key_value_storage.clone()));
     let shard_service = Arc::new(ShardServiceDefault::new());
 
-    let mut oplog_archives: Vec<Arc<dyn OplogArchiveService + Send + Sync>> = Vec::new();
+    let mut oplog_archives: Vec<Arc<dyn OplogArchiveService>> = Vec::new();
     for idx in 1..golem_config.oplog.indexed_storage_layers {
-        let svc: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
-            CompressedOplogArchiveService::new(indexed_storage.clone(), idx),
-        );
+        let svc: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            idx,
+        ));
         oplog_archives.push(svc);
     }
     for idx in 0..golem_config.oplog.blob_storage_layers {
-        let svc: Arc<dyn OplogArchiveService + Send + Sync> =
+        let svc: Arc<dyn OplogArchiveService> =
             Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), idx));
         oplog_archives.push(svc);
     }
     let oplog_archives = NEVec::try_from_vec(oplog_archives);
 
-    let base_oplog_service: Arc<dyn OplogService + Send + Sync> = match oplog_archives {
+    let base_oplog_service: Arc<dyn OplogService> = match oplog_archives {
         None => Arc::new(
             PrimaryOplogService::new(
                 indexed_storage.clone(),
@@ -482,7 +483,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
 
     let blob_store_service = Arc::new(DefaultBlobStoreService::new(blob_storage.clone()));
 
-    let worker_proxy: Arc<dyn WorkerProxy + Send + Sync> = Arc::new(RemoteWorkerProxy::new(
+    let worker_proxy: Arc<dyn WorkerProxy> = Arc::new(RemoteWorkerProxy::new(
         golem_config.public_worker_api.uri(),
         golem_config
             .public_worker_api
@@ -493,7 +494,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
         golem_config.public_worker_api.connect_timeout,
     ));
 
-    let rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync> =
+    let rdbms_service: Arc<dyn rdbms::RdbmsService> =
         Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms));
 
     let events = Arc::new(Events::new(
@@ -507,7 +508,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
         plugins.clone(),
     ));
 
-    let oplog_service: Arc<dyn OplogService + Send + Sync> = Arc::new(ForwardingOplogService::new(
+    let oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
         base_oplog_service,
         oplog_processor_plugin.clone(),
         component_service.clone(),
@@ -529,7 +530,7 @@ async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>
         key_value_storage.clone(),
         shard_service.clone(),
         promise_service.clone(),
-        Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx> + Send + Sync>),
+        Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx>>),
         oplog_service.clone(),
         worker_service.clone(),
         golem_config.scheduler.refresh_interval,

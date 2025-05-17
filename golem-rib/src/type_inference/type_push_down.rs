@@ -547,26 +547,17 @@ mod internal {
         expressions: &'a mut Vec<Expr>,
         inferred_type: &'a mut InferredType,
     ) {
-        match call_type {
-            // For CallType::Enum, there are no argument expressions
-            // For CallType::Function, there is no type available to push down to arguments, as it is invalid
-            // to push down the return type of function to its arguments.
-            // For variant constructor, the type of the arguments are present in the return type of the call
-            // and should be pushed down to arguments
-            CallType::VariantConstructor(name) => {
-                if let TypeInternal::Variant(variant) = inferred_type.inner.deref() {
-                    let identified_variant = variant
-                        .iter()
-                        .find(|(variant_name, _)| variant_name == name);
-                    if let Some((_name, Some(inner_type))) = identified_variant {
-                        for expr in expressions {
-                            expr.add_infer_type_mut(inner_type.clone());
-                        }
+        if let CallType::VariantConstructor(name) = call_type {
+            if let TypeInternal::Variant(variant) = inferred_type.inner.deref() {
+                let identified_variant = variant
+                    .iter()
+                    .find(|(variant_name, _)| variant_name == name);
+                if let Some((_name, Some(inner_type))) = identified_variant {
+                    for expr in expressions {
+                        expr.add_infer_type_mut(inner_type.clone());
                     }
                 }
             }
-
-            _ => {}
         }
     }
 

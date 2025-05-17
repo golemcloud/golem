@@ -41,7 +41,7 @@ use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAc
 use golem_wasm_rpc::Value;
 
 #[async_trait]
-pub trait SchedulerService {
+pub trait SchedulerService: Send + Sync {
     async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId;
 
     async fn cancel(&self, id: ScheduleId);
@@ -55,7 +55,7 @@ pub trait SchedulerWorkerAccess {
     async fn open_oplog(
         &self,
         owned_worker_id: &OwnedWorkerId,
-    ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError>;
+    ) -> Result<Arc<dyn Oplog>, GolemError>;
 
     // enqueue and invocation to the worker
     async fn enqueue_invocation(
@@ -69,7 +69,7 @@ pub trait SchedulerWorkerAccess {
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Send + Sync> {
+impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
     async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId) {
         self.deref().activate_worker(owned_worker_id).await;
     }
@@ -77,7 +77,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Se
     async fn open_oplog(
         &self,
         owned_worker_id: &OwnedWorkerId,
-    ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError> {
+    ) -> Result<Arc<dyn Oplog>, GolemError> {
         let worker = self
             .get_or_create_suspended(owned_worker_id, None, None, None, None)
             .await?;
@@ -115,21 +115,21 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx> + Se
 pub struct SchedulerServiceDefault {
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
     background_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
-    shard_service: Arc<dyn ShardService + Send + Sync>,
-    promise_service: Arc<dyn PromiseService + Send + Sync>,
+    shard_service: Arc<dyn ShardService>,
+    promise_service: Arc<dyn PromiseService>,
     worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
-    worker_service: Arc<dyn WorkerService + Send + Sync>,
+    oplog_service: Arc<dyn OplogService>,
+    worker_service: Arc<dyn WorkerService>,
 }
 
 impl SchedulerServiceDefault {
     pub fn new(
         key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
-        shard_service: Arc<dyn ShardService + Send + Sync>,
-        promise_service: Arc<dyn PromiseService + Send + Sync>,
+        shard_service: Arc<dyn ShardService>,
+        promise_service: Arc<dyn PromiseService>,
         worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
+        worker_service: Arc<dyn WorkerService>,
         process_interval: Duration,
     ) -> Arc<Self> {
         let svc = Self {
@@ -456,7 +456,7 @@ mod tests {
         async fn open_oplog(
             &self,
             _owned_worker_id: &OwnedWorkerId,
-        ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError> {
+        ) -> Result<Arc<dyn Oplog>, GolemError> {
             unimplemented!()
         }
         async fn enqueue_invocation(
@@ -477,7 +477,7 @@ mod tests {
             .to_vec()
     }
 
-    fn create_shard_service_mock() -> Arc<dyn ShardService + Send + Sync> {
+    fn create_shard_service_mock() -> Arc<dyn ShardService> {
         let result = Arc::new(ShardServiceDefault::new());
         result.register(1, &HashSet::from_iter(vec![ShardId::new(0)]));
         result
@@ -491,7 +491,7 @@ mod tests {
         Arc::new(SchedulerWorkerAccessMock)
     }
 
-    async fn create_oplog_service_mock() -> Arc<dyn OplogService + Send + Sync> {
+    async fn create_oplog_service_mock() -> Arc<dyn OplogService> {
         Arc::new(
             PrimaryOplogService::new(
                 Arc::new(InMemoryIndexedStorage::new()),
@@ -505,9 +505,9 @@ mod tests {
 
     fn create_worker_service_mock(
         kvs: Arc<InMemoryKeyValueStorage>,
-        shard_service: Arc<dyn ShardService + Send + Sync>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-    ) -> Arc<dyn WorkerService + Send + Sync> {
+        shard_service: Arc<dyn ShardService>,
+        oplog_service: Arc<dyn OplogService>,
+    ) -> Arc<dyn WorkerService> {
         Arc::new(DefaultWorkerService::new(kvs, shard_service, oplog_service))
     }
 

@@ -50,7 +50,7 @@ use tokio::time::Instant;
 use tracing::Instrument;
 
 #[async_trait]
-pub trait OplogProcessorPlugin {
+pub trait OplogProcessorPlugin: Send + Sync {
     async fn send(
         &self,
         worker_metadata: WorkerMetadata,
@@ -68,8 +68,8 @@ pub struct PerExecutorOplogProcessorPlugin<Ctx: WorkerCtx> {
     workers: Arc<RwLock<HashMap<WorkerKey, RunningPlugin>>>,
 
     component_service: Arc<dyn ComponentService<Ctx::Types>>,
-    shard_service: Arc<dyn ShardService + Send + Sync>,
-    worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>,
+    shard_service: Arc<dyn ShardService>,
+    worker_activator: Arc<dyn WorkerActivator<Ctx>>,
     plugins: Arc<dyn Plugins<Ctx::Types>>,
 }
 
@@ -85,8 +85,8 @@ struct RunningPlugin {
 impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
     pub fn new(
         component_service: Arc<dyn ComponentService<Ctx::Types>>,
-        shard_service: Arc<dyn ShardService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator<Ctx> + Send + Sync>,
+        shard_service: Arc<dyn ShardService>,
+        worker_activator: Arc<dyn WorkerActivator<Ctx>>,
         plugins: Arc<dyn Plugins<Ctx::Types>>,
     ) -> Self {
         Self {
@@ -311,13 +311,13 @@ impl<Ctx: WorkerCtx> HasComponentService<Ctx::Types> for PerExecutorOplogProcess
 }
 
 impl<Ctx: WorkerCtx> HasShardService for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn shard_service(&self) -> Arc<dyn ShardService + Send + Sync> {
+    fn shard_service(&self) -> Arc<dyn ShardService> {
         self.shard_service.clone()
     }
 }
 
 impl<Ctx: WorkerCtx> HasWorkerActivator<Ctx> for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn worker_activator(&self) -> Arc<dyn WorkerActivator<Ctx> + Send + Sync> {
+    fn worker_activator(&self) -> Arc<dyn WorkerActivator<Ctx>> {
         self.worker_activator.clone()
     }
 }
@@ -329,7 +329,7 @@ impl<Ctx: WorkerCtx> HasPlugins<Ctx::Types> for PerExecutorOplogProcessorPlugin<
 }
 
 impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn oplog_processor_plugin(&self) -> Arc<dyn OplogProcessorPlugin + Send + Sync> {
+    fn oplog_processor_plugin(&self) -> Arc<dyn OplogProcessorPlugin> {
         Arc::new(self.clone())
     }
 }
@@ -337,9 +337,9 @@ impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for PerExecutorOplogProcessorPlugin
 struct CreateOplogConstructor<T: GolemTypes> {
     owned_worker_id: OwnedWorkerId,
     initial_entry: Option<OplogEntry>,
-    inner: Arc<dyn OplogService + Send + Sync>,
+    inner: Arc<dyn OplogService>,
     last_oplog_index: OplogIndex,
-    oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+    oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService<T>>,
     plugins: Arc<dyn Plugins<T>>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
@@ -368,9 +368,9 @@ impl<T: GolemTypes> CreateOplogConstructor<T> {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_entry: Option<OplogEntry>,
-        inner: Arc<dyn OplogService + Send + Sync>,
+        inner: Arc<dyn OplogService>,
         last_oplog_index: OplogIndex,
-        oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+        oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService<T>>,
         plugins: Arc<dyn Plugins<T>>,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
@@ -392,10 +392,7 @@ impl<T: GolemTypes> CreateOplogConstructor<T> {
 
 #[async_trait]
 impl<T: GolemTypes> OplogConstructor for CreateOplogConstructor<T> {
-    async fn create_oplog(
-        self,
-        close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
         let inner = if let Some(initial_entry) = self.initial_entry {
             self.inner
                 .create(
@@ -431,18 +428,18 @@ impl<T: GolemTypes> OplogConstructor for CreateOplogConstructor<T> {
 }
 
 pub struct ForwardingOplogService<T: GolemTypes> {
-    pub inner: Arc<dyn OplogService + Send + Sync>,
+    pub inner: Arc<dyn OplogService>,
     oplogs: OpenOplogs,
 
-    oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+    oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService<T>>,
     plugins: Arc<dyn Plugins<T> + Send + Sync>,
 }
 
 impl<T: GolemTypes> ForwardingOplogService<T> {
     pub fn new(
-        inner: Arc<dyn OplogService + Send + Sync>,
-        oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+        inner: Arc<dyn OplogService>,
+        oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService<T>>,
         plugins: Arc<dyn Plugins<T>>,
     ) -> Self {
@@ -470,7 +467,7 @@ impl<T: GolemTypes> OplogService for ForwardingOplogService<T> {
         initial_entry: OplogEntry,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + Send + Sync + 'static> {
+    ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
                 &owned_worker_id.worker_id,
@@ -495,7 +492,7 @@ impl<T: GolemTypes> OplogService for ForwardingOplogService<T> {
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + Send + Sync + 'static> {
+    ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
                 &owned_worker_id.worker_id,
@@ -566,7 +563,7 @@ impl<T: GolemTypes> OplogService for ForwardingOplogService<T> {
 
 /// A wrapper for `Oplog` that periodically sends buffered oplog entries to oplog processor plugins
 pub struct ForwardingOplog<T: GolemTypes> {
-    inner: Arc<dyn Oplog + Send + Sync>,
+    inner: Arc<dyn Oplog>,
     state: Arc<Mutex<ForwardingOplogState<T>>>,
     timer: Option<JoinHandle<()>>,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
@@ -576,9 +573,9 @@ impl<T: GolemTypes> ForwardingOplog<T> {
     const MAX_COMMIT_COUNT: usize = 3;
 
     pub fn new(
-        inner: Arc<dyn Oplog + Send + Sync>,
-        oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
+        inner: Arc<dyn Oplog>,
+        oplog_plugins: Arc<dyn OplogProcessorPlugin>,
+        oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService<T>>,
         plugins: Arc<dyn Plugins<T>>,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
@@ -690,11 +687,11 @@ struct ForwardingOplogState<T: GolemTypes> {
     buffer: VecDeque<OplogEntry>,
     commit_count: usize,
     last_send: Instant,
-    oplog_plugins: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+    oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     initial_worker_metadata: WorkerMetadata,
     last_oplog_idx: OplogIndex,
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
+    oplog_service: Arc<dyn OplogService>,
     components: Arc<dyn ComponentService<T>>,
     plugins: Arc<dyn Plugins<T>>,
 }

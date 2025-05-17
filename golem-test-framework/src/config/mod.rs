@@ -55,7 +55,7 @@ pub trait TestDependencies {
     fn component_compilation_service(
         &self,
     ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static>;
-    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static>;
+    fn worker_service(&self) -> Arc<dyn WorkerService + 'static>;
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>;
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService>;

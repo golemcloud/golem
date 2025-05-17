@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(clippy::large_enum_variant)]
+#![allow(clippy::result_large_err)]
+
 pub use call_type::*;
 pub use compiler::*;
 pub use expr::*;
@@ -27,6 +30,7 @@ pub use type_registry::*;
 pub use variable_id::*;
 
 mod call_type;
+
 mod compiler;
 mod expr;
 mod function_name;

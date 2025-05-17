@@ -28,7 +28,7 @@ use tracing::Instrument;
 
 pub struct EphemeralOplog {
     owned_worker_id: OwnedWorkerId,
-    primary: Arc<dyn Oplog + Send + Sync>,
+    primary: Arc<dyn Oplog>,
     target: Arc<dyn OplogArchive + Send + Sync>,
     state: Arc<Mutex<EphemeralOplogState>>,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
@@ -70,7 +70,7 @@ impl EphemeralOplog {
         owned_worker_id: OwnedWorkerId,
         last_oplog_idx: OplogIndex,
         max_operations_before_commit: u64,
-        primary: Arc<dyn Oplog + Send + Sync>,
+        primary: Arc<dyn Oplog>,
         target: Arc<dyn OplogArchive + Send + Sync>,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {

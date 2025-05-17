@@ -82,7 +82,7 @@ pub struct CliTestDependencies {
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync + 'static>,
-    worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+    worker_service: Arc<dyn WorkerService + 'static>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
@@ -420,7 +420,7 @@ impl CliTestDependencies {
                 .await
                 .expect("Failed to join");
 
-        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
             DockerWorkerService::new(
                 component_service.clone(),
                 shard_manager.clone(),
@@ -586,7 +586,7 @@ impl CliTestDependencies {
                 .await
                 .expect("Failed to join.");
 
-        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
             SpawnedWorkerService::new(
                 &build_root.join("golem-worker-service"),
                 &workspace_root.join("golem-worker-service"),
@@ -742,7 +742,7 @@ impl CliTestDependencies {
                 .await
                 .expect("Failed to join.");
 
-        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
             K8sWorkerService::new(
                 &namespace,
                 &routing_type,
@@ -906,7 +906,7 @@ impl CliTestDependencies {
                 .await
                 .expect("Failed to join.");
 
-        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
             K8sWorkerService::new(
                 &namespace,
                 &routing_type,
@@ -1025,7 +1025,7 @@ impl CliTestDependencies {
                     *component_compilation_service_http_port,
                     *component_compilation_service_grpc_port,
                 ));
-                let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+                let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
                     ProvidedWorkerService::new(
                         worker_service_host.clone(),
                         *worker_service_http_port,
@@ -1187,7 +1187,7 @@ impl TestDependencies for CliTestDependencies {
         self.component_compilation_service.clone()
     }
 
-    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {
+    fn worker_service(&self) -> Arc<dyn WorkerService + 'static> {
         self.worker_service.clone()
     }
 

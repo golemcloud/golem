@@ -915,9 +915,9 @@ impl WorkerApi {
             .await
             .map_err(|e| e.into())
             .map(|bytes| {
-                Binary(Body::from_bytes_stream(bytes.map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-                })))
+                Binary(Body::from_bytes_stream(
+                    bytes.map_err(|e| std::io::Error::other(e.to_string())),
+                ))
             });
 
         record.result(response)

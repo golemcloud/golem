@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tracing::{info, Instrument};
 
 #[async_trait]
-pub trait RunningWorkerEnumerationService {
+pub trait RunningWorkerEnumerationService: Send + Sync {
     async fn get(
         &self,
         component_id: &ComponentId,
@@ -68,7 +68,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationServiceDefault<Ctx> {
 }
 
 #[async_trait]
-pub trait WorkerEnumerationService {
+pub trait WorkerEnumerationService: Send + Sync {
     async fn get(
         &self,
         account_id: &AccountId,
@@ -82,15 +82,15 @@ pub trait WorkerEnumerationService {
 
 #[derive(Clone)]
 pub struct DefaultWorkerEnumerationService {
-    worker_service: Arc<dyn WorkerService + Send + Sync>,
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
+    worker_service: Arc<dyn WorkerService>,
+    oplog_service: Arc<dyn OplogService>,
     golem_config: Arc<GolemConfig>,
 }
 
 impl DefaultWorkerEnumerationService {
     pub fn new(
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
+        worker_service: Arc<dyn WorkerService>,
+        oplog_service: Arc<dyn OplogService>,
         golem_config: Arc<GolemConfig>,
     ) -> Self {
         Self {
@@ -152,13 +152,13 @@ impl DefaultWorkerEnumerationService {
 }
 
 impl HasOplogService for DefaultWorkerEnumerationService {
-    fn oplog_service(&self) -> Arc<dyn OplogService + Send + Sync> {
+    fn oplog_service(&self) -> Arc<dyn OplogService> {
         self.oplog_service.clone()
     }
 }
 
 impl HasWorkerService for DefaultWorkerEnumerationService {
-    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync> {
+    fn worker_service(&self) -> Arc<dyn WorkerService> {
         self.worker_service.clone()
     }
 }

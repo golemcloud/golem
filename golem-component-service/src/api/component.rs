@@ -269,9 +269,9 @@ impl ComponentApi {
             .download_stream(&component_id, version, &DefaultComponentOwner)
             .await?;
 
-        Ok(Binary(Body::from_bytes_stream(bytes.map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-        }))))
+        Ok(Binary(Body::from_bytes_stream(
+            bytes.map_err(|e| std::io::Error::other(e.to_string())),
+        )))
     }
 
     /// Get the metadata for all component versions
@@ -777,9 +777,9 @@ impl ComponentApi {
                 &DefaultComponentOwner,
             )
             .await?;
-        Ok(Binary(Body::from_bytes_stream(bytes.map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-        }))))
+        Ok(Binary(Body::from_bytes_stream(
+            bytes.map_err(|e| std::io::Error::other(e.to_string())),
+        )))
     }
 
     fn parse_version_path_segment(version: &str) -> Result<u64> {
