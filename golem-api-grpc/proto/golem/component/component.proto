@@ -22,4 +22,5 @@ message Component {
   repeated golem.component.InitialComponentFile files = 10;
   repeated golem.component.PluginInstallation installed_plugins = 11;
   golem.common.AccountId account_id = 12;
+  map<string, string> env = 13;
 }

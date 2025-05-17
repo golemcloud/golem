@@ -444,11 +444,11 @@ async fn test_api_def_with_invalid_query_and_path_lookup() {
       response
     "#;
 
-    let api_specification: HttpApiDefinition =
+    let api_specification1: HttpApiDefinition =
         get_api_def_with_worker_binding("/foo/bar", None, response_mapping).await;
 
-    let result = CompiledHttpApiDefinition::from_http_api_definition(
-        &api_specification,
+    let result1 = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification1,
         &internal::get_component_metadata(),
         &DefaultNamespace::default(),
     )
@@ -463,7 +463,67 @@ async fn test_api_def_with_invalid_query_and_path_lookup() {
         }
     );
 
-    assert_eq!(result, expected)
+    assert_eq!(&result1, &expected);
+
+    let api_specification2 =
+        get_api_def_with_worker_binding("/foo/{user  -  id}?{cou ntry}", None, response_mapping)
+            .await;
+
+    let result2 = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification2,
+        &internal::get_component_metadata(),
+        &DefaultNamespace::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(&result2, &expected)
+}
+
+#[test]
+async fn test_api_def_with_path_parameters_in_space() {
+    let response_mapping = r#"
+       let user_id = request.path.user-id;
+       let country = request.query.country;
+       let worker-name = "shopping-cart-${user_id}-${country}";
+       let worker-instance = instance(worker-name);
+       let response = worker-instance.get-cart-contents(user_id, country);
+      response
+    "#;
+
+    // user-id and country is having space before and after
+    let api_specification: HttpApiDefinition = get_api_def_with_worker_binding(
+        "/foo/{ user-id   }?{    country }",
+        None,
+        response_mapping,
+    )
+    .await;
+
+    let api_request =
+        get_gateway_request("/foo/jon?country=usa", None, &HeaderMap::new(), Value::Null);
+
+    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
+
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let test_response = internal::get_details_from_response(response).await;
+
+    let result = (test_response.function_name, test_response.function_params);
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("jon".to_string()),
+            Value::String("usa".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
 }
 
 #[test]

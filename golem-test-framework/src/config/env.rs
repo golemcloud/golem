@@ -46,6 +46,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tempfile::TempDir;
 use tracing::{Instrument, Level};
 
 pub struct EnvBasedTestDependenciesConfig {
@@ -172,6 +173,7 @@ pub struct EnvBasedTestDependencies {
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+    component_temp_directory: Arc<TempDir>,
 }
 
 impl Debug for EnvBasedTestDependencies {
@@ -491,6 +493,9 @@ impl EnvBasedTestDependencies {
             blob_storage,
             initial_component_files_service,
             plugin_wasm_files_service,
+            component_temp_directory: Arc::new(
+                TempDir::new().expect("Failed to create temporary directory"),
+            ),
         }
     }
 }
@@ -505,6 +510,10 @@ impl TestDependencies for EnvBasedTestDependencies {
         self.redis.clone()
     }
 
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+        self.blob_storage.clone()
+    }
+
     fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
         self.redis_monitor.clone()
     }
@@ -515,6 +524,10 @@ impl TestDependencies for EnvBasedTestDependencies {
 
     fn component_directory(&self) -> &Path {
         &self.config.golem_test_components
+    }
+
+    fn component_temp_directory(&self) -> &Path {
+        self.component_temp_directory.path()
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService> {
@@ -533,10 +546,6 @@ impl TestDependencies for EnvBasedTestDependencies {
 
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         self.worker_executor_cluster.clone()
-    }
-
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
-        self.blob_storage.clone()
     }
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {

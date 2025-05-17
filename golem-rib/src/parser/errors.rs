@@ -88,13 +88,13 @@ mod invalid_syntax_tests {
           let x = 1;
           let y = 2;
           let z = 3;
-          let result = {x, y, z;
+          let result = {x;
           result"#;
         let result = Expr::from_text(input);
         let expected_error = [
             "Parse error at line: 5, column: 26",
-            "Unexpected `,`",
-            "Expected whitespace or `}`",
+            "Unexpected `;`",
+            "Expected `:`",
             "",
         ]
         .join("\n");
@@ -126,7 +126,7 @@ mod invalid_syntax_tests {
     }
 
     #[test]
-    fn invalid_record_in_rib_program() {
+    fn invalid_record_in_rib_program_1() {
         let input = r#"
           let x = 1;
           let y = 2;
@@ -135,15 +135,66 @@ mod invalid_syntax_tests {
           result"#;
         let result = Expr::from_text(input);
         let expected_error = [
-            "Parse error at line: 5, column: 29",
-            "Unexpected `,`",
-            "Unexpected `b`",
-            "Expected s8, u8, s16, u16, s32, u32, s64, u64, f32, f64, char, string, bool, list, tuple, option or result",
+            "Parse error at line: 5, column: 37",
+            "Unexpected `;`",
+            "Expected `,` or `}`",
             "",
         ]
         .join("\n");
 
         assert_eq!(result, Err(expected_error));
+    }
+
+    #[test]
+    fn invalid_record_in_rib_program_2() {
+        let input = r#"{ "foo": "bar" }"#;
+        let error = Expr::from_text(input).unwrap_err();
+        assert_eq!(
+            error,
+            "Parse error at line: 1, column: 3\nUnexpected `\"`\nExpected letter\n"
+        );
+    }
+
+    #[test]
+    fn invalid_record_in_rib_program_3() {
+        let input = r#"{ foo: bar, bar: a  bc }"#;
+        let error = Expr::from_text(input).unwrap_err();
+        assert_eq!(
+            error,
+            "Parse error at line: 1, column: 21\nUnexpected `b`\nExpected `,` or `}`\n"
+        );
+    }
+
+    #[test]
+    fn invalid_record_in_rib_program_4() {
+        let input = r#"{ foo: bar, bar: abc"#;
+        let error = Expr::from_text(input).unwrap_err();
+        assert_eq!(
+            error,
+            "Parse error at line: 1, column: 21\nUnexpected end of input\nExpected `,` or `}`\n"
+        );
+    }
+
+    #[test]
+    fn invalid_record_in_rib_program_5() {
+        let input = r#"{ foo: bar, {bar}: abc}"#;
+        let error = Expr::from_text(input).unwrap_err();
+
+        assert_eq!(
+            error,
+            "Parse error at line: 1, column: 13\nUnexpected `{`\nExpected letter\n"
+        );
+    }
+
+    #[test]
+    fn invalid_record_in_rib_program_6() {
+        let input = r#"{ foo: bar, foo: abc, bar: baz, baz: baz, baz: baz}"#;
+        let error = Expr::from_text(input).unwrap_err();
+
+        assert_eq!(
+            error,
+            "Parse error at line: 1, column: 1\nduplicate keys found in record: foo, baz\n"
+        );
     }
 
     #[test]

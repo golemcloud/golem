@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use combine::parser::char::digit;
-use combine::sep_by;
+use combine::{attempt, sep_by};
 use combine::{
-    between, many1,
+    many1,
     parser::char::{char as char_, letter, spaces},
     ParseError, Parser,
 };
@@ -35,14 +35,15 @@ where
     let flag_name = many1(letter().or(char_('_')).or(digit()).or(char_('-')))
         .map(|s: Vec<char>| s.into_iter().collect());
 
-    spaces().with(
-        between(
-            char_('{').skip(spaces()),
-            char_('}').skip(spaces()),
-            sep_by(flag_name.skip(spaces()), char_(',').skip(spaces())),
-        )
-        .map(Expr::flags),
+    (
+        char_('{').skip(spaces().silent()),
+        sep_by(
+            attempt(flag_name.skip(spaces().silent())),
+            char_(',').skip(spaces().silent()),
+        ),
+        char_('}').skip(spaces().silent()),
     )
+        .map(|(_, flags, _): (_, Vec<String>, _)| Expr::flags(flags))
 }
 
 #[cfg(test)]

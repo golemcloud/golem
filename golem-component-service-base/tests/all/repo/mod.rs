@@ -40,6 +40,7 @@ use poem_openapi::NewType;
 use poem_openapi::__private::serde_json;
 use serde::{Deserialize, Serialize};
 use sqlx::query_builder::Separated;
+use sqlx::types::Json;
 use sqlx::{Database, Encode, QueryBuilder};
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -160,6 +161,7 @@ async fn test_repo_component_id_unique(
         vec![],
         HashMap::new(),
         owner1.clone(),
+        HashMap::new(),
     )
     .unwrap();
 
@@ -209,6 +211,7 @@ async fn test_repo_component_name_unique_in_namespace(
         vec![],
         HashMap::new(),
         owner1.clone(),
+        HashMap::new(),
     )
     .unwrap();
     let component2 = Component::new(
@@ -220,6 +223,7 @@ async fn test_repo_component_name_unique_in_namespace(
         vec![],
         HashMap::new(),
         owner2.clone(),
+        HashMap::new(),
     )
     .unwrap();
 
@@ -274,6 +278,7 @@ async fn test_repo_component_find_by_names(
         vec![],
         HashMap::new(),
         DefaultComponentOwner,
+        HashMap::new(),
     )
     .unwrap();
 
@@ -294,6 +299,7 @@ async fn test_repo_component_find_by_names(
         vec![],
         HashMap::new(),
         DefaultComponentOwner,
+        HashMap::new(),
     )
     .unwrap();
 
@@ -315,6 +321,7 @@ async fn test_repo_component_find_by_names(
                 .to_vec(),
             Some(0),
             None,
+            Json(HashMap::new()),
         )
         .await
         .unwrap();
@@ -545,6 +552,7 @@ async fn test_repo_component_delete(
         vec![],
         HashMap::new(),
         DefaultComponentOwner,
+        HashMap::new(),
     )
     .unwrap();
 
@@ -605,6 +613,7 @@ async fn test_repo_component_constraints(
         vec![],
         HashMap::new(),
         owner1.clone(),
+        HashMap::new(),
     )
     .unwrap();
 
@@ -698,6 +707,7 @@ async fn test_default_plugin_repo(
         vec![],
         HashMap::new(),
         owner.clone(),
+        HashMap::new(),
     )
     .unwrap();
     let component2 = Component::new(
@@ -709,6 +719,7 @@ async fn test_default_plugin_repo(
         vec![],
         HashMap::new(),
         owner.clone(),
+        HashMap::new(),
     )
     .unwrap();
 
@@ -847,6 +858,7 @@ async fn test_default_component_plugin_installation(
         vec![],
         HashMap::new(),
         component_owner.clone(),
+        HashMap::new(),
     )
     .unwrap();
 
@@ -872,6 +884,7 @@ async fn test_default_component_plugin_installation(
     component_repo
         .create(&ComponentRecord::try_from_model(component1.clone(), true).unwrap())
         .await?;
+
     plugin_repo.create(&plugin1_row).await?;
 
     let target1 = ComponentPluginInstallationTarget {

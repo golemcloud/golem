@@ -55,15 +55,22 @@ mod internal {
         >,
         Input::Position: GetSourcePosition,
     {
-        spaces().with(
-            sep_by(rib_expr(), char(';').skip(spaces())).map(|expressions: Vec<Expr>| {
-                if expressions.len() == 1 {
-                    expressions.first().unwrap().clone()
+        spaces().with(sep_by(rib_expr(), char(';').skip(spaces())).and_then(
+            |expressions: Vec<Expr>| {
+                if expressions.len() >= 2 {
+                    Ok(if expressions.len() == 1 {
+                        expressions.first().unwrap().clone()
+                    } else {
+                        Expr::expr_block(expressions)
+                    })
                 } else {
-                    Expr::expr_block(expressions)
+                    Err(RibParseError::Message(
+                        "block should have at least two elements separated by semicolons"
+                            .to_string(),
+                    ))
                 }
-            }),
-        )
+            },
+        ))
     }
 }
 #[cfg(test)]

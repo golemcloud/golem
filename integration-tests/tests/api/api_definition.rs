@@ -59,9 +59,7 @@ async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
                             r#"
                                 let status: u64 = 200;
                                 {
-                                    headers: {
-                                        {ContentType: "json", userid: "foo"}
-                                   },
+                                    headers: {ContentType: "json", userid: "foo"},
                                    body: "foo",
                                    status: status
                                 }
@@ -139,9 +137,7 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
                             r#"
                                 let status: u64 = 201;
                                 {
-                                    headers: {
-                                        {ContentType: "json", userid: "foo"}
-                                   },
+                                    headers: {ContentType: "json", userid: "foo"},
                                    body: "bar",
                                    status: status
                                 }
@@ -178,9 +174,7 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
                                 r#"
                                 let status: u64 = 200;
                                 {
-                                    headers: {
-                                        {ContentType: "json", userid: "foo"}
-                                   },
+                                    headers: {ContentType: "json", userid: "foo"},
                                    body: "foo",
                                    status: status
                                 }
@@ -206,9 +200,7 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
                                 r#"
                                 let status: u64 = 200;
                                 {
-                                    headers: {
-                                        {ContentType: "json", userid: "foo"}
-                                   },
+                                    headers: {ContentType: "json", userid: "foo"},
                                    body: "foo",
                                    status: status
                                 }
@@ -342,9 +334,7 @@ async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
                             r#"
                                 let status: u64 = 201;
                                 {
-                                    headers: {
-                                        {ContentType: "json", userid: "foo"}
-                                   },
+                                    headers: { ContentType: "json", userid: "foo" },
                                    body: "bar",
                                    status: status
                                 }
@@ -387,9 +377,7 @@ async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
                             r#"
                                 let status: u64 = 404;
                                 {
-                                    headers: {
-                                        {ContentType: "json", userid: "foo"}
-                                   },
+                                    headers: {ContentType: "json", userid: "foo"},
                                    body: "bar",
                                    status: status
                                 }

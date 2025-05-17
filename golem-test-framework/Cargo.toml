@@ -50,6 +50,7 @@ tonic = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+wasm-metadata = { version = "0.227.1" }
 
 [dev-dependencies]
 test-r = { workspace = true }

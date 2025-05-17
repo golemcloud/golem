@@ -331,6 +331,7 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             ComponentType::Durable,
             Some(&files),
             None,
+            &HashMap::new(),
         )
         .await
         .unwrap();
@@ -342,6 +343,7 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             ComponentType::Ephemeral,
             None,
             None,
+            &HashMap::new(),
         )
         .await
         .unwrap();
@@ -353,6 +355,7 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             ComponentType::Durable,
             None,
             Some(&HashMap::from([link.clone()])),
+            &HashMap::new(),
         )
         .await
         .unwrap();

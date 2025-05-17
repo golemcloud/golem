@@ -56,9 +56,9 @@ fn path_parser(input: &str) -> IResult<&str, Vec<PathPattern>> {
     let indexed_patterns = patterns
         .into_iter()
         .map(|pattern| match pattern {
-            ParsedPattern::Literal(literal) => PathPattern::literal(literal),
-            ParsedPattern::Var(var) => PathPattern::var(var),
-            ParsedPattern::CatchAllVar(var) => PathPattern::catch_all_var(var),
+            ParsedPattern::Literal(literal) => PathPattern::literal(literal.trim()),
+            ParsedPattern::Var(var) => PathPattern::var(var.trim()),
+            ParsedPattern::CatchAllVar(var) => PathPattern::catch_all_var(var.trim()),
         })
         .collect();
 
@@ -71,7 +71,7 @@ fn query_parser(input: &str) -> IResult<&str, Vec<QueryInfo>> {
 
 fn query_param_parser(input: &str) -> IResult<&str, QueryInfo> {
     map(place_holder_parser::parse_place_holder, |x| QueryInfo {
-        key_name: x.to_string(),
+        key_name: x.trim().to_string(),
     })(input)
 }
 

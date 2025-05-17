@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use tempfile::TempDir;
 use tracing::{Instrument, Level};
 
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
@@ -87,6 +88,7 @@ pub struct CliTestDependencies {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
+    component_temp_directory: Arc<TempDir>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -455,6 +457,7 @@ impl CliTestDependencies {
             initial_component_files_service,
             plugin_wasm_files_service,
             component_directory: params.component_directory.clone().into(),
+            component_temp_directory: Arc::new(TempDir::new().unwrap()),
         }
     }
 
@@ -633,6 +636,7 @@ impl CliTestDependencies {
             blob_storage,
             plugin_wasm_files_service,
             initial_component_files_service,
+            component_temp_directory: Arc::new(TempDir::new().unwrap()),
         }
     }
 
@@ -783,6 +787,7 @@ impl CliTestDependencies {
             initial_component_files_service,
             plugin_wasm_files_service,
             component_directory: Path::new(&params.component_directory).to_path_buf(),
+            component_temp_directory: Arc::new(TempDir::new().unwrap()),
         }
     }
 
@@ -946,6 +951,7 @@ impl CliTestDependencies {
             blob_storage,
             plugin_wasm_files_service,
             initial_component_files_service,
+            component_temp_directory: Arc::new(TempDir::new().unwrap()),
         }
     }
 
@@ -1052,6 +1058,7 @@ impl CliTestDependencies {
                     blob_storage,
                     plugin_wasm_files_service,
                     initial_component_files_service,
+                    component_temp_directory: Arc::new(TempDir::new().unwrap()),
                 }
             }
             TestMode::Docker {
@@ -1150,6 +1157,10 @@ impl TestDependencies for CliTestDependencies {
         self.redis.clone()
     }
 
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+        self.blob_storage.clone()
+    }
+
     fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
         self.redis_monitor.clone()
     }
@@ -1160,6 +1171,10 @@ impl TestDependencies for CliTestDependencies {
 
     fn component_directory(&self) -> &Path {
         &self.component_directory
+    }
+
+    fn component_temp_directory(&self) -> &Path {
+        self.component_temp_directory.path()
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService> {
@@ -1178,10 +1193,6 @@ impl TestDependencies for CliTestDependencies {
 
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         self.worker_executor_cluster.clone()
-    }
-
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
-        self.blob_storage.clone()
     }
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {

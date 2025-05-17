@@ -666,7 +666,13 @@ mod type_annotated_value {
         fn kind(&self) -> WasmTypeKind {
             let analysed_type = AnalysedType::try_from(&self.0)
                 .expect("Failed to retrieve AnalysedType from TypeAnnotatedValue");
-            analysed_type.kind()
+            let kind = analysed_type.kind();
+            if kind == WasmTypeKind::Unsupported {
+                // Fake kind to avoid the printer to panic
+                WasmTypeKind::String
+            } else {
+                kind
+            }
         }
 
         fn make_bool(val: bool) -> Self {
@@ -1039,6 +1045,9 @@ mod type_annotated_value {
         fn unwrap_string(&self) -> Cow<str> {
             match self.0.clone() {
                 TypeAnnotatedValue::Str(value) => Cow::Owned(value.clone()),
+                TypeAnnotatedValue::Handle(handle) => {
+                    Cow::Owned(format!("{}/{}", handle.uri, handle.resource_id))
+                }
                 _ => panic!("Expected string, found {:?}", self),
             }
         }
