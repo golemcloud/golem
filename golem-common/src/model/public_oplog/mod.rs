@@ -35,7 +35,7 @@ use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
@@ -260,6 +260,7 @@ pub struct ImportedFunctionInvokedParameters {
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[wit_transparent]
 pub struct StringAttributeValue {
     pub value: String,
 }
@@ -291,8 +292,17 @@ pub struct PublicLocalSpanData {
     pub start: Timestamp,
     pub parent_id: Option<SpanId>,
     pub linked_context: Option<u64>,
-    pub attributes: HashMap<String, PublicAttributeValue>,
+    pub attributes: Vec<PublicAttribute>,
     pub inherited: bool,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicAttribute {
+    pub key: String,
+    pub value: PublicAttributeValue,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
@@ -547,7 +557,7 @@ pub struct StartSpanParameters {
     pub span_id: SpanId,
     pub parent_id: Option<SpanId>,
     pub linked_context: Option<SpanId>,
-    pub attributes: HashMap<String, PublicAttributeValue>,
+    pub attributes: Vec<PublicAttribute>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
@@ -718,12 +728,14 @@ impl PublicOplogEntry {
     }
 
     fn span_attribute_match(
-        attributes: &HashMap<String, PublicAttributeValue>,
+        attributes: &Vec<PublicAttribute>,
         path_stack: &[String],
         query_path: &[String],
         query: &LeafQuery,
     ) -> bool {
-        for (key, value) in attributes {
+        for attr in attributes {
+            let key = &attr.key;
+            let value = &attr.value;
             let mut new_path: Vec<String> = path_stack.to_vec();
             new_path.push(key.clone());
 
@@ -951,8 +963,10 @@ impl PublicOplogEntry {
                     || Self::string_match(&params.span_id.to_string(), &[], query_path, query)
             }
             PublicOplogEntry::SetSpanAttribute(params) => {
-                let mut attributes = HashMap::new();
-                attributes.insert(params.key.clone(), params.value.clone());
+                let attributes = vec![PublicAttribute {
+                    key: params.key.clone(),
+                    value: params.value.clone(),
+                }];
                 Self::string_match("setspanattribute", &[], query_path, query)
                     || Self::string_match("set-span-attribute", &[], query_path, query)
                     || Self::string_match(&params.key, &[], query_path, query)

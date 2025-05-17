@@ -22,12 +22,12 @@ use crate::model::public_oplog::{
     ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
     OplogCursor, PendingUpdateParameters, PendingWorkerInvocationParameters,
-    PluginInstallationDescription, PublicAttributeValue, PublicDurableFunctionType,
-    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicRetryConfig,
-    PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters,
-    RevertParameters, SetSpanAttributeParameters, SnapshotBasedUpdateParameters,
-    StartSpanParameters, StringAttributeValue, SuccessfulUpdateParameters, TimestampParameter,
-    WriteRemoteBatchedParameters,
+    PluginInstallationDescription, PublicAttribute, PublicAttributeValue,
+    PublicDurableFunctionType, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry,
+    PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
+    ResourceParameters, RevertParameters, SetSpanAttributeParameters,
+    SnapshotBasedUpdateParameters, StartSpanParameters, StringAttributeValue,
+    SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::Empty;
@@ -450,8 +450,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 attributes: start
                     .attributes
                     .into_iter()
-                    .map(|(key, value)| value.try_into().map(|v| (key, v)))
-                    .collect::<Result<HashMap<String, PublicAttributeValue>, String>>()?,
+                    .map(|(key, value)| value.try_into().map(|v| PublicAttribute { key, value: v }))
+                    .collect::<Result<Vec<PublicAttribute>, String>>()?,
             })),
             Entry::FinishSpan(finish) => Ok(PublicOplogEntry::FinishSpan(FinishSpanParameters {
                 timestamp: finish.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -838,7 +838,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             attributes: start
                                 .attributes
                                 .into_iter()
-                                .map(|(key, value)| (key, value.into()))
+                                .map(|attr| (attr.key, attr.value.into()))
                                 .collect(),
                         }
                     ))
@@ -1160,8 +1160,8 @@ fn encode_public_span_data(spans: Vec<InvocationSpan>) -> Result<Vec<Vec<PublicS
                     attributes: span
                         .attributes
                         .into_iter()
-                        .map(|(k, v)| v.try_into().map(|v| (k, v)))
-                        .collect::<Result<HashMap<_, _>, _>>()?,
+                        .map(|(k, v)| v.try_into().map(|v| PublicAttribute { key: k, value: v }))
+                        .collect::<Result<Vec<_>, _>>()?,
                     inherited: span.inherited,
                 });
                 current.insert(0, span_data);
@@ -1213,7 +1213,7 @@ fn decode_public_span_data(
                             attributes: local_span_data
                                 .attributes
                                 .iter()
-                                .map(|(k, v)| (k.clone(), v.clone().into()))
+                                .map(|attr| (attr.key.clone(), attr.value.clone().into()))
                                 .collect(),
                             inherited: local_span_data.inherited,
                         })

@@ -52,7 +52,7 @@ use golem_common::model::public_oplog::{
     ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
     PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
-    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
+    PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
     PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters,
     SetSpanAttributeParameters, SnapshotBasedUpdateParameters, StartSpanParameters,
     SuccessfulUpdateParameters, TimestampParameter,
@@ -838,7 +838,13 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                 span_id,
                 parent_id,
                 linked_context: linked_context_id,
-                attributes: attributes.into_iter().map(|(k, v)| (k, v.into())).collect(),
+                attributes: attributes
+                    .into_iter()
+                    .map(|(k, v)| PublicAttribute {
+                        key: k,
+                        value: v.into(),
+                    })
+                    .collect(),
             })),
             OplogEntry::FinishSpan { timestamp, span_id } => {
                 Ok(PublicOplogEntry::FinishSpan(FinishSpanParameters {
@@ -1729,7 +1735,10 @@ fn encode_span_data(spans: &[SpanData]) -> Vec<Vec<PublicSpanData>> {
                     linked_context,
                     attributes: attributes
                         .iter()
-                        .map(|(k, v)| (k.clone(), v.clone().into()))
+                        .map(|(k, v)| PublicAttribute {
+                            key: k.clone(),
+                            value: v.clone().into(),
+                        })
                         .collect(),
                     inherited: *inherited,
                 });
