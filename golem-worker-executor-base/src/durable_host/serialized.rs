@@ -19,7 +19,10 @@ use crate::services::worker_proxy::WorkerProxyError;
 use anyhow::anyhow;
 use bincode::{Decode, Encode};
 use chrono::{DateTime, Timelike, Utc};
+use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
+use golem_wasm_rpc::{IntoValue, Value};
 use golem_wasm_rpc_derive::IntoValue;
+use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
 use wasmtime_wasi::bindings::sockets::ip_name_lookup::IpAddress;
@@ -93,7 +96,7 @@ impl From<DateTime<Utc>> for SerializableDateTime {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum SerializableError {
     Generic { message: String },
     FsError { code: u8 },
@@ -102,6 +105,53 @@ pub enum SerializableError {
     Rpc { error: RpcError },
     WorkerProxy { error: WorkerProxyError },
     Rdbms { error: RdbmsError },
+}
+
+impl Display for SerializableError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SerializableError::Generic { message } => write!(f, "{}", message),
+            SerializableError::FsError { code } => {
+                let decoded = decode_fs_error(*code);
+                match decoded {
+                    Some(error_code) => {
+                        write!(f, "File system error: {}", error_code)
+                    }
+                    None => {
+                        write!(f, "File system error: unknown error code {}", code)
+                    }
+                }
+            }
+            SerializableError::Golem { error } => write!(f, "{error}"),
+            SerializableError::SocketError { code } => {
+                let decoded = decode_socket_error(*code);
+                match decoded {
+                    Some(error_code) => {
+                        write!(f, "Socket error: {}", error_code)
+                    }
+                    None => {
+                        write!(f, "Socket error: unknown error code {}", code)
+                    }
+                }
+            }
+            SerializableError::Rpc { error } => write!(f, "Rpc error: {error}"),
+            SerializableError::WorkerProxy { error } => write!(f, "Worker service error: {error}"),
+            SerializableError::Rdbms { error } => write!(f, "RDBMS error: {error}"),
+        }
+    }
+}
+
+// We simply encode SerializableErrors for the public oplog as string. This simplified
+// significantly the size of each ValueAndType oplog entry and it is also necessary
+// because currently AnalysedType does not support recursion and GolemError is recursive.
+impl IntoValue for SerializableError {
+    fn into_value(self) -> Value {
+        Value::String(self.to_string())
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::str()
+    }
 }
 
 fn get_fs_error_code(value: &filesystem::types::ErrorCode) -> u8 {

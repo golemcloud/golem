@@ -32,7 +32,6 @@ use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, Retry
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, WitValue};
-use golem_wasm_rpc_derive::IntoValue;
 use http::Uri;
 use std::collections::HashMap;
 use std::error::Error;
@@ -93,7 +92,7 @@ pub trait WorkerProxy: Send + Sync {
     ) -> Result<(), WorkerProxyError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum WorkerProxyError {
     BadRequest(Vec<String>),
     Unauthorized(String),

@@ -22,10 +22,9 @@ use golem_api_grpc::proto::golem;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use golem_wasm_rpc::wasmtime::EncodingError;
-use golem_wasm_rpc_derive::IntoValue;
 use tonic::Status;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum GolemError {
     InvalidRequest {
         details: String,

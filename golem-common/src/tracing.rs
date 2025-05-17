@@ -578,9 +578,7 @@ pub(crate) mod format {
             let s = std::str::from_utf8(buf)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-            self.fmt_write
-                .write_str(s)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            self.fmt_write.write_str(s).map_err(io::Error::other)?;
 
             Ok(s.len())
         }
