@@ -22,18 +22,19 @@ golem-common = { path = "../golem-common", version = "=0.0.0" }
 golem-rib = { path = "../golem-rib", version = "=0.0.0" }
 golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host", "extra-bindings"] }
+golem-wasm-rpc-derive = { path = "../wasm-rpc-derive", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 async-lock = "3.4.0"
 async-mutex = "1.4.0"
 async-dropper-simple = { version = "0.2.6", features = ["no-default-bound", "tokio"] }
 async-recursion = { workspace = true }
-async-scoped = { version = "0.9.0", features = [ "use-tokio" ] }
+async-scoped = { version = "0.9.0", features = ["use-tokio"] }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bigdecimal = { workspace = true }
-bit-vec = { version = "0.6.3", features = ["serde"] }
+bit-vec = { workspace = true }
 bytes = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = "3.4.2"                              # keep in sync with wasmtime
@@ -60,7 +61,7 @@ log = "0.4.26"
 mac_address = { version = "1.1.8", features = ["serde"] }
 md5 = "0.7.0"
 metrohash = "1.0.7"
-nonempty-collections = { workspace = true}
+nonempty-collections = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }

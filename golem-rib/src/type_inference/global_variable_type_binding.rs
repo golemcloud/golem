@@ -114,7 +114,7 @@ fn override_type(expr: &mut Expr, type_spec: &GlobalVariableTypeSpec) {
                 ..
             } => {
                 if let Some(prev_ptr) = previous_expr_ptr {
-                    if (inner_expr.as_ref() as *const _) == prev_ptr {
+                    if std::ptr::eq(inner_expr.as_ref(), prev_ptr) {
                         if current_path.is_empty() {
                             *inferred_type = type_spec.inferred_type.clone();
                             previous_expr_ptr = None;

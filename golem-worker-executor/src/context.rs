@@ -328,22 +328,20 @@ impl WorkerCtx for Context {
     async fn create(
         owned_worker_id: OwnedWorkerId,
         component_metadata: ComponentMetadata<DefaultGolemTypes>,
-        promise_service: Arc<dyn PromiseService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
-        worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
-        >,
-        key_value_service: Arc<dyn KeyValueService + Send + Sync>,
-        blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
+        promise_service: Arc<dyn PromiseService>,
+        worker_service: Arc<dyn WorkerService>,
+        worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
+        key_value_service: Arc<dyn KeyValueService>,
+        blob_store_service: Arc<dyn BlobStoreService>,
+        rdbms_service: Arc<dyn RdbmsService>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         _active_workers: Arc<ActiveWorkers<Context>>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        oplog: Arc<dyn Oplog + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
+        oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Context>>,
-        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        rpc: Arc<dyn Rpc + Send + Sync>,
-        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        scheduler_service: Arc<dyn SchedulerService>,
+        rpc: Arc<dyn Rpc>,
+        worker_proxy: Arc<dyn WorkerProxy>,
         component_service: Arc<dyn ComponentService<DefaultGolemTypes>>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
@@ -351,7 +349,7 @@ impl WorkerCtx for Context {
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
-        worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
+        worker_fork: Arc<dyn WorkerForkService>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -415,11 +413,11 @@ impl WorkerCtx for Context {
         DurableWorkerCtx::<Context>::is_exit(error)
     }
 
-    fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+    fn rpc(&self) -> Arc<dyn Rpc> {
         self.durable_ctx.rpc()
     }
 
-    fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
+    fn worker_proxy(&self) -> Arc<dyn WorkerProxy> {
         self.durable_ctx.worker_proxy()
     }
 
@@ -427,7 +425,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.component_service()
     }
 
-    fn worker_fork(&self) -> Arc<dyn WorkerForkService + Send + Sync> {
+    fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.durable_ctx.worker_fork()
     }
 

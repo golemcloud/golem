@@ -48,7 +48,7 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 
 #[async_trait]
-pub trait WorkerForkService {
+pub trait WorkerForkService: Send + Sync {
     async fn fork(
         &self,
         source_worker_id: &OwnedWorkerId,
@@ -65,32 +65,31 @@ pub trait WorkerForkService {
 }
 
 pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
-    pub rpc: Arc<dyn Rpc + Send + Sync>,
+    pub rpc: Arc<dyn Rpc>,
     pub active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
     pub engine: Arc<wasmtime::Engine>,
     pub linker: Arc<wasmtime::component::Linker<Ctx>>,
     pub runtime: Handle,
     pub component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
-    pub shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
-    pub worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
-    pub worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
-    pub worker_enumeration_service:
-        Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
+    pub shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
+    pub worker_service: Arc<dyn worker::WorkerService>,
+    pub worker_proxy: Arc<dyn WorkerProxy>,
+    pub worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
     pub running_worker_enumeration_service:
-        Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync>,
-    pub promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
+        Arc<dyn worker_enumeration::RunningWorkerEnumerationService>,
+    pub promise_service: Arc<dyn promise::PromiseService>,
     pub golem_config: Arc<golem_config::GolemConfig>,
-    pub shard_service: Arc<dyn ShardService + Send + Sync>,
-    pub key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
-    pub blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
-    pub rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
-    pub oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
-    pub scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
-    pub worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
+    pub shard_service: Arc<dyn ShardService>,
+    pub key_value_service: Arc<dyn key_value::KeyValueService>,
+    pub blob_store_service: Arc<dyn blob_store::BlobStoreService>,
+    pub rdbms_service: Arc<dyn rdbms::RdbmsService>,
+    pub oplog_service: Arc<dyn oplog::OplogService>,
+    pub scheduler_service: Arc<dyn scheduler::SchedulerService>,
+    pub worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
     pub events: Arc<Events>,
     pub file_loader: Arc<FileLoader>,
     pub plugins: Arc<dyn Plugins<Ctx::Types>>,
-    pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+    pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     pub extra_deps: Ctx::ExtraDeps,
 }
 
@@ -119,15 +118,13 @@ impl<Ctx: WorkerCtx> HasConfig for DefaultWorkerFork<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasWorkerService for DefaultWorkerFork<Ctx> {
-    fn worker_service(&self) -> Arc<dyn worker::WorkerService + Send + Sync> {
+    fn worker_service(&self) -> Arc<dyn worker::WorkerService> {
         self.worker_service.clone()
     }
 }
 
 impl<Ctx: WorkerCtx> HasWorkerEnumerationService for DefaultWorkerFork<Ctx> {
-    fn worker_enumeration_service(
-        &self,
-    ) -> Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync> {
+    fn worker_enumeration_service(&self) -> Arc<dyn worker_enumeration::WorkerEnumerationService> {
         self.worker_enumeration_service.clone()
     }
 }
@@ -135,13 +132,13 @@ impl<Ctx: WorkerCtx> HasWorkerEnumerationService for DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> HasRunningWorkerEnumerationService for DefaultWorkerFork<Ctx> {
     fn running_worker_enumeration_service(
         &self,
-    ) -> Arc<dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync> {
+    ) -> Arc<dyn worker_enumeration::RunningWorkerEnumerationService> {
         self.running_worker_enumeration_service.clone()
     }
 }
 
 impl<Ctx: WorkerCtx> HasPromiseService for DefaultWorkerFork<Ctx> {
-    fn promise_service(&self) -> Arc<dyn promise::PromiseService + Send + Sync> {
+    fn promise_service(&self) -> Arc<dyn promise::PromiseService> {
         self.promise_service.clone()
     }
 }
@@ -161,43 +158,43 @@ impl<Ctx: WorkerCtx> HasWasmtimeEngine<Ctx> for DefaultWorkerFork<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasKeyValueService for DefaultWorkerFork<Ctx> {
-    fn key_value_service(&self) -> Arc<dyn key_value::KeyValueService + Send + Sync> {
+    fn key_value_service(&self) -> Arc<dyn key_value::KeyValueService> {
         self.key_value_service.clone()
     }
 }
 
 impl<Ctx: WorkerCtx> HasRdbmsService for DefaultWorkerFork<Ctx> {
-    fn rdbms_service(&self) -> Arc<dyn rdbms::RdbmsService + Send + Sync> {
+    fn rdbms_service(&self) -> Arc<dyn rdbms::RdbmsService> {
         self.rdbms_service.clone()
     }
 }
 
 impl<Ctx: WorkerCtx> HasBlobStoreService for DefaultWorkerFork<Ctx> {
-    fn blob_store_service(&self) -> Arc<dyn blob_store::BlobStoreService + Send + Sync> {
+    fn blob_store_service(&self) -> Arc<dyn blob_store::BlobStoreService> {
         self.blob_store_service.clone()
     }
 }
 
 impl<Ctx: WorkerCtx> HasSchedulerService for DefaultWorkerFork<Ctx> {
-    fn scheduler_service(&self) -> Arc<dyn scheduler::SchedulerService + Send + Sync> {
+    fn scheduler_service(&self) -> Arc<dyn scheduler::SchedulerService> {
         self.scheduler_service.clone()
     }
 }
 
 impl<Ctx: WorkerCtx> HasOplogService for DefaultWorkerFork<Ctx> {
-    fn oplog_service(&self) -> Arc<dyn oplog::OplogService + Send + Sync> {
+    fn oplog_service(&self) -> Arc<dyn oplog::OplogService> {
         self.oplog_service.clone()
     }
 }
 
 impl<Ctx: WorkerCtx> HasWorkerForkService for DefaultWorkerFork<Ctx> {
-    fn worker_fork_service(&self) -> Arc<dyn WorkerForkService + Send + Sync> {
+    fn worker_fork_service(&self) -> Arc<dyn WorkerForkService> {
         Arc::new(self.clone())
     }
 }
 
 impl<Ctx: WorkerCtx> HasRpc for DefaultWorkerFork<Ctx> {
-    fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+    fn rpc(&self) -> Arc<dyn Rpc> {
         self.rpc.clone()
     }
 }
@@ -209,25 +206,25 @@ impl<Ctx: WorkerCtx> HasExtraDeps<Ctx> for DefaultWorkerFork<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasShardService for DefaultWorkerFork<Ctx> {
-    fn shard_service(&self) -> Arc<dyn shard::ShardService + Send + Sync> {
+    fn shard_service(&self) -> Arc<dyn shard::ShardService> {
         self.shard_service.clone()
     }
 }
 
 impl<Ctx: WorkerCtx> HasShardManagerService for DefaultWorkerFork<Ctx> {
-    fn shard_manager_service(&self) -> Arc<dyn shard_manager::ShardManagerService + Send + Sync> {
+    fn shard_manager_service(&self) -> Arc<dyn shard_manager::ShardManagerService> {
         self.shard_manager_service.clone()
     }
 }
 
 impl<Ctx: WorkerCtx> HasWorkerActivator<Ctx> for DefaultWorkerFork<Ctx> {
-    fn worker_activator(&self) -> Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync> {
+    fn worker_activator(&self) -> Arc<dyn worker_activator::WorkerActivator<Ctx>> {
         self.worker_activator.clone()
     }
 }
 
 impl<Ctx: WorkerCtx> HasWorkerProxy for DefaultWorkerFork<Ctx> {
-    fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
+    fn worker_proxy(&self) -> Arc<dyn WorkerProxy> {
         self.worker_proxy.clone()
     }
 }
@@ -245,7 +242,7 @@ impl<Ctx: WorkerCtx> HasPlugins<Ctx::Types> for DefaultWorkerFork<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for DefaultWorkerFork<Ctx> {
-    fn oplog_processor_plugin(&self) -> Arc<dyn OplogProcessorPlugin + Send + Sync> {
+    fn oplog_processor_plugin(&self) -> Arc<dyn OplogProcessorPlugin> {
         self.oplog_processor_plugin.clone()
     }
 }
@@ -285,34 +282,32 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        rpc: Arc<dyn Rpc + Send + Sync>,
+        rpc: Arc<dyn Rpc>,
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
         component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
-        shard_manager_service: Arc<dyn shard_manager::ShardManagerService + Send + Sync>,
-        worker_service: Arc<dyn worker::WorkerService + Send + Sync>,
-        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
-        worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
-        >,
+        shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
+        worker_service: Arc<dyn worker::WorkerService>,
+        worker_proxy: Arc<dyn WorkerProxy>,
+        worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
         running_worker_enumeration_service: Arc<
-            dyn worker_enumeration::RunningWorkerEnumerationService + Send + Sync,
+            dyn worker_enumeration::RunningWorkerEnumerationService,
         >,
-        promise_service: Arc<dyn promise::PromiseService + Send + Sync>,
+        promise_service: Arc<dyn promise::PromiseService>,
         golem_config: Arc<golem_config::GolemConfig>,
-        shard_service: Arc<dyn ShardService + Send + Sync>,
-        key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
-        blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
-        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
-        oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
-        scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
-        worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx> + Send + Sync>,
+        shard_service: Arc<dyn ShardService>,
+        key_value_service: Arc<dyn key_value::KeyValueService>,
+        blob_store_service: Arc<dyn blob_store::BlobStoreService>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService>,
+        oplog_service: Arc<dyn oplog::OplogService>,
+        scheduler_service: Arc<dyn scheduler::SchedulerService>,
+        worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<Ctx::Types>>,
-        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -386,7 +381,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-    ) -> Result<Arc<dyn Oplog + Send + Sync>, GolemError> {
+    ) -> Result<Arc<dyn Oplog>, GolemError> {
         record_worker_call("fork");
 
         let (owned_source_worker_id, owned_target_worker_id) = self

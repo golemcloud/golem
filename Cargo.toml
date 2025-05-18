@@ -19,7 +19,8 @@ members = [
     "golem-worker-service",
     "integration-tests",
     "wasm-ast",
-    "wasm-rpc"
+    "wasm-rpc",
+    "wasm-rpc-derive"
 ]
 
 exclude = [
@@ -85,6 +86,7 @@ base64 = "0.22.1"
 bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bincode = { version = "=2.0.0-rc.3", features = ["serde"] }
 bincode_derive = { version = "=2.0.0-rc.3" }
+bit-vec = { version = "0.6.3", features = ["serde"] }
 bytes = "1.10.1"
 cap-std = "3.4.2" # keep in sync with wasmtime
 chrono = { version = "0.4.40", features = ["serde"] }
