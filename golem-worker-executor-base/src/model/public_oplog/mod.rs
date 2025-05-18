@@ -15,9 +15,7 @@
 pub mod wit;
 
 use crate::durable_host::http::serialized::{
-    SerializableDnsErrorPayload, SerializableErrorCode, SerializableFieldSizePayload,
-    SerializableHttpMethod, SerializableHttpRequest, SerializableResponse,
-    SerializableResponseHeaders, SerializableTlsAlertReceivedPayload,
+    SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
 };
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::serialized::{
@@ -29,7 +27,6 @@ use crate::durable_host::wasm_rpc::serialized::{
     SerializableScheduleInvocationRequest,
 };
 use crate::error::GolemError;
-use crate::model::InterruptKind;
 use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::plugins::Plugins;
@@ -37,10 +34,8 @@ use crate::services::rdbms::mysql::types as mysql_types;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::types as postgres_types;
 use crate::services::rdbms::postgres::PostgresType;
-use crate::services::rdbms::Error as RdbmsError;
 use crate::services::rdbms::RdbmsIntoValueAndType;
 use crate::services::rpc::RpcError;
-use crate::services::worker_proxy::WorkerProxyError;
 use crate::GolemTypes;
 use async_trait::async_trait;
 use bincode::Decode;
@@ -57,24 +52,20 @@ use golem_common::model::public_oplog::{
     ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
     PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
-    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
+    PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
     PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters,
     SetSpanAttributeParameters, SnapshotBasedUpdateParameters, StartSpanParameters,
     SuccessfulUpdateParameters, TimestampParameter,
 };
 use golem_common::model::{
-    ComponentId, ComponentVersion, Empty, IdempotencyKey, OwnedWorkerId, PromiseId, ShardId,
-    WorkerId, WorkerInvocation,
+    ComponentId, ComponentVersion, Empty, OwnedWorkerId, PromiseId, WorkerId, WorkerInvocation,
 };
 use golem_common::serialization::try_deserialize as core_try_deserialize;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_ast::analysis::analysed_type::{
-    case, field, list, option, r#enum, record, result, result_err, str, tuple, u16, u32, u64, u8,
-    unit_case, variant,
+    case, field, list, option, record, result, result_err, str, u64, unit_case, variant,
 };
-use golem_wasm_ast::analysis::{
-    AnalysedFunctionParameter, AnalysedType, NameOptionTypePair, TypeVariant,
-};
+use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedType};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{
     parse_type_annotated_value, IntoValue, IntoValueAndType, Value, ValueAndType, WitValue,
@@ -95,7 +86,7 @@ pub struct PublicOplogChunk {
 
 pub async fn get_public_oplog_chunk<T: GolemTypes>(
     component_service: Arc<dyn ComponentService<T>>,
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
+    oplog_service: Arc<dyn OplogService>,
     plugins: Arc<dyn Plugins<T>>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentVersion,
@@ -148,7 +139,7 @@ pub struct PublicOplogSearchResult {
 
 pub async fn search_public_oplog<T: GolemTypes>(
     component_service: Arc<dyn ComponentService<T>>,
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
+    oplog_service: Arc<dyn OplogService>,
     plugin_service: Arc<dyn Plugins<T>>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentVersion,
@@ -202,7 +193,7 @@ pub async fn search_public_oplog<T: GolemTypes>(
 }
 
 pub async fn find_component_version_at(
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
+    oplog_service: Arc<dyn OplogService>,
     owned_worker_id: &OwnedWorkerId,
     start: OplogIndex,
 ) -> Result<ComponentVersion, GolemError> {
@@ -232,7 +223,7 @@ pub async fn find_component_version_at(
 pub trait PublicOplogEntryOps<T: GolemTypes>: Sized {
     async fn from_oplog_entry(
         value: OplogEntry,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService<T>>,
         plugins: Arc<dyn Plugins<T>>,
         owned_worker_id: &OwnedWorkerId,
@@ -244,7 +235,7 @@ pub trait PublicOplogEntryOps<T: GolemTypes>: Sized {
 impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
     async fn from_oplog_entry(
         value: OplogEntry,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService<T>>,
         plugins: Arc<dyn Plugins<T>>,
         owned_worker_id: &OwnedWorkerId,
@@ -847,7 +838,13 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                 span_id,
                 parent_id,
                 linked_context: linked_context_id,
-                attributes: attributes.into_iter().map(|(k, v)| (k, v.into())).collect(),
+                attributes: attributes
+                    .into_iter()
+                    .map(|(k, v)| PublicAttribute {
+                        key: k,
+                        value: v.into(),
+                    })
+                    .collect(),
             })),
             OplogEntry::FinishSpan { timestamp, span_id } => {
                 Ok(PublicOplogEntry::FinishSpan(FinishSpanParameters {
@@ -1644,842 +1641,6 @@ fn encode_host_function_response_as_value(
     }
 }
 
-impl IntoValue for SerializableError {
-    fn into_value(self) -> Value {
-        match self {
-            SerializableError::Generic { message } => Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(message.into_value())),
-            },
-            SerializableError::FsError { code } => Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(code.into_value())),
-            },
-            SerializableError::Golem { error } => Value::Variant {
-                case_idx: 2,
-                case_value: Some(Box::new(error.into_value())),
-            },
-            SerializableError::SocketError { code } => Value::Variant {
-                case_idx: 3,
-                case_value: Some(Box::new(code.into_value())),
-            },
-            SerializableError::Rpc { error } => Value::Variant {
-                case_idx: 4,
-                case_value: Some(Box::new(error.into_value())),
-            },
-            SerializableError::WorkerProxy { error } => Value::Variant {
-                case_idx: 5,
-                case_value: Some(Box::new(error.into_value())),
-            },
-            SerializableError::Rdbms { error } => Value::Variant {
-                case_idx: 6,
-                case_value: Some(Box::new(error.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::Variant(TypeVariant {
-            cases: vec![
-                NameOptionTypePair {
-                    name: "Generic".to_string(),
-                    typ: Some(String::get_type()),
-                },
-                NameOptionTypePair {
-                    name: "FsError".to_string(),
-                    typ: Some(u8::get_type()),
-                },
-                NameOptionTypePair {
-                    name: "Golem".to_string(),
-                    typ: Some(GolemError::get_type()),
-                },
-                NameOptionTypePair {
-                    name: "SocketError".to_string(),
-                    typ: Some(u8::get_type()),
-                },
-                NameOptionTypePair {
-                    name: "Rpc".to_string(),
-                    typ: Some(RpcError::get_type()),
-                },
-                NameOptionTypePair {
-                    name: "WorkerProxy".to_string(),
-                    typ: Some(WorkerProxyError::get_type()),
-                },
-                NameOptionTypePair {
-                    name: "Rdbms".to_string(),
-                    typ: Some(RdbmsError::get_type()),
-                },
-            ],
-        })
-    }
-}
-
-impl IntoValue for SerializableStreamError {
-    fn into_value(self) -> Value {
-        match self {
-            SerializableStreamError::Closed => Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            SerializableStreamError::LastOperationFailed(error) => Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(error.into_value())),
-            },
-            SerializableStreamError::Trap(error) => Value::Variant {
-                case_idx: 2,
-                case_value: Some(Box::new(error.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::Variant(TypeVariant {
-            cases: vec![
-                NameOptionTypePair {
-                    name: "Closed".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "LastOperationFailed".to_string(),
-                    typ: Some(SerializableError::get_type()),
-                },
-                NameOptionTypePair {
-                    name: "Trap".to_string(),
-                    typ: Some(SerializableError::get_type()),
-                },
-            ],
-        })
-    }
-}
-
-impl IntoValue for RpcError {
-    fn into_value(self) -> Value {
-        match self {
-            RpcError::ProtocolError { details } => Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(details.into_value())),
-            },
-            RpcError::Denied { details } => Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(details.into_value())),
-            },
-            RpcError::NotFound { details } => Value::Variant {
-                case_idx: 2,
-                case_value: Some(Box::new(details.into_value())),
-            },
-            RpcError::RemoteInternalError { details } => Value::Variant {
-                case_idx: 3,
-                case_value: Some(Box::new(details.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::Variant(TypeVariant {
-            cases: vec![
-                NameOptionTypePair {
-                    name: "ProtocolError".to_string(),
-                    typ: Some(String::get_type()),
-                },
-                NameOptionTypePair {
-                    name: "Denied".to_string(),
-                    typ: Some(String::get_type()),
-                },
-                NameOptionTypePair {
-                    name: "NotFound".to_string(),
-                    typ: Some(String::get_type()),
-                },
-                NameOptionTypePair {
-                    name: "RemoteInternalError".to_string(),
-                    typ: Some(String::get_type()),
-                },
-            ],
-        })
-    }
-}
-
-impl IntoValue for SerializableResponse {
-    fn into_value(self) -> Value {
-        match self {
-            SerializableResponse::Pending => Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            SerializableResponse::HeadersReceived(headers) => Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(headers.into_value())),
-            },
-            SerializableResponse::HttpError(error_code) => Value::Variant {
-                case_idx: 2,
-                case_value: Some(Box::new(error_code.into_value())),
-            },
-            SerializableResponse::InternalError(error) => Value::Variant {
-                case_idx: 3,
-                case_value: Some(Box::new(error.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::Variant(TypeVariant {
-            cases: vec![
-                NameOptionTypePair {
-                    name: "Pending".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "HeadersReceived".to_string(),
-                    typ: Some(SerializableResponseHeaders::get_type()),
-                },
-                NameOptionTypePair {
-                    name: "HttpError".to_string(),
-                    typ: Some(SerializableErrorCode::get_type()),
-                },
-                NameOptionTypePair {
-                    name: "InternalError".to_string(),
-                    typ: Some(Option::<SerializableError>::get_type()),
-                },
-            ],
-        })
-    }
-}
-
-impl IntoValue for SerializableResponseHeaders {
-    fn into_value(self) -> Value {
-        let SerializableResponseHeaders { status, headers } = self;
-        let headers: HashMap<String, String> = headers
-            .into_iter()
-            .map(|(k, v)| (k, String::from_utf8_lossy(&v).to_string()))
-            .collect();
-        Value::Record(vec![status.into_value(), headers.into_value()])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("status", u16()),
-            field("headers", HashMap::<String, String>::get_type()),
-        ])
-    }
-}
-
-impl IntoValue for SerializableErrorCode {
-    fn into_value(self) -> Value {
-        match self {
-            SerializableErrorCode::DnsTimeout => Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            SerializableErrorCode::DnsError(payload) => Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::DestinationNotFound => Value::Variant {
-                case_idx: 2,
-                case_value: None,
-            },
-            SerializableErrorCode::DestinationUnavailable => Value::Variant {
-                case_idx: 3,
-                case_value: None,
-            },
-            SerializableErrorCode::DestinationIpProhibited => Value::Variant {
-                case_idx: 4,
-                case_value: None,
-            },
-            SerializableErrorCode::DestinationIpUnroutable => Value::Variant {
-                case_idx: 5,
-                case_value: None,
-            },
-            SerializableErrorCode::ConnectionRefused => Value::Variant {
-                case_idx: 6,
-                case_value: None,
-            },
-            SerializableErrorCode::ConnectionTerminated => Value::Variant {
-                case_idx: 7,
-                case_value: None,
-            },
-            SerializableErrorCode::ConnectionTimeout => Value::Variant {
-                case_idx: 8,
-                case_value: None,
-            },
-            SerializableErrorCode::ConnectionReadTimeout => Value::Variant {
-                case_idx: 9,
-                case_value: None,
-            },
-            SerializableErrorCode::ConnectionWriteTimeout => Value::Variant {
-                case_idx: 10,
-                case_value: None,
-            },
-            SerializableErrorCode::ConnectionLimitReached => Value::Variant {
-                case_idx: 11,
-                case_value: None,
-            },
-            SerializableErrorCode::TlsProtocolError => Value::Variant {
-                case_idx: 12,
-                case_value: None,
-            },
-            SerializableErrorCode::TlsCertificateError => Value::Variant {
-                case_idx: 13,
-                case_value: None,
-            },
-            SerializableErrorCode::TlsAlertReceived(payload) => Value::Variant {
-                case_idx: 14,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::HttpRequestDenied => Value::Variant {
-                case_idx: 15,
-                case_value: None,
-            },
-            SerializableErrorCode::HttpRequestLengthRequired => Value::Variant {
-                case_idx: 16,
-                case_value: None,
-            },
-            SerializableErrorCode::HttpRequestBodySize(payload) => Value::Variant {
-                case_idx: 17,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::HttpRequestMethodInvalid => Value::Variant {
-                case_idx: 18,
-                case_value: None,
-            },
-            SerializableErrorCode::HttpRequestUriInvalid => Value::Variant {
-                case_idx: 19,
-                case_value: None,
-            },
-            SerializableErrorCode::HttpRequestUriTooLong => Value::Variant {
-                case_idx: 20,
-                case_value: None,
-            },
-            SerializableErrorCode::HttpRequestHeaderSectionSize(payload) => Value::Variant {
-                case_idx: 21,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::HttpRequestHeaderSize(payload) => Value::Variant {
-                case_idx: 22,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::HttpRequestTrailerSectionSize(payload) => Value::Variant {
-                case_idx: 23,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::HttpRequestTrailerSize(payload) => Value::Variant {
-                case_idx: 24,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::HttpResponseIncomplete => Value::Variant {
-                case_idx: 25,
-                case_value: None,
-            },
-            SerializableErrorCode::HttpResponseHeaderSectionSize(payload) => Value::Variant {
-                case_idx: 26,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::HttpResponseHeaderSize(payload) => Value::Variant {
-                case_idx: 27,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::HttpResponseBodySize(payload) => Value::Variant {
-                case_idx: 28,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::HttpResponseTrailerSectionSize(payload) => Value::Variant {
-                case_idx: 29,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::HttpResponseTrailerSize(payload) => Value::Variant {
-                case_idx: 30,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::HttpResponseTransferCoding(payload) => Value::Variant {
-                case_idx: 31,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::HttpResponseContentCoding(payload) => Value::Variant {
-                case_idx: 32,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-            SerializableErrorCode::HttpResponseTimeout => Value::Variant {
-                case_idx: 33,
-                case_value: None,
-            },
-            SerializableErrorCode::HttpUpgradeFailed => Value::Variant {
-                case_idx: 34,
-                case_value: None,
-            },
-            SerializableErrorCode::HttpProtocolError => Value::Variant {
-                case_idx: 35,
-                case_value: None,
-            },
-            SerializableErrorCode::LoopDetected => Value::Variant {
-                case_idx: 36,
-                case_value: None,
-            },
-            SerializableErrorCode::ConfigurationError => Value::Variant {
-                case_idx: 37,
-                case_value: None,
-            },
-            SerializableErrorCode::InternalError(payload) => Value::Variant {
-                case_idx: 38,
-                case_value: Some(Box::new(payload.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        variant(vec![
-            unit_case("DnsTimeout"),
-            case("DnsError", SerializableDnsErrorPayload::get_type()),
-            unit_case("DestinationNotFound"),
-            unit_case("DestinationUnavailable"),
-            unit_case("DestinationIpProhibited"),
-            unit_case("DestinationIpUnroutable"),
-            unit_case("ConnectionRefused"),
-            unit_case("ConnectionTerminated"),
-            unit_case("ConnectionTimeout"),
-            unit_case("ConnectionReadTimeout"),
-            unit_case("ConnectionWriteTimeout"),
-            unit_case("ConnectionLimitReached"),
-            unit_case("TlsProtocolError"),
-            unit_case("TlsCertificateError"),
-            case(
-                "TlsAlertReceived",
-                SerializableTlsAlertReceivedPayload::get_type(),
-            ),
-            unit_case("HttpRequestDenied"),
-            unit_case("HttpRequestLengthRequired"),
-            case("HttpRequestBodySize", option(u64())),
-            unit_case("HttpRequestMethodInvalid"),
-            unit_case("HttpRequestUriInvalid"),
-            unit_case("HttpRequestUriTooLong"),
-            case("HttpRequestHeaderSectionSize", option(u32())),
-            case(
-                "HttpRequestHeaderSize",
-                option(SerializableFieldSizePayload::get_type()),
-            ),
-            case("HttpRequestTrailerSectionSize", option(u32())),
-            case(
-                "HttpRequestTrailerSize",
-                SerializableFieldSizePayload::get_type(),
-            ),
-            unit_case("HttpResponseIncomplete"),
-            case("HttpResponseHeaderSectionSize", option(u32())),
-            case(
-                "HttpResponseHeaderSize",
-                SerializableFieldSizePayload::get_type(),
-            ),
-            case("HttpResponseBodySize", option(u64())),
-            case("HttpResponseTrailerSectionSize", option(u32())),
-            case(
-                "HttpResponseTrailerSize",
-                SerializableFieldSizePayload::get_type(),
-            ),
-            case("HttpResponseTransferCoding", option(str())),
-            case("HttpResponseContentCoding", option(str())),
-            unit_case("HttpResponseTimeout"),
-            unit_case("HttpUpgradeFailed"),
-            unit_case("HttpProtocolError"),
-            unit_case("LoopDetected"),
-            unit_case("ConfigurationError"),
-            case("InternalError", option(str())),
-        ])
-    }
-}
-
-impl IntoValue for SerializableDnsErrorPayload {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.rcode.into_value(), self.info_code.into_value()])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("rcode", option(str())),
-            field("info_code", option(u16())),
-        ])
-    }
-}
-
-impl IntoValue for SerializableTlsAlertReceivedPayload {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.alert_id.into_value(),
-            self.alert_message.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("alert_id", option(u8())),
-            field("alert_message", option(str())),
-        ])
-    }
-}
-
-impl IntoValue for SerializableFieldSizePayload {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.field_name.into_value(),
-            self.field_size.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("field_name", option(str())),
-            field("field_size", option(u32())),
-        ])
-    }
-}
-
-impl IntoValue for GolemError {
-    fn into_value(self) -> Value {
-        fn into_value(value: GolemError, top_level: bool) -> Value {
-            match value {
-                GolemError::InvalidRequest { details } => Value::Variant {
-                    case_idx: 0,
-                    case_value: Some(Box::new(Value::Record(vec![details.into_value()]))),
-                },
-                GolemError::WorkerAlreadyExists { worker_id } => Value::Variant {
-                    case_idx: 1,
-                    case_value: Some(Box::new(Value::Record(vec![worker_id.into_value()]))),
-                },
-                GolemError::WorkerNotFound { worker_id } => Value::Variant {
-                    case_idx: 2,
-                    case_value: Some(Box::new(Value::Record(vec![worker_id.into_value()]))),
-                },
-                GolemError::WorkerCreationFailed { worker_id, details } => Value::Variant {
-                    case_idx: 3,
-                    case_value: Some(Box::new(Value::Record(vec![
-                        worker_id.into_value(),
-                        details.into_value(),
-                    ]))),
-                },
-                GolemError::FailedToResumeWorker { worker_id, reason } => Value::Variant {
-                    case_idx: 4,
-                    case_value: Some(Box::new(Value::Record(vec![
-                        worker_id.into_value(),
-                        if top_level {
-                            into_value(*reason, false)
-                        } else {
-                            reason.to_string().into_value()
-                        },
-                    ]))),
-                },
-                GolemError::ComponentDownloadFailed {
-                    component_id,
-                    component_version,
-                    reason,
-                } => Value::Variant {
-                    case_idx: 5,
-                    case_value: Some(Box::new(Value::Record(vec![
-                        component_id.into_value(),
-                        component_version.into_value(),
-                        reason.into_value(),
-                    ]))),
-                },
-                GolemError::ComponentParseFailed {
-                    component_id,
-                    component_version,
-                    reason,
-                } => Value::Variant {
-                    case_idx: 6,
-                    case_value: Some(Box::new(Value::Record(vec![
-                        component_id.into_value(),
-                        component_version.into_value(),
-                        reason.into_value(),
-                    ]))),
-                },
-                GolemError::GetLatestVersionOfComponentFailed {
-                    component_id,
-                    reason,
-                } => Value::Variant {
-                    case_idx: 7,
-                    case_value: Some(Box::new(Value::Record(vec![
-                        component_id.into_value(),
-                        reason.into_value(),
-                    ]))),
-                },
-                GolemError::PromiseNotFound { promise_id } => Value::Variant {
-                    case_idx: 8,
-                    case_value: Some(Box::new(Value::Record(vec![promise_id.into_value()]))),
-                },
-                GolemError::PromiseDropped { promise_id } => Value::Variant {
-                    case_idx: 9,
-                    case_value: Some(Box::new(Value::Record(vec![promise_id.into_value()]))),
-                },
-                GolemError::PromiseAlreadyCompleted { promise_id } => Value::Variant {
-                    case_idx: 10,
-                    case_value: Some(Box::new(Value::Record(vec![promise_id.into_value()]))),
-                },
-                GolemError::Interrupted { kind } => Value::Variant {
-                    case_idx: 11,
-                    case_value: Some(Box::new(Value::Record(vec![kind.into_value()]))),
-                },
-                GolemError::ParamTypeMismatch { details } => Value::Variant {
-                    case_idx: 12,
-                    case_value: Some(Box::new(Value::Record(vec![details.into_value()]))),
-                },
-                GolemError::NoValueInMessage => Value::Variant {
-                    case_idx: 13,
-                    case_value: None,
-                },
-                GolemError::ValueMismatch { details } => Value::Variant {
-                    case_idx: 14,
-                    case_value: Some(Box::new(Value::Record(vec![details.into_value()]))),
-                },
-                GolemError::UnexpectedOplogEntry { expected, got } => Value::Variant {
-                    case_idx: 15,
-                    case_value: Some(Box::new(Value::Record(vec![
-                        expected.into_value(),
-                        got.into_value(),
-                    ]))),
-                },
-                GolemError::Runtime { details } => Value::Variant {
-                    case_idx: 16,
-                    case_value: Some(Box::new(Value::Record(vec![details.into_value()]))),
-                },
-                GolemError::InvalidShardId {
-                    shard_id,
-                    shard_ids,
-                } => Value::Variant {
-                    case_idx: 17,
-                    case_value: Some(Box::new(Value::Record(vec![
-                        shard_id.into_value(),
-                        shard_ids.into_value(),
-                    ]))),
-                },
-                GolemError::InvalidAccount => Value::Variant {
-                    case_idx: 18,
-                    case_value: None,
-                },
-                GolemError::PreviousInvocationFailed { details } => Value::Variant {
-                    case_idx: 19,
-                    case_value: Some(Box::new(Value::Record(vec![details.into_value()]))),
-                },
-                GolemError::PreviousInvocationExited => Value::Variant {
-                    case_idx: 20,
-                    case_value: None,
-                },
-                GolemError::Unknown { details } => Value::Variant {
-                    case_idx: 21,
-                    case_value: Some(Box::new(Value::Record(vec![details.into_value()]))),
-                },
-                GolemError::ShardingNotReady => Value::Variant {
-                    case_idx: 22,
-                    case_value: None,
-                },
-                GolemError::InitialComponentFileDownloadFailed { path, reason } => Value::Variant {
-                    case_idx: 23,
-                    case_value: Some(Box::new(Value::Record(vec![
-                        path.into_value(),
-                        reason.into_value(),
-                    ]))),
-                },
-                GolemError::FileSystemError { path, reason } => Value::Variant {
-                    case_idx: 24,
-                    case_value: Some(Box::new(Value::Record(vec![
-                        path.into_value(),
-                        reason.into_value(),
-                    ]))),
-                },
-            }
-        }
-        into_value(self, true)
-    }
-
-    fn get_type() -> AnalysedType {
-        fn get_type(top_level: bool) -> AnalysedType {
-            variant(vec![
-                case("InvalidRequest", record(vec![field("details", str())])),
-                case(
-                    "WorkerAlreadyExists",
-                    record(vec![field("worker_id", WorkerId::get_type())]),
-                ),
-                case(
-                    "WorkerNotFound",
-                    record(vec![field("worker_id", WorkerId::get_type())]),
-                ),
-                case(
-                    "WorkerCreationFailed",
-                    record(vec![
-                        field("worker_id", WorkerId::get_type()),
-                        field("details", str()),
-                    ]),
-                ),
-                case(
-                    "FailedToResumeWorker",
-                    record(vec![
-                        field("worker_id", WorkerId::get_type()),
-                        field("reason", if top_level { get_type(false) } else { str() }),
-                    ]),
-                ),
-                case(
-                    "ComponentDownloadFailed",
-                    record(vec![
-                        field("component_id", ComponentId::get_type()),
-                        field("component_version", u64()),
-                        field("reason", str()),
-                    ]),
-                ),
-                case(
-                    "ComponentParseFailed",
-                    record(vec![
-                        field("component_id", ComponentId::get_type()),
-                        field("component_version", u64()),
-                        field("reason", str()),
-                    ]),
-                ),
-                case(
-                    "GetLatestVersionOfComponentFailed",
-                    record(vec![
-                        field("component_id", ComponentId::get_type()),
-                        field("reason", str()),
-                    ]),
-                ),
-                case(
-                    "PromiseNotFound",
-                    record(vec![field("promise_id", PromiseId::get_type())]),
-                ),
-                case(
-                    "PromiseDropped",
-                    record(vec![field("promise_id", PromiseId::get_type())]),
-                ),
-                case(
-                    "PromiseAlreadyCompleted",
-                    record(vec![field("promise_id", PromiseId::get_type())]),
-                ),
-                case(
-                    "Interrupted",
-                    record(vec![field("kind", InterruptKind::get_type())]),
-                ),
-                case("ParamTypeMismatch", record(vec![field("details", str())])),
-                unit_case("NoValueInMessage"),
-                case("ValueMismatch", record(vec![field("details", str())])),
-                case(
-                    "UnexpectedOplogEntry",
-                    record(vec![field("expected", str()), field("got", str())]),
-                ),
-                case("Runtime", record(vec![field("details", str())])),
-                case(
-                    "InvalidShardId",
-                    record(vec![
-                        field("shard_id", ShardId::get_type()),
-                        field("shard_ids", list(ShardId::get_type())),
-                    ]),
-                ),
-                unit_case("InvalidAccount"),
-                case(
-                    "PreviousInvocationFailed",
-                    record(vec![field("details", str())]),
-                ),
-                unit_case("PreviousInvocationExited"),
-                case("Unknown", record(vec![field("details", str())])),
-                unit_case("ShardingNotReady"),
-                case(
-                    "InitialComponentFileDownloadFailed",
-                    record(vec![field("path", str()), field("reason", str())]),
-                ),
-            ])
-        }
-        get_type(true)
-    }
-}
-
-impl IntoValue for InterruptKind {
-    fn into_value(self) -> Value {
-        match self {
-            InterruptKind::Interrupt => Value::Enum(0),
-            InterruptKind::Restart => Value::Enum(1),
-            InterruptKind::Suspend => Value::Enum(2),
-            InterruptKind::Jump => Value::Enum(3),
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        r#enum(&["Interrupt", "Restart", "Suspend", "Jump"])
-    }
-}
-
-impl IntoValue for WorkerProxyError {
-    fn into_value(self) -> Value {
-        match self {
-            WorkerProxyError::BadRequest(errors) => Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(errors.into_value())),
-            },
-            WorkerProxyError::Unauthorized(error) => Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(error.into_value())),
-            },
-            WorkerProxyError::LimitExceeded(error) => Value::Variant {
-                case_idx: 2,
-                case_value: Some(Box::new(error.into_value())),
-            },
-            WorkerProxyError::NotFound(error) => Value::Variant {
-                case_idx: 3,
-                case_value: Some(Box::new(error.into_value())),
-            },
-            WorkerProxyError::AlreadyExists(error) => Value::Variant {
-                case_idx: 4,
-                case_value: Some(Box::new(error.into_value())),
-            },
-            WorkerProxyError::InternalError(error) => Value::Variant {
-                case_idx: 5,
-                case_value: Some(Box::new(error.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        variant(vec![
-            case("BadRequest", list(str())),
-            case("Unauthorized", str()),
-            case("LimitExceeded", str()),
-            case("NotFound", str()),
-            case("AlreadyExists", str()),
-            case("InternalError", GolemError::get_type()),
-        ])
-    }
-}
-
-impl IntoValue for crate::services::blob_store::ObjectMetadata {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            Value::String(self.name),
-            Value::String(self.container),
-            Value::U64(self.created_at),
-            Value::U64(self.size),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("name", str()),
-            field("container", str()),
-            field("created_at", u64()),
-            field("size", u64()),
-        ])
-    }
-}
-
-impl IntoValue for SerializableDateTime {
-    fn into_value(self) -> Value {
-        Value::Record(vec![Value::U64(self.seconds), Value::U32(self.nanoseconds)])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![field("seconds", u64()), field("nanoseconds", u32())])
-    }
-}
-
-impl IntoValue for SerializableIpAddresses {
-    fn into_value(self) -> Value {
-        Value::List(self.0.into_iter().map(|v| v.into_value()).collect())
-    }
-
-    fn get_type() -> AnalysedType {
-        list(SerializableIpAddress::get_type())
-    }
-}
-
 impl IntoValue for SerializableIpAddress {
     fn into_value(self) -> Value {
         let addr = match self {
@@ -2491,174 +1652,6 @@ impl IntoValue for SerializableIpAddress {
 
     fn get_type() -> AnalysedType {
         str()
-    }
-}
-
-impl IntoValue for SerializableFileTimes {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.data_access_timestamp.into_value(),
-            self.data_modification_timestamp.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field(
-                "data_access_timestamp",
-                option(SerializableDateTime::get_type()),
-            ),
-            field(
-                "data_modification_timestamp",
-                option(SerializableDateTime::get_type()),
-            ),
-        ])
-    }
-}
-
-impl IntoValue for SerializableHttpRequest {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            Value::String(self.uri),
-            self.method.into_value(),
-            self.headers.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("uri", str()),
-            field("method", SerializableHttpMethod::get_type()),
-            field("headers", HashMap::<String, String>::get_type()),
-        ])
-    }
-}
-
-impl IntoValue for SerializableHttpMethod {
-    fn into_value(self) -> Value {
-        match self {
-            SerializableHttpMethod::Get => Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            SerializableHttpMethod::Post => Value::Variant {
-                case_idx: 1,
-                case_value: None,
-            },
-            SerializableHttpMethod::Put => Value::Variant {
-                case_idx: 2,
-                case_value: None,
-            },
-            SerializableHttpMethod::Delete => Value::Variant {
-                case_idx: 3,
-                case_value: None,
-            },
-            SerializableHttpMethod::Head => Value::Variant {
-                case_idx: 4,
-                case_value: None,
-            },
-            SerializableHttpMethod::Connect => Value::Variant {
-                case_idx: 5,
-                case_value: None,
-            },
-            SerializableHttpMethod::Options => Value::Variant {
-                case_idx: 6,
-                case_value: None,
-            },
-            SerializableHttpMethod::Trace => Value::Variant {
-                case_idx: 7,
-                case_value: None,
-            },
-            SerializableHttpMethod::Patch => Value::Variant {
-                case_idx: 8,
-                case_value: None,
-            },
-            SerializableHttpMethod::Other(other) => Value::Variant {
-                case_idx: 9,
-                case_value: Some(Box::new(Value::String(other))),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        variant(vec![
-            unit_case("Get"),
-            unit_case("Post"),
-            unit_case("Put"),
-            unit_case("Delete"),
-            unit_case("Head"),
-            unit_case("Connect"),
-            unit_case("Options"),
-            unit_case("Trace"),
-            unit_case("Patch"),
-            case("Other", str()),
-        ])
-    }
-}
-
-impl IntoValueAndType for SerializableInvokeRequest {
-    fn into_value_and_type(self) -> ValueAndType {
-        ValueAndType::new(
-            Value::Record(vec![
-                self.remote_worker_id.into_value(),
-                self.idempotency_key.into_value(),
-                Value::String(self.function_name),
-                Value::Tuple(
-                    self.function_params
-                        .iter()
-                        .map(|v| v.value.clone())
-                        .collect(),
-                ),
-            ]),
-            record(vec![
-                field("remote_worker_id", WorkerId::get_type()),
-                field("idempotency_key", IdempotencyKey::get_type()),
-                field("function_name", str()),
-                field(
-                    "function_params",
-                    tuple(self.function_params.into_iter().map(|v| v.typ).collect()),
-                ),
-            ]),
-        )
-    }
-}
-
-impl IntoValueAndType for SerializableScheduleInvocationRequest {
-    fn into_value_and_type(self) -> ValueAndType {
-        ValueAndType::new(
-            Value::Record(vec![
-                self.remote_worker_id.into_value(),
-                self.idempotency_key.into_value(),
-                self.function_name.into_value(),
-                Value::Tuple(
-                    self.function_params
-                        .iter()
-                        .map(|v| v.value.clone())
-                        .collect(),
-                ),
-                self.datetime.into_value(),
-            ]),
-            record(vec![
-                field("remote_worker_id", WorkerId::get_type()),
-                field("idempotency_key", IdempotencyKey::get_type()),
-                field("function_name", str()),
-                field(
-                    "function_params",
-                    tuple(self.function_params.into_iter().map(|v| v.typ).collect()),
-                ),
-                field("datetime", SerializableDateTime::get_type()),
-            ]),
-        )
-    }
-}
-
-impl IntoValue for SerializableScheduleId {
-    fn into_value(self) -> Value {
-        Value::List(self.data.into_iter().map(Value::U8).collect())
-    }
-
-    fn get_type() -> AnalysedType {
-        list(u8())
     }
 }
 
@@ -2742,7 +1735,10 @@ fn encode_span_data(spans: &[SpanData]) -> Vec<Vec<PublicSpanData>> {
                     linked_context,
                     attributes: attributes
                         .iter()
-                        .map(|(k, v)| (k.clone(), v.clone().into()))
+                        .map(|(k, v)| PublicAttribute {
+                            key: k.clone(),
+                            value: v.clone().into(),
+                        })
                         .collect(),
                     inherited: *inherited,
                 });

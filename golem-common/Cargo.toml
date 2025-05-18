@@ -74,6 +74,7 @@ golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = 
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = [
     "host",
 ], optional = true }
+golem-wasm-rpc-derive = { path = "../wasm-rpc-derive", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

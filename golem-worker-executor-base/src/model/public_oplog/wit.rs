@@ -278,9 +278,9 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 linked_context: linked_context.map(|id| id.to_string()),
                 attributes: attributes
                     .into_iter()
-                    .map(|(k, v)| oplog::Attribute {
-                        key: k,
-                        value: v.into(),
+                    .map(|attr| oplog::Attribute {
+                        key: attr.key,
+                        value: attr.value.into(),
                     })
                     .collect(),
             }),
@@ -416,9 +416,9 @@ impl From<PublicSpanData> for oplog::SpanData {
                 attributes: local_span
                     .attributes
                     .into_iter()
-                    .map(|(k, v)| oplog::Attribute {
-                        key: k,
-                        value: v.into(),
+                    .map(|attr| oplog::Attribute {
+                        key: attr.key,
+                        value: attr.value.into(),
                     })
                     .collect(),
                 inherited: local_span.inherited,
