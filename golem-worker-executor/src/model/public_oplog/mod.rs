@@ -53,9 +53,10 @@ use golem_common::model::public_oplog::{
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
     PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
     PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
-    PublicUpdateDescription, PublicWorkerInvocation, RemoteTransactionParameters, ResourceParameters, RevertParameters,
-    SetSpanAttributeParameters, SnapshotBasedUpdateParameters, StartSpanParameters,
-    SuccessfulUpdateParameters, TimestampParameter,
+    PublicUpdateDescription, PublicWorkerInvocation, RemoteTransactionParameters,
+    ResourceParameters, RevertParameters, SetSpanAttributeParameters,
+    SnapshotBasedUpdateParameters, StartSpanParameters, SuccessfulUpdateParameters,
+    TimestampParameter,
 };
 use golem_common::model::{
     ComponentId, ComponentVersion, Empty, OwnedWorkerId, PromiseId, WorkerId, WorkerInvocation,

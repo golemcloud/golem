@@ -24,10 +24,11 @@ use crate::model::public_oplog::{
     OplogCursor, PendingUpdateParameters, PendingWorkerInvocationParameters,
     PluginInstallationDescription, PublicAttribute, PublicAttributeValue,
     PublicDurableFunctionType, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry,
-    PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation, RemoteTransactionParameters,
-    ResourceParameters, RevertParameters, SetSpanAttributeParameters,
+    PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
+    RemoteTransactionParameters, ResourceParameters, RevertParameters, SetSpanAttributeParameters,
     SnapshotBasedUpdateParameters, StartSpanParameters, StringAttributeValue,
-    SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters
+    SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters,
+    WriteRemoteTransactionParameters,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::Empty;

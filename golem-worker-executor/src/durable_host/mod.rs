@@ -2281,13 +2281,14 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 let (begin_index, begin_entry) =
                     crate::get_oplog_entry!(self.replay_state, OplogEntry::BeginRemoteTransaction)?;
 
-                let tx_id = match begin_entry {
+                let tx_id = try_match!(
+                    begin_entry,
                     OplogEntry::BeginRemoteTransaction {
                         timestamp: _,
                         transaction_id,
-                    } => Ok(transaction_id),
-                    _ => Err(GolemError::runtime("Unexpected oplog entry")),
-                }?;
+                    }
+                )
+                .map_err(|_| GolemError::runtime("Unexpected oplog entry"))?;
 
                 let (tx_id, tx) = handler.create_replay(&tx_id).await?;
 

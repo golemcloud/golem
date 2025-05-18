@@ -68,7 +68,7 @@ pub struct WriteRemoteBatchedParameters {
     pub index: Option<OplogIndex>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -611,7 +611,6 @@ pub struct RemoteTransactionParameters {
     pub timestamp: Timestamp,
     pub begin_index: OplogIndex,
 }
-
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]

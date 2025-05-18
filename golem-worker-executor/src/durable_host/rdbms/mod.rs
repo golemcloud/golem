@@ -86,7 +86,7 @@ async fn begin_db_transaction<Ctx, T, E>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Send + Sync + Clone + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
     E: From<RdbmsError>,
 {
     let interface = get_db_connection_interface::<T>();
@@ -545,7 +545,7 @@ where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     E: From<RdbmsError>,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
 {
     let interface = get_db_transaction_interface::<T>();
     let handle = entry.rep();
@@ -605,7 +605,7 @@ where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     E: From<RdbmsError>,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
 {
     let interface = get_db_transaction_interface::<T>();
     let handle = entry.rep();
@@ -855,7 +855,6 @@ fn get_db_transaction<Ctx, T>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + 'static,
-    dyn RdbmsService: RdbmsTypeService<T>,
 {
     let transaction_entry = ctx
         .as_wasi_view()
@@ -1186,7 +1185,7 @@ async fn db_transaction_cleanup<Ctx, T>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
 {
     let result = ctx
         .as_wasi_view()
@@ -1309,19 +1308,19 @@ fn get_begin_oplog_index<Ctx: WorkerCtx>(
 struct RdbmsRemoteTransactionHandler<T: RdbmsType> {
     pool_key: RdbmsPoolKey,
     worker_id: WorkerId,
-    rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
+    rdbms_service: Arc<dyn RdbmsService>,
     _owner: PhantomData<T>,
 }
 
 impl<T> RdbmsRemoteTransactionHandler<T>
 where
     T: RdbmsType + Send + Sync + Clone + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
 {
     fn new(
         pool_key: RdbmsPoolKey,
         worker_id: WorkerId,
-        rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
+        rdbms_service: Arc<dyn RdbmsService>,
     ) -> Self {
         Self {
             pool_key,
@@ -1351,7 +1350,7 @@ impl<T> RemoteTransactionHandler<RdbmsTransactionState<T>, RdbmsError>
     for RdbmsRemoteTransactionHandler<T>
 where
     T: RdbmsType + Send + Sync + Clone + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
 {
     async fn create_new(&self) -> Result<(String, RdbmsTransactionState<T>), RdbmsError> {
         let transaction = self
