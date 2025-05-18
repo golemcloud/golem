@@ -5679,6 +5679,16 @@ components:
       - Facebook
       - Microsoft
       - Gitlab
+    PublicAttribute:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          $ref: '#/components/schemas/PublicAttributeValue'
+      required:
+      - key
+      - value
     PublicAttributeValue:
       discriminator:
         propertyName: type
@@ -5760,9 +5770,9 @@ components:
           type: integer
           format: uint64
         attributes:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/PublicAttributeValue'
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicAttribute'
         inherited:
           type: boolean
       required:
@@ -6515,9 +6525,9 @@ components:
         linkedContext:
           type: string
         attributes:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/PublicAttributeValue'
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicAttribute'
       required:
       - timestamp
       - spanId
