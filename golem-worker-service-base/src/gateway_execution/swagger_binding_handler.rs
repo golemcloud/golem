@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api::api_definition::HttpApiDefinitionResponseData;
 use crate::gateway_api_definition::http::oas_api_definition::OpenApiHttpApiDefinition;
 use crate::gateway_api_deployment::ApiSiteString;
 use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
@@ -193,7 +192,7 @@ impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
             }
         };
 
-        // Convert to HttpApiDefinitionResponseData using the definition_service
+        // Get the compiled API definition using the definition_service
         let definition_service = match &self.definition_service {
             Some(service) => service,
             None => {
@@ -203,7 +202,7 @@ impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
             }
         };
 
-        let response_data = match definition_service
+        let compiled_def = match definition_service
             .get(
                 &api_def.id,
                 &api_def.version,
@@ -212,22 +211,7 @@ impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
             )
             .await
         {
-            Ok(Some(compiled_def)) => {
-                match HttpApiDefinitionResponseData::from_compiled_http_api_definition(
-                    compiled_def,
-                    &definition_service.conversion_context(namespace, &EmptyAuthCtx::default()),
-                )
-                .await
-                {
-                    Ok(response_data) => response_data,
-                    Err(e) => {
-                        return Err(SwaggerBindingError::InternalError(format!(
-                            "Error converting to response data: {}",
-                            e
-                        )))
-                    }
-                }
-            }
+            Ok(Some(compiled_def)) => compiled_def,
             Ok(None) => {
                 return Err(SwaggerBindingError::NotFound(
                     "API definition not found".to_string(),
@@ -242,8 +226,8 @@ impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
         };
 
         // Convert to OpenAPI spec
-        let openapi_req = match OpenApiHttpApiDefinition::from_http_api_definition_response_data(
-            &response_data,
+        let openapi_req = match OpenApiHttpApiDefinition::from_compiled_http_api_definition(
+            &compiled_def,
         ) {
             Ok(req) => req,
             Err(e) => {

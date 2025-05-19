@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api::api_definition::HttpApiDefinitionResponseData;
-use crate::api::RouteResponseData;
 use crate::gateway_api_definition::http::oas_api_definition::OpenApiHttpApiDefinition;
-use crate::gateway_api_definition::http::MethodPattern;
+use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, CompiledRoute, MethodPattern};
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_middleware::HttpCors;
-use golem_common::model::GatewayBindingType;
+use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::RibInputTypeInfo;
 use serde::{Deserialize, Serialize};
@@ -41,54 +39,59 @@ pub struct OpenApiHttpApiDefinitionResponse {
 
 // OpenApiHttpApiDefinitionResponse implementation
 impl OpenApiHttpApiDefinitionResponse {
-    pub fn from_http_api_definition_response_data(
-        response_data: &HttpApiDefinitionResponseData,
+    pub fn from_compiled_http_api_definition<N: Clone>(
+        compiled_api_definition: &CompiledHttpApiDefinition<N>,
     ) -> Result<Self, String> {
         let openapi =
-            OpenApiHttpApiDefinition::from_http_api_definition_response_data(response_data)?;
+            OpenApiHttpApiDefinition::from_compiled_http_api_definition(compiled_api_definition)?;
         let openapi_yaml = serde_yaml::to_string(&openapi)
             .map_err(|e| format!("Failed to serialize OpenAPI to YAML: {}", e))?;
 
         Ok(Self {
-            id: response_data.id.clone(),
-            version: response_data.version.clone(),
+            id: compiled_api_definition.id.clone(),
+            version: compiled_api_definition.version.clone(),
             openapi_yaml,
         })
     }
 }
 
-// Convert HttpApiDefinitionResponseData to OpenHttpApiDefinition
+// Convert CompiledHttpApiDefinition to OpenHttpApiDefinition
 impl OpenApiHttpApiDefinition {
-    pub fn from_http_api_definition_response_data(
-        response_data: &HttpApiDefinitionResponseData,
+    pub fn from_compiled_http_api_definition<N: Clone>(
+        compiled_api_definition: &CompiledHttpApiDefinition<N>,
     ) -> Result<Self, String> {
-        let mut open_api = create_base_openapi(response_data);
+        let mut open_api = create_base_openapi(compiled_api_definition);
         let mut paths = std::collections::BTreeMap::new();
         let mut security_schemes = indexmap::IndexMap::new();
 
         // Process each route and build paths
-        for route in &response_data.routes {
-            process_route(route, &mut paths, &mut security_schemes)?;
+        for route in &compiled_api_definition.routes {
+            // Skip auth callback routes, they shouldn't be exposed in OpenAPI
+            if route.as_auth_callback_route().is_none() {
+                process_route(route, &mut paths, &mut security_schemes)?;
+            }
         }
 
         // Set paths and security in OpenAPI spec
-        finalize_openapi(&mut open_api, paths, security_schemes, response_data);
+        finalize_openapi(&mut open_api, paths, security_schemes, compiled_api_definition);
 
         Ok(OpenApiHttpApiDefinition(open_api))
     }
 }
 
 // Helper function: Base OpenAPI structure
-fn create_base_openapi(response_data: &HttpApiDefinitionResponseData) -> openapiv3::OpenAPI {
+fn create_base_openapi<N: Clone>(
+    compiled_api_definition: &CompiledHttpApiDefinition<N>,
+) -> openapiv3::OpenAPI {
     let mut open_api = openapiv3::OpenAPI {
         openapi: "3.0.0".to_string(),
         info: openapiv3::Info {
-            title: response_data.id.0.clone(),
+            title: compiled_api_definition.id.0.clone(),
             description: None,
             terms_of_service: None,
             contact: None,
             license: None,
-            version: response_data.version.0.clone(),
+            version: compiled_api_definition.version.0.clone(),
             extensions: Default::default(),
         },
         ..Default::default()
@@ -97,11 +100,11 @@ fn create_base_openapi(response_data: &HttpApiDefinitionResponseData) -> openapi
     // Add Golem extensions
     open_api.extensions.insert(
         GOLEM_API_DEFINITION_ID_EXTENSION.to_string(),
-        serde_json::Value::String(response_data.id.0.clone()),
+        serde_json::Value::String(compiled_api_definition.id.0.clone()),
     );
     open_api.extensions.insert(
         GOLEM_API_DEFINITION_VERSION.to_string(),
-        serde_json::Value::String(response_data.version.0.clone()),
+        serde_json::Value::String(compiled_api_definition.version.0.clone()),
     );
 
     // Initialize components
@@ -110,9 +113,9 @@ fn create_base_openapi(response_data: &HttpApiDefinitionResponseData) -> openapi
     open_api
 }
 
-// Helper function: Handles each route in the HttpApiDefinitionResponseData
+// Helper function: Handles each route in the CompiledHttpApiDefinition
 fn process_route(
-    route: &RouteResponseData,
+    route: &CompiledRoute,
     paths: &mut std::collections::BTreeMap<String, openapiv3::PathItem>,
     security_schemes: &mut indexmap::IndexMap<
         String,
@@ -131,7 +134,7 @@ fn process_route(
 }
 
 // Helper function: Adds both path and query parameters to the operation
-fn add_parameters(operation: &mut openapiv3::Operation, route: &RouteResponseData) {
+fn add_parameters(operation: &mut openapiv3::Operation, route: &CompiledRoute) {
     let (path_parameters, query_parameters) = get_parameters(route);
 
     // Add path parameters
@@ -153,7 +156,7 @@ fn add_parameters(operation: &mut openapiv3::Operation, route: &RouteResponseDat
 
 // Helper function: Creates an operation for a route
 fn create_operation(
-    route: &RouteResponseData,
+    route: &CompiledRoute,
     security_schemes: &mut indexmap::IndexMap<
         String,
         openapiv3::ReferenceOr<openapiv3::SecurityScheme>,
@@ -220,30 +223,47 @@ fn extract_parameters_from_record(
 
 // Helper function: Gets path and query parameters with their types from route
 // Returns two separate lists: one for path parameters and one for query parameters
-fn get_parameters(route: &RouteResponseData) -> (Vec<ParameterTuple>, Vec<ParameterTuple>) {
+fn get_parameters(route: &CompiledRoute) -> (Vec<ParameterTuple>, Vec<ParameterTuple>) {
     let mut path_parameters = Vec::new();
     let mut query_parameters = Vec::new();
 
-    // Check worker_name_input first
-    if let Some(worker_name_input) = &route.binding.worker_name_input {
-        if let Some(request_record) = worker_name_input.types.get("request") {
-            extract_parameters_from_record(
-                request_record,
-                &mut path_parameters,
-                &mut query_parameters,
-            );
-        }
-    }
+    // Extract parameters based on binding type
+    match &route.binding {
+        GatewayBindingCompiled::Worker(worker_binding) | GatewayBindingCompiled::FileServer(worker_binding) => {
+            // Check worker_name_input first
+            if let Some(worker_name_compiled) = &worker_binding.worker_name_compiled {
+                if let Some(request_record) = worker_name_compiled.rib_input_type_info.types.get("request") {
+                    extract_parameters_from_record(
+                        request_record,
+                        &mut path_parameters,
+                        &mut query_parameters,
+                    );
+                }
+            }
 
-    // Check response_mapping_input
-    if let Some(response_mapping_input) = &route.binding.response_mapping_input {
-        if let Some(request_record) = response_mapping_input.types.get("request") {
-            extract_parameters_from_record(
-                request_record,
-                &mut path_parameters,
-                &mut query_parameters,
-            );
+            // Check response_mapping_input
+            if let Some(request_record) = worker_binding.response_compiled.rib_input.types.get("request") {
+                extract_parameters_from_record(
+                    request_record,
+                    &mut path_parameters,
+                    &mut query_parameters,
+                );
+            }
         }
+        GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
+            // Check worker_name_input for HttpHandler
+            if let Some(worker_name_compiled) = &http_handler_binding.worker_name_compiled {
+                if let Some(request_record) = worker_name_compiled.rib_input_type_info.types.get("request") {
+                    extract_parameters_from_record(
+                        request_record,
+                        &mut path_parameters,
+                        &mut query_parameters,
+                    );
+                }
+            }
+        }
+        // Other binding types don't have parameters
+        _ => {}
     }
 
     (path_parameters, query_parameters)
@@ -289,18 +309,19 @@ fn create_parameter(
 }
 
 // Helper function: Adds request body to the operation
-fn add_request_body(operation: &mut openapiv3::Operation, route: &RouteResponseData) {
-    // Only add request body if response_mapping_input is present
-    if let Some(response_mapping_input) = &route.binding.response_mapping_input {
-        if !response_mapping_input.types.is_empty() {
-            let request_body = create_request_body(route, response_mapping_input);
+fn add_request_body(operation: &mut openapiv3::Operation, route: &CompiledRoute) {
+    // Only add request body if we have a binding that contains response_mapping
+    match &route.binding {
+        GatewayBindingCompiled::Worker(worker_binding) | GatewayBindingCompiled::FileServer(worker_binding) => {
+            let request_body = create_request_body(route, &worker_binding.response_compiled.rib_input);
             operation.request_body = Some(openapiv3::ReferenceOr::Item(request_body));
         }
+        _ => {}
     }
 }
 
 // Helper function: Adds responses to the operation
-fn add_responses(operation: &mut openapiv3::Operation, route: &RouteResponseData) {
+fn add_responses(operation: &mut openapiv3::Operation, route: &CompiledRoute) {
     // Get the default status code based on the method
     let default_status = get_default_status_code(&route.method);
 
@@ -329,7 +350,7 @@ fn add_responses(operation: &mut openapiv3::Operation, route: &RouteResponseData
 }
 
 // Helper function: Adds binding info to the operation
-fn add_binding_info(operation: &mut openapiv3::Operation, route: &RouteResponseData) {
+fn add_binding_info(operation: &mut openapiv3::Operation, route: &CompiledRoute) {
     let binding_info = create_binding_info(route);
     operation.extensions.insert(
         GOLEM_API_GATEWAY_BINDING.to_string(),
@@ -340,35 +361,37 @@ fn add_binding_info(operation: &mut openapiv3::Operation, route: &RouteResponseD
 // Helper function: Adds security to the operation
 fn add_security(
     operation: &mut openapiv3::Operation,
-    route: &RouteResponseData,
+    route: &CompiledRoute,
     security_schemes: &mut indexmap::IndexMap<
         String,
         openapiv3::ReferenceOr<openapiv3::SecurityScheme>,
     >,
 ) {
-    if let Some(security_ref) = &route.security {
+    if let Some(security_middleware) = route.get_security_middleware() {
+        let security_ref = security_middleware.security_scheme_with_metadata.security_scheme.scheme_identifier().to_string();
+        
         // Add security scheme if not already present
-        if !security_schemes.contains_key::<str>(security_ref) {
-            let security_scheme = create_security_scheme(security_ref);
+        if !security_schemes.contains_key::<str>(&security_ref) {
+            let security_scheme = create_security_scheme(&security_ref);
             security_schemes.insert(
-                security_ref.to_string(),
+                security_ref.clone(),
                 openapiv3::ReferenceOr::Item(security_scheme),
             );
         }
 
         // Add security requirement to operation
         let mut req = indexmap::IndexMap::new();
-        req.insert(security_ref.to_string(), Vec::<String>::new());
+        req.insert(security_ref, Vec::<String>::new());
         operation.security = Some(vec![req]);
     }
 }
 
 // Helper function: Finalizes OpenAPI specification
-fn finalize_openapi(
+fn finalize_openapi<N: Clone>(
     open_api: &mut openapiv3::OpenAPI,
     paths: std::collections::BTreeMap<String, openapiv3::PathItem>,
     security_schemes: indexmap::IndexMap<String, openapiv3::ReferenceOr<openapiv3::SecurityScheme>>,
-    response_data: &HttpApiDefinitionResponseData,
+    compiled_api_definition: &CompiledHttpApiDefinition<N>,
 ) {
     // Set paths
     open_api.paths = openapiv3::Paths {
@@ -385,12 +408,12 @@ fn finalize_openapi(
     }
 
     // Set global security if needed
-    set_global_security(open_api, response_data);
+    set_global_security(open_api, compiled_api_definition);
 }
 
 // Helper function: Creates a request body
 fn create_request_body(
-    _route: &RouteResponseData,
+    _route: &CompiledRoute,
     response_mapping_input: &RibInputTypeInfo,
 ) -> openapiv3::RequestBody {
     let body_schema = determine_request_body_schema(response_mapping_input);
@@ -443,7 +466,7 @@ fn get_default_status_code(method: &MethodPattern) -> u16 {
 }
 
 // Helper function: Create response
-fn create_response(status_code: u16, route: &RouteResponseData) -> openapiv3::Response {
+fn create_response(status_code: u16, route: &CompiledRoute) -> openapiv3::Response {
     let mut response = openapiv3::Response {
         description: get_status_description(status_code),
         ..Default::default()
@@ -479,71 +502,81 @@ fn get_status_description(status_code: u16) -> String {
 }
 
 // Helper function: Determines response schema
-fn determine_response_schema(route: &RouteResponseData) -> openapiv3::Schema {
+fn determine_response_schema(route: &CompiledRoute) -> openapiv3::Schema {
     // We check if it has both status and body fields, then use the body field
-    if let Some(response_mapping_output) = &route.binding.response_mapping_output {
-        if let AnalysedType::Record(record) = &response_mapping_output.analysed_type {
-            let has_status = record.fields.iter().any(|f| f.name == "status");
-            let has_body = record.fields.iter().any(|f| f.name == "body");
+    match &route.binding {
+        GatewayBindingCompiled::Worker(worker_binding) | GatewayBindingCompiled::FileServer(worker_binding) => {
+            if let Some(output_info) = &worker_binding.response_compiled.rib_output {
+                if let AnalysedType::Record(record) = &output_info.analysed_type {
+                    let has_status = record.fields.iter().any(|f| f.name == "status");
+                    let has_body = record.fields.iter().any(|f| f.name == "body");
 
-            return match (has_status, has_body) {
-                (true, true) => record
-                    .fields
-                    .iter()
-                    .find(|f| f.name == "body")
-                    .map(|body_field| create_schema_from_analysed_type(&body_field.typ))
-                    .unwrap_or_else(create_default_object_schema),
-                (true, false) => create_default_object_schema(),
-                _ => create_schema_from_analysed_type(&response_mapping_output.analysed_type),
-            };
+                    return match (has_status, has_body) {
+                        (true, true) => record
+                            .fields
+                            .iter()
+                            .find(|f| f.name == "body")
+                            .map(|body_field| create_schema_from_analysed_type(&body_field.typ))
+                            .unwrap_or_else(create_default_object_schema),
+                        (true, false) => create_default_object_schema(),
+                        _ => create_schema_from_analysed_type(&output_info.analysed_type),
+                    };
+                }
+                return create_schema_from_analysed_type(&output_info.analysed_type);
+            }
         }
-        create_schema_from_analysed_type(&response_mapping_output.analysed_type)
-    } else {
-        create_default_object_schema()
+        _ => {}
     }
+    
+    // Fallback to default object
+    create_default_object_schema()
 }
 
 // Helper function: Creates binding info
 // fileserver, default, http-handler and swagger-ui binding info are handled by common binding info
 // cors-preflight binding info is handled by cors-preflight binding info
-fn create_binding_info(route: &RouteResponseData) -> serde_json::Map<String, serde_json::Value> {
+fn create_binding_info(route: &CompiledRoute) -> serde_json::Map<String, serde_json::Value> {
     let mut binding_info = serde_json::Map::new();
 
-    match route.binding.binding_type {
-        Some(GatewayBindingType::Default) => {
+    match &route.binding {
+        GatewayBindingCompiled::Worker(_) => {
             binding_info.insert(
                 "binding-type".to_string(),
                 serde_json::Value::String("default".to_string()),
             );
             add_common_binding_info(&mut binding_info, route);
         }
-        Some(GatewayBindingType::HttpHandler) => {
+        GatewayBindingCompiled::HttpHandler(_) => {
             binding_info.insert(
                 "binding-type".to_string(),
                 serde_json::Value::String("http-handler".to_string()),
             );
             add_common_binding_info(&mut binding_info, route);
         }
-        Some(GatewayBindingType::FileServer) => {
+        GatewayBindingCompiled::FileServer(_) => {
             binding_info.insert(
                 "binding-type".to_string(),
                 serde_json::Value::String("file-server".to_string()),
             );
             add_common_binding_info(&mut binding_info, route);
         }
-        Some(GatewayBindingType::CorsPreflight) => {
-            add_cors_preflight_binding_info(&mut binding_info, route);
+        GatewayBindingCompiled::Static(static_binding) => {
+            match static_binding {
+                StaticBinding::HttpCorsPreflight(_) => {
+                    add_cors_preflight_binding_info(&mut binding_info, route);
+                }
+                StaticBinding::HttpAuthCallBack(_) => {
+                    binding_info.insert(
+                        "binding-type".to_string(),
+                        serde_json::Value::String("auth-callback".to_string()),
+                    );
+                }
+            }
         }
-        Some(GatewayBindingType::SwaggerUi) => {
+        GatewayBindingCompiled::SwaggerUi => {
             binding_info.insert(
                 "binding-type".to_string(),
                 serde_json::Value::String("swagger-ui".to_string()),
-            );
-        }
-        None => {
-            binding_info.insert(
-                "binding-type".to_string(),
-                serde_json::Value::String("default".to_string()),
             );
         }
     }
@@ -554,38 +587,70 @@ fn create_binding_info(route: &RouteResponseData) -> serde_json::Map<String, ser
 // Helper function: Adds common binding info
 fn add_common_binding_info(
     binding_info: &mut serde_json::Map<String, serde_json::Value>,
-    route: &RouteResponseData,
+    route: &CompiledRoute,
 ) {
-    if let Some(worker_name) = &route.binding.worker_name {
-        binding_info.insert(
-            "worker-name".to_string(),
-            serde_json::Value::String(worker_name.clone()),
-        );
-    }
+    match &route.binding {
+        GatewayBindingCompiled::Worker(worker_binding) | GatewayBindingCompiled::FileServer(worker_binding) => {
+            // Add worker name if available
+            if let Some(worker_name_compiled) = &worker_binding.worker_name_compiled {
+                binding_info.insert(
+                    "worker-name".to_string(),
+                    serde_json::Value::String(worker_name_compiled.worker_name.to_string()),
+                );
+            }
 
-    if let Some(versioned_component) = &route.binding.component {
-        binding_info.insert(
-            "component-name".to_string(),
-            serde_json::Value::String(versioned_component.name().to_string()),
-        );
-        binding_info.insert(
-            "component-version".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(versioned_component.version())),
-        );
-    }
+            // Add component info
+            binding_info.insert(
+                "component-name".to_string(),
+                serde_json::Value::String(worker_binding.component_id.component_id.0.to_string()),
+            );
+            binding_info.insert(
+                "component-version".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(worker_binding.component_id.version)),
+            );
 
-    if let Some(key) = &route.binding.idempotency_key {
-        binding_info.insert(
-            "idempotency-key".to_string(),
-            serde_json::Value::String(key.clone()),
-        );
-    }
+            // Add idempotency key if available
+            if let Some(idempotency_key_compiled) = &worker_binding.idempotency_key_compiled {
+                binding_info.insert(
+                    "idempotency-key".to_string(),
+                    serde_json::Value::String(idempotency_key_compiled.idempotency_key.to_string()),
+                );
+            }
 
-    if let Some(response) = &route.binding.response {
-        binding_info.insert(
-            "response".to_string(),
-            serde_json::Value::String(response.clone()),
-        );
+            // Add response mapping
+            binding_info.insert(
+                "response".to_string(),
+                serde_json::Value::String(worker_binding.response_compiled.response_mapping_expr.to_string()),
+            );
+        }
+        GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
+            // Add worker name if available
+            if let Some(worker_name_compiled) = &http_handler_binding.worker_name_compiled {
+                binding_info.insert(
+                    "worker-name".to_string(),
+                    serde_json::Value::String(worker_name_compiled.worker_name.to_string()),
+                );
+            }
+
+            // Add component info
+            binding_info.insert(
+                "component-name".to_string(),
+                serde_json::Value::String(http_handler_binding.component_id.component_id.0.to_string()),
+            );
+            binding_info.insert(
+                "component-version".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(http_handler_binding.component_id.version)),
+            );
+
+            // Add idempotency key if available
+            if let Some(idempotency_key_compiled) = &http_handler_binding.idempotency_key_compiled {
+                binding_info.insert(
+                    "idempotency-key".to_string(),
+                    serde_json::Value::String(idempotency_key_compiled.idempotency_key.to_string()),
+                );
+            }
+        }
+        _ => {}
     }
 }
 
@@ -593,14 +658,14 @@ fn add_common_binding_info(
 // Converts the cors-preflight binding info to a response string
 fn add_cors_preflight_binding_info(
     binding_info: &mut serde_json::Map<String, serde_json::Value>,
-    route: &RouteResponseData,
+    route: &CompiledRoute,
 ) {
     binding_info.insert(
         "binding-type".to_string(),
         serde_json::Value::String("cors-preflight".to_string()),
     );
 
-    if let Some(cors) = &route.binding.cors_preflight {
+    if let GatewayBindingCompiled::Static(StaticBinding::HttpCorsPreflight(cors)) = &route.binding {
         let formatted_response = create_cors_response(cors);
         binding_info.insert(
             "response".to_string(),
@@ -669,20 +734,21 @@ fn create_security_scheme(security_ref: &str) -> openapiv3::SecurityScheme {
 }
 
 // Helper function: Sets global security
-fn set_global_security(
+fn set_global_security<N: Clone>(
     open_api: &mut openapiv3::OpenAPI,
-    response_data: &HttpApiDefinitionResponseData,
+    compiled_api_definition: &CompiledHttpApiDefinition<N>,
 ) {
     let mut seen_requirements = std::collections::HashSet::new();
     let mut global_security = Vec::new();
 
-    for route in &response_data.routes {
-        if let Some(security_ref) = &route.security {
-            if !seen_requirements.contains::<str>(security_ref) {
+    for route in &compiled_api_definition.routes {
+        if let Some(security_middleware) = route.get_security_middleware() {
+            let security_ref = security_middleware.security_scheme_with_metadata.security_scheme.scheme_identifier().to_string();
+            if !seen_requirements.contains::<str>(&security_ref) {
                 let mut req = indexmap::IndexMap::new();
-                req.insert(security_ref.to_string(), Vec::<String>::new());
+                req.insert(security_ref.clone(), Vec::<String>::new());
                 global_security.push(req);
-                seen_requirements.insert(security_ref.to_string());
+                seen_requirements.insert(security_ref);
             }
         }
     }
@@ -739,25 +805,23 @@ fn create_default_object_schema() -> openapiv3::Schema {
     }
 }
 
-// Macro: Generate the body of the match arm
-macro_rules! create_integer_schema_body {
-    ($format:expr, $min:expr, $max:expr) => {{
-        let schema_data = openapiv3::SchemaData::default();
-        openapiv3::Schema {
-            schema_data,
-            schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Integer(
-                openapiv3::IntegerType {
-                    format: openapiv3::VariantOrUnknownOrEmpty::Item($format),
-                    minimum: $min,
-                    maximum: $max,
-                    multiple_of: None,
-                    exclusive_minimum: false,
-                    exclusive_maximum: false,
-                    enumeration: vec![],
-                },
-            )),
-        }
-    }};
+// Helper function: Creates an integer schema
+fn create_integer_schema(format: openapiv3::IntegerFormat, min: Option<i64>, max: Option<i64>) -> openapiv3::Schema {
+    let schema_data = openapiv3::SchemaData::default();
+    openapiv3::Schema {
+        schema_data,
+        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Integer(
+            openapiv3::IntegerType {
+                format: openapiv3::VariantOrUnknownOrEmpty::Item(format),
+                minimum: min,
+                maximum: max,
+                multiple_of: None,
+                exclusive_minimum: false,
+                exclusive_maximum: false,
+                enumeration: vec![],
+            },
+        )),
+    }
 }
 
 // Helper function: Converts AnalysedType to OpenAPI Schema
@@ -775,30 +839,30 @@ fn create_schema_from_analysed_type(
             )),
         },
 
-        // Handle integer types using the macro for the body
+        // Handle integer types using the function for the body
         AnalysedType::U8(_) => {
-            create_integer_schema_body!(openapiv3::IntegerFormat::Int32, Some(0), Some(255))
+            create_integer_schema(openapiv3::IntegerFormat::Int32, Some(0), Some(255))
         }
         AnalysedType::U16(_) => {
-            create_integer_schema_body!(openapiv3::IntegerFormat::Int32, Some(0), Some(65535))
+            create_integer_schema(openapiv3::IntegerFormat::Int32, Some(0), Some(65535))
         }
         AnalysedType::U32(_) => {
-            create_integer_schema_body!(openapiv3::IntegerFormat::Int32, Some(0), None)
+            create_integer_schema(openapiv3::IntegerFormat::Int32, Some(0), None)
         }
         AnalysedType::U64(_) => {
-            create_integer_schema_body!(openapiv3::IntegerFormat::Int64, Some(0), None)
+            create_integer_schema(openapiv3::IntegerFormat::Int64, Some(0), None)
         }
         AnalysedType::S8(_) => {
-            create_integer_schema_body!(openapiv3::IntegerFormat::Int32, Some(-128), Some(127))
+            create_integer_schema(openapiv3::IntegerFormat::Int32, Some(-128), Some(127))
         }
         AnalysedType::S16(_) => {
-            create_integer_schema_body!(openapiv3::IntegerFormat::Int32, Some(-32768), Some(32767))
+            create_integer_schema(openapiv3::IntegerFormat::Int32, Some(-32768), Some(32767))
         }
         AnalysedType::S32(_) => {
-            create_integer_schema_body!(openapiv3::IntegerFormat::Int32, None, None)
+            create_integer_schema(openapiv3::IntegerFormat::Int32, None, None)
         }
         AnalysedType::S64(_) => {
-            create_integer_schema_body!(openapiv3::IntegerFormat::Int64, None, None)
+            create_integer_schema(openapiv3::IntegerFormat::Int64, None, None)
         }
 
         AnalysedType::F32(_) => {
