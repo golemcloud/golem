@@ -1728,7 +1728,7 @@ fn component_deploy_properties(
 ) -> anyhow::Result<ComponentDeployProperties> {
     let linked_wasm_path = app_ctx
         .application
-        .component_final_linked_wasm(component_name, build_profile);
+        .component_linked_wasm(component_name, build_profile);
     let component_properties = app_ctx
         .application
         .component_properties(component_name, build_profile);

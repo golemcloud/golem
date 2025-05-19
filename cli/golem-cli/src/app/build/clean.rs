@@ -43,7 +43,7 @@ pub fn clean_app(ctx: &ApplicationContext) -> anyhow::Result<()> {
                     paths.insert((
                         "linked wasm",
                         ctx.application
-                            .component_final_linked_wasm(component_name, profile.as_ref()),
+                            .component_linked_wasm(component_name, profile.as_ref()),
                     ));
 
                     let properties = &ctx

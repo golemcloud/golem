@@ -25,10 +25,10 @@ pub async fn add_metadata_to_selected_components(
     let _indent = LogIndent::new();
 
     for component_name in ctx.selected_component_names() {
-        let linked_wasm = ctx.application.component_linked_wasm(component_name);
+        let linked_wasm = ctx.application.component_temp_linked_wasm(component_name);
         let final_linked_wasm = ctx
             .application
-            .component_final_linked_wasm(component_name, ctx.build_profile());
+            .component_linked_wasm(component_name, ctx.build_profile());
 
         let root_package_name = ctx.wit.root_package_name(component_name)?;
 

@@ -816,7 +816,7 @@ impl Application {
     }
 
     /// The final linked component WASM
-    pub fn component_final_linked_wasm(
+    pub fn component_linked_wasm(
         &self,
         component_name: &AppComponentName,
         profile: Option<&BuildProfileName>,
@@ -836,12 +836,10 @@ impl Application {
     }
 
     /// Temporary target of the component composition (linking) step
-    pub fn component_linked_wasm(&self, component_name: &AppComponentName) -> PathBuf {
-        self.component_source_dir(component_name).join(
-            self.temp_dir()
-                .join("linked-wasm")
-                .join(format!("{}.wasm", component_name.as_str())),
-        )
+    pub fn component_temp_linked_wasm(&self, component_name: &AppComponentName) -> PathBuf {
+        self.temp_dir()
+            .join("temp-linked-wasm")
+            .join(format!("{}.wasm", component_name.as_str()))
     }
 
     fn client_build_dir(&self) -> PathBuf {
