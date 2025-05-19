@@ -1,12 +1,9 @@
 # make sure this stays before other urllib uses
-from urllib3.contrib.wasi import enable_wasi_backend
-enable_wasi_backend("component_name")
-
 import asyncio
 
-from pack_name import exports
-from pack_name.types import Ok
-from pack_name.imports.types import (
+from wit_world import exports
+from wit_world.types import Ok
+from wit_world.imports.types import (
     Method_Get,
     IncomingRequest,
     ResponseOutparam,

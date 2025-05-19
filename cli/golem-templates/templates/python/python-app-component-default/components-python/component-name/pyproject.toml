@@ -7,7 +7,7 @@ dependencies = []
 
 [dependency-groups]
 dev = [
-    "componentize-py==0.16.0",
+    "componentize-py==0.17.0",
     "urllib3",
     "lib"
 ]
@@ -16,7 +16,7 @@ dev = [
 package = false
 override-dependencies = [
   # Golem fork of urllib3 that enables usage with WASI
-  "urllib3 @ git+https://github.com/golemcloud/urllib3@799b3c60acca32fe4a17407f06a30cbadc0f129e"
+  "urllib3 @ git+https://github.com/golemcloud/urllib3@17239c144d664fcac3a28462d080fd3db3e5f19e"
 ]
 
 [tool.uv.sources]

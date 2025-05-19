@@ -1,13 +1,9 @@
 # make sure this stays before other urllib uses
-from urllib3.contrib.wasi import enable_wasi_backend
-
-enable_wasi_backend("component_name")
-
-from component_name import exports
-from component_name.exports.component_name_api import *
-from component_name.imports import llm
+from wit_world import exports
+from wit_world.exports.component_name_api import *
+from wit_world.imports import llm
 from typing import Optional, Set
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import os
 from urllib3 import request
 from typing import Any
@@ -381,7 +377,7 @@ def parse_llm_response(response: llm.ChatEvent):
 
     try:
         return model_response_schema.validate(json.loads(content.value))
-    except:
+    except Exception:
         raise ValueError(f"Failed parsing model response: {content.value}")
 
 
