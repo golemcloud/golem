@@ -43,7 +43,6 @@ use golem_common::grpc::{
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiDefinitionTraceErrorKind;
-use golem_worker_service_base::api::HttpApiDefinitionResponseData;
 use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use openapiv3::OpenAPI;
@@ -522,18 +521,9 @@ impl GrpcApiDefinitionService {
                 ))
             })?;
 
-        let response_data = HttpApiDefinitionResponseData::from_compiled_http_api_definition(
-            definition,
-            &self
-                .definition_service
-                .conversion_context(&DefaultNamespace::default(), &EmptyAuthCtx::default()),
-        )
-        .await
-        .map_err(|e| internal_error(format!("Failed to convert to response data: {}", e)))?;
-
         let internal_response =
-            golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(
-                &response_data,
+            golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
+                &definition,
             )
             .map_err(|e| internal_error(format!("Failed to create OpenAPI response: {}", e)))?;
 

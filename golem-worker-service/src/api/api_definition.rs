@@ -431,20 +431,8 @@ impl RegisterApiDefinitionApi {
             "Can't find api definition with id {api_definition_id}, and version {api_version}"
         ))))?;
 
-        let response_data = HttpApiDefinitionResponseData::from_compiled_http_api_definition(
-            compiled_definition,
-            &self
-                .definition_service
-                .conversion_context(&DefaultNamespace::default(), &EmptyAuthCtx::default()),
-        )
-        .await
-        .map_err(|e| {
-            error!("Failed to convert to response data {}", e);
-            ApiEndpointError::internal(safe(e.to_string()))
-        })?;
-
-        let response = OpenApiHttpApiDefinitionResponse::from_http_api_definition_response_data(
-            &response_data,
+        let response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
+            &compiled_definition,
         )
         .map_err(|e| {
             error!("Failed to convert to OpenAPI: {}", e);
