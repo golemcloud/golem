@@ -137,7 +137,7 @@ pub fn default_configured(
 }
 
 #[allow(clippy::type_complexity)]
-struct CachedPlugins<T: GolemTypes, Inner: Plugins<T>> {
+pub struct CachedPlugins<T: GolemTypes, Inner: Plugins<T>> {
     inner: Inner,
     cached_plugin_installations: Cache<
         (
@@ -432,7 +432,7 @@ impl Plugins<DefaultGolemTypes> for DefaultGrpcPlugins {
 }
 
 #[derive(Clone)]
-struct PluginsUnavailable;
+pub struct PluginsUnavailable;
 
 #[async_trait]
 impl PluginsObservations for PluginsUnavailable {
