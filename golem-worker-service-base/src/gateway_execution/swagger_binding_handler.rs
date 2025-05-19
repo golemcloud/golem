@@ -226,17 +226,16 @@ impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
         };
 
         // Convert to OpenAPI spec
-        let openapi_req = match OpenApiHttpApiDefinition::from_compiled_http_api_definition(
-            &compiled_def,
-        ) {
-            Ok(req) => req,
-            Err(e) => {
-                return Err(SwaggerBindingError::InternalError(format!(
-                    "Error converting to OpenAPI: {}",
-                    e
-                )))
-            }
-        };
+        let openapi_req =
+            match OpenApiHttpApiDefinition::from_compiled_http_api_definition(&compiled_def) {
+                Ok(req) => req,
+                Err(e) => {
+                    return Err(SwaggerBindingError::InternalError(format!(
+                        "Error converting to OpenAPI: {}",
+                        e
+                    )))
+                }
+            };
 
         // Add server information to the OpenAPI spec
         let mut spec = openapi_req.0;
