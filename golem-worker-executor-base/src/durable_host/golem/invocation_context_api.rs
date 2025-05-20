@@ -19,13 +19,11 @@ use crate::preview2::golem_api_1_x::context::{
 };
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use anyhow::anyhow;
-use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextSpan;
 use golem_service_base::headers::TraceContextHeaders;
 use std::sync::Arc;
 use wasmtime::component::Resource;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostSpan for DurableWorkerCtx<Ctx> {
     async fn started_at(&mut self, self_: Resource<SpanEntry>) -> anyhow::Result<Datetime> {
         self.observe_function_call("golem::api::context::span", "started-at");
@@ -102,7 +100,6 @@ impl<Ctx: WorkerCtx> HostSpan for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostInvocationContext for DurableWorkerCtx<Ctx> {
     async fn trace_id(
         &mut self,
@@ -264,7 +261,6 @@ impl<Ctx: WorkerCtx> HostInvocationContext for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn start_span(&mut self, name: String) -> anyhow::Result<Resource<SpanEntry>> {
         self.observe_function_call("golem::api::context", "start");

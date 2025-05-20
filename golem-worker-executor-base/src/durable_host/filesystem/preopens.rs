@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use anyhow::anyhow;
-use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::durable_host::serialized::SerializableError;
@@ -22,7 +21,6 @@ use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::DurableFunctionType;
 use wasmtime_wasi::bindings::filesystem::preopens::{Descriptor, Host};
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_directories(&mut self) -> anyhow::Result<Vec<(Resource<Descriptor>, String)>> {
         let durability = Durability::<Vec<String>, SerializableError>::new(
