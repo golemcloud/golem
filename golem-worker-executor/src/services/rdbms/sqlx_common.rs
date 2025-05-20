@@ -845,11 +845,28 @@ where
 
         let mut tx_conn = self.tx_connection.0.lock().await;
 
-        if tx_conn.open {
-            let _ = DB::TransactionManager::rollback(&mut tx_conn.connection).await;
-        }
+        let result = if tx_conn.open {
+            let result = DB::TransactionManager::rollback(&mut tx_conn.connection)
+                .await
+                .map_err(|e| {
+                    let e = Error::query_execution_failure(e);
+                    error!(
+                        rdbms_type = self.rdbms_type.to_string(),
+                        pool_key = self.pool_key.to_string(),
+                        transaction_id = self.transaction_id.to_string(),
+                        "rollback if open transaction - error: {}",
+                        e
+                    );
+                    e
+                });
+            tx_conn.open = false;
+            result
+        } else {
+            Ok(())
+        };
 
-        self.record_metrics("rollback-transaction-if-open", start, Ok(()))
+        self.record_metrics("rollback-transaction-if-open", start, result)
+            .or(Ok(()))
     }
 }
 
