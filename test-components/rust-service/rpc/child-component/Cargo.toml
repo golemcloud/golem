@@ -3,7 +3,7 @@ name = "child-component"
 version = "0.0.1"
 edition = "2021"
 homepage = "https://golem.cloud"
-license = "Apache-2.0"
+
 
 [package.metadata.component.target]
 path = "wit-generated"
