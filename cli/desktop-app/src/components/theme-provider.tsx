@@ -1,6 +1,21 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import { listenThemeChange, Theme } from "@/lib/tauri&web.ts";
 
-type Theme = "dark" | "light" | "system";
+function useSystemTheme() {
+  const [systemTheme, setSystemTheme] = useState<Exclude<Theme, "system">>(
+      window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+  )
+
+  useEffect(function () {
+    const unlisten = listenThemeChange((event) => {
+      setSystemTheme(event.payload)
+    });
+
+    return unlisten;
+  }, []);
+
+  return systemTheme;
+}
 
 type ThemeProviderProps = {
   children: React.ReactNode;
@@ -29,6 +44,7 @@ export function ThemeProvider({
   const [theme, setTheme] = useState<Theme>(
     () => (localStorage.getItem(storageKey) as Theme) || defaultTheme,
   );
+  const systemTheme = useSystemTheme()
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -36,17 +52,12 @@ export function ThemeProvider({
     root.classList.remove("light", "dark");
 
     if (theme === "system") {
-      const systemTheme = window.matchMedia("(prefers-color-scheme: dark)")
-        .matches
-        ? "dark"
-        : "light";
-
       root.classList.add(systemTheme);
       return;
     }
 
     root.classList.add(theme);
-  }, [theme]);
+  }, [theme, systemTheme]);
 
   const value = {
     theme,
