@@ -664,6 +664,7 @@ async fn db_transaction_drop<Ctx, T>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + 'static,
+    dyn RdbmsService: RdbmsTypeService<T>,
 {
     let interface = get_db_transaction_interface::<T>();
 
@@ -675,8 +676,22 @@ where
         .table()
         .delete::<RdbmsTransactionEntry<T>>(entry)?;
 
-    if let RdbmsTransactionState::Open(transaction) = entry.state {
-        let _ = transaction.rollback_if_open().await;
+    if ctx.durable_execution_state().is_live {
+        if let RdbmsTransactionState::Open(transaction) = entry.state {
+            let _ = transaction.rollback_if_open().await;
+
+            let _ = ctx
+                .state
+                .rdbms_service
+                .deref()
+                .rdbms_type_service()
+                .cleanup_transaction(
+                    &entry.pool_key,
+                    &ctx.owned_worker_id.worker_id,
+                    &transaction.transaction_id(),
+                )
+                .await;
+        }
     }
 
     rolled_back_durable_transaction_if_open(ctx, handle).await?;
@@ -1300,7 +1315,7 @@ fn get_begin_oplog_index<Ctx: WorkerCtx>(
     handle: u32,
 ) -> anyhow::Result<OplogIndex> {
     let begin_oplog_idx = *ctx.state.open_function_table.get(&handle).ok_or_else(|| {
-        anyhow!("No matching BeginRemoteWrite index was found for the open Rdbms request")
+        anyhow!("No matching begin oplog index was found for the open Rdbms request")
     })?;
     Ok(begin_oplog_idx)
 }
