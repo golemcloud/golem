@@ -36,7 +36,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
-pub trait RdbmsType: Debug + Display + Default + Send {
+pub trait RdbmsType:
+    Debug + Display + Default + PartialEq + Encode + Decode + Clone + Send
+{
     type DbColumn: Clone
         + Send
         + Sync

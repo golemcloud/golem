@@ -28,6 +28,7 @@ use golem_worker_executor::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsTy
 use golem_worker_executor::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use mac_address::MacAddress;
 use serde_json::json;
+use std::any::{Any, TypeId};
 use std::collections::{Bound, HashMap};
 use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -62,19 +63,19 @@ fn rdbms_service() -> RdbmsServiceDefault {
 }
 
 #[derive(Clone, Debug)]
-enum StatementAction<T: RdbmsType + Clone> {
+enum StatementAction<T: RdbmsType> {
     Execute(ExpectedExecuteResult),
     Query(ExpectedQueryResult<T>),
     QueryStream(ExpectedQueryResult<T>),
 }
 
 #[derive(Clone, Debug)]
-struct ExpectedQueryResult<T: RdbmsType + Clone> {
+struct ExpectedQueryResult<T: RdbmsType> {
     expected_columns: Option<Vec<T::DbColumn>>,
     expected_rows: Option<Vec<DbRow<T::DbValue>>>,
 }
 
-impl<T: RdbmsType + Clone> ExpectedQueryResult<T> {
+impl<T: RdbmsType> ExpectedQueryResult<T> {
     fn new(
         expected_columns: Option<Vec<T::DbColumn>>,
         expected_rows: Option<Vec<DbRow<T::DbValue>>>,
@@ -98,7 +99,7 @@ impl ExpectedExecuteResult {
 }
 
 #[derive(Clone, Debug)]
-enum StatementResult<T: RdbmsType + Clone + 'static> {
+enum StatementResult<T: RdbmsType + 'static> {
     Execute(u64),
     Query(DbResult<T>),
 }
@@ -112,13 +113,13 @@ enum TransactionEnd {
 }
 
 #[derive(Debug, Clone)]
-struct StatementTest<T: RdbmsType + Clone> {
+struct StatementTest<T: RdbmsType> {
     pub action: StatementAction<T>,
     pub statement: &'static str,
     pub params: Vec<T::DbValue>,
 }
 
-impl<T: RdbmsType + Clone> StatementTest<T> {
+impl<T: RdbmsType> StatementTest<T> {
     fn execute_test(
         statement: &'static str,
         params: Vec<T::DbValue>,
@@ -193,12 +194,12 @@ impl<T: RdbmsType + Clone> StatementTest<T> {
 }
 
 #[derive(Debug, Clone)]
-struct RdbmsTest<T: RdbmsType + Clone> {
+struct RdbmsTest<T: RdbmsType> {
     statements: Vec<StatementTest<T>>,
     transaction_end: Option<TransactionEnd>,
 }
 
-impl<T: RdbmsType + Clone> RdbmsTest<T> {
+impl<T: RdbmsType> RdbmsTest<T> {
     fn new(statements: Vec<StatementTest<T>>, transaction_end: Option<TransactionEnd>) -> Self {
         Self {
             statements,
@@ -2438,7 +2439,7 @@ async fn mysql_create_insert_select_test(
     .await;
 }
 
-async fn execute_rdbms_test<T: RdbmsType + Clone + 'static>(
+async fn execute_rdbms_test<T: RdbmsType + 'static>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     pool_key: &RdbmsPoolKey,
     worker_id: &WorkerId,
@@ -2494,7 +2495,7 @@ async fn execute_rdbms_test<T: RdbmsType + Clone + 'static>(
                     .expect("Transaction pre rollback");
                 transaction.rollback().await.expect("Transaction rollback")
             }
-            TransactionEnd::None => ()
+            TransactionEnd::None => (),
         }
     } else {
         for st in test.statements {
@@ -2532,7 +2533,7 @@ async fn execute_rdbms_test<T: RdbmsType + Clone + 'static>(
     (transaction_id, results)
 }
 
-async fn rdbms_test<T: RdbmsType + Clone + 'static>(
+async fn rdbms_test<T: RdbmsType + 'static>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
     test: RdbmsTest<T>,
@@ -2560,7 +2561,7 @@ async fn rdbms_test<T: RdbmsType + Clone + 'static>(
     check!(!exists);
 }
 
-async fn check_transaction<T: RdbmsType + Clone + 'static>(
+async fn check_transaction<T: RdbmsType + 'static>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     pool_key: &RdbmsPoolKey,
     worker_id: &WorkerId,
@@ -2594,7 +2595,7 @@ async fn check_transaction<T: RdbmsType + Clone + 'static>(
                     "transaction status for worker {worker_id} is rolled back"
                 );
             }
-            TransactionEnd::None => (), // TODO
+            TransactionEnd::None => (),
         }
 
         let result = rdbms
@@ -2604,10 +2605,25 @@ async fn check_transaction<T: RdbmsType + Clone + 'static>(
             result.is_ok(),
             "transaction cleanup for worker {worker_id} is ok"
         );
+
+        if PostgresType.type_id() != TypeId::of::<T>() {
+            let transaction_status = rdbms
+                .get_transaction_status(&pool_key, &worker_id, &transaction_id)
+                .await;
+            check!(
+                transaction_status.is_ok(),
+                "transaction status for worker {worker_id} is ok"
+            );
+            let transaction_status = transaction_status.unwrap();
+            check!(
+                transaction_status == RdbmsTransactionStatus::NotFound,
+                "transaction status for worker {worker_id} is cleaned up"
+            );
+        }
     }
 }
 
-fn check_test_results<T: RdbmsType + Clone>(
+fn check_test_results<T: RdbmsType>(
     worker_id: &WorkerId,
     test: RdbmsTest<T>,
     results: Vec<Result<StatementResult<T>, Error>>,
@@ -2969,7 +2985,7 @@ async fn postgres_par_test(postgres: &DockerPostgresRdb, rdbms_service: &RdbmsSe
     .await
 }
 
-async fn create_test_databases<T: RdbmsType + Clone + 'static>(
+async fn create_test_databases<T: RdbmsType + 'static>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
     count: u8,
@@ -3006,7 +3022,7 @@ async fn create_test_databases<T: RdbmsType + Clone + 'static>(
     values
 }
 
-async fn rdbms_par_test<T: RdbmsType + Clone + 'static>(
+async fn rdbms_par_test<T: RdbmsType + 'static>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_addresses: Vec<String>,
     count: u8,

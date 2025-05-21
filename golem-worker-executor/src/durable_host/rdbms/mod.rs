@@ -54,7 +54,7 @@ async fn open_db_connection<Ctx, T, E>(
 ) -> anyhow::Result<Result<Resource<RdbmsConnection<T>>, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     E: From<RdbmsError>,
 {
@@ -85,7 +85,7 @@ async fn begin_db_transaction<Ctx, T, E>(
 ) -> anyhow::Result<Result<Resource<RdbmsTransactionEntry<T>>, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Send + Sync + Clone + 'static,
+    T: RdbmsType + Send + Sync + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     E: From<RdbmsError>,
 {
@@ -133,7 +133,7 @@ async fn db_connection_durable_execute<Ctx, T, P, E>(
 ) -> anyhow::Result<Result<u64, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
@@ -165,7 +165,7 @@ async fn db_connection_durable_query<Ctx, T, P, R, E>(
 ) -> anyhow::Result<Result<R, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     R: FromRdbmsValue<crate::services::rdbms::DbResult<T>>,
@@ -205,7 +205,7 @@ async fn db_connection_durable_query_stream<Ctx, T, P, E>(
 ) -> anyhow::Result<Result<Resource<RdbmsResultStreamEntry<T>>, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
+    T: RdbmsType + 'static,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
@@ -257,7 +257,7 @@ async fn db_connection_drop<Ctx, T>(
 ) -> anyhow::Result<()>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
     let interface = get_db_connection_interface::<T>();
@@ -288,7 +288,7 @@ async fn db_result_stream_durable_get_columns<Ctx, T, R>(
 ) -> anyhow::Result<Vec<R>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     R: FromRdbmsValue<T::DbColumn>,
 {
@@ -340,7 +340,7 @@ async fn db_result_stream_durable_get_next<Ctx, T, R>(
 ) -> anyhow::Result<Option<Vec<R>>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     R: FromRdbmsValue<crate::services::rdbms::DbRow<T::DbValue>>,
 {
@@ -396,7 +396,7 @@ async fn db_result_stream_drop<Ctx, T>(
 ) -> anyhow::Result<()>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
 {
     let interface = get_db_result_stream_interface::<T>();
     ctx.observe_function_call(interface.as_str(), "drop");
@@ -424,7 +424,7 @@ async fn db_transaction_durable_query<Ctx, T, P, R, E>(
 ) -> anyhow::Result<Result<R, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     R: FromRdbmsValue<crate::services::rdbms::DbResult<T>>,
@@ -466,7 +466,7 @@ async fn db_transaction_durable_execute<Ctx, T, P, E>(
 ) -> anyhow::Result<Result<u64, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
@@ -500,7 +500,7 @@ async fn db_transaction_durable_query_stream<Ctx, T, P, E>(
 ) -> anyhow::Result<Result<Resource<RdbmsResultStreamEntry<T>>, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
+    T: RdbmsType + 'static,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
@@ -543,7 +543,7 @@ async fn db_transaction_durable_rollback<Ctx, T, E>(
 ) -> anyhow::Result<Result<(), E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
+    T: RdbmsType + 'static,
     E: From<RdbmsError>,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
@@ -603,7 +603,7 @@ async fn db_transaction_durable_commit<Ctx, T, E>(
 ) -> anyhow::Result<Result<(), E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
+    T: RdbmsType + 'static,
     E: From<RdbmsError>,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
@@ -663,7 +663,7 @@ async fn db_transaction_drop<Ctx, T>(
 ) -> anyhow::Result<()>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
 {
     let interface = get_db_transaction_interface::<T>();
 
@@ -699,13 +699,13 @@ impl<T: RdbmsType> RdbmsConnection<T> {
 }
 
 #[derive(Clone)]
-pub struct RdbmsResultStreamEntry<T: RdbmsType + Clone + 'static> {
+pub struct RdbmsResultStreamEntry<T: RdbmsType + 'static> {
     request: RdbmsRequest<T>,
     state: RdbmsResultStreamState<T>,
     transaction_handle: Option<u32>,
 }
 
-impl<T: RdbmsType + Clone + 'static> RdbmsResultStreamEntry<T> {
+impl<T: RdbmsType + 'static> RdbmsResultStreamEntry<T> {
     fn new(
         request: RdbmsRequest<T>,
         state: RdbmsResultStreamState<T>,
@@ -727,7 +727,7 @@ impl<T: RdbmsType + Clone + 'static> RdbmsResultStreamEntry<T> {
 }
 
 #[derive(Clone)]
-pub enum RdbmsResultStreamState<T: RdbmsType + Clone + 'static> {
+pub enum RdbmsResultStreamState<T: RdbmsType + 'static> {
     New,
     Open(Arc<dyn crate::services::rdbms::DbResultStream<T> + Send + Sync>),
 }
@@ -738,7 +738,7 @@ fn is_db_query_stream_in_transaction<Ctx, T>(
 ) -> anyhow::Result<bool>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
+    T: RdbmsType + 'static,
 {
     let transaction_handle = ctx
         .as_wasi_view()
@@ -754,7 +754,7 @@ async fn get_db_query_stream<Ctx, T>(
 ) -> Result<Arc<dyn crate::services::rdbms::DbResultStream<T> + Send + Sync>, RdbmsError>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
     let query_stream_entry = ctx
@@ -809,12 +809,12 @@ where
 }
 
 #[derive(Clone)]
-pub struct RdbmsTransactionEntry<T: RdbmsType + Clone + 'static> {
+pub struct RdbmsTransactionEntry<T: RdbmsType + 'static> {
     pool_key: RdbmsPoolKey,
     state: RdbmsTransactionState<T>,
 }
 
-impl<T: RdbmsType + Clone + 'static> RdbmsTransactionEntry<T> {
+impl<T: RdbmsType + 'static> RdbmsTransactionEntry<T> {
     fn new(pool_key: RdbmsPoolKey, state: RdbmsTransactionState<T>) -> Self {
         Self { pool_key, state }
     }
@@ -837,7 +837,7 @@ impl<T: RdbmsType + Clone + 'static> RdbmsTransactionEntry<T> {
 }
 
 #[derive(Clone)]
-pub enum RdbmsTransactionState<T: RdbmsType + Clone + 'static> {
+pub enum RdbmsTransactionState<T: RdbmsType + 'static> {
     Open(Arc<dyn crate::services::rdbms::DbTransaction<T> + Send + Sync>),
     Closed(RdbmsTransactionId),
 }
@@ -854,7 +854,7 @@ fn get_db_transaction<Ctx, T>(
 >
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
 {
     let transaction_entry = ctx
         .as_wasi_view()
@@ -882,7 +882,7 @@ async fn db_connection_query<Ctx, T, P>(
 )
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
 {
@@ -922,7 +922,7 @@ async fn db_connection_execute<Ctx, T, P>(
 ) -> (Option<RdbmsRequest<T>>, Result<u64, RdbmsError>)
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
 {
@@ -963,7 +963,7 @@ fn db_connection_query_stream<Ctx, T, P>(
 ) -> Result<RdbmsRequest<T>, RdbmsError>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
     T::DbValue: FromRdbmsValue<P>,
 {
     let pool_key = ctx
@@ -991,7 +991,7 @@ async fn db_transaction_query<Ctx, T, P>(
 )
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
 {
@@ -1026,7 +1026,7 @@ async fn db_transaction_execute<Ctx, T, P>(
 ) -> (Option<RdbmsRequest<T>>, Result<u64, RdbmsError>)
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
 {
@@ -1061,7 +1061,7 @@ fn db_transaction_query_stream<Ctx, T, P>(
 ) -> Result<RdbmsRequest<T>, RdbmsError>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
     T::DbValue: FromRdbmsValue<P>,
 {
     match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
@@ -1084,7 +1084,7 @@ async fn db_transaction_pre_commit<Ctx, T>(
 ) -> Result<(), RdbmsError>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
 {
     let state = ctx
         .as_wasi_view()
@@ -1105,7 +1105,7 @@ async fn db_transaction_commit<Ctx, T>(
 ) -> Result<(), RdbmsError>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
 {
     let state = ctx
         .as_wasi_view()
@@ -1134,7 +1134,7 @@ async fn db_transaction_pre_rollback<Ctx, T>(
 ) -> Result<(), RdbmsError>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
 {
     let state = ctx
         .as_wasi_view()
@@ -1155,7 +1155,7 @@ async fn db_transaction_rollback<Ctx, T>(
 ) -> Result<(), RdbmsError>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
 {
     let state = ctx
         .as_wasi_view()
@@ -1184,7 +1184,7 @@ async fn db_transaction_cleanup<Ctx, T>(
 ) -> Result<(), RdbmsError>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + 'static,
+    T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
     let result = ctx
@@ -1314,7 +1314,7 @@ struct RdbmsRemoteTransactionHandler<T: RdbmsType> {
 
 impl<T> RdbmsRemoteTransactionHandler<T>
 where
-    T: RdbmsType + Send + Sync + Clone + 'static,
+    T: RdbmsType + Send + Sync + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
     fn new(
@@ -1349,7 +1349,7 @@ where
 impl<T> RemoteTransactionHandler<RdbmsTransactionState<T>, RdbmsError>
     for RdbmsRemoteTransactionHandler<T>
 where
-    T: RdbmsType + Send + Sync + Clone + 'static,
+    T: RdbmsType + Send + Sync + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
     async fn create_new(&self) -> Result<(String, RdbmsTransactionState<T>), RdbmsError> {

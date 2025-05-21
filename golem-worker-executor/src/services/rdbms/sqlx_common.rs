@@ -946,7 +946,7 @@ where
 #[async_trait]
 impl<T, DB> DbResultStream<T> for SqlxDbResultStream<'_, T, DB>
 where
-    T: RdbmsType + Sync + Clone,
+    T: RdbmsType + Sync,
     DB: Database,
     DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
 {

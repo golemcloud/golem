@@ -77,10 +77,12 @@ impl GolemTransactionRepo<sqlx::MySql> for MysqlType {
             );
             "#,
         );
-        let _res = query
-            .execute(executor)
-            .await
-            .map_err(Error::query_execution_failure)?;
+        let _ = query.execute(executor).await.map_err(|e| {
+            Error::other_response_failure(format!(
+                "There was a problem to create 'golem_transactions' table (error: {})",
+                e
+            ))
+        })?; // TODO better error message
         Ok(())
     }
 
