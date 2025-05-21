@@ -2494,10 +2494,7 @@ async fn execute_rdbms_test<T: RdbmsType + Clone + 'static>(
                     .expect("Transaction pre rollback");
                 transaction.rollback().await.expect("Transaction rollback")
             }
-            TransactionEnd::None => transaction
-                .rollback_if_open()
-                .await
-                .expect("Transaction rollback"),
+            TransactionEnd::None => ()
         }
     } else {
         for st in test.statements {

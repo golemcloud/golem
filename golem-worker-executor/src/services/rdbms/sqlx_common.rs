@@ -18,7 +18,6 @@ use crate::services::rdbms::{
     DbResult, DbResultStream, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey, RdbmsStatus,
     RdbmsTransactionId, RdbmsTransactionStatus, RdbmsType,
 };
-use async_dropper_simple::AsyncDrop;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::future::BoxFuture;
@@ -870,15 +869,18 @@ where
     }
 }
 
-#[async_trait]
-impl<T, DB> AsyncDrop for SqlxDbTransaction<T, DB>
+impl<T, DB> Drop for SqlxDbTransaction<T, DB>
 where
-    T: RdbmsType + Sync + QueryExecutor<T, DB> + TransactionSupport<T, DB>,
+    T: RdbmsType,
     DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
 {
-    async fn async_drop(&mut self) {
-        let _ = SqlxDbTransaction::rollback_if_open(self).await;
+    fn drop(&mut self) {
+        if let Some(mut tx_conn) = self.tx_connection.0.try_lock() {
+            if tx_conn.open {
+                DB::TransactionManager::start_rollback(&mut tx_conn.connection);
+                tx_conn.open = false;
+            }
+        }
     }
 }
 
