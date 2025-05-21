@@ -84,7 +84,7 @@ async fn env_vars(
     grpc_port: u16,
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-    worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+    worker_service: Arc<dyn WorkerService + 'static>,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     verbosity: Level,
 ) -> HashMap<String, String> {

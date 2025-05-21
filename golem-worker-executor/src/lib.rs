@@ -71,6 +71,16 @@ impl Bootstrap<Context> for ServerBootstrap {
         Arc::new(ActiveWorkers::<Context>::new(&golem_config.memory))
     }
 
+    fn create_plugins(
+        &self,
+        golem_config: &GolemConfig,
+    ) -> (
+        Arc<dyn Plugins<DefaultGolemTypes>>,
+        Arc<dyn PluginsObservations>,
+    ) {
+        plugins::default_configured(&golem_config.plugin_service)
+    }
+
     fn create_component_service(
         &self,
         golem_config: &GolemConfig,
@@ -86,16 +96,6 @@ impl Bootstrap<Context> for ServerBootstrap {
         )
     }
 
-    fn create_plugins(
-        &self,
-        golem_config: &GolemConfig,
-    ) -> (
-        Arc<dyn Plugins<DefaultGolemTypes>>,
-        Arc<dyn PluginsObservations>,
-    ) {
-        plugins::default_configured(&golem_config.plugin_service)
-    }
-
     async fn create_services(
         &self,
         active_workers: Arc<ActiveWorkers<Context>>,
@@ -103,24 +103,24 @@ impl Bootstrap<Context> for ServerBootstrap {
         linker: Arc<Linker<Context>>,
         runtime: Handle,
         component_service: Arc<dyn ComponentService<DefaultGolemTypes>>,
-        shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
-        worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
-        running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
-        promise_service: Arc<dyn PromiseService + Send + Sync>,
+        shard_manager_service: Arc<dyn ShardManagerService>,
+        worker_service: Arc<dyn WorkerService>,
+        worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
+        running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService>,
+        promise_service: Arc<dyn PromiseService>,
         golem_config: Arc<GolemConfig>,
-        shard_service: Arc<dyn ShardService + Send + Sync>,
-        key_value_service: Arc<dyn KeyValueService + Send + Sync>,
-        blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator<Context> + Send + Sync>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        shard_service: Arc<dyn ShardService>,
+        key_value_service: Arc<dyn KeyValueService>,
+        blob_store_service: Arc<dyn BlobStoreService>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService>,
+        worker_activator: Arc<dyn WorkerActivator<Context>>,
+        oplog_service: Arc<dyn OplogService>,
+        scheduler_service: Arc<dyn SchedulerService>,
+        worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
-        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<Context>> {
         let additional_deps = AdditionalDeps {};
 

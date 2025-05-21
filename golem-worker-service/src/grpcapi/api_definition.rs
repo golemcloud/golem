@@ -43,6 +43,7 @@ use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiDefinitionTraceErrorKind;
 use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
+use openapiv3::OpenAPI;
 
 #[derive(Clone)]
 pub struct GrpcApiDefinitionService {
@@ -270,9 +271,26 @@ impl GrpcApiDefinitionService {
                     .await?
             }
             create_api_definition_request::ApiDefinition::Openapi(definition) => {
-                let converted = OpenApiHttpApiDefinition(
-                    serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?,
-                );
+                // Try YAML first
+                let oas_definition = match serde_yaml::from_str::<OpenAPI>(&definition) {
+                    Ok(value) => value,
+                    Err(yaml_err) => {
+                        // If YAML fails, try JSON
+                        match serde_json::from_str::<OpenAPI>(&definition) {
+                            Ok(value) => value,
+                            Err(json_err) => {
+                                // If both fail, return a combined error
+                                return Err(bad_request(format!(
+                                    "Invalid format: Not valid YAML ({}) or JSON ({})",
+                                    yaml_err, json_err
+                                )));
+                            }
+                        }
+                    }
+                };
+
+                let converted = OpenApiHttpApiDefinition(oas_definition);
+
                 self.definition_service
                     .create_with_oas(
                         &converted,
@@ -313,9 +331,26 @@ impl GrpcApiDefinitionService {
                     .await?
             }
             update_api_definition_request::ApiDefinition::Openapi(definition) => {
-                let converted = OpenApiHttpApiDefinition(
-                    serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?,
-                );
+                // Try YAML first
+                let oas_definition = match serde_yaml::from_str::<OpenAPI>(&definition) {
+                    Ok(value) => value,
+                    Err(yaml_err) => {
+                        // If YAML fails, try JSON
+                        match serde_json::from_str::<OpenAPI>(&definition) {
+                            Ok(value) => value,
+                            Err(json_err) => {
+                                // If both fail, return a combined error
+                                return Err(bad_request(format!(
+                                    "Invalid format: Not valid YAML ({}) or JSON ({})",
+                                    yaml_err, json_err
+                                )));
+                            }
+                        }
+                    }
+                };
+
+                let converted = OpenApiHttpApiDefinition(oas_definition);
+
                 self.definition_service
                     .update_with_oas(
                         &converted,

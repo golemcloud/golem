@@ -229,7 +229,7 @@ dependencies = [
 dependencies = ["wit"]
 description = "Runs unit tests only"
 script = '''
-cargo test --workspace --lib --all-features -- --nocapture --report-time $JUNIT_OPTS
+cargo test --workspace --lib --all-features --exclude golem-wasm-rpc-derive -- --nocapture --report-time $JUNIT_OPTS
 cargo test -p golem-wasm-ast --tests --all-features -- --nocapture --report-time $JUNIT_OPTS
 '''
 

@@ -19,16 +19,16 @@ use crate::model::public_oplog::{
     ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, PendingUpdateParameters,
-    PendingWorkerInvocationParameters, PluginInstallationDescription, PublicAttributeValue,
-    PublicDurableFunctionType, PublicLocalSpanData, PublicOplogEntry, PublicRetryConfig,
-    PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters,
-    SnapshotBasedUpdateParameters, StringAttributeValue, SuccessfulUpdateParameters,
-    TimestampParameter,
+    PendingWorkerInvocationParameters, PluginInstallationDescription, PublicAttribute,
+    PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData, PublicOplogEntry,
+    PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
+    ResourceParameters, SnapshotBasedUpdateParameters, StringAttributeValue,
+    SuccessfulUpdateParameters, TimestampParameter,
 };
 use crate::model::{
     AccountId, ComponentId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 use crate::model::invocation_context::{SpanId, TraceId};
@@ -130,12 +130,12 @@ fn exported_function_invoked_serialization_poem_serde_equivalence() {
             start: rounded_ts(Timestamp::now_utc()),
             parent_id: None,
             linked_context: None,
-            attributes: HashMap::from_iter(vec![(
-                "a".to_string(),
-                PublicAttributeValue::String(StringAttributeValue {
+            attributes: vec![PublicAttribute {
+                key: "a".to_string(),
+                value: PublicAttributeValue::String(StringAttributeValue {
                     value: "b".to_string(),
                 }),
-            )]),
+            }],
             inherited: true,
         })]],
     });
@@ -320,12 +320,12 @@ fn pending_worker_invocation_serialization_poem_serde_equivalence() {
                 start: rounded_ts(Timestamp::now_utc()),
                 parent_id: None,
                 linked_context: None,
-                attributes: HashMap::from_iter(vec![(
-                    "a".to_string(),
-                    PublicAttributeValue::String(StringAttributeValue {
+                attributes: vec![PublicAttribute {
+                    key: "a".to_string(),
+                    value: PublicAttributeValue::String(StringAttributeValue {
                         value: "b".to_string(),
                     }),
-                )]),
+                }],
                 inherited: true,
             })]],
         }),

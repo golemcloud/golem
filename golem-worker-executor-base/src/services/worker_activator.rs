@@ -25,7 +25,7 @@ use tracing::{error, warn};
 
 /// Service for activating workers in the background
 #[async_trait]
-pub trait WorkerActivator<Ctx: WorkerCtx> {
+pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
     /// Makes sure an already existing worker is active in a background task. Returns immediately
     async fn activate_worker(&self, owned_worker_id: &OwnedWorkerId);
 
@@ -51,7 +51,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx> {
 }
 
 pub struct LazyWorkerActivator<Ctx: WorkerCtx> {
-    worker_activator: Arc<Mutex<Option<Arc<dyn WorkerActivator<Ctx> + Send + Sync + 'static>>>>,
+    worker_activator: Arc<Mutex<Option<Arc<dyn WorkerActivator<Ctx> + 'static>>>>,
 }
 
 impl<Ctx: WorkerCtx> LazyWorkerActivator<Ctx> {
@@ -61,7 +61,7 @@ impl<Ctx: WorkerCtx> LazyWorkerActivator<Ctx> {
         }
     }
 
-    pub fn set(&self, worker_activator: Arc<impl WorkerActivator<Ctx> + Send + Sync + 'static>) {
+    pub fn set(&self, worker_activator: Arc<impl WorkerActivator<Ctx> + 'static>) {
         *self.worker_activator.lock().unwrap() = Some(worker_activator);
     }
 }

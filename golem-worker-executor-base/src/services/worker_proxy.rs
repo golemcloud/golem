@@ -43,7 +43,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 #[async_trait]
-pub trait WorkerProxy {
+pub trait WorkerProxy: Send + Sync {
     async fn invoke_and_await(
         &self,
         owned_worker_id: &OwnedWorkerId,

@@ -320,8 +320,7 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> FileServerBindingHandler<
                     file.key
                 )))
                 .map(|stream| {
-                    let mapped =
-                        stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+                    let mapped = stream.map_err(std::io::Error::other);
                     Box::pin(mapped)
                 })?;
 
@@ -352,8 +351,7 @@ impl<Namespace: GolemNamespace, AuthCtx: GolemAuthCtx> FileServerBindingHandler<
                 .get_file_contents(&worker_id, binding_details.file_path.clone(), &namespace)
                 .await?;
 
-            let stream =
-                stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()));
+            let stream = stream.map_err(|e| std::io::Error::other(e.to_string()));
 
             Ok(FileServerBindingSuccess {
                 binding_details,

@@ -441,10 +441,10 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     let primary_oplog_service = Arc::new(
         PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 100).await,
     );
-    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
         CompressedOplogArchiveService::new(indexed_storage.clone(), 1),
     );
-    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> =
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
     let oplog_service = Arc::new(MultiLayerOplogService::new(
         primary_oplog_service.clone(),
@@ -794,7 +794,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
     let primary_oplog_service = Arc::new(
         PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 100).await,
     );
-    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+    let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
     } else {
         Arc::new(CompressedOplogArchiveService::new(
@@ -802,7 +802,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             1,
         ))
     };
-    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+    let tertiary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
     } else {
         Arc::new(CompressedOplogArchiveService::new(
@@ -925,7 +925,7 @@ async fn read_from_archive_impl(use_blob: bool) {
     let primary_oplog_service = Arc::new(
         PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 100).await,
     );
-    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+    let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
     } else {
         Arc::new(CompressedOplogArchiveService::new(
@@ -933,7 +933,7 @@ async fn read_from_archive_impl(use_blob: bool) {
             1,
         ))
     };
-    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+    let tertiary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
     } else {
         Arc::new(CompressedOplogArchiveService::new(
@@ -1025,7 +1025,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     let primary_oplog_service = Arc::new(
         PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 100).await,
     );
-    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+    let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
     } else {
         Arc::new(CompressedOplogArchiveService::new(
@@ -1033,7 +1033,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             1,
         ))
     };
-    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+    let tertiary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
     } else {
         Arc::new(CompressedOplogArchiveService::new(
@@ -1166,7 +1166,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     let mut primary_oplog_service = Arc::new(
         PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 100).await,
     );
-    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+    let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
     } else {
         Arc::new(CompressedOplogArchiveService::new(
@@ -1174,7 +1174,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             1,
         ))
     };
-    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+    let tertiary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
     } else {
         Arc::new(CompressedOplogArchiveService::new(
@@ -1424,7 +1424,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
     let primary_oplog_service = Arc::new(
         PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 100).await,
     );
-    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+    let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
     } else {
         Arc::new(CompressedOplogArchiveService::new(
@@ -1432,7 +1432,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
             1,
         ))
     };
-    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+    let tertiary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
     } else {
         Arc::new(CompressedOplogArchiveService::new(
@@ -1535,7 +1535,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
     let primary_oplog_service = Arc::new(
         PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 100).await,
     );
-    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+    let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
     } else {
         Arc::new(CompressedOplogArchiveService::new(
@@ -1543,7 +1543,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
             1,
         ))
     };
-    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+    let tertiary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
     } else {
         Arc::new(CompressedOplogArchiveService::new(
@@ -1679,10 +1679,10 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
     let primary_oplog_service = Arc::new(
         PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 100).await,
     );
-    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
         CompressedOplogArchiveService::new(indexed_storage.clone(), 1),
     );
-    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> =
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
 
     let oplog_service = Arc::new(MultiLayerOplogService::new(

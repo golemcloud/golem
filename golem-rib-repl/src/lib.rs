@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(clippy::large_enum_variant)]
+
 pub use dependency_manager::*;
 pub use invoke::*;
 pub use repl_printer::*;

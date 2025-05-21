@@ -51,7 +51,7 @@ async fn open_db_connection<Ctx, T, E>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
     E: From<RdbmsError>,
 {
     let interface = get_db_connection_interface::<T>();
@@ -116,7 +116,7 @@ async fn db_connection_durable_execute<Ctx, T, P, E>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
@@ -148,7 +148,7 @@ async fn db_connection_durable_query<Ctx, T, P, R, E>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     R: FromRdbmsValue<crate::services::rdbms::DbResult<T>>,
     E: From<RdbmsError>,
@@ -240,7 +240,7 @@ async fn db_connection_drop<Ctx, T>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
 {
     let interface = get_db_connection_interface::<T>();
     ctx.observe_function_call(interface.as_str(), "drop");
@@ -271,7 +271,7 @@ async fn db_result_stream_durable_get_columns<Ctx, T, R>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
     R: FromRdbmsValue<T::DbColumn>,
 {
     let interface = get_db_result_stream_interface::<T>();
@@ -316,7 +316,7 @@ async fn db_result_stream_durable_get_next<Ctx, T, R>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
     R: FromRdbmsValue<crate::services::rdbms::DbRow<T::DbValue>>,
 {
     let interface = get_db_result_stream_interface::<T>();
@@ -398,7 +398,7 @@ async fn db_transaction_durable_query<Ctx, T, P, R, E>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     R: FromRdbmsValue<crate::services::rdbms::DbResult<T>>,
     E: From<RdbmsError>,
@@ -440,7 +440,7 @@ async fn db_transaction_durable_execute<Ctx, T, P, E>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
@@ -658,7 +658,7 @@ async fn get_db_query_stream<Ctx, T>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
 {
     let query_stream_entry = ctx
         .as_wasi_view()
@@ -751,7 +751,7 @@ async fn get_db_transaction<Ctx, T>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
 {
     let transaction_entry = ctx
         .as_wasi_view()
@@ -804,7 +804,7 @@ async fn db_connection_query<Ctx, T, P>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
 {
     let worker_id = ctx.state.owned_worker_id.worker_id.clone();
@@ -844,7 +844,7 @@ async fn db_connection_execute<Ctx, T, P>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
 {
     let worker_id = ctx.state.owned_worker_id.worker_id.clone();
@@ -913,7 +913,7 @@ async fn db_transaction_query<Ctx, T, P>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
 {
     match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
@@ -943,7 +943,7 @@ async fn db_transaction_execute<Ctx, T, P>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + Clone + 'static,
-    dyn RdbmsService + Send + Sync: RdbmsTypeService<T>,
+    dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
 {
     match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {

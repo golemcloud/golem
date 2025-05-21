@@ -322,12 +322,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 let _ = writeln!(result, "{pad}linked span:       {}", &linked_id,);
             }
             let _ = writeln!(result, "{pad}attributes:");
-            for (k, v) in &params.attributes {
+            for attr in &params.attributes {
                 let _ = writeln!(
                     result,
                     "{pad}  - {}: {}",
-                    k,
-                    match v {
+                    attr.key,
+                    match &attr.value {
                         PublicAttributeValue::String(StringAttributeValue { value }) => value,
                     }
                 );

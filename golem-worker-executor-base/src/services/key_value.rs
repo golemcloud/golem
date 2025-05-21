@@ -26,7 +26,7 @@ use crate::storage::keyvalue::{
 
 /// Service implementing a persistent key-value store
 #[async_trait]
-pub trait KeyValueService {
+pub trait KeyValueService: Send + Sync {
     async fn delete(
         &self,
         account_id: AccountId,
