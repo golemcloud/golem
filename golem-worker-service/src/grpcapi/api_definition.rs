@@ -46,9 +46,6 @@ use golem_worker_service_base::api::ApiDefinitionTraceErrorKind;
 use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use openapiv3::OpenAPI;
-use golem_worker_service_base::api::HttpApiDefinitionResponseData;
-use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionResponse as InternalOpenApiHttpApiDefinitionResponse;
-use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 
 #[derive(Clone)]
 pub struct GrpcApiDefinitionService {
