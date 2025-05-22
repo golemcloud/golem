@@ -81,11 +81,11 @@ impl<'a> MergeTaskStack<'a> {
                             }
                         }
 
-                        let merged = flatten_all_of(field_types);
+                        let merged = merge_types(field_types);
 
-                        if !merged.is_unknown() {
+                        //if !merged.is_unknown() {
                             fields.push((field.to_string(), merged));
-                        }
+                        //}
                     }
 
                     let inferred_type =
@@ -108,7 +108,7 @@ impl<'a> MergeTaskStack<'a> {
                                 }
                             }
 
-                            let merged = flatten_all_of(variant_types);
+                            let merged = merge_types(variant_types);
 
                             variants.push((variant_name, Some(merged)));
                         } else {
@@ -135,7 +135,7 @@ impl<'a> MergeTaskStack<'a> {
                             }
                         }
 
-                        let merged = flatten_all_of(tuple_types);
+                        let merged = merge_types(tuple_types);
 
                         tuple.push(merged);
                     }
@@ -159,7 +159,7 @@ impl<'a> MergeTaskStack<'a> {
                             }
                         }
 
-                        let merged = flatten_all_of(ok_types);
+                        let merged = merge_types(ok_types);
 
                         ok = Some(merged);
                     }
@@ -174,7 +174,7 @@ impl<'a> MergeTaskStack<'a> {
                             }
                         }
 
-                        let merged = flatten_all_of(error_types);
+                        let merged = merge_types(error_types);
 
                         error = Some(merged);
                     }
@@ -195,7 +195,7 @@ impl<'a> MergeTaskStack<'a> {
                         }
                     }
 
-                    let merged = flatten_all_of(all_of_types);
+                    let merged = merge_types(all_of_types);
 
                     types.insert(all_of_builder.task_index, merged);
                 }
@@ -210,7 +210,7 @@ impl<'a> MergeTaskStack<'a> {
                         }
                     }
 
-                    let merged = flatten_all_of(list_types);
+                    let merged = merge_types(list_types);
 
                     let inferred_type =
                         InferredType::new(TypeInternal::List(merged), TypeOrigin::NoOrigin);
@@ -228,7 +228,7 @@ impl<'a> MergeTaskStack<'a> {
                         }
                     }
 
-                    let merged = flatten_all_of(list_types);
+                    let merged = merge_types(list_types);
 
                     let inferred_type =
                         InferredType::new(TypeInternal::Option(merged), TypeOrigin::NoOrigin);
@@ -252,7 +252,7 @@ impl<'a> MergeTaskStack<'a> {
         if final_types.len() == 1 {
             final_types[0].clone()
         } else {
-            flatten_all_of(final_types)
+            merge_types(final_types)
         }
     }
 
@@ -1237,7 +1237,7 @@ mod type_identifiers {
     }
 }
 
-pub fn flatten_all_of(types: Vec<InferredType>) -> InferredType {
+pub fn merge_types(types: Vec<InferredType>) -> InferredType {
     let mut result_map: HashMap<InferredType, InferredType> = HashMap::new();
     let mut queue: VecDeque<InferredType> = VecDeque::from(types);
 
