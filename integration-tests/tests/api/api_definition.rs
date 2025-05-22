@@ -522,7 +522,8 @@ paths:
           let status: u64 = 200;
           {{
             headers: {{
-              {{ContentType: "json", userid: "foo"}}
+              ContentType: "json",
+              userid: "foo"
             }},
             body: "Item added",
             status: status
@@ -656,7 +657,7 @@ async fn create_openapi_json_definition(deps: &EnvBasedTestDependencies) {
           "binding-type": "default",
           "component-name": "{unique_component_name}",
           "component-version": 0,
-          "response": "let worker = instance(\"{unique_component_name}\");\nlet result = worker.get-cart-contents();\nlet status: u64 = 200;\n{{\n  headers: {{\n    {{ContentType: \"json\", userid: \"foo\"}}\n  }},\n  body: \"Item added\",\n  status: status\n}}"
+          "response": "let worker = instance(\"{unique_component_name}\");\nlet result = worker.get-cart-contents();\nlet status: u64 = 200;\n{{\n  headers: {{\n    ContentType: \"json\",\n    userid: \"foo\"\n  }},\n  body: \"Item added\",\n  status: status\n}}"
         }}
       }},
       "options": {{
