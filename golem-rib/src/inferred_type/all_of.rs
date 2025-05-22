@@ -20,7 +20,8 @@ pub(crate) use internal::*;
 pub(crate) use type_identifiers::*;
 
 pub fn merge(inferred_types: &[InferredType]) -> InferredType {
-    get_merge_task(inferred_types).complete()
+    let result = get_merge_task(inferred_types).complete();
+    result
 }
 
 // This module is responsible to merge the types when constructing InferredType::AllOf, while
@@ -299,7 +300,7 @@ impl<'a> MergeTaskStack<'a> {
         &mut self,
         tuple_identifier: &TupleIdentifier,
     ) -> Option<&mut TupleBuilder> {
-        for task in self.tasks.iter_mut().rev() {
+        for task in self.tasks.iter_mut() {
             match task {
                 MergeTask::TupleBuilder(builder)
                     if builder.tuple.len() == tuple_identifier.length
@@ -319,7 +320,7 @@ impl<'a> MergeTaskStack<'a> {
         &mut self,
         record_fields: &RecordIdentifier,
     ) -> Option<&mut RecordBuilder<'a>> {
-        for task in self.tasks.iter_mut().rev() {
+        for task in self.tasks.iter_mut() {
             match task {
                 MergeTask::RecordBuilder(builder)
                     if builder.field_names() == record_fields.fields
@@ -353,7 +354,7 @@ impl<'a> MergeTaskStack<'a> {
         &mut self,
         option_identifier: &OptionIdentifier,
     ) -> Option<&mut OptionBuilder> {
-        for task in self.tasks.iter_mut().rev() {
+        for task in self.tasks.iter_mut() {
             match task {
                 MergeTask::OptionBuilder(builder) if builder.path == option_identifier.path => {
                     return Some(builder);
@@ -370,7 +371,7 @@ impl<'a> MergeTaskStack<'a> {
         &mut self,
         variant_identifier: &VariantIdentifier,
     ) -> Option<&mut VariantBuilder> {
-        for task in self.tasks.iter_mut().rev() {
+        for task in self.tasks.iter_mut() {
             if let MergeTask::VariantBuilder(builder) = task {
                 let builder_variants = &builder.variants;
 
@@ -744,7 +745,7 @@ fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> 
         .map(|(i, inf)| MergeTask::inspect(Path::default(), i, inf))
         .collect::<Vec<_>>();
 
-    temp_task_queue.extend(merge_tasks.clone());
+    temp_task_queue.extend(merge_tasks);
 
     let mut final_task_stack: MergeTaskStack = MergeTaskStack::new();
 
@@ -1542,6 +1543,25 @@ mod tests {
     use crate::rib_source_span::SourceSpan;
     use crate::PathElem;
     use test_r::test;
+
+    #[test]
+    fn test_all_of_merge_record_0() {
+        let rec1 = InferredType::record(vec![
+            ("a".to_string(), InferredType::record(vec![("a1".to_string(), InferredType::string())])),
+            ("b".to_string(),  InferredType::string())
+        ]);
+
+        let rec2 = InferredType::record(vec![
+            ("a".to_string(), InferredType::record(vec![("a1".to_string(), InferredType::unknown())])),
+        ]);
+
+        let inferred_types = vec![rec1, rec2];
+        let merged = get_merge_task(&inferred_types);
+
+        dbg!(merged);
+
+        assert!(false);
+    }
 
     #[test]
     fn test_all_of_merge_record_1() {
