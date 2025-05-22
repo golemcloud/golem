@@ -26,6 +26,7 @@ pub use inferred_expr::*;
 pub use instance_type_binding::*;
 pub use rib_input_type::*;
 pub use rib_output_type::*;
+pub use set_origin::*;
 pub use type_annotation_binding::*;
 pub use type_hint::*;
 pub use type_pull_up::*;

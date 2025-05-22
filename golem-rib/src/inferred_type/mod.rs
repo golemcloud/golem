@@ -14,11 +14,11 @@
 
 pub use type_internal::*;
 
-pub(crate) use flatten::*;
+pub(crate) use all_of::*;
 pub(crate) use type_origin::*;
 pub(crate) use unification::*;
 
-mod flatten;
+mod all_of;
 mod type_internal;
 mod type_origin;
 mod unification;
@@ -29,7 +29,6 @@ use crate::type_inference::GetTypeHint;
 use crate::TypeName;
 use bigdecimal::BigDecimal;
 use golem_wasm_ast::analysis::*;
-use std::collections::{HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -41,6 +40,26 @@ pub struct InferredType {
 }
 
 impl InferredType {
+    pub fn description(&self) -> Option<String> {
+        match self.critical_origin() {
+            TypeOrigin::OriginatedAt(_) => None,
+            TypeOrigin::Default(_) => {
+                Some(format!("inferred as {} by default", self.get_type_hint()))
+            }
+            TypeOrigin::NoOrigin => None,
+            TypeOrigin::Declared(source_location) => Some(format!(
+                "inferred as {} due to the declaration at {}",
+                self.get_type_hint(),
+                source_location
+            )),
+            TypeOrigin::Multiple(_) => None,
+            TypeOrigin::PatternMatch(source_location) => Some(format!(
+                "inferred as {} due to the pattern match at {}",
+                self.get_type_hint(),
+                source_location
+            )),
+        }
+    }
     pub fn originated_at(&self, source_span: &SourceSpan) -> InferredType {
         self.add_origin(TypeOrigin::OriginatedAt(source_span.clone()))
     }
@@ -57,36 +76,21 @@ impl InferredType {
         let origin = self.origin();
 
         match origin {
-            TypeOrigin::Default => None,
+            TypeOrigin::Default(_) => None,
             TypeOrigin::NoOrigin => None,
-            TypeOrigin::Declared(source_span) => Some(source_span),
+            TypeOrigin::Declared(_) => None,
             TypeOrigin::Multiple(origins) => {
-                let mut source_spans = vec![];
-                // multiple is always assumed to be flattened
+                let mut source_span = None;
                 for origin in origins {
-                    match origin {
-                        TypeOrigin::OriginatedAt(source_span) => {
-                            source_spans.push(source_span.clone());
-                        }
-                        TypeOrigin::Declared(source_span) => {
-                            source_spans.push(source_span.clone());
-                        }
-                        TypeOrigin::NoOrigin => {}
-                        TypeOrigin::Default => {}
-                        TypeOrigin::Multiple(_) => {}
-                        TypeOrigin::PatternMatch(source_span) => {
-                            source_spans.push(source_span.clone());
-                        }
+                    if let TypeOrigin::OriginatedAt(loc) = origin {
+                        source_span = Some(loc.clone());
+                        break;
                     }
                 }
-                if source_spans.is_empty() {
-                    None
-                } else {
-                    Some(source_spans[0].clone())
-                }
+                source_span
             }
-            TypeOrigin::OriginatedAt(source_span) => Some(source_span),
-            TypeOrigin::PatternMatch(source_span) => Some(source_span),
+            TypeOrigin::OriginatedAt(_) => None,
+            TypeOrigin::PatternMatch(_) => None,
         }
     }
 
@@ -234,19 +238,12 @@ impl InferredType {
         }
     }
 
-    pub fn default_type(inferred_type: TypeInternal) -> InferredType {
-        InferredType {
-            inner: Box::new(inferred_type),
-            origin: TypeOrigin::Default,
-        }
-    }
-
     pub fn declared_at(&self, source_span: SourceSpan) -> InferredType {
         self.add_origin(TypeOrigin::Declared(source_span.clone()))
     }
 
-    pub fn as_default(&self) -> InferredType {
-        let new_origin = TypeOrigin::Default;
+    pub fn as_default(&self, default_type: DefaultType) -> InferredType {
+        let new_origin = TypeOrigin::Default(default_type);
 
         InferredType {
             inner: self.inner.clone(),
@@ -465,82 +462,7 @@ impl InferredType {
 
     pub fn add_origin(&self, origin: TypeOrigin) -> InferredType {
         let mut inferred_type = self.clone();
-
-        let mut queue = VecDeque::new();
-        queue.push_back(&mut inferred_type as *mut InferredType); // <- push pointer
-
-        while let Some(inferred_type_ptr) = queue.pop_back() {
-            unsafe {
-                let inferred_type = &mut *inferred_type_ptr; // unsafe reborrow
-
-                match &mut inferred_type.inner.as_mut() {
-                    TypeInternal::Bool => {}
-                    TypeInternal::S8 => {}
-                    TypeInternal::U8 => {}
-                    TypeInternal::S16 => {}
-                    TypeInternal::U16 => {}
-                    TypeInternal::S32 => {}
-                    TypeInternal::U32 => {}
-                    TypeInternal::S64 => {}
-                    TypeInternal::U64 => {}
-                    TypeInternal::F32 => {}
-                    TypeInternal::F64 => {}
-                    TypeInternal::Chr => {}
-                    TypeInternal::Str => {}
-                    TypeInternal::List(inner) => {
-                        queue.push_back(inner as *mut _);
-                    }
-                    TypeInternal::Tuple(inferred_types) => {
-                        for inferred_type in inferred_types {
-                            queue.push_back(inferred_type as *mut _);
-                        }
-                    }
-                    TypeInternal::Record(inferred_types) => {
-                        for (_, inferred_type) in inferred_types {
-                            queue.push_back(inferred_type as *mut _);
-                        }
-                    }
-                    TypeInternal::Flags(_) => {}
-                    TypeInternal::Enum(_) => {}
-                    TypeInternal::Option(inner) => {
-                        queue.push_back(inner as *mut _);
-                    }
-                    TypeInternal::Result { ok, error } => {
-                        if let Some(ok) = ok {
-                            queue.push_back(ok as *mut _);
-                        }
-                        if let Some(error) = error {
-                            queue.push_back(error as *mut _);
-                        }
-                    }
-                    TypeInternal::Variant(variants) => {
-                        for (_, inferred_type) in variants {
-                            if let Some(inferred_type) = inferred_type {
-                                queue.push_back(inferred_type as *mut _);
-                            }
-                        }
-                    }
-                    TypeInternal::Resource { .. } => {}
-                    TypeInternal::Range { from, to } => {
-                        queue.push_back(from as *mut _);
-                        if let Some(to) = to {
-                            queue.push_back(to as *mut _);
-                        }
-                    }
-                    TypeInternal::Instance { .. } => {}
-                    TypeInternal::AllOf(all_of) => {
-                        for inferred_type in all_of {
-                            queue.push_back(inferred_type as *mut _);
-                        }
-                    }
-                    TypeInternal::Unknown => {}
-                    TypeInternal::Sequence(_) => {}
-                }
-
-                inferred_type.add_origin_mut(origin.clone());
-            }
-        }
-
+        inferred_type.add_origin_mut(origin.clone());
         inferred_type
     }
 
@@ -563,34 +485,8 @@ impl InferredType {
             .unwrap_or(self.get_type_hint().to_string())
     }
 
-    pub fn all_of(types: Vec<InferredType>) -> Option<InferredType> {
-        let flattened = InferredType::flatten_all_of_inferred_types(&types);
-
-        let mut types: Vec<InferredType> =
-            flattened.into_iter().filter(|t| !t.is_unknown()).collect();
-
-        let mut unique_types: HashSet<InferredType> = HashSet::new();
-        types.retain(|t| unique_types.insert(t.clone()));
-
-        if unique_types.is_empty() {
-            None
-        } else if unique_types.len() == 1 {
-            unique_types.into_iter().next()
-        } else {
-            let mut unique_all_of_types: Vec<InferredType> = unique_types.into_iter().collect();
-            unique_all_of_types.sort();
-
-            let mut origin = TypeOrigin::NoOrigin;
-
-            for typ in unique_all_of_types.iter() {
-                origin = origin.add_origin(typ.origin.clone());
-            }
-
-            Some(InferredType {
-                inner: Box::new(TypeInternal::AllOf(unique_all_of_types)),
-                origin,
-            })
-        }
+    pub fn all_of(types: Vec<InferredType>) -> InferredType {
+        merge(&types)
     }
 
     pub fn is_unit(&self) -> bool {
@@ -650,27 +546,26 @@ impl InferredType {
                 let mut all_types = new_types.clone();
                 all_types.extend(existing_types.clone());
 
-                InferredType::all_of(all_types).unwrap_or(InferredType::unknown())
+                InferredType::all_of(all_types)
             }
 
             (TypeInternal::AllOf(existing_types), _) => {
                 let mut all_types = existing_types.clone();
                 all_types.push(new_inferred_type);
 
-                InferredType::all_of(all_types).unwrap_or(InferredType::unknown())
+                InferredType::all_of(all_types)
             }
 
             (_, TypeInternal::AllOf(new_types)) => {
                 let mut all_types = new_types.clone();
                 all_types.push(self.clone());
 
-                InferredType::all_of(all_types).unwrap_or(InferredType::unknown())
+                InferredType::all_of(all_types)
             }
 
             (_, _) => {
                 if self != &new_inferred_type && !new_inferred_type.is_unknown() {
                     InferredType::all_of(vec![self.clone(), new_inferred_type.clone()])
-                        .unwrap_or(InferredType::unknown())
                 } else {
                     self.clone()
                 }
@@ -741,6 +636,16 @@ impl From<&InferredNumber> for InferredType {
             InferredNumber::U64 => InferredType::u64(),
             InferredNumber::F32 => InferredType::f32(),
             InferredNumber::F64 => InferredType::f64(),
+        }
+    }
+}
+
+impl From<&DefaultType> for InferredType {
+    fn from(default_type: &DefaultType) -> Self {
+        match default_type {
+            DefaultType::String => InferredType::string().as_default(default_type.clone()),
+            DefaultType::F64 => InferredType::f64().as_default(default_type.clone()),
+            DefaultType::S32 => InferredType::s32().as_default(default_type.clone()),
         }
     }
 }

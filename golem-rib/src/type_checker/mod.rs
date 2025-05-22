@@ -58,16 +58,16 @@ mod type_check_tests {
 
         use crate::type_checker::type_check_tests::internal;
         use crate::type_checker::type_check_tests::internal::strip_spaces;
-        use crate::{compile, Expr};
+        use crate::Expr;
 
         #[test]
         async fn test_inference_pattern_match_invalid_0() {
             let expr = r#"
-          let x: option<u64> = some(1);
-          match x {
-            some(x) => x,
-            none => "none"
+          match 1 {
+            1 =>  {  foo : "bar"  },
+            2 =>  {  foo : 1  }
           }
+
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
@@ -77,22 +77,20 @@ mod type_check_tests {
             let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 4, column 24
-            `x`
-            cause: type mismatch. expected string, found u64
-            expected string based on pattern match branch at line 5 column 21
+            error in the following rib found at line 3, column 28
+            `"bar"`
+            cause: type mismatch. expected s32, found string
             "#;
 
-            //assert!(false);
             assert_eq!(error_msg, strip_spaces(expected));
         }
 
         #[test]
         async fn test_inference_pattern_match_invalid_1() {
             let expr = r#"
-          let x: option<u64> = some(1);
-          match x {
-            some(x) => {foo: x},
+          let x = 1;
+          match some(x) {
+            some(_) => {foo: x},
             none => {foo: "bar"}
           }
         "#;
@@ -104,10 +102,9 @@ mod type_check_tests {
             let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 4, column 24
-            `{foo: x}`
-            cause: type mismatch. expected string, found u64
-            expected string based on pattern match branch at line 5 column 21
+            error in the following rib found at line 2, column 19
+            `1`
+            cause: type mismatch. expected string, found s32
             "#;
 
             //assert!(false);
@@ -119,7 +116,7 @@ mod type_check_tests {
             let expr = r#"
           let x: option<u64> = some(1);
           match x {
-            some(x) => ok(1),
+            some(x) => ok(x),
             none    => ok("none")
           }
         "#;
@@ -131,10 +128,9 @@ mod type_check_tests {
             let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 4, column 24
-            `ok(1)`
-            cause: type mismatch. expected string, found s32
-            expected string based on pattern match branch at line 5 column 24
+            error in the following rib found at line 5, column 27
+            `"none"`
+            cause: type mismatch. expected u64, found string
             "#;
 
             //assert!(false);
@@ -158,10 +154,10 @@ mod type_check_tests {
             let error_msg = compile(expr, &metadata).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 5, column 24
-            `ok(1)`
-            cause: type mismatch. expected string, found s32
-            expected string based on pattern match branch at line 4 column 24
+            error in the following rib found at line 4, column 27
+            `"none"`
+            cause: type mismatch. expected s32, found string
+            expected type s32 based on expression `1` found at line 5 column 27
             "#;
 
             //assert!(false);
@@ -286,7 +282,7 @@ mod type_check_tests {
             let expected = r#"
             error in the following rib found at line 2, column 21
             `{a: "foo"}`
-            cause: ambiguous types: `list<number>`, `record{a: str}`
+            cause: ambiguous types: `list<number>`, `record{a: string}`
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));

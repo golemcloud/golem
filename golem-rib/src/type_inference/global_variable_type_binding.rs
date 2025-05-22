@@ -25,6 +25,10 @@ pub struct GlobalVariableTypeSpec {
 }
 
 impl GlobalVariableTypeSpec {
+    pub fn variable(&self) -> String {
+        self.variable_id.name()
+    }
+
     // Constructs a new `GlobalVariableTypeSpec`, which associates a specific inferred type
     // with a global variable and its nested path.
     //

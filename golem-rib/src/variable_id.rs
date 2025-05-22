@@ -46,6 +46,7 @@ impl VariableId {
             match_arm_index,
         })
     }
+
     pub fn name(&self) -> String {
         match self {
             VariableId::Global(name) => name.clone(),

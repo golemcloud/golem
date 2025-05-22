@@ -31,7 +31,7 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
         rib: &Expr,
         export_metadata: &[AnalysedExport],
     ) -> Result<CompilerOutput, RibCompilationError> {
-        rib::compile_with_restricted_global_variables(
+        rib::compile_with_global_variables(
             rib.clone(),
             &export_metadata.to_vec(),
             Some(vec!["request".to_string()]),
