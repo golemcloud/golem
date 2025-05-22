@@ -738,7 +738,7 @@ mod internal {
 
 #[cfg(test)]
 mod unresolved_types_tests {
-    use crate::{Expr};
+    use crate::Expr;
     use test_r::test;
 
     fn strip_spaces(input: &str) -> String {

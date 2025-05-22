@@ -1505,7 +1505,6 @@ mod compiler_tests {
             let compiler_config = CompilerConfig::new(metadata, vec![]);
             let compiler = Compiler::new(compiler_config);
 
-
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
@@ -1526,7 +1525,6 @@ mod compiler_tests {
 
             let compiler_config = CompilerConfig::new(metadata, vec![]);
             let compiler = Compiler::new(compiler_config);
-
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
@@ -1549,7 +1547,6 @@ mod compiler_tests {
 
             let compiler_config = CompilerConfig::new(metadata, vec![]);
             let compiler = Compiler::new(compiler_config);
-
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
@@ -1575,7 +1572,6 @@ mod compiler_tests {
 
             let compiler_config = CompilerConfig::new(metadata, vec![]);
             let compiler = Compiler::new(compiler_config);
-
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
@@ -1618,7 +1614,6 @@ mod compiler_tests {
             let compiler_config = CompilerConfig::new(metadata, vec![]);
             let compiler = Compiler::new(compiler_config);
 
-
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
@@ -1640,7 +1635,6 @@ mod compiler_tests {
 
             let compiler_config = CompilerConfig::new(metadata, vec![]);
             let compiler = Compiler::new(compiler_config);
-
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(

@@ -23,7 +23,9 @@ pub use worker_functions_in_rib::*;
 
 use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{Expr, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo, VariableId};
+use crate::{
+    Expr, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo, VariableId,
+};
 
 mod byte_code;
 mod compiler_output;
@@ -31,7 +33,6 @@ mod desugar;
 mod ir;
 mod type_with_unit;
 mod worker_functions_in_rib;
-
 
 // TODO: Change this to proper comments
 // Rib allows global input variables, however, we can choose to fail compilation
@@ -44,31 +45,29 @@ mod worker_functions_in_rib;
 #[derive(Default)]
 pub struct CompilerConfig {
     component_metadata: Vec<AnalysedExport>,
-    rib_global_input: Vec<GlobalVariableTypeSpec>
+    rib_global_input: Vec<GlobalVariableTypeSpec>,
 }
 
 impl CompilerConfig {
     pub fn new(
         component_metadata: Vec<AnalysedExport>,
-        global_variable_type_spec: Vec<GlobalVariableTypeSpec>
+        global_variable_type_spec: Vec<GlobalVariableTypeSpec>,
     ) -> CompilerConfig {
         CompilerConfig {
             component_metadata,
-            rib_global_input: global_variable_type_spec
+            rib_global_input: global_variable_type_spec,
         }
     }
 }
 
 #[derive(Default)]
 pub struct Compiler {
-    config: CompilerConfig
+    config: CompilerConfig,
 }
 
 impl Compiler {
     pub fn new(config: CompilerConfig) -> Compiler {
-        Compiler {
-            config
-        }
+        Compiler { config }
     }
 
     pub fn with_component_metadata(&mut self, component_metadata: Vec<AnalysedExport>) {
@@ -80,8 +79,10 @@ impl Compiler {
     }
 
     pub fn compile(&self, expr: Expr) -> Result<CompilerOutput, RibCompilationError> {
-        let type_registry = FunctionTypeRegistry::from_export_metadata(&self.config.component_metadata);
-        let inferred_expr = InferredExpr::from_expr(expr, &type_registry, &self.config.rib_global_input)?;
+        let type_registry =
+            FunctionTypeRegistry::from_export_metadata(&self.config.component_metadata);
+        let inferred_expr =
+            InferredExpr::from_expr(expr, &type_registry, &self.config.rib_global_input)?;
 
         let function_calls_identified =
             WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
@@ -91,8 +92,12 @@ impl Compiler {
         let output_type_info = RibOutputTypeInfo::from_expr(&inferred_expr)?;
 
         // allowed_global_variables
-        let allowed_global_variables: Vec<String> =
-            self.config.rib_global_input.iter().map(|x| x.variable()).collect::<Vec<_>>();
+        let allowed_global_variables: Vec<String> = self
+            .config
+            .rib_global_input
+            .iter()
+            .map(|x| x.variable())
+            .collect::<Vec<_>>();
 
         let mut unidentified_global_inputs = vec![];
 
@@ -118,7 +123,6 @@ impl Compiler {
             rib_output_type_info: Some(output_type_info),
         })
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq)]
