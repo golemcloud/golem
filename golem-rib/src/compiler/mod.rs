@@ -45,7 +45,7 @@ mod worker_functions_in_rib;
 #[derive(Default)]
 pub struct CompilerConfig {
     component_metadata: Vec<AnalysedExport>,
-    rib_global_input: Vec<GlobalVariableTypeSpec>,
+    global_input_spec: Vec<GlobalVariableTypeSpec>,
 }
 
 impl CompilerConfig {
@@ -55,7 +55,7 @@ impl CompilerConfig {
     ) -> CompilerConfig {
         CompilerConfig {
             component_metadata,
-            rib_global_input: global_variable_type_spec,
+            global_input_spec: global_variable_type_spec,
         }
     }
 }
@@ -75,14 +75,14 @@ impl Compiler {
     }
 
     pub fn with_global_variables(&mut self, global_variables: Vec<GlobalVariableTypeSpec>) {
-        self.config.rib_global_input = global_variables
+        self.config.global_input_spec = global_variables
     }
 
     pub fn compile(&self, expr: Expr) -> Result<CompilerOutput, RibCompilationError> {
         let type_registry =
             FunctionTypeRegistry::from_export_metadata(&self.config.component_metadata);
         let inferred_expr =
-            InferredExpr::from_expr(expr, &type_registry, &self.config.rib_global_input)?;
+            InferredExpr::from_expr(expr, &type_registry, &self.config.global_input_spec)?;
 
         let function_calls_identified =
             WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
@@ -94,16 +94,18 @@ impl Compiler {
         // allowed_global_variables
         let allowed_global_variables: Vec<String> = self
             .config
-            .rib_global_input
+            .global_input_spec
             .iter()
             .map(|x| x.variable())
             .collect::<Vec<_>>();
 
         let mut unidentified_global_inputs = vec![];
 
-        for (name, _) in global_input_type_info.types.iter() {
-            if !allowed_global_variables.contains(name) {
-                unidentified_global_inputs.push(name.clone());
+        if !allowed_global_variables.is_empty() {
+            for (name, _) in global_input_type_info.types.iter() {
+                if !allowed_global_variables.contains(name) {
+                    unidentified_global_inputs.push(name.clone());
+                }
             }
         }
 

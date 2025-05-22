@@ -1708,6 +1708,10 @@ mod tests {
 
         let mut interpreter = Interpreter::default();
 
+        let compiler = Compiler::default();
+
+        let compiled = compiler.compile(expr).unwrap();
+
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(result.get_val().unwrap(), 3i32.into_value_and_type());
@@ -1725,6 +1729,9 @@ mod tests {
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let mut interpreter = Interpreter::default();
+
+        let compiler = Compiler::default();
+        let compiled = compiler.compile(expr).unwrap();
 
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -1762,6 +1769,10 @@ mod tests {
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let mut interpreter = Interpreter::default();
+
+        let compiler = Compiler::default();
+
+        let compiled = compiler.compile(expr).unwrap();
 
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -1802,6 +1813,10 @@ mod tests {
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let mut interpreter = Interpreter::default();
+
+        let compiler = Compiler::default();
+
+        let compiled = compiler.compile(expr).unwrap();
 
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -1862,8 +1877,8 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiled =
-            compiler::compile_with_global_variables(expr, &vec![], None, &type_spec).unwrap();
+        let compiler = Compiler::new(CompilerConfig::new(vec![], type_spec));
+        let compiled = compiler.compile(expr).unwrap();
 
         let result = interpreter
             .run(compiled.byte_code)
@@ -1928,8 +1943,9 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiled =
-            compiler::compile_with_global_variables(expr, &vec![], None, &type_spec).unwrap();
+        let compiler = Compiler::new(CompilerConfig::new(vec![], type_spec));
+
+        let compiled = compiler.compile(expr).unwrap();
 
         let result = interpreter
             .run(compiled.byte_code)
@@ -1957,6 +1973,10 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
+        let compiler = Compiler::default();
+
+        let compiled = compiler.compile(expr).unwrap();
+
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(
@@ -1983,7 +2003,14 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(expr, &get_metadata_with_enum_and_variant()).unwrap();
+
+        let compiler = Compiler::new(CompilerConfig::new(
+            get_metadata_with_enum_and_variant(),
+            vec![],
+        ));
+
+        let compiled = compiler.compile(expr).unwrap();
+
         let result = interpreter.run(compiled.byte_code).await.unwrap();
         let expected_enum_type = r#enum(&["x", "y", "z"]);
         let expected_variant_type = get_analysed_type_variant();
@@ -2029,7 +2056,11 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(expr, &get_metadata_with_enum_and_variant()).unwrap();
+        let compiler = Compiler::new(CompilerConfig::new(
+            get_metadata_with_enum_and_variant(),
+            vec![],
+        ));
+        let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
         let expected_value = Value::Record(vec![3u32.into_value(), 7u64.into_value()]);
 
@@ -2054,7 +2085,8 @@ mod tests {
           "#;
 
         let expr = Expr::from_text(rib_expr).unwrap();
-
+        let compiler = Compiler::default();
+        let compiled = compiler.compile(expr).unwrap();
         let result = interpreter
             .run(compiled.byte_code)
             .await
@@ -2086,6 +2118,9 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
+        let compiler = Compiler::default();
+        let compiled = compiler.compile(expr).unwrap();
+
         let result = interpreter
             .run(compiled.byte_code)
             .await
@@ -2115,7 +2150,7 @@ mod tests {
 
         let compiler = Compiler::default();
 
-        let compiled = compiler(expr, &vec![]).unwrap();
+        let compiled = compiler.compile(expr).unwrap();
 
         let result = interpreter
             .run(compiled.byte_code)
@@ -2229,7 +2264,8 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(rib).unwrap();
-        let compile_result = compiler::compile(expr, &component_metadata);
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compile_result = compiler.compile(expr);
         assert!(compile_result.is_err());
     }
 
@@ -2248,7 +2284,8 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(rib).unwrap();
-        let compile_result = compiler::compile(expr, &component_metadata);
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compile_result = compiler.compile(expr);
         assert!(compile_result.is_err());
     }
 
@@ -2480,7 +2517,8 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(expr, &analysed_exports).unwrap();
+        let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+        let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(
@@ -2512,7 +2550,8 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(expr, &analysed_exports).unwrap();
+        let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+        let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(
@@ -2546,7 +2585,8 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(expr, &analysed_exports).unwrap();
+        let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+        let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         let expected = test_utils::get_value_and_type(
@@ -2583,7 +2623,8 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(expr, &analysed_exports).unwrap();
+        let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+        let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         let expected = get_value_and_type(&tuple(vec![str(), str()]), r#"("failed", "bar")"#);
@@ -3414,7 +3455,9 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata();
 
-        let compiled = compiler::compile(expr, &component_metadata);
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+
+        let compiled = compiler.compile(expr);
 
         assert!(compiled.is_err());
     }
@@ -3428,7 +3471,9 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata();
 
-        let compiled = compiler::compile(expr, &component_metadata);
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+
+        let compiled = compiler.compile(expr);
 
         assert!(compiled.is_err());
     }
@@ -3442,7 +3487,9 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata();
 
-        let compiled = compiler::compile(expr, &component_metadata);
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+
+        let compiled = compiler.compile(expr);
 
         assert!(compiled.is_err());
     }
@@ -3486,9 +3533,9 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiled = compiler::compile(expr, &component_metadata)
-            .unwrap_err()
-            .to_string();
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+
+        let compiled = compiler.compile(expr).unwrap_err().to_string();
 
         assert_eq!(compiled, "error in the following rib found at line 2, column 28\n`instance`\ncause: `instance` is a reserved keyword\nhelp: use `instance()` instead of `instance` to create an ephemeral worker instance.\nhelp: for a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name\n".to_string());
     }
@@ -3503,9 +3550,9 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compilation_error = compiler::compile(expr, &component_metadata)
-            .unwrap_err()
-            .to_string();
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+
+        let compilation_error = compiler.compile(expr).unwrap_err().to_string();
 
         assert_eq!(
             compilation_error,
@@ -3710,11 +3757,12 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
+
         let component_metadata = test_utils::get_metadata();
 
-        let compilation_error = compiler::compile(expr, &component_metadata)
-            .unwrap_err()
-            .to_string();
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+
+        let compilation_error = compiler.compile(expr).unwrap_err().to_string();
 
         assert_eq!(
             compilation_error,
@@ -3825,9 +3873,9 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiled = compiler::compile(expr, &component_metadata)
-            .unwrap_err()
-            .to_string();
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+
+        let compiled = compiler.compile(expr).unwrap_err().to_string();
 
         assert_eq!(
             compiled,
@@ -3933,9 +3981,9 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiled = compiler::compile(expr, &component_metadata)
-            .unwrap_err()
-            .to_string();
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+
+        let compiled = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
             error in the following rib found at line 3, column 17
@@ -4028,9 +4076,9 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiled = compiler::compile(expr, &component_metadata)
-            .unwrap_err()
-            .to_string();
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+
+        let compiled = compiler.compile(expr).unwrap_err().to_string();
 
         assert_eq!(compiled, "error in the following rib found at line 4, column 17\n`cart.add-items({product-id: \"mac\", name: \"macbook\", price: 1: f32, quantity: 1: u32})`\ncause: invalid function call `add-items`\nfunction 'add-items' not found\n".to_string());
     }
@@ -4046,9 +4094,9 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiled = compiler::compile(expr, &component_metadata)
-            .unwrap_err()
-            .to_string();
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+
+        let compiled = compiler.compile(expr).unwrap_err().to_string();
 
         assert_eq!(
             compiled,
@@ -4090,11 +4138,12 @@ mod tests {
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
+
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let error_message = compiler::compile(expr, &component_metadata)
-            .unwrap_err()
-            .to_string();
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+
+        let error_message = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
             error in the following rib found at line 4, column 31
@@ -4273,7 +4322,9 @@ mod tests {
         let component_metadata = test_utils::get_metadata();
 
         let compiler_config = CompilerConfig::new(component_metadata, vec![]);
+
         let compiler = Compiler::new(compiler_config);
+
         let compiled = compiler.compile(expr).unwrap();
 
         let mut input = HashMap::new();
@@ -4308,9 +4359,9 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let error = compiler::compile(expr, &component_metadata)
-            .unwrap_err()
-            .to_string();
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+
+        let error = compiler.compile(expr).unwrap_err().to_string();
 
         assert_eq!(error, "error in the following rib found at line 3, column 30\n`worker.qux[amazon:shopping-cart](\"bar\")`\ncause: invalid method invocation `worker.qux`. make sure `worker` is defined and is a valid instance type (i.e, resource or worker)\n");
     }
@@ -4323,11 +4374,12 @@ mod tests {
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
+
         let component_metadata = test_utils::get_metadata();
 
-        let error = compiler::compile(expr, &component_metadata)
-            .unwrap_err()
-            .to_string();
+        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+
+        let error = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
             error in the following rib found at line 2, column 39

@@ -1434,9 +1434,9 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let mut compiler = Compiler::default();
-            compiler.with_component_metadata(metadata);
-            let compiler_error = compiler.compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
+
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 4, column 16\n`golem:it/api.{cart0(user_id).add-item}(\"apple\")`\ncause: invalid function call `[constructor]cart0`\nunknown function\n"
@@ -1649,7 +1649,7 @@ mod compiler_tests {
         use test_r::test;
 
         use crate::compiler::byte_code::compiler_tests::internal;
-        use crate::{compiler, Expr};
+        use crate::{compiler, Compiler, CompilerConfig, Expr};
         use golem_wasm_ast::analysis::{
             AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeList, TypeOption,
             TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
@@ -1677,7 +1677,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
+            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1706,7 +1707,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
+            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1755,7 +1757,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
+            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1792,7 +1795,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
+            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1828,7 +1832,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
+            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1865,7 +1870,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
+            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1913,7 +1919,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
+            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1957,7 +1964,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
+            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 
@@ -1992,7 +2000,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(expr, &analysed_exports).unwrap();
+            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
 

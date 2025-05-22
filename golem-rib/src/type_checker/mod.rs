@@ -58,7 +58,7 @@ mod type_check_tests {
 
         use crate::type_checker::type_check_tests::internal;
         use crate::type_checker::type_check_tests::internal::strip_spaces;
-        use crate::Expr;
+        use crate::{Compiler, CompilerConfig, Expr};
 
         #[test]
         async fn test_inference_pattern_match_invalid_0() {
@@ -74,7 +74,8 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 3, column 28
@@ -99,7 +100,8 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 19
@@ -125,7 +127,8 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 5, column 27
@@ -151,7 +154,8 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 4, column 27
@@ -175,7 +179,8 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -200,7 +205,8 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -225,7 +231,8 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -254,7 +261,8 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 51
@@ -277,7 +285,8 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 21
@@ -299,7 +308,8 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -324,7 +334,8 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28
@@ -350,7 +361,8 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 3, column 30
@@ -375,7 +387,8 @@ mod type_check_tests {
 
             let metadata = internal::get_metadata_with_record_input_params();
 
-            let error_msg = compile(expr, &metadata).unwrap_err().to_string();
+            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
             error in the following rib found at line 2, column 28

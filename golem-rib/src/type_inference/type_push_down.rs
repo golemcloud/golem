@@ -792,7 +792,7 @@ mod type_push_down_tests {
     use test_r::test;
 
     use crate::type_inference::type_push_down::type_push_down_tests::internal::strip_spaces;
-    use crate::{Expr, InferredType};
+    use crate::{Compiler, Expr, InferredType};
 
     #[test]
     fn test_push_down_for_record() {
@@ -860,7 +860,9 @@ mod type_push_down_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_message = compile(expr, &vec![]).unwrap_err().to_string();
+        let compiler = Compiler::default();
+
+        let error_message = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 2, column 36
