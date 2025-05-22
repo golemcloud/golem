@@ -337,7 +337,7 @@ impl<'a> MergeTaskStack<'a> {
     }
 
     pub fn get_list_mut(&mut self, list_identifier: &ListIdentifier) -> Option<&mut ListBuilder> {
-        for task in self.tasks.iter_mut().rev() {
+        for task in self.tasks.iter_mut() {
             match task {
                 MergeTask::ListBuilder(builder) if builder.path == list_identifier.path => {
                     return Some(builder);
@@ -402,7 +402,7 @@ impl<'a> MergeTaskStack<'a> {
     }
 
     pub fn get_result_mut(&mut self, result_key: &ResultIdentifier) -> Option<&mut ResultBuilder> {
-        for task in self.tasks.iter_mut().rev() {
+        for task in self.tasks.iter_mut() {
             if let MergeTask::ResultBuilder(builder) = task {
                 match (result_key.ok, result_key.error) {
                     (true, true) => {
