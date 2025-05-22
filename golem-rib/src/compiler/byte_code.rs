@@ -1405,7 +1405,7 @@ mod compiler_tests {
         use test_r::test;
 
         use crate::compiler::byte_code::compiler_tests::internal;
-        use crate::{compiler, Expr};
+        use crate::{compiler, Compiler, CompilerConfig, Expr};
         use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
 
         #[test]
@@ -1416,7 +1416,9 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(expr, &vec![]).unwrap_err().to_string();
+            let compiler = Compiler::default();
+
+            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
 
             assert_eq!(compiler_error, "error in the following rib found at line 2, column 16\n`foo(request)`\ncause: invalid function call `foo`\nunknown function\n");
         }
@@ -1432,7 +1434,9 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
+            let mut compiler = Compiler::default();
+            compiler.with_component_metadata(metadata);
+            let compiler_error = compiler.compile(expr, &metadata).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 4, column 16\n`golem:it/api.{cart0(user_id).add-item}(\"apple\")`\ncause: invalid function call `[constructor]cart0`\nunknown function\n"
@@ -1450,7 +1454,11 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
+
+            let compiler_config = CompilerConfig::new(metadata, vec![]);
+            let compiler = Compiler::new(compiler_config);
+
+            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 4, column 16\n`golem:it/api.{cart(user_id).foo}(\"apple\")`\ncause: invalid function call `[method]cart.foo`\nunknown function\n"
@@ -1472,7 +1480,11 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
+
+            let compiler_config = CompilerConfig::new(metadata, vec![]);
+            let compiler = Compiler::new(compiler_config);
+
+            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 3, column 29\n`foo(user_id, user_id)`\ncause: invalid argument size for function `foo`. expected 1 arguments, found 2\n"
@@ -1489,7 +1501,12 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
+
+            let compiler_config = CompilerConfig::new(metadata, vec![]);
+            let compiler = Compiler::new(compiler_config);
+
+
+            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 3, column 16\n`golem:it/api.{cart(user_id, user_id).add-item}(\"apple\")`\ncause: invalid argument size for function `[constructor]cart`. expected 1 arguments, found 2\n"
@@ -1506,7 +1523,12 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
+
+            let compiler_config = CompilerConfig::new(metadata, vec![]);
+            let compiler = Compiler::new(compiler_config);
+
+
+            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 3, column 16\n`golem:it/api.{cart(user_id).add-item}(\"apple\", \"samsung\")`\ncause: invalid argument size for function `[method]cart.add-item`. expected 1 arguments, found 2\n"
@@ -1524,7 +1546,12 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
+
+            let compiler_config = CompilerConfig::new(metadata, vec![]);
+            let compiler = Compiler::new(compiler_config);
+
+
+            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 0, column 0\n`register-user(1, \"foo\")`\ncause: invalid argument size for function `register-user`. expected 1 arguments, found 2\n"
@@ -1545,7 +1572,12 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
+
+            let compiler_config = CompilerConfig::new(metadata, vec![]);
+            let compiler = Compiler::new(compiler_config);
+
+
+            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 2, column 33\n`1: u64`\nfound within:\n`foo(1: u64)`\ncause: type mismatch. expected string, found u64\ninvalid argument to the function `foo`\n"
@@ -1562,7 +1594,11 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
+
+            let compiler_config = CompilerConfig::new(metadata, vec![]);
+            let compiler = Compiler::new(compiler_config);
+
+            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 3, column 54\n`\"apple\"`\nfound within:\n`golem:it/api.{cart(user_id).add-item}(\"apple\")`\ncause: type mismatch. expected record { name: string }, found string\ninvalid argument to the function `[method]cart.add-item`\n"
@@ -1578,7 +1614,12 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
+
+            let compiler_config = CompilerConfig::new(metadata, vec![]);
+            let compiler = Compiler::new(compiler_config);
+
+
+            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 1, column 1\n`{foo: \"bar\"}`\nfound within:\n`golem:it/api.{cart({foo: \"bar\"}).add-item}(\"apple\")`\ncause: type mismatch. expected string, found record { foo: string }\ninvalid argument to the function `[constructor]cart`\n"
@@ -1596,7 +1637,12 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler_error = compiler::compile(expr, &metadata).unwrap_err().to_string();
+
+            let compiler_config = CompilerConfig::new(metadata, vec![]);
+            let compiler = Compiler::new(compiler_config);
+
+
+            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 2, column 56\n`\"foo\"`\nfound within:\n`register-user(\"foo\")`\ncause: type mismatch. expected u64, found string\ninvalid argument to the function `register-user`\n"

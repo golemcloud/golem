@@ -792,7 +792,7 @@ mod type_push_down_tests {
     use test_r::test;
 
     use crate::type_inference::type_push_down::type_push_down_tests::internal::strip_spaces;
-    use crate::{compile, Expr, InferredType};
+    use crate::{Expr, InferredType};
 
     #[test]
     fn test_push_down_for_record() {

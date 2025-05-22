@@ -23,7 +23,7 @@ pub use worker_functions_in_rib::*;
 
 use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{Expr, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo};
+use crate::{Expr, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo, VariableId};
 
 mod byte_code;
 mod compiler_output;
@@ -32,13 +32,8 @@ mod ir;
 mod type_with_unit;
 mod worker_functions_in_rib;
 
-pub fn compile(
-    expr: Expr,
-    export_metadata: &Vec<AnalysedExport>,
-) -> Result<CompilerOutput, RibCompilationError> {
-    compile_with_restricted_global_variables(expr, export_metadata, None, &vec![])
-}
 
+// TODO: Change this to proper comments
 // Rib allows global input variables, however, we can choose to fail compilation
 // if they don't fall under a pre-defined set of global variables. If nothing is specified,
 // then it implies, any names can be a global variable in Rib. Example: `foo`.
@@ -46,47 +41,84 @@ pub fn compile(
 // `GlobalVariableTypeSpec` is a compiler configuration that customises it's behaviour.
 // Example:  request.path.*` should be always a `string`.
 // Not all global variables require a type specification.
-pub fn compile_with_restricted_global_variables(
-    expr: Expr,
-    export_metadata: &Vec<AnalysedExport>,
-    allowed_global_variables: Option<Vec<String>>,
-    global_variable_type_spec: &Vec<GlobalVariableTypeSpec>,
-) -> Result<CompilerOutput, RibCompilationError> {
-    let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
-    let inferred_expr = InferredExpr::from_expr(expr, &type_registry, global_variable_type_spec)?;
+#[derive(Default)]
+pub struct CompilerConfig {
+    component_metadata: Vec<AnalysedExport>,
+    rib_global_input: Vec<GlobalVariableTypeSpec>
+}
 
-    let function_calls_identified =
-        WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
-
-    let global_input_type_info = RibInputTypeInfo::from_expr(&inferred_expr)?;
-
-    let output_type_info = RibOutputTypeInfo::from_expr(&inferred_expr)?;
-
-    if let Some(supported_global_inputs) = &allowed_global_variables {
-        let mut unsupoorted_global_inputs = vec![];
-
-        for (name, _) in global_input_type_info.types.iter() {
-            if !supported_global_inputs.contains(name) {
-                unsupoorted_global_inputs.push(name.clone());
-            }
+impl CompilerConfig {
+    pub fn new(
+        component_metadata: Vec<AnalysedExport>,
+        global_variable_type_spec: Vec<GlobalVariableTypeSpec>
+    ) -> CompilerConfig {
+        CompilerConfig {
+            component_metadata,
+            rib_global_input: global_variable_type_spec
         }
+    }
+}
 
-        if !unsupoorted_global_inputs.is_empty() {
-            return Err(RibCompilationError::UnsupportedGlobalInput {
-                invalid_global_inputs: unsupoorted_global_inputs,
-                valid_global_inputs: supported_global_inputs.clone(),
-            });
+#[derive(Default)]
+pub struct Compiler {
+    config: CompilerConfig
+}
+
+impl Compiler {
+    pub fn new(config: CompilerConfig) -> Compiler {
+        Compiler {
+            config
         }
     }
 
-    let byte_code = RibByteCode::from_expr(&inferred_expr)?;
+    pub fn with_component_metadata(&mut self, component_metadata: Vec<AnalysedExport>) {
+        self.config.component_metadata = component_metadata
+    }
 
-    Ok(CompilerOutput {
-        worker_invoke_calls: function_calls_identified,
-        byte_code,
-        rib_input_type_info: global_input_type_info,
-        rib_output_type_info: Some(output_type_info),
-    })
+    pub fn with_global_variables(&mut self, global_variables: Vec<GlobalVariableTypeSpec>) {
+        self.config.rib_global_input = global_variables
+    }
+
+    pub fn compile(&self, expr: Expr) -> Result<CompilerOutput, RibCompilationError> {
+        let type_registry = FunctionTypeRegistry::from_export_metadata(&self.config.component_metadata);
+        let inferred_expr = InferredExpr::from_expr(expr, &type_registry, &self.config.rib_global_input)?;
+
+        let function_calls_identified =
+            WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
+
+        // The types that are tagged as global input in the script
+        let global_input_type_info = RibInputTypeInfo::from_expr(&inferred_expr)?;
+        let output_type_info = RibOutputTypeInfo::from_expr(&inferred_expr)?;
+
+        // allowed_global_variables
+        let allowed_global_variables: Vec<String> =
+            self.config.rib_global_input.iter().map(|x| x.variable()).collect::<Vec<_>>();
+
+        let mut unidentified_global_inputs = vec![];
+
+        for (name, _) in global_input_type_info.types.iter() {
+            if !allowed_global_variables.contains(name) {
+                unidentified_global_inputs.push(name.clone());
+            }
+        }
+
+        if !unidentified_global_inputs.is_empty() {
+            return Err(RibCompilationError::UnsupportedGlobalInput {
+                invalid_global_inputs: unidentified_global_inputs,
+                valid_global_inputs: allowed_global_variables,
+            });
+        }
+
+        let byte_code = RibByteCode::from_expr(&inferred_expr)?;
+
+        Ok(CompilerOutput {
+            worker_invoke_calls: function_calls_identified,
+            byte_code,
+            rib_input_type_info: global_input_type_info,
+            rib_output_type_info: Some(output_type_info),
+        })
+    }
+
 }
 
 #[derive(Debug, Clone, PartialEq)]
