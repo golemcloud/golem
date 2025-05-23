@@ -142,7 +142,7 @@ openidconnect = "3.5.0"
 opentelemetry = "0.28.0"
 opentelemetry-prometheus = "0.28.0"
 opentelemetry_sdk = "0.28.0"
-poem-openapi = { version = "=5.1.5", features = [# pinned temporarily because 5.1.8 generats invalid OpenAPI yaml
+poem-openapi = { version = "5.1.5", features = [
     "swagger-ui",
     "chrono",
     "time",
@@ -151,12 +151,12 @@ poem-openapi = { version = "=5.1.5", features = [# pinned temporarily because 5.
     "url",
     "websocket",
 ] }
-poem = { version = "=3.1.6", features = [
+poem = { version = "3.1.6", features = [
     "prometheus",
     "opentelemetry",
     "test",
 ] }
-poem-openapi-derive = "=5.1.4"
+poem-openapi-derive = "5.1.4"
 postgres = "0.19.10"
 prometheus = { version = "0.13.4", features = ["process"] }
 proptest = "=1.5.0"
@@ -207,6 +207,7 @@ testcontainers-modules = { version = "0.11.6", features = [
 ] }
 test-r = { version = "2.1.0", default-features = true }
 thiserror = "2.0.12"
+time = { version = "0.3.41", features = ["default", "macros"] }
 tokio = { version = "1.44", features = [
     "macros",
     "rt-multi-thread",
