@@ -33,7 +33,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
 
 use golem_worker_executor_base::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
+    DurableWorkerCtx, DurableWorkerCtxView, DynamicGrpcClient, GrpcEntry, PublicDurableWorkerState,
 };
 use golem_worker_executor_base::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
@@ -900,6 +900,34 @@ impl HostWasmRpc for TestWorkerCtx {
 
     async fn drop(&mut self, rep: Resource<WasmRpc>) -> anyhow::Result<()> {
         HostWasmRpc::drop(&mut self.durable_ctx, rep).await
+    }
+}
+
+#[async_trait]
+impl DynamicGrpcClient for TestWorkerCtx {
+    async fn invoke_grpc(
+        &mut self,
+        self_: Resource<GrpcEntry>,
+        function_str: String,
+        service_name: String,
+        params: &[wasmtime::component::Val],
+        results: &mut [wasmtime::component::Val],
+        result_types: &[wasmtime::component::Type],
+        grpc_metadata: golem_common::model::component_metadata::GrpcMetadata,
+        _call_type: String,
+    ) -> anyhow::Result<()> {
+        self.durable_ctx
+            .invoke_grpc(
+                self_,
+                function_str,
+                service_name,
+                params,
+                results,
+                result_types,
+                grpc_metadata,
+                _call_type,
+            )
+            .await
     }
 }
 

@@ -1,0 +1,44 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+
+# See https://learn.golem.cloud/docs/app-manifest#field-reference for field reference
+
+templates:
+  rust:
+    profiles:
+      debug:
+        build:
+        - command: cargo component build
+          sources:
+          - src
+          - wit-generated
+          - ../../common-rust
+          targets:
+          - ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+        sourceWit: wit
+        generatedWit: wit-generated
+        componentWasm: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+        linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_debug.wasm
+        clean:
+        - src/bindings.rs
+      release:
+        build:
+        - command: cargo component build --release
+          sources:
+          - src
+          - wit-generated
+          - ../../common-rust
+          targets:
+          - ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+        sourceWit: wit
+        generatedWit: wit-generated
+        componentWasm: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+        linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm
+        clean:
+        - src/bindings.rs
+    defaultProfile: debug
+customCommands:
+  cargo-clean:
+  - command: cargo clean

@@ -20,14 +20,19 @@ use async_trait::async_trait;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_wasm_rpc::golem_rpc_0_2_x::types::HostFutureInvokeResult;
 use golem_wasm_rpc::HostWasmRpc;
+use grpc::dynamic_grpc_link;
 use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{Component, Linker};
 use wasmtime::Engine;
 
+use super::DynamicGrpcClient;
+
+mod common;
+mod grpc;
 mod wasm_rpc;
 
 #[async_trait]
-impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
+impl<Ctx: WorkerCtx + HostWasmRpc + DynamicGrpcClient + HostFutureInvokeResult> DynamicLinking<Ctx>
     for DurableWorkerCtx<Ctx>
 {
     fn link(
@@ -51,6 +56,9 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
                     match component_metadata.dynamic_linking.get(&name.to_string()) {
                         Some(DynamicLinkedInstance::WasmRpc(rpc_metadata)) => {
                             dynamic_wasm_rpc_link(&name, rpc_metadata, engine, &mut root, inst)?;
+                        }
+                        Some(DynamicLinkedInstance::Grpc(rpc_metadata)) => {
+                            dynamic_grpc_link(&name, rpc_metadata, engine, &mut root, inst)?;
                         }
                         None => {
                             // Instance not marked for dynamic linking

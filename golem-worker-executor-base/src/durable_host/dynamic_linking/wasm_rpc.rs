@@ -16,7 +16,9 @@ use crate::durable_host::wasm_rpc::{create_rpc_connection_span, WasmRpcEntryPayl
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
-use golem_common::model::component_metadata::DynamicLinkedWasmRpc;
+use golem_common::model::component_metadata::{
+    DynamicLinkedRpcTargets, DynamicLinkedWasmRpc, RpcTarget,
+};
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::{ComponentId, ComponentType, OwnedWorkerId, TargetWorkerId, WorkerId};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{FutureInvokeResult, HostFutureInvokeResult};
@@ -1015,7 +1017,7 @@ impl DynamicRpcCall {
                         target_constructor_name: ParsedFunctionName {
                             site: target
                                 .site()
-                                .map_err(|err| anyhow!(err))
+                                .map_err(|err: String| anyhow!(err))
                                 .context(context(rpc_metadata))?,
                             function: ParsedFunctionReference::RawResourceConstructor {
                                 resource: resource_name.to_string(),

@@ -1,0 +1,151 @@
+
+package rpc-grpc:grpcbin;
+
+interface grpcbin {
+    
+    record headers-message-values {
+        values: list<string>,
+    }
+            
+    record headers-message-metadata-entry {
+        key: option<string>,
+        value: option<headers-message-values>,
+    }
+            
+    record headers-message {
+        metadata: list<headers-message-metadata-entry>,
+    }
+            
+    record specific-error-request {
+        code: option<u32>,
+        reason: option<string>,
+    }
+            
+    record empty-message {
+        empty: bool,
+    }
+            
+    record dummy-message-sub {
+        f-string: option<string>,
+    }
+            
+    
+    enum dummy-message-enum {
+        enum1,
+    }
+        
+    record dummy-message {
+        f-string: option<string>,
+        f-strings: list<string>,
+        f-int32: option<s32>,
+        f-int32s: list<s32>,
+        f-enum: option<dummy-message-enum>,
+        f-enums: list<dummy-message-enum>,
+        f-sub: option<dummy-message-sub>,
+        f-subs: list<dummy-message-sub>,
+        f-bool: option<bool>,
+        f-bools: list<bool>,
+        f-int64: option<s64>,
+        f-int64s: list<s64>,
+        f-bytes: option<list<u8>>,
+        f-bytess: list<list<u8>>,
+        f-float: option<f32>,
+        f-floats: list<f32>,
+    }
+            
+    record index-reply-endpoint {
+        path: option<string>,
+        description: option<string>,
+    }
+            
+    record index-reply {
+        description: option<string>,
+        endpoints: list<index-reply-endpoint>,
+    }
+            
+    record grpc-configuration {
+        url: string,
+        secret-token: string,
+    }
+            
+    
+    enum grpc-status-code {
+        ok,
+        cancelled,
+        unknown,
+        invalid-argument,
+        deadline-exceeded,
+        not-found,
+        already-exists,
+        permission-denied,
+        resource-exhausted,
+        failed-precondition,
+        aborted,
+        out-of-range,
+        unimplemented,
+        internal,
+        unavailable,
+        data-loss,
+        unauthenticated,
+    }
+        
+    record grpc-status {
+        code: grpc-status-code,
+        message: string,
+        details: list<u8>,
+    }
+            
+    
+}
+
+interface g-r-p-c-bin {
+    use grpcbin.{ dummy-message, grpc-status, empty-message, grpc-configuration, };
+    
+    
+    resource g-r-p-c-bin-resource-unary {
+        constructor(grpc-configuration: grpc-configuration, );
+        
+        dummy-unary: func(empty-message: empty-message, ) -> result<dummy-message, grpc-status>;
+        
+    }
+
+    resource dummy-server-stream-resource-server-streaming {
+        constructor(grpc-configuration: grpc-configuration, );
+        
+        send: func(message: empty-message, ) -> result<option<bool>, grpc-status>;
+        
+        receive: func() -> result<option<dummy-message>, grpc-status>;
+        
+        finish: func() -> result<bool, grpc-status>;
+        
+    }
+
+    resource dummy-client-stream-resource-client-streaming {
+        constructor(grpc-configuration: grpc-configuration, );
+        
+        send: func(message: empty-message, ) -> result<option<bool>, grpc-status>;
+        
+        finish: func() -> result<dummy-message, grpc-status>;
+        
+    }
+
+    resource dummy-bi-stream-resource-bidirectional-streaming {
+        constructor(grpc-configuration: grpc-configuration, );
+        
+        send: func(message: empty-message, ) -> result<option<bool>, grpc-status>;
+        
+        receive: func() -> result<option<dummy-message>, grpc-status>;
+        
+        finish: func() -> result<bool, grpc-status>;
+        
+    }
+
+}
+
+
+
+world grpcbin-world {
+    export grpcbin;
+    export g-r-p-c-bin;
+}
+            

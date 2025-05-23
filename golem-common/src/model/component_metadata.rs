@@ -74,6 +74,7 @@ impl Debug for ComponentMetadata {
 #[serde(tag = "type")]
 pub enum DynamicLinkedInstance {
     WasmRpc(DynamicLinkedWasmRpc),
+    Grpc(DynamicLinkedGrpc),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
@@ -85,12 +86,50 @@ pub struct DynamicLinkedWasmRpc {
     pub targets: HashMap<String, WasmRpcTarget>,
 }
 
-impl DynamicLinkedWasmRpc {
-    pub fn target(&self, stub_resource: &str) -> Result<WasmRpcTarget, String> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicLinkedGrpc {
+    /// Maps resource names within the dynamic linked interface to target information
+    pub targets: HashMap<String, GrpcTarget>,
+    pub metadata: GrpcMetadata,
+}
+
+pub trait DynamicLinkedRpcTargets<T: RpcTarget> {
+    fn target(&self, stub_resource: &str) -> Result<T, String>;
+    fn targets(&self) -> HashMap<String, T>;
+}
+
+impl DynamicLinkedRpcTargets<WasmRpcTarget> for DynamicLinkedWasmRpc {
+    fn target(&self, stub_resource: &str) -> Result<WasmRpcTarget, String> {
         self.targets.get(stub_resource).cloned().ok_or_else(|| {
             format!("Resource '{stub_resource}' not found in dynamic linked interface")
         })
     }
+
+    fn targets(&self) -> HashMap<String, WasmRpcTarget> {
+        self.targets.clone()
+    }
+}
+
+impl DynamicLinkedRpcTargets<GrpcTarget> for DynamicLinkedGrpc {
+    fn target(&self, stub_resource: &str) -> Result<GrpcTarget, String> {
+        self.targets.get(stub_resource).cloned().ok_or_else(|| {
+            format!("Resource '{stub_resource}' not found in dynamic linked interface")
+        })
+    }
+
+    fn targets(&self) -> HashMap<String, GrpcTarget> {
+        self.targets.clone()
+    }
+}
+
+pub trait RpcTarget {
+    fn site(&self) -> Result<ParsedFunctionSite, String>;
+    fn interface_name(&self) -> String;
+    fn component_name(&self) -> String;
+    fn component_type(&self) -> ComponentType;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
@@ -103,9 +142,20 @@ pub struct WasmRpcTarget {
     pub component_type: ComponentType,
 }
 
-impl WasmRpcTarget {
-    pub fn site(&self) -> Result<ParsedFunctionSite, String> {
+impl RpcTarget for WasmRpcTarget {
+    fn site(&self) -> Result<ParsedFunctionSite, String> {
         ParsedFunctionSite::parse(&self.interface_name)
+    }
+    fn component_name(&self) -> String {
+        self.component_name.clone()
+    }
+
+    fn interface_name(&self) -> String {
+        self.interface_name.clone()
+    }
+
+    fn component_type(&self) -> ComponentType {
+        self.component_type
     }
 }
 
@@ -117,6 +167,53 @@ impl Display for WasmRpcTarget {
             self.interface_name, self.component_name, self.component_type
         )
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct GrpcTarget {
+    pub interface_name: String,
+    pub component_name: String,
+    pub component_type: ComponentType,
+}
+
+impl RpcTarget for GrpcTarget {
+    fn site(&self) -> Result<ParsedFunctionSite, String> {
+        ParsedFunctionSite::parse(&self.interface_name)
+    }
+
+    fn component_name(&self) -> String {
+        self.component_name.clone()
+    }
+
+    fn interface_name(&self) -> String {
+        self.interface_name.clone()
+    }
+
+    fn component_type(&self) -> ComponentType {
+        self.component_type
+    }
+}
+
+impl Display for GrpcTarget {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}@{}({})",
+            self.interface_name, self.component_name, self.component_type
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct GrpcMetadata {
+    pub file_descriptor_set: Vec<u8>,
+    pub package_name: String,
 }
 
 #[derive(
@@ -411,8 +508,9 @@ fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
 mod protobuf {
     use crate::model::base64::Base64;
     use crate::model::component_metadata::{
-        ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc, LinearMemory,
-        ProducerField, Producers, VersionedName, WasmRpcTarget,
+        ComponentMetadata, DynamicLinkedGrpc, DynamicLinkedInstance, DynamicLinkedWasmRpc,
+        GrpcMetadata, GrpcTarget, LinearMemory, ProducerField, Producers, VersionedName,
+        WasmRpcTarget,
     };
     use std::collections::HashMap;
 
@@ -561,6 +659,12 @@ mod protobuf {
                         golem_api_grpc::proto::golem::component::dynamic_linked_instance::DynamicLinkedInstance::WasmRpc(
                             dynamic_linked_wasm_rpc.into())),
                 },
+                DynamicLinkedInstance::Grpc(dynamic_linked_grpc) => Self {
+                    dynamic_linked_instance: Some(
+                        golem_api_grpc::proto::golem::component::dynamic_linked_instance::DynamicLinkedInstance::Grpc(
+                            dynamic_linked_grpc.into())),
+                },
+
             }
         }
     }
@@ -575,6 +679,7 @@ mod protobuf {
         ) -> Result<Self, Self::Error> {
             match value.dynamic_linked_instance {
                 Some(golem_api_grpc::proto::golem::component::dynamic_linked_instance::DynamicLinkedInstance::WasmRpc(dynamic_linked_wasm_rpc)) => Ok(Self::WasmRpc(dynamic_linked_wasm_rpc.try_into()?)),
+                Some(golem_api_grpc::proto::golem::component::dynamic_linked_instance::DynamicLinkedInstance::Grpc(dynamic_linked_grpc)) => Ok(Self::Grpc(dynamic_linked_grpc.try_into()?)),
                 None => Err("Missing dynamic_linked_instance".to_string()),
             }
         }
@@ -588,6 +693,19 @@ mod protobuf {
                     .into_iter()
                     .map(|(key, target)| (key, target.into()))
                     .collect(),
+            }
+        }
+    }
+
+    impl From<DynamicLinkedGrpc> for golem_api_grpc::proto::golem::component::DynamicLinkedGrpc {
+        fn from(value: DynamicLinkedGrpc) -> Self {
+            Self {
+                targets: value
+                    .targets
+                    .into_iter()
+                    .map(|(key, target)| (key, target.into()))
+                    .collect(),
+                metadata: Some(value.metadata.into()),
             }
         }
     }
@@ -610,6 +728,25 @@ mod protobuf {
         }
     }
 
+    impl TryFrom<golem_api_grpc::proto::golem::component::DynamicLinkedGrpc> for DynamicLinkedGrpc {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::DynamicLinkedGrpc,
+        ) -> Result<Self, Self::Error> {
+            match value.metadata {
+                Some(metadata) => Ok(Self {
+                    targets: value
+                        .targets
+                        .into_iter()
+                        .map(|(key, target)| target.try_into().map(|target| (key, target)))
+                        .collect::<Result<HashMap<_, _>, _>>()?,
+                    metadata: metadata.into(),
+                }),
+                None => Err("Missing GRPC metadata value".to_string()),
+            }
+        }
+    }
+
     impl From<WasmRpcTarget> for golem_api_grpc::proto::golem::component::WasmRpcTarget {
         fn from(value: WasmRpcTarget) -> Self {
             Self {
@@ -622,11 +759,55 @@ mod protobuf {
         }
     }
 
+    impl From<GrpcTarget> for golem_api_grpc::proto::golem::component::GrpcTarget {
+        fn from(value: GrpcTarget) -> Self {
+            Self {
+                interface_name: value.interface_name,
+                component_name: value.component_name,
+                component_type: golem_api_grpc::proto::golem::component::ComponentType::from(
+                    value.component_type,
+                ) as i32,
+            }
+        }
+    }
+
+    impl From<golem_api_grpc::proto::golem::component::GrpcMetadata> for GrpcMetadata {
+        fn from(value: golem_api_grpc::proto::golem::component::GrpcMetadata) -> Self {
+            Self {
+                file_descriptor_set: value.file_descriptor_set,
+                package_name: value.package_name,
+            }
+        }
+    }
+
+    impl From<GrpcMetadata> for golem_api_grpc::proto::golem::component::GrpcMetadata {
+        fn from(value: GrpcMetadata) -> Self {
+            Self {
+                file_descriptor_set: value.file_descriptor_set,
+                package_name: value.package_name,
+            }
+        }
+    }
+
     impl TryFrom<golem_api_grpc::proto::golem::component::WasmRpcTarget> for WasmRpcTarget {
         type Error = String;
 
         fn try_from(
             value: golem_api_grpc::proto::golem::component::WasmRpcTarget,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                interface_name: value.interface_name,
+                component_name: value.component_name,
+                component_type: value.component_type.try_into()?,
+            })
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::GrpcTarget> for GrpcTarget {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::GrpcTarget,
         ) -> Result<Self, Self::Error> {
             Ok(Self {
                 interface_name: value.interface_name,

@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["components-rust/*", "common-rust/*"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[workspace.dependencies]
+golem-rust = "1.4.0"
+reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-march-2025", features = ["json"] }
+serde = { version = "1.0.0", features = ["derive"] }
+serde_json = "1.0"
+wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }

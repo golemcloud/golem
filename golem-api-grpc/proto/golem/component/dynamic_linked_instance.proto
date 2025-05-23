@@ -7,11 +7,29 @@ package golem.component;
 message DynamicLinkedInstance {
   oneof dynamic_linked_instance {
     DynamicLinkedWasmRpc wasm_rpc = 1;
+    DynamicLinkedGrpc grpc = 2;
   }
 }
 
 message DynamicLinkedWasmRpc {
   map<string, WasmRpcTarget> targets = 1;
+}
+
+
+message DynamicLinkedGrpc {
+  map<string, GrpcTarget> targets = 1;
+  GrpcMetadata metadata = 2;
+}
+
+message GrpcMetadata {
+  bytes file_descriptor_set = 1;
+  string package_name = 2;
+}
+
+message GrpcTarget {
+  string interface_name = 1;
+  string component_name = 2;
+  ComponentType component_type = 3;
 }
 
 message WasmRpcTarget {

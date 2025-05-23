@@ -9,7 +9,6 @@ description = "Golem Worker Executor base implementation"
 
 autotests = false
 
-
 [lib]
 path = "src/lib.rs"
 harness = false
@@ -17,23 +16,17 @@ harness = false
 [features]
 
 [dependencies]
-golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
-golem-common = { path = "../golem-common", version = "=0.0.0" }
-golem-rib = { path = "../golem-rib", version = "=0.0.0" }
-golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host", "extra-bindings"] }
-golem-wasm-rpc-derive = { path = "../wasm-rpc-derive", version = "=0.0.0" }
 
 anyhow = { workspace = true }
+async-dropper-simple = { version = "0.2.6", features = ["no-default-bound", "tokio"] }
 async-lock = "3.4.0"
 async-mutex = "1.4.0"
-async-dropper-simple = { version = "0.2.6", features = ["no-default-bound", "tokio"] }
 async-recursion = { workspace = true }
 async-scoped = { version = "0.9.0", features = ["use-tokio"] }
 async-trait = { workspace = true }
-bincode = { workspace = true }
+base64 = { workspace = true }
 bigdecimal = { workspace = true }
+bincode = { workspace = true }
 bit-vec = { workspace = true }
 bytes = { workspace = true }
 cap-std = { workspace = true }
@@ -48,6 +41,14 @@ fs-set-times = "0.20.3"
 futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "1.0.0"
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-rib = { path = "../golem-rib", version = "=0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host", "extra-bindings"] }
+golem-wasm-rpc-derive = { path = "../wasm-rpc-derive", version = "=0.0.0" }
+heck = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
@@ -55,6 +56,7 @@ http-body-util = { workspace = true }
 humansize = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
+hyper-rustls ={ version = "0.27.5", features = ["http2"] }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
 log = "0.4.26"
@@ -64,8 +66,11 @@ metrohash = "1.0.7"
 nonempty-collections = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
+prost-reflect = { workspace = true }
 rand = { workspace = true }
 ringbuf = "0.4.7"
+rustls = { workspace = true }
+rustls-native-certs = "0.8.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
@@ -85,20 +90,21 @@ uuid = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
+wit-carpenter = { path = "../wc" }
 zstd = "0.13"
 
 [dev-dependencies]
-golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }
 
 assert2 = { workspace = true }
 axum = { workspace = true }
 goldenfile = "1.8.0"
+golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }
 proptest = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }
 serde_json = { workspace = true }
-test-r = { workspace = true }
 system-interface = { workspace = true }
+test-r = { workspace = true }
 
 [[test]]
 name = "integration"

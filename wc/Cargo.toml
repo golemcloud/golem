@@ -1,0 +1,13 @@
+[package]
+name = "wit-carpenter"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+heck = { workspace = true }
+mustache = "0.9.0"
+prost-build = "0.13.5"
+prost-reflect = { workspace = true }
+prost-types = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }

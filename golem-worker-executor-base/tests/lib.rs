@@ -62,6 +62,7 @@ pub mod observability;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod revert;
+pub mod rust_grpc;
 pub mod rust_rpc;
 pub mod rust_rpc_stubless;
 pub mod scalability;
@@ -88,6 +89,7 @@ tag_suite!(durability, group3);
 tag_suite!(scalability, group4);
 tag_suite!(hot_update, group4);
 tag_suite!(rust_rpc, group4);
+tag_suite!(rust_grpc, group4);
 tag_suite!(rust_rpc_stubless, group4);
 
 tag_suite!(guest_languages2, group5);

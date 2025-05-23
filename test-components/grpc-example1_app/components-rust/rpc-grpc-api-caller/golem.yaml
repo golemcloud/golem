@@ -1,0 +1,17 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+# Schema for vscode-yaml
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
+
+# See https://learn.golem.cloud/docs/app-manifest#field-reference for field reference
+
+components:
+  rpc-grpc:api-caller:
+    template: rust
+
+dependencies:
+ rpc-grpc:api-caller:
+ - target: rpc-grpc:grpcbin
+   type: grpc
+   proto:
+    root: /home/balaram/golem-fork/test-components/grpc--example1_app/components-rust/rpc-grpc-api-caller/proto/

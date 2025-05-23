@@ -7441,14 +7441,41 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    DynamicLinkedGrpc:
+      type: object
+      properties:
+        targets:
+          description: Maps resource names within the dynamic linked interface to target information
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/GrpcTarget'
+        metadata:
+          $ref: '#/components/schemas/GrpcMetadata'
+      required:
+      - targets
+      - metadata
     DynamicLinkedInstance:
       discriminator:
         propertyName: type
         mapping:
           WasmRpc: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+          Grpc: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedGrpc'
       type: object
       oneOf:
       - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+      - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedGrpc'
+    DynamicLinkedInstance_DynamicLinkedGrpc:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Grpc
+            type: string
+            enum:
+            - Grpc
+        required:
+        - type
+      - $ref: '#/components/schemas/DynamicLinkedGrpc'
     DynamicLinkedInstance_DynamicLinkedWasmRpc:
       allOf:
       - type: object
@@ -7480,6 +7507,32 @@ components:
             $ref: '#/components/schemas/DynamicLinkedInstance'
       required:
       - dynamicLinking
+    GrpcMetadata:
+      type: object
+      properties:
+        fileDescriptorSet:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        packageName:
+          type: string
+      required:
+      - fileDescriptorSet
+      - packageName
+    GrpcTarget:
+      type: object
+      properties:
+        interfaceName:
+          type: string
+        componentName:
+          type: string
+        componentType:
+          $ref: '#/components/schemas/ComponentType'
+      required:
+      - interfaceName
+      - componentName
+      - componentType
     InitialComponentFile:
       type: object
       properties:
