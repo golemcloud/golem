@@ -1547,17 +1547,21 @@ mod tests {
     #[test]
     fn test_all_of_merge_record_0() {
         let rec1 = InferredType::record(vec![
-            ("a".to_string(), InferredType::record(vec![("a1".to_string(), InferredType::string())])),
-            ("b".to_string(),  InferredType::string())
+            (
+                "a".to_string(),
+                InferredType::record(vec![("a1".to_string(), InferredType::string())]),
+            ),
+            ("b".to_string(), InferredType::string()),
         ]);
 
-        let rec2 = InferredType::record(vec![
-            ("a".to_string(), InferredType::record(vec![("a1".to_string(), InferredType::unknown())])),
-        ]);
+        let rec2 = InferredType::record(vec![(
+            "a".to_string(),
+            InferredType::record(vec![("a1".to_string(), InferredType::unknown())]),
+        )]);
 
         let inferred_types = vec![rec1, rec2];
         let merged = get_merge_task(&inferred_types);
-        
+
         assert!(false);
     }
 
