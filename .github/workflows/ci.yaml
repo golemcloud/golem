@@ -153,7 +153,7 @@ jobs:
         # Redis is started manually below, so auto-start is not applicable
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri "https://github.com/redis-windows/redis-windows/releases/latest/download/redis-windows-latest.zip" -OutFile "redis.zip"
+          Invoke-WebRequest -Uri "https://github.com/redis-windows/redis-windows/releases/download/8.0.0/Redis-8.0.0-Windows-x64.zip" -OutFile "redis.zip"
           Expand-Archive -Path redis.zip -DestinationPath redis
           Start-Process -FilePath "redis\\redis-server.exe" -ArgumentList "--maxheap 256mb" -NoNewWindow
       - name: Worker Executor integration tests
@@ -209,15 +209,18 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
+      - name: Setup Redis (Linux)
+        if: runner.os == 'Linux'
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
+          auto-start: false
       - name: Setup Redis (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri "https://github.com/redis-windows/redis-windows/releases/latest/download/redis-windows-latest.zip" -OutFile "redis.zip"
+          Invoke-WebRequest -Uri "https://github.com/redis-windows/redis-windows/releases/download/8.0.0/Redis-8.0.0-Windows-x64.zip" -OutFile "redis.zip"
           Expand-Archive -Path redis.zip -DestinationPath redis
           Start-Process -FilePath "redis\\redis-server.exe" -ArgumentList "--maxheap 256mb" -NoNewWindow
       - name: ${{ matrix.group.description }}
