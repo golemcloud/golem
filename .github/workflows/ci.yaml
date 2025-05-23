@@ -5,6 +5,8 @@ on:
       - "v*.*.*"
     branches:
       - main
+      - ci-windows
+  workflow_dispatch:
   pull_request:
 
 concurrency:
@@ -22,7 +24,11 @@ jobs:
   build:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,7 +59,11 @@ jobs:
   unit-tests-and-checks:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -94,10 +104,10 @@ jobs:
   worker-tests:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
     strategy:
       fail-fast: true
       matrix:
+        os: [windows-latest, ubuntu-22.04]
         group:
           - name: untagged
           - name: group1
@@ -108,7 +118,8 @@ jobs:
           - name: group6
           - name: group7
           - name: group8
-    name: worker-tests-${{ matrix.group.name }}
+    runs-on: ${{ matrix.os }}
+    name: worker-tests-${{ matrix.group.name }}-${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -149,10 +160,10 @@ jobs:
   api-and-integration-tests:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
     strategy:
       fail-fast: true
       matrix:
+        os: [windows-latest, ubuntu-22.04]
         group:
           - name: integration-tests-group1
             description: "Full integration tests"
@@ -166,6 +177,7 @@ jobs:
             description: "Sharding tests"
           - name: api-tests
             description: "API tests"
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -206,7 +218,11 @@ jobs:
           include_passed: true
 
   wasm-rpc-stub:
-    runs-on: blacksmith
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
     env:
       CARGO_BUILD_JOBS: 10
     steps:
@@ -240,7 +256,7 @@ jobs:
   docker-targets-build:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: ubuntu-22.04
     if: github.event_name == 'push' && github.ref_type == 'tag'
     strategy:
       fail-fast: false
@@ -302,7 +318,7 @@ jobs:
           path: target/${{ matrix.platform.target }}.tar
 
   docker-publish:
-    runs-on: blacksmith
+    runs-on: ubuntu-22.04
     needs:
       - docker-targets-build
     if: github.event_name == 'push' && github.ref_type == 'tag'
@@ -444,7 +460,7 @@ jobs:
     if: "startsWith(github.ref, 'refs/tags/v')"
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -479,7 +495,7 @@ jobs:
       - publish
       - docker-publish
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: blacksmith
+    runs-on: ubuntu-22.04
     steps:
       - name: Publish Slack Notification
         uses: rtCamp/action-slack-notify@v2
