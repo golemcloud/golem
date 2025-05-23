@@ -141,11 +141,21 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
+      - name: Setup Redis (Linux)
+        if: runner.os == 'Linux'
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
+      - name: Setup Redis (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # Redis is started manually below, so auto-start is not applicable
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://github.com/redis-windows/redis-windows/releases/latest/download/redis-windows-latest.zip" -OutFile "redis.zip"
+          Expand-Archive -Path redis.zip -DestinationPath redis
+          Start-Process -FilePath "redis\\redis-server.exe" -ArgumentList "--maxheap 256mb" -NoNewWindow
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
         timeout-minutes: 40
@@ -203,7 +213,13 @@ jobs:
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
-          auto-start: false
+      - name: Setup Redis (Windows)
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://github.com/redis-windows/redis-windows/releases/latest/download/redis-windows-latest.zip" -OutFile "redis.zip"
+          Expand-Archive -Path redis.zip -DestinationPath redis
+          Start-Process -FilePath "redis\\redis-server.exe" -ArgumentList "--maxheap 256mb" -NoNewWindow
       - name: ${{ matrix.group.description }}
         env:
           QUIET: true
@@ -457,7 +473,7 @@ jobs:
       - wasm-rpc-stub
       - worker-tests
       - api-and-integration-tests
-    if: "startsWith(github.ref, 'refs/tags/v')"
+    if: startsWith(github.ref, 'refs/tags/v')
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: ubuntu-22.04
