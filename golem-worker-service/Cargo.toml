@@ -32,6 +32,7 @@ futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
 include_dir = { workspace = true }
+openapiv3 = {workspace = true}
 opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
@@ -41,6 +42,7 @@ poem-openapi-derive = { workspace = true }
 prometheus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true}
 tap = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
