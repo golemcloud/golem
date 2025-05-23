@@ -83,7 +83,7 @@ pub use bindings::wasi;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc0_2_0 as golem_rpc_0_2_x;
+pub use bindings::golem::rpc0_2_1 as golem_rpc_0_2_x;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
