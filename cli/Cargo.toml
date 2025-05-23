@@ -5,6 +5,9 @@ members = ["golem", "golem-cli", "golem-templates"]
 
 exclude = ["desktop-app/src-tauri"]
 
+[workspace.metadata]
+license-file = "LICENSE"
+
 [workspace.dependencies]
 
 # Golem dep
