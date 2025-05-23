@@ -1557,9 +1557,7 @@ mod tests {
 
         let inferred_types = vec![rec1, rec2];
         let merged = get_merge_task(&inferred_types);
-
-        dbg!(merged);
-
+        
         assert!(false);
     }
 
