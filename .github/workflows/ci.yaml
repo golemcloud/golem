@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-22.04]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -62,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-22.04]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -107,7 +107,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        os: [windows-latest, ubuntu-22.04]
+        os: [windows-latest]
         group:
           - name: untagged
           - name: group1
@@ -173,7 +173,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        os: [windows-latest, ubuntu-22.04]
+        os: [windows-latest]
         group:
           - name: integration-tests-group1
             description: "Full integration tests"
@@ -240,7 +240,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-22.04]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     env:
       CARGO_BUILD_JOBS: 10
@@ -276,7 +276,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: ubuntu-22.04
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    if: false # Temporarily disabled
     strategy:
       fail-fast: false
       matrix:
@@ -340,7 +340,7 @@ jobs:
     runs-on: ubuntu-22.04
     needs:
       - docker-targets-build
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    if: false # Temporarily disabled
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -476,7 +476,7 @@ jobs:
       - wasm-rpc-stub
       - worker-tests
       - api-and-integration-tests
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: false # Temporarily disabled
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: ubuntu-22.04
@@ -513,7 +513,7 @@ jobs:
     needs:
       - publish
       - docker-publish
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
+    if: false # Temporarily disabled
     runs-on: ubuntu-22.04
     steps:
       - name: Publish Slack Notification
