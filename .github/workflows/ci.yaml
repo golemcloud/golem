@@ -53,7 +53,7 @@ jobs:
       - name: Building all executables
         env:
           QUIET: true
-        run: cargo make --profile ci build
+        run: cargo make --profile ci build -- --keep-going
         timeout-minutes: 30
 
   unit-tests-and-checks:
@@ -86,7 +86,7 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Unit tests
-        run: cargo make --profile ci unit-tests
+        run: cargo make --profile ci unit-tests -- --keep-going
       - name: Check formatting and clippy rules
         run: cargo make --profile ci check
       - name: Check openapi is up to date
@@ -157,7 +157,7 @@ jobs:
           Expand-Archive -Path redis.zip -DestinationPath redis
           Start-Process -FilePath "redis\\redis-server.exe" -ArgumentList "--maxheap 256mb" -NoNewWindow
       - name: Worker Executor integration tests
-        run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
+        run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }} -- --keep-going
         timeout-minutes: 40
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
@@ -226,7 +226,7 @@ jobs:
       - name: ${{ matrix.group.description }}
         env:
           QUIET: true
-        run: cargo make --profile ci ${{ matrix.group.name }}
+        run: cargo make --profile ci ${{ matrix.group.name }} -- --keep-going
         timeout-minutes: 30
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
@@ -321,7 +321,7 @@ jobs:
         if: ${{ matrix.platform.cross }}
 
       - name: Build executables
-        run: cargo make --profile ci build-release
+        run: cargo make --profile ci build-release -- --keep-going
         env:
           PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
 
