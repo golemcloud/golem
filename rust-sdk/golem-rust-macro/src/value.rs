@@ -106,7 +106,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                         let case_ident = &variant.ident;
                         let idx = idx as u32;
 
-                        if variant.fields.len() == 0 {
+                        if variant.fields.is_empty() {
                             quote! {
                                 #ident::#case_ident => {
                                     builder.variant_unit(#idx)
@@ -340,7 +340,7 @@ fn has_only_named_fields(fields: &Fields) -> bool {
 }
 
 fn is_unit_case(variant: &Variant) -> bool {
-    variant.fields.len() == 0
+    variant.fields.is_empty()
         || variant
             .attrs
             .iter()
@@ -431,7 +431,7 @@ pub fn derive_from_value_and_type(input: TokenStream) -> TokenStream {
                         let case_ident = &variant.ident;
                         let idx = idx as u32;
 
-                        if variant.fields.len() == 0 {
+                        if variant.fields.is_empty() {
                             quote! {
                                 #idx => {
                                     Ok(#ident::#case_ident)

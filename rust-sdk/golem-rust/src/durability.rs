@@ -199,7 +199,7 @@ mod tests {
     use crate::value_and_type::type_builder::TypeNodeBuilder;
     use crate::value_and_type::{FromValueAndType, IntoValue};
     use golem_wasm_rpc::{NodeBuilder, WitValueExtractor};
-    use std::io::{Error, ErrorKind};
+    use std::io::Error;
 
     // This is not an actual runnable test - with no host implementation - but verifies through
     // an example that the Durability API is usable.
@@ -219,7 +219,7 @@ mod tests {
 
         impl From<CustomError> for std::io::Error {
             fn from(value: CustomError) -> Self {
-                Error::new(ErrorKind::Other, format!("{value:?}"))
+                Error::other(format!("{value:?}"))
             }
         }
 
