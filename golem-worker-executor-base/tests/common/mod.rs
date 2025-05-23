@@ -825,7 +825,6 @@ impl FileSystemReading for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl HostWasmRpc for TestWorkerCtx {
     async fn new(
         &mut self,
@@ -903,7 +902,6 @@ impl HostWasmRpc for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl HostFutureInvokeResult for TestWorkerCtx {
     async fn subscribe(
         &mut self,

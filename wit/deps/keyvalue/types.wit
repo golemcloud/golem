@@ -18,7 +18,7 @@ interface types {
 	// Soon: switch to `resource bucket { ... }`
 	resource bucket {
 		/// Opens a bucket with the given name.
-		/// 
+		///
 		/// If any error occurs, including if the bucket does not exist, it returns an `Err(error)`.
 		open-bucket: static func(name: string) -> result<bucket, error>;
   	}
@@ -26,7 +26,7 @@ interface types {
 	/// retrieve the value from the bucket.
 	type key = string;
 
-	use wasi:io/streams@0.2.0.{input-stream, output-stream};
+	use wasi:io/streams@0.2.3.{input-stream, output-stream};
 	use wasi-keyvalue-error.{ error };
 	/// A value is the data stored in a key-value pair. The value can be of any type
 	/// that can be represented in a byte array. It provides a way to write the value

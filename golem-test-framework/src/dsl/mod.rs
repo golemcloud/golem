@@ -2552,7 +2552,7 @@ fn rename_component_if_needed(temp_dir: &Path, path: &Path, name: &str) -> anyho
         );
         Ok(path.to_path_buf())
     } else {
-        let new_path = Builder::new().keep(true).tempfile_in(temp_dir)?;
+        let new_path = Builder::new().disable_cleanup(true).tempfile_in(temp_dir)?;
         let add_metadata = AddMetadata {
             name: Some(name.to_string()),
             version: metadata

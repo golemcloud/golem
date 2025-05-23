@@ -1,10 +1,10 @@
 package golem:api;
 
 world golem {
-  import golem:api/host@1.1.6;
-  import golem:api/context@1.1.6;
-  import golem:api/oplog@1.1.6;
-  import golem:durability/durability@1.2.0;
+  import golem:api/host@1.1.7;
+  import golem:api/context@1.1.7;
+  import golem:api/oplog@1.1.7;
+  import golem:durability/durability@1.2.1;
   import wasi:blobstore/blobstore;
   import wasi:blobstore/container;
   import wasi:blobstore/types;

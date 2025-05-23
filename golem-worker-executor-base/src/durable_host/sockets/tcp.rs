@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
@@ -23,7 +22,6 @@ use wasmtime_wasi::bindings::sockets::tcp::{
 };
 use wasmtime_wasi::SocketError;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
     async fn start_bind(
         &mut self,
@@ -235,5 +233,4 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}

@@ -25,10 +25,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{
-    HostInputStream, HostOutputStream, InputStream, StreamResult, Subscribe, WasiView,
+    DynInputStream, DynOutputStream, InputStream, IoView, OutputStream, Pollable, StreamResult,
 };
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostBucket for DurableWorkerCtx<Ctx> {
     async fn open_bucket(
         &mut self,
@@ -46,7 +45,6 @@ impl<Ctx: WorkerCtx> HostBucket for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
     async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<OutgoingValueEntry>> {
         self.observe_function_call("keyvalue::types::outgoing_value", "new_outgoing_value");
@@ -71,7 +69,7 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
             .get::<OutgoingValueEntry>(&self_)?
             .body
             .clone();
-        let body: Box<dyn HostOutputStream> = Box::new(OutgoingValueEntryStream::new(body));
+        let body: DynOutputStream = Box::new(OutgoingValueEntryStream::new(body));
         let outgoing_value_async_body = self.as_wasi_view().table().push(body)?;
         Ok(Ok(outgoing_value_async_body))
     }
@@ -104,7 +102,6 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
     async fn incoming_value_consume_sync(
         &mut self,
@@ -138,7 +135,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
             .get::<IncomingValueEntry>(&self_)?
             .body
             .clone();
-        let input_stream: InputStream = Box::new(IncomingValueEntryStream::new(body));
+        let input_stream: DynInputStream = Box::new(IncomingValueEntryStream::new(body));
         let incoming_value_async_body = self.as_wasi_view().table().push(input_stream)?;
         Ok(Ok(incoming_value_async_body))
     }
@@ -167,7 +164,6 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
 pub struct BucketEntry {
@@ -209,11 +205,11 @@ impl OutgoingValueEntryStream {
 }
 
 #[async_trait]
-impl Subscribe for OutgoingValueEntryStream {
+impl Pollable for OutgoingValueEntryStream {
     async fn ready(&mut self) {}
 }
 
-impl HostOutputStream for OutgoingValueEntryStream {
+impl OutputStream for OutgoingValueEntryStream {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -255,11 +251,11 @@ impl IncomingValueEntryStream {
 }
 
 #[async_trait]
-impl Subscribe for IncomingValueEntryStream {
+impl Pollable for IncomingValueEntryStream {
     async fn ready(&mut self) {}
 }
 
-impl HostInputStream for IncomingValueEntryStream {
+impl InputStream for IncomingValueEntryStream {
     fn read(&mut self, size: usize) -> StreamResult<Bytes> {
         let mut buf = vec![0u8; size];
         let mut body = self.body.write().unwrap();

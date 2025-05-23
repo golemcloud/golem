@@ -20,7 +20,7 @@ use crate::workerctx::WorkerCtx;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 use wasmtime_wasi::{
-    DirPerms, FilePerms, ResourceTable, StdinStream, StdoutStream, WasiCtx, WasiCtxBuilder,
+    DirPerms, FilePerms, IoCtx, ResourceTable, StdinStream, StdoutStream, WasiCtx, WasiCtxBuilder,
 };
 
 pub mod helpers;
@@ -110,9 +110,9 @@ pub fn create_context(
     stderr: impl StdoutStream + Sized + 'static,
     suspend_signal: impl Fn(Duration) -> anyhow::Error + Send + Sync + 'static,
     suspend_threshold: Duration,
-) -> Result<(WasiCtx, ResourceTable), anyhow::Error> {
+) -> Result<(WasiCtx, IoCtx, ResourceTable), anyhow::Error> {
     let table = ResourceTable::new();
-    let wasi = WasiCtxBuilder::new()
+    let (wasi, io_ctx) = WasiCtxBuilder::new()
         .args(args)
         .envs(env)
         .stdin(stdin)
@@ -125,5 +125,5 @@ pub fn create_context(
         .allow_ip_name_lookup(true)
         .build();
 
-    Ok((wasi, table))
+    Ok((wasi, io_ctx, table))
 }

@@ -15,10 +15,8 @@
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::logging::logging::{Host, Level};
 use crate::workerctx::WorkerCtx;
-use async_trait::async_trait;
 use golem_common::model::{LogLevel, WorkerEvent};
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
         self.observe_function_call("logging::handler", "log");

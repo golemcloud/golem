@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use wasmtime::component::Resource;
-use wasmtime_wasi::WasiView;
+use wasmtime_wasi::IoView;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::keyvalue::wasi_keyvalue_error::{Error, Host, HostError};
 use crate::workerctx::WorkerCtx;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostError for DurableWorkerCtx<Ctx> {
     async fn trace(&mut self, self_: Resource<Error>) -> anyhow::Result<String> {
         self.observe_function_call("keyvalue::wasi_cloud_error", "trace");
@@ -40,7 +38,6 @@ impl<Ctx: WorkerCtx> HostError for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
 pub struct ErrorEntry {

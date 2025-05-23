@@ -1,8 +1,8 @@
-package golem:rpc@0.2.0;
+package golem:rpc@0.2.1;
 
 interface types {
-  use wasi:clocks/wall-clock@0.2.0.{datetime};
-  use wasi:io/poll@0.2.0.{pollable};
+  use wasi:clocks/wall-clock@0.2.3.{datetime};
+  use wasi:io/poll@0.2.3.{pollable};
 
   /// Represents a Golem worker
   record worker-id {

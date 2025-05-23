@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
-
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
@@ -21,7 +19,6 @@ use golem_common::model::oplog::DurableFunctionType;
 use wasmtime_wasi::bindings::cli::environment::Host;
 
 // NOTE: No need to persist the results of these functions as the result values are persisted as part of the initial Create oplog entry
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
         let durability = Durability::<Vec<(String, String)>, SerializableError>::new(
