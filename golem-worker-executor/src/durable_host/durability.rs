@@ -344,6 +344,10 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         self.state.end_function(function_type, begin_index).await?;
         if function_type == &DurableFunctionType::WriteRemote
             || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
+            || matches!(
+                function_type,
+                DurableFunctionType::WriteRemoteTransaction(_)
+            )
             || forced_commit
         {
             self.state.oplog.commit(CommitLevel::DurableOnly).await;
