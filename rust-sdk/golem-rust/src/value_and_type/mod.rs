@@ -17,14 +17,15 @@
 
 pub mod type_builder;
 
-use crate::value_and_type::type_builder::{TypeNodeBuilder, WitTypeBuilderExtensions};
+use crate::value_and_type::type_builder::WitTypeBuilderExtensions;
 use golem_wasm_rpc::golem_rpc_0_2_x::types::ValueAndType;
-use golem_wasm_rpc::{
-    NodeBuilder, WitType, WitValue, WitValueBuilderExtensions, WitValueExtractor,
-};
+use golem_wasm_rpc::{WitType, WitValue, WitValueBuilderExtensions};
 use std::collections::Bound;
 use std::collections::HashMap;
 use std::hash::Hash;
+
+pub use golem_wasm_rpc::{NodeBuilder, WitValueExtractor};
+pub use type_builder::TypeNodeBuilder;
 
 /// Specific trait to convert a type into a pair of `WitValue` and `WitType`.
 pub trait IntoValue: Sized {
