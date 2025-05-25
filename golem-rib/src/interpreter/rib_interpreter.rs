@@ -2538,16 +2538,13 @@ mod tests {
 
         let expr = r#"
 
-           let record = {
-             a : {
-               a1 : {
-                 a2 : "dev"
-                }
-             },
-             b : "baz"
-           };
-
-           "${record.a.a1.a2} ${record.b}"
+           let record = { request : { path : { user : "jak" } }, y : "baz" };
+           let input = (1, ok(1), "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
+           my-worker-function(input);
+           match input {
+             (n1, ok(x), txt, rec, _, _, _, _, prod, _) =>  "prod ${n1} ${txt} ${rec.request.path.user} ${rec.y}",
+             (n1, ok(x), txt, rec, _, _, _, _, dev, _) =>   "dev ${n1} ${txt} ${rec.request.path.user} ${rec.y}"
+           }
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
