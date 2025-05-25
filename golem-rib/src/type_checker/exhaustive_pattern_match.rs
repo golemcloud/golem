@@ -411,7 +411,7 @@ mod internal {
 #[cfg(test)]
 mod pattern_match_exhaustive_tests {
     use crate::type_checker::exhaustive_pattern_match::pattern_match_exhaustive_tests::internal::strip_spaces;
-    use crate::{Compiler, Expr};
+    use crate::{RibCompiler, Expr};
     use test_r::test;
 
     #[test]
@@ -426,7 +426,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -443,7 +443,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -459,7 +459,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -475,7 +475,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -491,7 +491,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -507,7 +507,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -523,7 +523,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -540,7 +540,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -565,7 +565,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -590,7 +590,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -614,7 +614,7 @@ mod pattern_match_exhaustive_tests {
         "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -638,7 +638,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -662,7 +662,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -687,7 +687,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -712,7 +712,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -729,7 +729,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -745,7 +745,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -761,7 +761,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -777,7 +777,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -793,7 +793,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -809,7 +809,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
         assert!(result.is_ok())
     }
@@ -826,7 +826,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -851,7 +851,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -876,7 +876,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -901,7 +901,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -925,7 +925,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -950,7 +950,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -975,7 +975,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -1000,7 +1000,7 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
@@ -1024,7 +1024,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
 
         assert!(result.is_ok());
@@ -1041,7 +1041,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
 
         assert!(result.is_ok());
@@ -1058,7 +1058,7 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let result = compiler.compile(expr);
 
         assert!(result.is_ok());

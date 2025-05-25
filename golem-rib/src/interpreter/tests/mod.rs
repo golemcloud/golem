@@ -16,7 +16,7 @@
 mod comprehensive_test {
     use test_r::test;
 
-    use crate::{compiler, Compiler, CompilerConfig, Expr};
+    use crate::{RibCompiler, RibCompilerConfig, Expr};
     use golem_wasm_ast::analysis::{
         AnalysedType, NameTypePair, TypeBool, TypeF32, TypeF64, TypeRecord, TypeS16, TypeS32,
         TypeStr, TypeU64, TypeU8,
@@ -484,7 +484,7 @@ mod comprehensive_test {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::new(CompilerConfig::new(
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
             component_metadata::component_metadata(),
             vec![],
         ));

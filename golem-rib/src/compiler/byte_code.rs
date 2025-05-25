@@ -1405,7 +1405,7 @@ mod compiler_tests {
         use test_r::test;
 
         use crate::compiler::byte_code::compiler_tests::internal;
-        use crate::{compiler, Compiler, CompilerConfig, Expr};
+        use crate::{RibCompiler, RibCompilerConfig, Expr};
         use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
 
         #[test]
@@ -1416,7 +1416,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = Compiler::default();
+            let compiler = RibCompiler::default();
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
 
@@ -1434,7 +1434,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = Compiler::new(CompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
 
             assert_eq!(
@@ -1455,8 +1455,8 @@ mod compiler_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiler_config = CompilerConfig::new(metadata, vec![]);
-            let compiler = Compiler::new(compiler_config);
+            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
@@ -1481,8 +1481,8 @@ mod compiler_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiler_config = CompilerConfig::new(metadata, vec![]);
-            let compiler = Compiler::new(compiler_config);
+            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
@@ -1502,8 +1502,8 @@ mod compiler_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiler_config = CompilerConfig::new(metadata, vec![]);
-            let compiler = Compiler::new(compiler_config);
+            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
@@ -1523,8 +1523,8 @@ mod compiler_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiler_config = CompilerConfig::new(metadata, vec![]);
-            let compiler = Compiler::new(compiler_config);
+            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
@@ -1545,8 +1545,8 @@ mod compiler_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiler_config = CompilerConfig::new(metadata, vec![]);
-            let compiler = Compiler::new(compiler_config);
+            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
@@ -1570,8 +1570,8 @@ mod compiler_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiler_config = CompilerConfig::new(metadata, vec![]);
-            let compiler = Compiler::new(compiler_config);
+            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
@@ -1591,8 +1591,8 @@ mod compiler_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiler_config = CompilerConfig::new(metadata, vec![]);
-            let compiler = Compiler::new(compiler_config);
+            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
@@ -1611,8 +1611,8 @@ mod compiler_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiler_config = CompilerConfig::new(metadata, vec![]);
-            let compiler = Compiler::new(compiler_config);
+            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
@@ -1633,8 +1633,8 @@ mod compiler_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiler_config = CompilerConfig::new(metadata, vec![]);
-            let compiler = Compiler::new(compiler_config);
+            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
@@ -1649,7 +1649,7 @@ mod compiler_tests {
         use test_r::test;
 
         use crate::compiler::byte_code::compiler_tests::internal;
-        use crate::{compiler, Compiler, CompilerConfig, Expr};
+        use crate::{RibCompiler, RibCompilerConfig, Expr};
         use golem_wasm_ast::analysis::{
             AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeList, TypeOption,
             TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
@@ -1677,7 +1677,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1707,7 +1707,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1757,7 +1757,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1795,7 +1795,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1832,7 +1832,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1870,7 +1870,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1919,7 +1919,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1964,7 +1964,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -2000,7 +2000,7 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);

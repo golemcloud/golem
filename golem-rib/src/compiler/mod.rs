@@ -23,9 +23,7 @@ pub use worker_functions_in_rib::*;
 
 use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{
-    Expr, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo, VariableId,
-};
+use crate::{Expr, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo};
 
 mod byte_code;
 mod compiler_output;
@@ -34,40 +32,46 @@ mod ir;
 mod type_with_unit;
 mod worker_functions_in_rib;
 
-// TODO: Change this to proper comments
-// Rib allows global input variables, however, we can choose to fail compilation
-// if they don't fall under a pre-defined set of global variables. If nothing is specified,
-// then it implies, any names can be a global variable in Rib. Example: `foo`.
-// Along with this, we can explicitly specify the types of certain global variables using `GlobalVariableTypeSpec`.
-// `GlobalVariableTypeSpec` is a compiler configuration that customises it's behaviour.
-// Example:  request.path.*` should be always a `string`.
-// Not all global variables require a type specification.
+/// Compiler configuration options for Rib.
+///
+/// # Fields
+/// - `component_metadata`: Component metadata that describes the worker functions available.
+/// - `global_input_spec`: Defines constraints and types for global input variables.
+///   By default, Rib allows any identifier (e.g., `foo`) to be treated as a global variable.
+///   A global variable is a variable that is not defined in the Rib script but is expected to be provided
+///   by the environment in which the Rib script is executed (e.g., `request`, `env`). Hence it is called `global_input`.
+///   This field can restrict global variables to a predefined set. If the field is empty, any identifier
+///   can be used as a global variable.
+///
+///   You can also associate specific types with known global variables using
+///   `GlobalVariableTypeSpec`. For example, the path `request.path.*` can be enforced to always
+///   be of type `string`. Note that not all global variables require a type specification.
 #[derive(Default)]
-pub struct CompilerConfig {
+pub struct RibCompilerConfig {
     component_metadata: Vec<AnalysedExport>,
-    global_input_spec: Vec<GlobalVariableTypeSpec>,
+    input_spec: Vec<GlobalVariableTypeSpec>,
 }
 
-impl CompilerConfig {
+impl RibCompilerConfig {
     pub fn new(
         component_metadata: Vec<AnalysedExport>,
-        global_variable_type_spec: Vec<GlobalVariableTypeSpec>,
-    ) -> CompilerConfig {
-        CompilerConfig {
+        input_spec: Vec<GlobalVariableTypeSpec>,
+    ) -> RibCompilerConfig {
+        RibCompilerConfig {
             component_metadata,
-            global_input_spec: global_variable_type_spec,
+            input_spec: input_spec,
         }
     }
 }
 
 #[derive(Default)]
-pub struct Compiler {
-    config: CompilerConfig,
+pub struct RibCompiler {
+    config: RibCompilerConfig,
 }
 
-impl Compiler {
-    pub fn new(config: CompilerConfig) -> Compiler {
-        Compiler { config }
+impl RibCompiler {
+    pub fn new(config: RibCompilerConfig) -> RibCompiler {
+        RibCompiler { config }
     }
 
     pub fn with_component_metadata(&mut self, component_metadata: Vec<AnalysedExport>) {
@@ -75,14 +79,14 @@ impl Compiler {
     }
 
     pub fn with_global_variables(&mut self, global_variables: Vec<GlobalVariableTypeSpec>) {
-        self.config.global_input_spec = global_variables
+        self.config.input_spec = global_variables
     }
 
     pub fn compile(&self, expr: Expr) -> Result<CompilerOutput, RibCompilationError> {
         let type_registry =
             FunctionTypeRegistry::from_export_metadata(&self.config.component_metadata);
         let inferred_expr =
-            InferredExpr::from_expr(expr, &type_registry, &self.config.global_input_spec)?;
+            InferredExpr::from_expr(expr, &type_registry, &self.config.input_spec)?;
 
         let function_calls_identified =
             WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
@@ -94,7 +98,7 @@ impl Compiler {
         // allowed_global_variables
         let allowed_global_variables: Vec<String> = self
             .config
-            .global_input_spec
+            .input_spec
             .iter()
             .map(|x| x.variable())
             .collect::<Vec<_>>();

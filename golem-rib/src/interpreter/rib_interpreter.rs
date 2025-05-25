@@ -1464,8 +1464,8 @@ mod tests {
         strip_spaces,
     };
     use crate::{
-        compiler, Compiler, CompilerConfig, Expr, FunctionTypeRegistry, GlobalVariableTypeSpec,
-        InferredType, InstructionId, Path, VariableId,
+        RibCompiler, RibCompilerConfig, Expr, FunctionTypeRegistry, GlobalVariableTypeSpec, InferredType,
+        InstructionId, Path, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{
         bool, case, f32, field, list, option, r#enum, record, result, s32, s8, str, tuple, u32,
@@ -1704,11 +1704,9 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiler = Compiler::default();
-
         let mut interpreter = Interpreter::default();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -1730,7 +1728,7 @@ mod tests {
 
         let mut interpreter = Interpreter::default();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -1770,7 +1768,7 @@ mod tests {
 
         let mut interpreter = Interpreter::default();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -1814,7 +1812,7 @@ mod tests {
 
         let mut interpreter = Interpreter::default();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -1877,7 +1875,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiler = Compiler::new(CompilerConfig::new(vec![], type_spec));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(vec![], type_spec));
         let compiled = compiler.compile(expr).unwrap();
 
         let result = interpreter
@@ -1943,7 +1941,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiler = Compiler::new(CompilerConfig::new(vec![], type_spec));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(vec![], type_spec));
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -1973,7 +1971,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2004,7 +2002,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::new(CompilerConfig::new(
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
             get_metadata_with_enum_and_variant(),
             vec![],
         ));
@@ -2056,7 +2054,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::new(CompilerConfig::new(
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
             get_metadata_with_enum_and_variant(),
             vec![],
         ));
@@ -2085,7 +2083,7 @@ mod tests {
           "#;
 
         let expr = Expr::from_text(rib_expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter
             .run(compiled.byte_code)
@@ -2118,7 +2116,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let result = interpreter
@@ -2148,7 +2146,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2177,7 +2175,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2207,8 +2205,8 @@ mod tests {
 
         let expr = Expr::from_text(rib).unwrap();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2238,8 +2236,8 @@ mod tests {
 
         let expr = Expr::from_text(rib).unwrap();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2264,7 +2262,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(rib).unwrap();
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
         let compile_result = compiler.compile(expr);
         assert!(compile_result.is_err());
     }
@@ -2284,7 +2282,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(rib).unwrap();
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
         let compile_result = compiler.compile(expr);
         assert!(compile_result.is_err());
     }
@@ -2304,7 +2302,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let result = interpreter
@@ -2335,7 +2333,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let result = interpreter
@@ -2370,7 +2368,7 @@ mod tests {
         let mut expr = Expr::from_text(expr).unwrap();
         expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
             .unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2392,7 +2390,7 @@ mod tests {
         let mut expr = Expr::from_text(expr).unwrap();
         expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
             .unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2416,7 +2414,7 @@ mod tests {
         expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
             .unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2437,7 +2435,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2458,7 +2456,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
         let rib_result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2484,7 +2482,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
         let rib_result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2517,7 +2515,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2548,7 +2546,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2583,7 +2581,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2621,7 +2619,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = Compiler::new(CompilerConfig::new(analysed_exports, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2640,8 +2638,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = Interpreter::default();
@@ -2674,8 +2672,8 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2711,8 +2709,8 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2735,8 +2733,8 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2764,8 +2762,8 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2793,8 +2791,8 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata_with_resource_without_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2833,8 +2831,8 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata_with_resource_without_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2856,8 +2854,8 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata_with_resource_without_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2894,8 +2892,8 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata_with_resource_without_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2914,8 +2912,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_without_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = Interpreter::default();
@@ -2936,7 +2934,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -2957,7 +2955,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -2983,7 +2981,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3010,7 +3008,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3032,7 +3030,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3061,7 +3059,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3086,7 +3084,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3110,7 +3108,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3133,7 +3131,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3156,7 +3154,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3185,7 +3183,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3216,7 +3214,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3253,7 +3251,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3280,7 +3278,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3310,7 +3308,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3342,7 +3340,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3375,7 +3373,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3400,7 +3398,7 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = Compiler::default();
+        let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
 
         let mut interpreter = Interpreter::default();
@@ -3422,8 +3420,8 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -3453,7 +3451,7 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata();
 
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
         let compiled = compiler.compile(expr);
 
@@ -3469,7 +3467,7 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata();
 
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
         let compiled = compiler.compile(expr);
 
@@ -3485,7 +3483,7 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata();
 
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
         let compiled = compiler.compile(expr);
 
@@ -3501,8 +3499,8 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -3531,7 +3529,7 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
 
@@ -3548,7 +3546,7 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
         let compilation_error = compiler.compile(expr).unwrap_err().to_string();
 
@@ -3573,8 +3571,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter =
@@ -3596,8 +3594,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -3625,8 +3623,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -3656,8 +3654,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -3695,8 +3693,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -3726,8 +3724,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -3758,7 +3756,7 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata();
 
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
         let compilation_error = compiler.compile(expr).unwrap_err().to_string();
 
@@ -3778,8 +3776,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -3809,8 +3807,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -3840,8 +3838,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -3871,7 +3869,7 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
 
@@ -3891,8 +3889,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -3922,8 +3920,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -3958,8 +3956,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter =
@@ -3979,7 +3977,7 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
 
@@ -4004,8 +4002,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter =
@@ -4027,8 +4025,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -4074,7 +4072,7 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
 
@@ -4092,7 +4090,7 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
 
@@ -4114,8 +4112,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter =
@@ -4139,7 +4137,7 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
         let error_message = compiler.compile(expr).unwrap_err().to_string();
 
@@ -4166,8 +4164,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter =
@@ -4193,8 +4191,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter =
@@ -4224,8 +4222,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter =
@@ -4256,8 +4254,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter =
@@ -4278,8 +4276,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut input = HashMap::new();
@@ -4319,9 +4317,9 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
 
-        let compiler = Compiler::new(compiler_config);
+        let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4357,7 +4355,7 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
         let error = compiler.compile(expr).unwrap_err().to_string();
 
@@ -4375,7 +4373,7 @@ mod tests {
 
         let component_metadata = test_utils::get_metadata();
 
-        let compiler = Compiler::new(CompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
         let error = compiler.compile(expr).unwrap_err().to_string();
 
@@ -4398,8 +4396,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
@@ -4433,8 +4431,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut input = HashMap::new();
@@ -4490,8 +4488,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut input = HashMap::new();
@@ -4545,8 +4543,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut input = HashMap::new();
@@ -4603,8 +4601,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = CompilerConfig::new(component_metadata, vec![]);
-        let compiler = Compiler::new(compiler_config);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
         let mut input = HashMap::new();

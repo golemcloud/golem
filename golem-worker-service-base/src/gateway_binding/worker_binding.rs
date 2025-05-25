@@ -67,7 +67,7 @@ impl WorkerBindingCompiled {
         )?;
         let invocation_context_compiled = match &gateway_worker_binding.invocation_context {
             Some(invocation_context) => Some(InvocationContextCompiled::from_invocation_context(
-                invocation_context,
+                &invocation_context,
                 export_metadata,
             )?),
             None => None,

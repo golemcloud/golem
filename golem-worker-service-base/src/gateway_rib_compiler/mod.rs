@@ -13,7 +13,10 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{CompilerOutput, Expr, GlobalVariableTypeSpec, InferredType, Path, RibCompilationError};
+use rib::{
+    CompilerOutput, Expr, GlobalVariableTypeSpec, InferredType, Path, RibCompilationError,
+    RibCompiler, RibCompilerConfig,
+};
 
 // A wrapper service over original Rib Compiler concerning
 // the details of the worker bridge.
@@ -31,33 +34,34 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
         rib: &Expr,
         export_metadata: &[AnalysedExport],
     ) -> Result<CompilerOutput, RibCompilationError> {
-        rib::compile_with_global_variables(
-            rib.clone(),
-            &export_metadata.to_vec(),
-            Some(vec!["request".to_string()]),
-            &vec![
-                GlobalVariableTypeSpec::new(
-                    "request",
-                    Path::from_elems(vec!["path"]),
-                    InferredType::string(),
-                ),
-                GlobalVariableTypeSpec::new(
-                    "request",
-                    Path::from_elems(vec!["query"]),
-                    InferredType::string(),
-                ),
-                // `request.headers.*` or `request.header.*` should be a `string`.
-                GlobalVariableTypeSpec::new(
-                    "request",
-                    Path::from_elems(vec!["headers"]),
-                    InferredType::string(),
-                ),
-                GlobalVariableTypeSpec::new(
-                    "request",
-                    Path::from_elems(vec!["header"]),
-                    InferredType::string(),
-                ),
-            ],
-        )
+        let rib_input_spec = vec![
+            GlobalVariableTypeSpec::new(
+                "request",
+                rib::Path::from_elems(vec!["path"]),
+                InferredType::string(),
+            ),
+            GlobalVariableTypeSpec::new(
+                "request",
+                Path::from_elems(vec!["query"]),
+                InferredType::string(),
+            ),
+            // `request.headers.*` or `request.header.*` should be a `string`.
+            GlobalVariableTypeSpec::new(
+                "request",
+                Path::from_elems(vec!["headers"]),
+                InferredType::string(),
+            ),
+            GlobalVariableTypeSpec::new(
+                "request",
+                Path::from_elems(vec!["header"]),
+                InferredType::string(),
+            ),
+        ];
+
+        let compiler_config = RibCompilerConfig::new(export_metadata.to_vec(), rib_input_spec);
+
+        let compiler = RibCompiler::new(compiler_config);
+
+        compiler.compile(rib.clone())
     }
 }
