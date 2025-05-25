@@ -6,6 +6,8 @@ on:
     branches:
       - main
   pull_request:
+  # Enables to start/restart the workflow from the GitHub UI/CLI
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -50,7 +52,8 @@ jobs:
         run: cargo make --profile ci build
         timeout-minutes: 30
 
-  unit-tests-and-checks:
+  unit-tests:
+    # Run all unit tests
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -77,12 +80,6 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Unit tests
         run: cargo make --profile ci unit-tests
-      - name: Check formatting and clippy rules
-        run: cargo make --profile ci check
-      - name: Check openapi is up to date
-        run: cargo make --profile ci check-openapi
-      - name: Check configs are up to date
-        run: cargo make --profile ci check-configs
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
         if: always()
@@ -90,6 +87,39 @@ jobs:
           report_paths: "**/target/report-*.xml"
           detailed_summary: true
           include_passed: true
+
+  code-checks:
+    # Run code formatting, lint, and config checks
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check formatting and clippy rules
+        run: cargo make --profile ci check
+      - name: Check openapi is up to date
+        run: cargo make --profile ci check-openapi
+      - name: Check configs are up to date
+        run: cargo make --profile ci check-configs
 
   worker-tests:
     env:
@@ -437,7 +467,8 @@ jobs:
   publish:
     needs:
       - build
-      - unit-tests-and-checks
+      - unit-tests
+      - code-checks
       - wasm-rpc-stub
       - worker-tests
       - api-and-integration-tests
