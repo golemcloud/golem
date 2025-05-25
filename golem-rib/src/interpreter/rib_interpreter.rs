@@ -2540,12 +2540,14 @@ mod tests {
 
            let record = {
              a : {
-               a1 : "jak"
+               a1 : {
+                 a2 : "dev"
+                }
              },
              b : "baz"
            };
 
-           "${record.a.a1} ${record.b}"
+           "${record.a.a1.a2} ${record.b}"
         "#;
 
         let expr = Expr::from_text(expr).unwrap();

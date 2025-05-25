@@ -84,9 +84,7 @@ impl<'a> MergeTaskStack<'a> {
 
                         let merged = merge_types(field_types);
 
-                        //if !merged.is_unknown() {
                         fields.push((field.to_string(), merged));
-                        //}
                     }
 
                     let inferred_type =
@@ -237,7 +235,12 @@ impl<'a> MergeTaskStack<'a> {
                     types.insert(option_builder.task_index, inferred_type);
                 }
 
-                MergeTask::Inspect(_) => {}
+                MergeTask::Inspect(inspect) => {
+                    let task_index = inspect.task_index;
+                    let inferred_type = inspect.inferred_type.clone();
+                    used_index.insert(task_index);
+                    types.insert(task_index, inferred_type);
+                }
             }
         }
 
@@ -1543,27 +1546,6 @@ mod tests {
     use crate::rib_source_span::SourceSpan;
     use crate::PathElem;
     use test_r::test;
-
-    #[test]
-    fn test_all_of_merge_record_0() {
-        let rec1 = InferredType::record(vec![
-            (
-                "a".to_string(),
-                InferredType::record(vec![("a1".to_string(), InferredType::string())]),
-            ),
-            ("b".to_string(), InferredType::string()),
-        ]);
-
-        let rec2 = InferredType::record(vec![(
-            "a".to_string(),
-            InferredType::record(vec![("a1".to_string(), InferredType::unknown())]),
-        )]);
-
-        let inferred_types = vec![rec1, rec2];
-        let merged = get_merge_task(&inferred_types);
-
-        assert!(false);
-    }
 
     #[test]
     fn test_all_of_merge_record_1() {
