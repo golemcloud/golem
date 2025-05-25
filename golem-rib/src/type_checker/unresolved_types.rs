@@ -738,7 +738,7 @@ mod internal {
 
 #[cfg(test)]
 mod unresolved_types_tests {
-    use crate::{RibCompiler, Expr};
+    use crate::{Expr, RibCompiler};
     use test_r::test;
 
     fn strip_spaces(input: &str) -> String {

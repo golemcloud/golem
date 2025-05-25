@@ -411,7 +411,7 @@ mod internal {
 #[cfg(test)]
 mod pattern_match_exhaustive_tests {
     use crate::type_checker::exhaustive_pattern_match::pattern_match_exhaustive_tests::internal::strip_spaces;
-    use crate::{RibCompiler, Expr};
+    use crate::{Expr, RibCompiler};
     use test_r::test;
 
     #[test]

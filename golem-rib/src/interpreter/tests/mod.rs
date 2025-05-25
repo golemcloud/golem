@@ -16,7 +16,7 @@
 mod comprehensive_test {
     use test_r::test;
 
-    use crate::{RibCompiler, RibCompilerConfig, Expr};
+    use crate::{Expr, RibCompiler, RibCompilerConfig};
     use golem_wasm_ast::analysis::{
         AnalysedType, NameTypePair, TypeBool, TypeF32, TypeF64, TypeRecord, TypeS16, TypeS32,
         TypeStr, TypeU64, TypeU8,

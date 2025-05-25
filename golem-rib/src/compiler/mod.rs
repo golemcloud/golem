@@ -59,7 +59,7 @@ impl RibCompilerConfig {
     ) -> RibCompilerConfig {
         RibCompilerConfig {
             component_metadata,
-            input_spec: input_spec,
+            input_spec,
         }
     }
 }
@@ -85,8 +85,7 @@ impl RibCompiler {
     pub fn compile(&self, expr: Expr) -> Result<CompilerOutput, RibCompilationError> {
         let type_registry =
             FunctionTypeRegistry::from_export_metadata(&self.config.component_metadata);
-        let inferred_expr =
-            InferredExpr::from_expr(expr, &type_registry, &self.config.input_spec)?;
+        let inferred_expr = InferredExpr::from_expr(expr, &type_registry, &self.config.input_spec)?;
 
         let function_calls_identified =
             WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;

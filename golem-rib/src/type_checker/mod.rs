@@ -58,7 +58,7 @@ mod type_check_tests {
 
         use crate::type_checker::type_check_tests::internal;
         use crate::type_checker::type_check_tests::internal::strip_spaces;
-        use crate::{RibCompiler, RibCompilerConfig, Expr};
+        use crate::{Expr, RibCompiler, RibCompilerConfig};
 
         #[test]
         async fn test_inference_pattern_match_invalid_0() {

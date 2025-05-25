@@ -1405,7 +1405,7 @@ mod compiler_tests {
         use test_r::test;
 
         use crate::compiler::byte_code::compiler_tests::internal;
-        use crate::{RibCompiler, RibCompilerConfig, Expr};
+        use crate::{Expr, RibCompiler, RibCompilerConfig};
         use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
 
         #[test]
@@ -1649,7 +1649,7 @@ mod compiler_tests {
         use test_r::test;
 
         use crate::compiler::byte_code::compiler_tests::internal;
-        use crate::{RibCompiler, RibCompilerConfig, Expr};
+        use crate::{Expr, RibCompiler, RibCompilerConfig};
         use golem_wasm_ast::analysis::{
             AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeList, TypeOption,
             TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
