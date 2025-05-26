@@ -14,7 +14,6 @@
 
 use crate::rib_source_span::SourceSpan;
 use bigdecimal::BigDecimal;
-use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 

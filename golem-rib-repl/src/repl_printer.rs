@@ -62,7 +62,11 @@ impl ReplPrinter for DefaultReplResultPrinter {
 
                 println!("{}", "[compilation error]".red().bold());
                 println!("{} {}", "[position]".yellow(), position.start_column());
-                println!("{} {}", "[expression]".yellow(), compilation_error.expr.to_string().white());
+                println!(
+                    "{} {}",
+                    "[expression]".yellow(),
+                    compilation_error.expr.to_string().white()
+                );
                 println!("{} {}", "[cause]".yellow(), cause.bright_red().bold());
 
                 if !compilation_error.additional_error_details.is_empty() {
@@ -119,6 +123,11 @@ impl ReplPrinter for DefaultReplResultPrinter {
     }
 
     fn print_wasm_value_type(&self, analysed_type: &AnalysedType) {
-        println!("{}", wasm_wave::wasm::DisplayType(analysed_type).to_string().yellow());
+        println!(
+            "{}",
+            wasm_wave::wasm::DisplayType(analysed_type)
+                .to_string()
+                .yellow()
+        );
     }
 }

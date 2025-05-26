@@ -29,7 +29,6 @@ use rustyline::{Config, Editor};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
-use golem_wasm_ast::analysis::analysed_type::tuple;
 
 /// The REPL environment for Rib, providing an interactive shell for executing Rib code.
 pub struct RibRepl {
@@ -169,9 +168,7 @@ impl RibRepl {
                     // Before evaluation
                     let result = eval(compilation.rib_byte_code, &mut self.repl_state).await;
                     match result {
-                        Ok(result) => {
-                            Ok(Some(result))
-                        }
+                        Ok(result) => Ok(Some(result)),
                         Err(err) => {
                             self.remove_rib_text_in_session();
                             Err(RibExecutionError::RibRuntimeError(err))
@@ -209,26 +206,23 @@ impl RibRepl {
             let readline = self.read_line();
             match readline {
                 Ok(rib) => {
-                    let result =
-                        self.execute_rib(&rib).await;
+                    let result = self.execute_rib(&rib).await;
 
                     match result {
                         Ok(Some(result)) => {
                             self.printer.print_rib_result(&result);
                         }
 
-                        Ok(None) => {},
+                        Ok(None) => {}
 
-                        Err(err) => {
-                            match err {
-                                RibExecutionError::RibRuntimeError(runtime_error) => {
-                                    self.printer.print_rib_runtime_error(&runtime_error);
-                                }
-                                RibExecutionError::RibCompilationError(runtime_error) => {
-                                    self.printer.print_rib_compilation_error(&runtime_error);
-                                }
+                        Err(err) => match err {
+                            RibExecutionError::RibRuntimeError(runtime_error) => {
+                                self.printer.print_rib_runtime_error(&runtime_error);
                             }
-                        }
+                            RibExecutionError::RibCompilationError(runtime_error) => {
+                                self.printer.print_rib_compilation_error(&runtime_error);
+                            }
+                        },
                     }
                 }
                 Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => break,
