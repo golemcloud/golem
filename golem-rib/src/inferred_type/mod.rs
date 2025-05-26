@@ -462,7 +462,7 @@ impl InferredType {
     }
 
     pub fn all_of(types: Vec<InferredType>) -> InferredType {
-        merge(&types)
+        get_merge_task(&types).complete()
     }
 
     pub fn is_unit(&self) -> bool {

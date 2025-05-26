@@ -19,10 +19,6 @@ use crate::inferred_type::TypeOrigin;
 pub(crate) use internal::*;
 pub(crate) use type_identifiers::*;
 
-pub fn merge(inferred_types: &[InferredType]) -> InferredType {
-    let result = get_merge_task(inferred_types).complete();
-    result
-}
 
 // This module is responsible to merge the types when constructing InferredType::AllOf, while
 // selecting the type with maximum `TypeOrigin` information. This gives two advantages.
@@ -746,7 +742,7 @@ impl<'a> RecordBuilder<'a> {
     }
 }
 
-fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> {
+pub fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> {
     let mut temp_task_queue = VecDeque::new();
 
     let merge_tasks: Vec<MergeTask<'a>> = inferred_types
