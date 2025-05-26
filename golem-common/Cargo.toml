@@ -93,6 +93,7 @@ fred = { workspace = true, optional = true }
 git-version = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
+indexmap = { workspace = true }
 iso8601-timestamp = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }

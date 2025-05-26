@@ -79,8 +79,6 @@ jobs:
       #  run: cargo make --profile ci unit-tests
       #- name: Check formatting and clippy rules
       #  run: cargo make --profile ci check
-      - name: Locale
-        run: locale
       - name: Check openapi is up to date
         run: cargo make --profile ci check-openapi
       - name: Check configs are up to date
