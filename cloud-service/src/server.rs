@@ -53,7 +53,7 @@ async fn dump_openapi_yaml() -> Result<(), std::io::Error> {
     let config = CloudServiceConfig::default();
     let services = Services::new(&config).await.map_err(|e| {
         error!("Services - init error: {}", e);
-        std::io::Error::new(std::io::ErrorKind::Other, e)
+        std::io::Error::other(e)
     })?;
     let open_api_service = make_open_api_service(&services);
     println!("{}", open_api_service.spec_yaml());
@@ -74,7 +74,7 @@ async fn async_main(
                 .await
                 .map_err(|e| {
                     error!("DB - init error: {}", e);
-                    std::io::Error::new(std::io::ErrorKind::Other, format!("Init error: {e:?}"))
+                    std::io::Error::other(format!("Init error: {e:?}"))
                 })?;
         }
         DbConfig::Sqlite(c) => {
@@ -82,14 +82,14 @@ async fn async_main(
                 .await
                 .map_err(|e| {
                     error!("DB - init error: {}", e);
-                    std::io::Error::new(std::io::ErrorKind::Other, format!("Init error: {e:?}"))
+                    std::io::Error::other(format!("Init error: {e:?}"))
                 })?;
         }
     };
 
     let services = Services::new(config).await.map_err(|e| {
         error!("Services - init error: {}", e);
-        std::io::Error::new(std::io::ErrorKind::Other, e)
+        std::io::Error::other(e)
     })?;
 
     services
@@ -98,7 +98,7 @@ async fn async_main(
         .await
         .map_err(|e| {
             error!("Plan - init error: {}", e);
-            std::io::Error::new(std::io::ErrorKind::Other, "Plan Error")
+            std::io::Error::other("Plan Error")
         })?;
 
     services
@@ -107,7 +107,7 @@ async fn async_main(
         .await
         .map_err(|e| {
             error!("Login - init error: {}", e);
-            std::io::Error::new(std::io::ErrorKind::Other, "Login Error")
+            std::io::Error::other("Login Error")
         })?;
 
     let http_services = services.clone();

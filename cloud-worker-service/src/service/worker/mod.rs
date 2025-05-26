@@ -101,6 +101,7 @@ pub trait WorkerService {
         namespace: CloudNamespace,
     ) -> Result<(), WorkerError>;
 
+    #[allow(clippy::result_large_err)]
     fn validate_typed_parameters(
         &self,
         params: Vec<TypeAnnotatedValue>,

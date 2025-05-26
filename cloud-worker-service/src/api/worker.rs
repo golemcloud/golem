@@ -1243,9 +1243,9 @@ impl WorkerApi {
             .get_file_contents(&worker_id.into_target_worker_id(), path, namespace)
             .await?;
 
-        Ok(Binary(Body::from_bytes_stream(bytes.map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-        }))))
+        Ok(Binary(Body::from_bytes_stream(
+            bytes.map_err(|e| std::io::Error::other(e.to_string())),
+        )))
     }
 
     /// Activate a plugin

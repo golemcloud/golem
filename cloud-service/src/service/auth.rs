@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use cloud_common::model::{
-    ProjectAction, ProjectActions, ProjectAuthorisedActions, Role, TokenSecret,
+    ProjectAction, ProjectActions, ProjectAuthorisedActions, ProjectPermisison, Role, TokenSecret,
 };
 use golem_service_base::repo::RepoError;
 use std::collections::HashSet;
@@ -281,7 +281,32 @@ impl AuthService for AuthServiceDefault {
         requested_action: &ProjectAction,
     ) -> Result<AuthorizedProjectAction, AuthServiceError> {
         let actions = self.get_project_actions(auth, project_id).await?;
-        let has_permission = actions.actions.actions.contains(requested_action);
+        let has_permission = match requested_action {
+            ProjectAction::ViewProject => !actions.actions.actions.is_empty(),
+            ProjectAction::BatchUpdatePluginInstallations => {
+                actions
+                    .actions
+                    .actions
+                    .contains(&ProjectPermisison::CreatePluginInstallation)
+                    && actions
+                        .actions
+                        .actions
+                        .contains(&ProjectPermisison::UpdatePluginInstallation)
+                    && actions
+                        .actions
+                        .actions
+                        .contains(&ProjectPermisison::DeletePluginInstallation)
+            }
+            other => {
+                let converted = ProjectPermisison::try_from(other.clone()).map_err(|_| {
+                    AuthServiceError::ProjectActionForbidden {
+                        project_id: project_id.clone(),
+                        requested_action: other.clone(),
+                    }
+                })?;
+                actions.actions.actions.contains(&converted)
+            }
+        };
         if has_permission {
             Ok(AuthorizedProjectAction {
                 own_account_id: auth.token.account_id.clone(),

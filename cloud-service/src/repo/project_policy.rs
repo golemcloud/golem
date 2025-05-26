@@ -1,7 +1,7 @@
 use crate::model::ProjectPolicy;
 use async_trait::async_trait;
-use cloud_common::model::ProjectPolicyId;
-use cloud_common::model::{ProjectAction, ProjectActions};
+use cloud_common::model::ProjectActions;
+use cloud_common::model::{ProjectPermisison, ProjectPolicyId};
 use conditional_trait_gen::trait_gen;
 use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
@@ -29,7 +29,6 @@ pub struct ProjectPolicyRecord {
     pub update_api_definition: bool,
     pub delete_api_definition: bool,
     pub delete_project: bool,
-    pub view_project: bool,
     pub view_plugin_installations: bool,
     pub create_plugin_installation: bool,
     pub update_plugin_installation: bool,
@@ -40,96 +39,89 @@ pub struct ProjectPolicyRecord {
     pub upsert_api_domain: bool,
     pub view_api_domain: bool,
     pub delete_api_domain: bool,
-    pub batch_update_plugin_installations: bool,
 }
 
 impl From<ProjectPolicyRecord> for ProjectPolicy {
     fn from(value: ProjectPolicyRecord) -> Self {
-        let mut project_actions: HashSet<ProjectAction> = HashSet::new();
+        let mut project_actions: HashSet<ProjectPermisison> = HashSet::new();
 
         if value.view_component {
-            project_actions.insert(ProjectAction::ViewComponent);
+            project_actions.insert(ProjectPermisison::ViewComponent);
         }
         if value.create_component {
-            project_actions.insert(ProjectAction::CreateComponent);
+            project_actions.insert(ProjectPermisison::CreateComponent);
         }
         if value.update_component {
-            project_actions.insert(ProjectAction::UpdateComponent);
+            project_actions.insert(ProjectPermisison::UpdateComponent);
         }
         if value.delete_component {
-            project_actions.insert(ProjectAction::DeleteComponent);
+            project_actions.insert(ProjectPermisison::DeleteComponent);
         }
         if value.view_worker {
-            project_actions.insert(ProjectAction::ViewWorker);
+            project_actions.insert(ProjectPermisison::ViewWorker);
         }
         if value.create_worker {
-            project_actions.insert(ProjectAction::CreateWorker);
+            project_actions.insert(ProjectPermisison::CreateWorker);
         }
         if value.update_worker {
-            project_actions.insert(ProjectAction::UpdateWorker);
+            project_actions.insert(ProjectPermisison::UpdateWorker);
         }
         if value.delete_worker {
-            project_actions.insert(ProjectAction::DeleteWorker);
+            project_actions.insert(ProjectPermisison::DeleteWorker);
         }
         if value.view_project_grants {
-            project_actions.insert(ProjectAction::ViewProjectGrants);
+            project_actions.insert(ProjectPermisison::ViewProjectGrants);
         }
         if value.create_project_grants {
-            project_actions.insert(ProjectAction::CreateProjectGrants);
+            project_actions.insert(ProjectPermisison::CreateProjectGrants);
         }
         if value.delete_project_grants {
-            project_actions.insert(ProjectAction::DeleteProjectGrants);
+            project_actions.insert(ProjectPermisison::DeleteProjectGrants);
         }
         if value.view_api_definition {
-            project_actions.insert(ProjectAction::ViewApiDefinition);
+            project_actions.insert(ProjectPermisison::ViewApiDefinition);
         }
         if value.create_api_definition {
-            project_actions.insert(ProjectAction::CreateApiDefinition);
+            project_actions.insert(ProjectPermisison::CreateApiDefinition);
         }
         if value.update_api_definition {
-            project_actions.insert(ProjectAction::UpdateApiDefinition);
+            project_actions.insert(ProjectPermisison::UpdateApiDefinition);
         }
         if value.delete_api_definition {
-            project_actions.insert(ProjectAction::DeleteApiDefinition);
+            project_actions.insert(ProjectPermisison::DeleteApiDefinition);
         }
         if value.delete_project {
-            project_actions.insert(ProjectAction::DeleteProject);
-        }
-        if value.view_project {
-            project_actions.insert(ProjectAction::ViewProject);
+            project_actions.insert(ProjectPermisison::DeleteProject);
         }
         if value.view_plugin_installations {
-            project_actions.insert(ProjectAction::ViewPluginInstallations);
+            project_actions.insert(ProjectPermisison::ViewPluginInstallations);
         }
         if value.create_plugin_installation {
-            project_actions.insert(ProjectAction::CreatePluginInstallation);
+            project_actions.insert(ProjectPermisison::CreatePluginInstallation);
         }
         if value.update_plugin_installation {
-            project_actions.insert(ProjectAction::UpdatePluginInstallation);
+            project_actions.insert(ProjectPermisison::UpdatePluginInstallation);
         }
         if value.delete_plugin_installation {
-            project_actions.insert(ProjectAction::DeletePluginInstallation);
+            project_actions.insert(ProjectPermisison::DeletePluginInstallation);
         }
         if value.upsert_api_deployment {
-            project_actions.insert(ProjectAction::UpsertApiDeployment);
+            project_actions.insert(ProjectPermisison::UpsertApiDeployment);
         }
         if value.view_api_deployment {
-            project_actions.insert(ProjectAction::ViewApiDeployment);
+            project_actions.insert(ProjectPermisison::ViewApiDeployment);
         }
         if value.delete_api_deployment {
-            project_actions.insert(ProjectAction::DeleteApiDeployment);
+            project_actions.insert(ProjectPermisison::DeleteApiDeployment);
         }
         if value.upsert_api_domain {
-            project_actions.insert(ProjectAction::UpsertApiDomain);
+            project_actions.insert(ProjectPermisison::UpsertApiDomain);
         }
         if value.view_api_domain {
-            project_actions.insert(ProjectAction::ViewApiDomain);
+            project_actions.insert(ProjectPermisison::ViewApiDomain);
         }
         if value.delete_api_domain {
-            project_actions.insert(ProjectAction::DeleteApiDomain);
-        }
-        if value.batch_update_plugin_installations {
-            project_actions.insert(ProjectAction::BatchUpdatePluginInstallations);
+            project_actions.insert(ProjectPermisison::DeleteApiDomain);
         }
 
         ProjectPolicy {
@@ -150,115 +142,107 @@ impl From<ProjectPolicy> for ProjectPolicyRecord {
             view_component: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::ViewComponent),
+                .contains(&ProjectPermisison::ViewComponent),
             create_component: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::CreateComponent),
+                .contains(&ProjectPermisison::CreateComponent),
             update_component: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::UpdateComponent),
+                .contains(&ProjectPermisison::UpdateComponent),
             delete_component: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::DeleteComponent),
+                .contains(&ProjectPermisison::DeleteComponent),
             view_worker: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::ViewWorker),
+                .contains(&ProjectPermisison::ViewWorker),
             create_worker: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::CreateWorker),
+                .contains(&ProjectPermisison::CreateWorker),
             update_worker: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::UpdateWorker),
+                .contains(&ProjectPermisison::UpdateWorker),
             delete_worker: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::DeleteWorker),
+                .contains(&ProjectPermisison::DeleteWorker),
             view_project_grants: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::ViewProjectGrants),
+                .contains(&ProjectPermisison::ViewProjectGrants),
             create_project_grants: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::CreateProjectGrants),
+                .contains(&ProjectPermisison::CreateProjectGrants),
             delete_project_grants: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::DeleteProjectGrants),
+                .contains(&ProjectPermisison::DeleteProjectGrants),
             view_api_definition: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::ViewApiDefinition),
+                .contains(&ProjectPermisison::ViewApiDefinition),
             create_api_definition: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::CreateApiDefinition),
+                .contains(&ProjectPermisison::CreateApiDefinition),
             update_api_definition: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::UpdateApiDefinition),
+                .contains(&ProjectPermisison::UpdateApiDefinition),
             delete_api_definition: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::DeleteApiDefinition),
+                .contains(&ProjectPermisison::DeleteApiDefinition),
             delete_project: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::DeleteProject),
-            view_project: value
-                .project_actions
-                .actions
-                .contains(&ProjectAction::ViewProject),
+                .contains(&ProjectPermisison::DeleteProject),
             view_plugin_installations: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::ViewPluginInstallations),
+                .contains(&ProjectPermisison::ViewPluginInstallations),
             create_plugin_installation: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::CreatePluginInstallation),
+                .contains(&ProjectPermisison::CreatePluginInstallation),
             update_plugin_installation: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::UpdatePluginInstallation),
+                .contains(&ProjectPermisison::UpdatePluginInstallation),
             delete_plugin_installation: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::DeletePluginInstallation),
+                .contains(&ProjectPermisison::DeletePluginInstallation),
             upsert_api_deployment: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::UpsertApiDeployment),
+                .contains(&ProjectPermisison::UpsertApiDeployment),
             view_api_deployment: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::ViewApiDeployment),
+                .contains(&ProjectPermisison::ViewApiDeployment),
             delete_api_deployment: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::DeleteApiDeployment),
+                .contains(&ProjectPermisison::DeleteApiDeployment),
             upsert_api_domain: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::UpsertApiDomain),
+                .contains(&ProjectPermisison::UpsertApiDomain),
             view_api_domain: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::ViewApiDomain),
+                .contains(&ProjectPermisison::ViewApiDomain),
             delete_api_domain: value
                 .project_actions
                 .actions
-                .contains(&ProjectAction::DeleteApiDomain),
-            batch_update_plugin_installations: value
-                .project_actions
-                .actions
-                .contains(&ProjectAction::BatchUpdatePluginInstallations),
+                .contains(&ProjectPermisison::DeleteApiDomain),
         }
     }
 }
@@ -299,26 +283,23 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
             r#"
               INSERT INTO project_policies
                 (
-                project_policy_id, name,
-                view_component, create_component, update_component, delete_component,
-                view_worker, create_worker, update_worker, delete_worker,
-                view_project_grants, create_project_grants, delete_project_grants,
-                view_api_definition, create_api_definition, update_api_definition, delete_api_definition,
-                delete_project, view_project, view_plugin_installations, create_plugin_installation, update_plugin_installation,
-                delete_plugin_installation, upsert_api_deployment, view_api_deployment, delete_api_deployment,
-                upsert_api_domain, view_api_domain, delete_api_domain, batch_update_plugin_installations
+                project_policy_id, name, view_component, create_component,
+                update_component, delete_component, view_worker, create_worker,
+                update_worker, delete_worker, view_project_grants, create_project_grants,
+                delete_project_grants, view_api_definition, create_api_definition, update_api_definition,
+                delete_api_definition, delete_project, view_plugin_installations, create_plugin_installation,
+                update_plugin_installation, delete_plugin_installation, upsert_api_deployment, view_api_deployment,
+                delete_api_deployment, upsert_api_domain, view_api_domain, delete_api_domain
                 )
               VALUES
                 (
-                 $1, $2,
-                 $3, $4, $5, $6,
-                 $7, $8, $9, $10,
-                 $11, $12, $13,
-                 $14, $15, $16, $17,
-                 $18, $19, $20, $21,
-                 $22, $23, $24, $25,
-                 $26, $27, $28, $29,
-                 $30
+                 $1, $2, $3, $4,
+                 $5, $6, $7, $8,
+                 $9, $10, $11, $12,
+                 $13, $14, $15, $16,
+                 $17, $18, $19, $20,
+                 $21, $22, $23, $24,
+                 $25, $26, $27, $28
                 )
             "#,
              )
@@ -340,7 +321,6 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
             .bind(project_policy.update_api_definition)
             .bind(project_policy.delete_api_definition)
             .bind(project_policy.delete_project)
-            .bind(project_policy.view_project)
             .bind(project_policy.view_plugin_installations)
             .bind(project_policy.create_plugin_installation)
             .bind(project_policy.update_plugin_installation)
@@ -350,8 +330,7 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
             .bind(project_policy.delete_api_deployment)
             .bind(project_policy.upsert_api_domain)
             .bind(project_policy.view_api_domain)
-            .bind(project_policy.delete_api_domain)
-            .bind(project_policy.batch_update_plugin_installations);
+            .bind(project_policy.delete_api_domain);
 
         self.db_pool
             .with_rw("project_policy", "create")

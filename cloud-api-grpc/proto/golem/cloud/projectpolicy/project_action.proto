@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package golem.cloud.projectpolicy;
 
-
 enum ProjectAction {
   VIEW_COMPONENT = 0;
   CREATE_COMPONENT = 1;

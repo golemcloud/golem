@@ -4,6 +4,7 @@ use crate::repo::plugin::CloudPluginScopeRow;
 use crate::repo::CloudPluginOwnerRow;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
+use cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectAction as GrpcProjectAction;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::plugin::{ComponentPluginScope, PluginOwner, PluginScope};
 use golem_common::model::{AccountId, ComponentId, Empty, ProjectId};
@@ -75,50 +76,37 @@ impl std::str::FromStr for TokenSecret {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    serde::Serialize,
-    serde::Deserialize,
-    Enum,
-    EnumIter,
-    FromRepr,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, EnumIter, FromRepr)]
 #[repr(i32)]
 pub enum ProjectAction {
-    ViewComponent = 0,
-    CreateComponent = 1,
-    UpdateComponent = 2,
-    DeleteComponent = 3,
-    ViewWorker = 4,
-    CreateWorker = 5,
-    UpdateWorker = 6,
-    DeleteWorker = 7,
-    ViewProjectGrants = 8,
-    CreateProjectGrants = 9,
-    DeleteProjectGrants = 10,
-    ViewApiDefinition = 11,
-    CreateApiDefinition = 12,
-    UpdateApiDefinition = 13,
-    DeleteApiDefinition = 14,
-    DeleteProject = 15,
-    ViewProject = 16,
-    ViewPluginInstallations = 17,
-    CreatePluginInstallation = 18,
-    UpdatePluginInstallation = 19,
-    DeletePluginInstallation = 20,
-    UpsertApiDeployment = 21,
-    ViewApiDeployment = 22,
-    DeleteApiDeployment = 23,
-    UpsertApiDomain = 24,
-    ViewApiDomain = 25,
-    DeleteApiDomain = 26,
-    BatchUpdatePluginInstallations = 27,
+    ViewComponent = GrpcProjectAction::ViewComponent as i32,
+    CreateComponent = GrpcProjectAction::CreateComponent as i32,
+    UpdateComponent = GrpcProjectAction::UpdateComponent as i32,
+    DeleteComponent = GrpcProjectAction::DeleteComponent as i32,
+    ViewWorker = GrpcProjectAction::ViewWorker as i32,
+    CreateWorker = GrpcProjectAction::CreateWorker as i32,
+    UpdateWorker = GrpcProjectAction::UpdateWorker as i32,
+    DeleteWorker = GrpcProjectAction::DeleteWorker as i32,
+    ViewProjectGrants = GrpcProjectAction::ViewProjectGrants as i32,
+    CreateProjectGrants = GrpcProjectAction::CreateProjectGrants as i32,
+    DeleteProjectGrants = GrpcProjectAction::DeleteProjectGrants as i32,
+    ViewApiDefinition = GrpcProjectAction::ViewApiDefinition as i32,
+    CreateApiDefinition = GrpcProjectAction::CreateApiDefinition as i32,
+    UpdateApiDefinition = GrpcProjectAction::UpdateApiDefinition as i32,
+    DeleteApiDefinition = GrpcProjectAction::DeleteApiDefinition as i32,
+    DeleteProject = GrpcProjectAction::DeleteProject as i32,
+    ViewProject = GrpcProjectAction::ViewProject as i32,
+    ViewPluginInstallations = GrpcProjectAction::ViewPluginInstallations as i32,
+    CreatePluginInstallation = GrpcProjectAction::CreatePluginInstallation as i32,
+    UpdatePluginInstallation = GrpcProjectAction::UpdatePluginInstallation as i32,
+    DeletePluginInstallation = GrpcProjectAction::DeletePluginInstallation as i32,
+    UpsertApiDeployment = GrpcProjectAction::UpsertApiDeployment as i32,
+    ViewApiDeployment = GrpcProjectAction::ViewApiDeployment as i32,
+    DeleteApiDeployment = GrpcProjectAction::DeleteApiDeployment as i32,
+    UpsertApiDomain = GrpcProjectAction::UpsertApiDomain as i32,
+    ViewApiDomain = GrpcProjectAction::ViewApiDomain as i32,
+    DeleteApiDomain = GrpcProjectAction::DeleteApiDomain as i32,
+    BatchUpdatePluginInstallations = GrpcProjectAction::BatchUpdatePluginInstallations as i32,
 }
 
 impl From<ProjectAction> for i32 {
@@ -137,81 +125,196 @@ impl TryFrom<i32> for ProjectAction {
 impl Display for ProjectAction {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            ProjectAction::ViewComponent => write!(f, "ViewComponent"),
-            ProjectAction::CreateComponent => write!(f, "CreateComponent"),
-            ProjectAction::UpdateComponent => write!(f, "UpdateComponent"),
-            ProjectAction::DeleteComponent => write!(f, "DeleteComponent"),
-            ProjectAction::ViewWorker => write!(f, "ViewWorker"),
-            ProjectAction::CreateWorker => write!(f, "CreateWorker"),
-            ProjectAction::UpdateWorker => write!(f, "UpdateWorker"),
-            ProjectAction::DeleteWorker => write!(f, "DeleteWorker"),
-            ProjectAction::ViewProjectGrants => write!(f, "ViewProjectGrants"),
-            ProjectAction::CreateProjectGrants => write!(f, "CreateProjectGrants"),
-            ProjectAction::DeleteProjectGrants => write!(f, "DeleteProjectGrants"),
-            ProjectAction::ViewApiDefinition => write!(f, "ViewApiDefinition"),
-            ProjectAction::CreateApiDefinition => write!(f, "CreateApiDefinition"),
-            ProjectAction::UpdateApiDefinition => write!(f, "UpdateApiDefinition"),
-            ProjectAction::DeleteApiDefinition => write!(f, "DeleteApiDefinition"),
-            ProjectAction::DeleteProject => write!(f, "DeleteProject"),
-            ProjectAction::ViewProject => write!(f, "ViewProject"),
-            ProjectAction::ViewPluginInstallations => write!(f, "ViewPluginInstallations"),
-            ProjectAction::CreatePluginInstallation => write!(f, "CreatePluginInstallation"),
-            ProjectAction::UpdatePluginInstallation => write!(f, "UpdatePluginInstallation"),
-            ProjectAction::DeletePluginInstallation => write!(f, "DeletePluginInstallation"),
-            ProjectAction::UpsertApiDeployment => write!(f, "UpsertApiDeployment"),
-            ProjectAction::ViewApiDeployment => write!(f, "ViewApiDeployment"),
-            ProjectAction::DeleteApiDeployment => write!(f, "DeleteApiDeployment"),
-            ProjectAction::UpsertApiDomain => write!(f, "UpsertApiDomain"),
-            ProjectAction::ViewApiDomain => write!(f, "ViewApiDomain"),
-            ProjectAction::DeleteApiDomain => write!(f, "DeleteApiDomain"),
-            ProjectAction::BatchUpdatePluginInstallations => {
-                write!(f, "BatchUpdatePluginInstallations")
+            Self::ViewComponent => write!(f, "ViewComponent"),
+            Self::CreateComponent => write!(f, "CreateComponent"),
+            Self::UpdateComponent => write!(f, "UpdateComponent"),
+            Self::DeleteComponent => write!(f, "DeleteComponent"),
+            Self::ViewWorker => write!(f, "ViewWorker"),
+            Self::CreateWorker => write!(f, "CreateWorker"),
+            Self::UpdateWorker => write!(f, "UpdateWorker"),
+            Self::DeleteWorker => write!(f, "DeleteWorker"),
+            Self::ViewProjectGrants => write!(f, "ViewProjectGrants"),
+            Self::CreateProjectGrants => write!(f, "CreateProjectGrants"),
+            Self::DeleteProjectGrants => write!(f, "DeleteProjectGrants"),
+            Self::ViewApiDefinition => write!(f, "ViewApiDefinition"),
+            Self::CreateApiDefinition => write!(f, "CreateApiDefinition"),
+            Self::UpdateApiDefinition => write!(f, "UpdateApiDefinition"),
+            Self::DeleteApiDefinition => write!(f, "DeleteApiDefinition"),
+            Self::DeleteProject => write!(f, "DeleteProject"),
+            Self::ViewPluginInstallations => write!(f, "ViewPluginInstallations"),
+            Self::CreatePluginInstallation => write!(f, "CreatePluginInstallation"),
+            Self::UpdatePluginInstallation => write!(f, "UpdatePluginInstallation"),
+            Self::DeletePluginInstallation => write!(f, "DeletePluginInstallation"),
+            Self::UpsertApiDeployment => write!(f, "UpsertApiDeployment"),
+            Self::ViewApiDeployment => write!(f, "ViewApiDeployment"),
+            Self::DeleteApiDeployment => write!(f, "DeleteApiDeployment"),
+            Self::UpsertApiDomain => write!(f, "UpsertApiDomain"),
+            Self::ViewApiDomain => write!(f, "ViewApiDomain"),
+            Self::DeleteApiDomain => write!(f, "DeleteApiDomain"),
+            Self::ViewProject => write!(f, "ViewProject"),
+            Self::BatchUpdatePluginInstallations => write!(f, "BatchUpdatePluginInstallations"),
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    serde::Serialize,
+    serde::Deserialize,
+    Enum,
+    EnumIter,
+)]
+pub enum ProjectPermisison {
+    ViewComponent,
+    CreateComponent,
+    UpdateComponent,
+    DeleteComponent,
+    ViewWorker,
+    CreateWorker,
+    UpdateWorker,
+    DeleteWorker,
+    ViewProjectGrants,
+    CreateProjectGrants,
+    DeleteProjectGrants,
+    ViewApiDefinition,
+    CreateApiDefinition,
+    UpdateApiDefinition,
+    DeleteApiDefinition,
+    DeleteProject,
+    ViewPluginInstallations,
+    CreatePluginInstallation,
+    UpdatePluginInstallation,
+    DeletePluginInstallation,
+    UpsertApiDeployment,
+    ViewApiDeployment,
+    DeleteApiDeployment,
+    UpsertApiDomain,
+    ViewApiDomain,
+    DeleteApiDomain,
+}
+
+impl TryFrom<ProjectAction> for ProjectPermisison {
+    type Error = String;
+
+    fn try_from(value: ProjectAction) -> Result<Self, Self::Error> {
+        match value {
+            ProjectAction::ViewComponent => Ok(Self::ViewComponent),
+            ProjectAction::CreateComponent => Ok(Self::CreateComponent),
+            ProjectAction::UpdateComponent => Ok(Self::UpdateComponent),
+            ProjectAction::DeleteComponent => Ok(Self::DeleteComponent),
+            ProjectAction::ViewWorker => Ok(Self::ViewWorker),
+            ProjectAction::CreateWorker => Ok(Self::CreateWorker),
+            ProjectAction::UpdateWorker => Ok(Self::UpdateWorker),
+            ProjectAction::DeleteWorker => Ok(Self::DeleteWorker),
+            ProjectAction::ViewProjectGrants => Ok(Self::ViewProjectGrants),
+            ProjectAction::CreateProjectGrants => Ok(Self::CreateProjectGrants),
+            ProjectAction::DeleteProjectGrants => Ok(Self::DeleteProjectGrants),
+            ProjectAction::ViewApiDefinition => Ok(Self::ViewApiDefinition),
+            ProjectAction::CreateApiDefinition => Ok(Self::CreateApiDefinition),
+            ProjectAction::UpdateApiDefinition => Ok(Self::UpdateApiDefinition),
+            ProjectAction::DeleteApiDefinition => Ok(Self::DeleteApiDefinition),
+            ProjectAction::DeleteProject => Ok(Self::DeleteProject),
+            ProjectAction::ViewPluginInstallations => Ok(Self::ViewPluginInstallations),
+            ProjectAction::CreatePluginInstallation => Ok(Self::CreatePluginInstallation),
+            ProjectAction::UpdatePluginInstallation => Ok(Self::UpdatePluginInstallation),
+            ProjectAction::DeletePluginInstallation => Ok(Self::DeletePluginInstallation),
+            ProjectAction::UpsertApiDeployment => Ok(Self::UpsertApiDeployment),
+            ProjectAction::ViewApiDeployment => Ok(Self::ViewApiDeployment),
+            ProjectAction::DeleteApiDeployment => Ok(Self::DeleteApiDeployment),
+            ProjectAction::UpsertApiDomain => Ok(Self::UpsertApiDomain),
+            ProjectAction::ViewApiDomain => Ok(Self::ViewApiDomain),
+            ProjectAction::DeleteApiDomain => Ok(Self::DeleteApiDomain),
+            ProjectAction::BatchUpdatePluginInstallations | ProjectAction::ViewProject => {
+                Err(format!("Unknown project permission: {:?}", value))
             }
         }
     }
 }
 
-impl FromStr for ProjectAction {
+impl From<ProjectPermisison> for i32 {
+    fn from(value: ProjectPermisison) -> Self {
+        value as i32
+    }
+}
+
+impl Display for ProjectPermisison {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match *self {
+            ProjectPermisison::ViewComponent => write!(f, "ViewComponent"),
+            ProjectPermisison::CreateComponent => write!(f, "CreateComponent"),
+            ProjectPermisison::UpdateComponent => write!(f, "UpdateComponent"),
+            ProjectPermisison::DeleteComponent => write!(f, "DeleteComponent"),
+            ProjectPermisison::ViewWorker => write!(f, "ViewWorker"),
+            ProjectPermisison::CreateWorker => write!(f, "CreateWorker"),
+            ProjectPermisison::UpdateWorker => write!(f, "UpdateWorker"),
+            ProjectPermisison::DeleteWorker => write!(f, "DeleteWorker"),
+            ProjectPermisison::ViewProjectGrants => write!(f, "ViewProjectGrants"),
+            ProjectPermisison::CreateProjectGrants => write!(f, "CreateProjectGrants"),
+            ProjectPermisison::DeleteProjectGrants => write!(f, "DeleteProjectGrants"),
+            ProjectPermisison::ViewApiDefinition => write!(f, "ViewApiDefinition"),
+            ProjectPermisison::CreateApiDefinition => write!(f, "CreateApiDefinition"),
+            ProjectPermisison::UpdateApiDefinition => write!(f, "UpdateApiDefinition"),
+            ProjectPermisison::DeleteApiDefinition => write!(f, "DeleteApiDefinition"),
+            ProjectPermisison::DeleteProject => write!(f, "DeleteProject"),
+            ProjectPermisison::ViewPluginInstallations => write!(f, "ViewPluginInstallations"),
+            ProjectPermisison::CreatePluginInstallation => write!(f, "CreatePluginInstallation"),
+            ProjectPermisison::UpdatePluginInstallation => write!(f, "UpdatePluginInstallation"),
+            ProjectPermisison::DeletePluginInstallation => write!(f, "DeletePluginInstallation"),
+            ProjectPermisison::UpsertApiDeployment => write!(f, "UpsertApiDeployment"),
+            ProjectPermisison::ViewApiDeployment => write!(f, "ViewApiDeployment"),
+            ProjectPermisison::DeleteApiDeployment => write!(f, "DeleteApiDeployment"),
+            ProjectPermisison::UpsertApiDomain => write!(f, "UpsertApiDomain"),
+            ProjectPermisison::ViewApiDomain => write!(f, "ViewApiDomain"),
+            ProjectPermisison::DeleteApiDomain => write!(f, "DeleteApiDomain"),
+        }
+    }
+}
+
+impl FromStr for ProjectPermisison {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ViewComponent" => Ok(ProjectAction::ViewComponent),
-            "CreateComponent" => Ok(ProjectAction::CreateComponent),
-            "UpdateComponent" => Ok(ProjectAction::UpdateComponent),
-            "DeleteComponent" => Ok(ProjectAction::DeleteComponent),
-            "ViewWorker" => Ok(ProjectAction::ViewWorker),
-            "CreateWorker" => Ok(ProjectAction::CreateWorker),
-            "UpdateWorker" => Ok(ProjectAction::UpdateWorker),
-            "DeleteWorker" => Ok(ProjectAction::DeleteWorker),
-            "ViewProjectGrants" => Ok(ProjectAction::ViewProjectGrants),
-            "CreateProjectGrants" => Ok(ProjectAction::CreateProjectGrants),
-            "DeleteProjectGrants" => Ok(ProjectAction::DeleteProjectGrants),
-            "ViewApiDefinition" => Ok(ProjectAction::ViewApiDefinition),
-            "CreateApiDefinition" => Ok(ProjectAction::CreateApiDefinition),
-            "UpdateApiDefinition" => Ok(ProjectAction::UpdateApiDefinition),
-            "DeleteApiDefinition" => Ok(ProjectAction::DeleteApiDefinition),
-            "DeleteProject" => Ok(ProjectAction::DeleteProject),
-            "ViewProject" => Ok(ProjectAction::ViewProject),
-            "ViewPluginInstallations" => Ok(ProjectAction::ViewPluginInstallations),
-            "CreatePluginInstallation" => Ok(ProjectAction::CreatePluginInstallation),
-            "UpdatePluginInstallation" => Ok(ProjectAction::UpdatePluginInstallation),
-            "DeletePluginInstallation" => Ok(ProjectAction::DeletePluginInstallation),
-            "UpsertApiDeployment" => Ok(ProjectAction::UpsertApiDeployment),
-            "ViewApiDeployment" => Ok(ProjectAction::ViewApiDeployment),
-            "DeleteApiDeployment" => Ok(ProjectAction::DeleteApiDeployment),
-            "UpsertApiDomain" => Ok(ProjectAction::UpsertApiDomain),
-            "ViewApiDomain" => Ok(ProjectAction::ViewApiDomain),
-            "DeleteApiDomain" => Ok(ProjectAction::DeleteApiDomain),
-            "BatchUpdatePluginInstallations" => Ok(ProjectAction::BatchUpdatePluginInstallations),
-            _ => Err(format!("Unknown project action: {}", s)),
+            "ViewComponent" => Ok(ProjectPermisison::ViewComponent),
+            "CreateComponent" => Ok(ProjectPermisison::CreateComponent),
+            "UpdateComponent" => Ok(ProjectPermisison::UpdateComponent),
+            "DeleteComponent" => Ok(ProjectPermisison::DeleteComponent),
+            "ViewWorker" => Ok(ProjectPermisison::ViewWorker),
+            "CreateWorker" => Ok(ProjectPermisison::CreateWorker),
+            "UpdateWorker" => Ok(ProjectPermisison::UpdateWorker),
+            "DeleteWorker" => Ok(ProjectPermisison::DeleteWorker),
+            "ViewProjectGrants" => Ok(ProjectPermisison::ViewProjectGrants),
+            "CreateProjectGrants" => Ok(ProjectPermisison::CreateProjectGrants),
+            "DeleteProjectGrants" => Ok(ProjectPermisison::DeleteProjectGrants),
+            "ViewApiDefinition" => Ok(ProjectPermisison::ViewApiDefinition),
+            "CreateApiDefinition" => Ok(ProjectPermisison::CreateApiDefinition),
+            "UpdateApiDefinition" => Ok(ProjectPermisison::UpdateApiDefinition),
+            "DeleteApiDefinition" => Ok(ProjectPermisison::DeleteApiDefinition),
+            "DeleteProject" => Ok(ProjectPermisison::DeleteProject),
+            "ViewPluginInstallations" => Ok(ProjectPermisison::ViewPluginInstallations),
+            "CreatePluginInstallation" => Ok(ProjectPermisison::CreatePluginInstallation),
+            "UpdatePluginInstallation" => Ok(ProjectPermisison::UpdatePluginInstallation),
+            "DeletePluginInstallation" => Ok(ProjectPermisison::DeletePluginInstallation),
+            "UpsertApiDeployment" => Ok(ProjectPermisison::UpsertApiDeployment),
+            "ViewApiDeployment" => Ok(ProjectPermisison::ViewApiDeployment),
+            "DeleteApiDeployment" => Ok(ProjectPermisison::DeleteApiDeployment),
+            "UpsertApiDomain" => Ok(ProjectPermisison::UpsertApiDomain),
+            "ViewApiDomain" => Ok(ProjectPermisison::ViewApiDomain),
+            "DeleteApiDomain" => Ok(ProjectPermisison::DeleteApiDomain),
+            _ => Err(format!("Unknown project permission: {}", s)),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 pub struct ProjectActions {
-    pub actions: HashSet<ProjectAction>,
+    pub actions: HashSet<ProjectPermisison>,
 }
 
 impl ProjectActions {
@@ -222,39 +325,9 @@ impl ProjectActions {
     }
 
     pub fn all() -> ProjectActions {
-        let actions: HashSet<ProjectAction> =
-            ProjectAction::iter().collect::<HashSet<ProjectAction>>();
+        let actions: HashSet<ProjectPermisison> =
+            ProjectPermisison::iter().collect::<HashSet<ProjectPermisison>>();
         ProjectActions { actions }
-    }
-}
-
-impl From<ProjectActions> for cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectActions {
-    fn from(value: ProjectActions) -> Self {
-        Self {
-            actions: value
-                .actions
-                .into_iter()
-                .map(|action| action.into())
-                .collect(),
-        }
-    }
-}
-
-impl TryFrom<cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectActions>
-    for ProjectActions
-{
-    type Error = String;
-
-    fn try_from(
-        value: cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectActions,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            actions: value
-                .actions
-                .into_iter()
-                .map(|action| action.try_into())
-                .collect::<Result<_, _>>()?,
-        })
     }
 }
 
@@ -645,10 +718,15 @@ mod test {
             let action_as_i32: i32 = action.clone().into();
             let deserialized_action = ProjectAction::try_from(action_as_i32).unwrap();
             assert_eq!(action, deserialized_action);
+        }
+    }
 
-            let action_as_str = action.to_string();
-            let deserialized_action = ProjectAction::from_str(&action_as_str).unwrap();
-            assert_eq!(action, deserialized_action);
+    #[test]
+    fn project_permission_to_from() {
+        for permission in ProjectPermisison::iter() {
+            let permission_as_str = permission.to_string();
+            let deserialized_permission = ProjectPermisison::from_str(&permission_as_str).unwrap();
+            assert_eq!(permission, deserialized_permission);
         }
     }
 }

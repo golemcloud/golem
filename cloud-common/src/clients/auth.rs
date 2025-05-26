@@ -107,7 +107,7 @@ impl BaseAuthService for CloudAuthService {
         let result: Result<CloudNamespace, AuthClientError> = with_retries(
             "auth",
             "authorize-project-action",
-            Some(format!("{action}")),
+            Some(format!("{action:}")),
             &self.retry_config,
             &(
                 self.auth_service_client.clone(),

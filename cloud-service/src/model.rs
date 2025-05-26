@@ -84,7 +84,7 @@ pub struct ProjectGrantDataRequest {
     pub grantee_account_id: Option<AccountId>,
     pub grantee_email: Option<String>,
     pub project_policy_id: Option<ProjectPolicyId>,
-    pub project_actions: Vec<ProjectAction>,
+    pub project_actions: Vec<ProjectPermisison>,
     pub project_policy_name: Option<String>,
 }
 
@@ -302,71 +302,12 @@ pub struct ProjectGrantData {
     pub project_policy_id: ProjectPolicyId,
 }
 
-impl From<ProjectGrantData>
-    for cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantData
-{
-    fn from(value: ProjectGrantData) -> Self {
-        Self {
-            grantee_account_id: Some(value.grantee_account_id.into()),
-            grantor_project_id: Some(value.grantor_project_id.into()),
-            project_policy_id: Some(value.project_policy_id.into()),
-        }
-    }
-}
-
-impl TryFrom<cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantData>
-    for ProjectGrantData
-{
-    type Error = String;
-
-    fn try_from(
-        value: cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantData,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            grantee_account_id: value
-                .grantee_account_id
-                .ok_or("Missing grantee_account_id")?
-                .into(),
-            grantor_project_id: value
-                .grantor_project_id
-                .ok_or("Missing grantor_project_id")?
-                .try_into()?,
-            project_policy_id: value
-                .project_policy_id
-                .ok_or("Missing project_policy_id")?
-                .try_into()?,
-        })
-    }
-}
-
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
 )]
 pub struct ProjectGrant {
     pub id: ProjectGrantId,
     pub data: ProjectGrantData,
-}
-
-impl TryFrom<cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrant> for ProjectGrant {
-    type Error = String;
-
-    fn try_from(
-        value: cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrant,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: value.id.ok_or("Missing id")?.try_into()?,
-            data: value.data.ok_or("Missing data")?.try_into()?,
-        })
-    }
-}
-
-impl From<ProjectGrant> for cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrant {
-    fn from(value: ProjectGrant) -> Self {
-        Self {
-            id: Some(value.id.into()),
-            data: Some(value.data.into()),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
@@ -376,30 +317,6 @@ pub struct ProjectPolicy {
     pub id: ProjectPolicyId,
     pub name: String,
     pub project_actions: ProjectActions,
-}
-
-impl From<ProjectPolicy> for cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectPolicy {
-    fn from(value: ProjectPolicy) -> Self {
-        Self {
-            id: Some(value.id.into()),
-            name: value.name,
-            actions: Some(value.project_actions.into()),
-        }
-    }
-}
-
-impl TryFrom<cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectPolicy> for ProjectPolicy {
-    type Error = String;
-
-    fn try_from(
-        value: cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectPolicy,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: value.id.ok_or("Missing id")?.try_into()?,
-            name: value.name,
-            project_actions: value.actions.ok_or("Missing actions")?.try_into()?,
-        })
-    }
 }
 
 #[derive(

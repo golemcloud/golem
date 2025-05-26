@@ -3,8 +3,6 @@ use crate::grpcapi::account_summary::AccountSummaryGrpcApi;
 use crate::grpcapi::limits::LimitsGrpcApi;
 use crate::grpcapi::login::LoginGrpcApi;
 use crate::grpcapi::project::ProjectGrpcApi;
-use crate::grpcapi::project_grant::ProjectGrantGrpcApi;
-use crate::grpcapi::project_policy::ProjectPolicyGrpcApi;
 use crate::grpcapi::token::TokenGrpcApi;
 use crate::service::Services;
 use auth::AuthGrpcApi;
@@ -14,8 +12,6 @@ use cloud_api_grpc::proto::golem::cloud::auth::v1::cloud_auth_service_server::Cl
 use cloud_api_grpc::proto::golem::cloud::limit::v1::cloud_limits_service_server::CloudLimitsServiceServer;
 use cloud_api_grpc::proto::golem::cloud::login::v1::cloud_login_service_server::CloudLoginServiceServer;
 use cloud_api_grpc::proto::golem::cloud::project::v1::cloud_project_service_server::CloudProjectServiceServer;
-use cloud_api_grpc::proto::golem::cloud::projectgrant::v1::cloud_project_grant_service_server::CloudProjectGrantServiceServer;
-use cloud_api_grpc::proto::golem::cloud::projectpolicy::v1::cloud_project_policy_service_server::CloudProjectPolicyServiceServer;
 use cloud_api_grpc::proto::golem::cloud::token::v1::cloud_token_service_server::CloudTokenServiceServer;
 use cloud_common::model::TokenSecret as ModelTokenSecret;
 use std::net::SocketAddr;
@@ -30,8 +26,6 @@ mod auth;
 mod limits;
 mod login;
 mod project;
-mod project_grant;
-mod project_policy;
 mod token;
 
 pub fn get_authorisation_token(metadata: MetadataMap) -> Option<ModelTokenSecret> {
@@ -68,12 +62,6 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
         .await;
     health_reporter
         .set_serving::<CloudProjectServiceServer<ProjectGrpcApi>>()
-        .await;
-    health_reporter
-        .set_serving::<CloudProjectGrantServiceServer<ProjectGrantGrpcApi>>()
-        .await;
-    health_reporter
-        .set_serving::<CloudProjectPolicyServiceServer<ProjectPolicyGrpcApi>>()
         .await;
     health_reporter
         .set_serving::<CloudTokenServiceServer<TokenGrpcApi>>()
@@ -132,23 +120,6 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
             CloudProjectServiceServer::new(ProjectGrpcApi {
                 auth_service: services.auth_service.clone(),
                 project_service: services.project_service.clone(),
-            })
-            .send_compressed(CompressionEncoding::Gzip)
-            .accept_compressed(CompressionEncoding::Gzip),
-        )
-        .add_service(
-            CloudProjectGrantServiceServer::new(ProjectGrantGrpcApi {
-                auth_service: services.auth_service.clone(),
-                project_grant_service: services.project_grant_service.clone(),
-                project_policy_service: services.project_policy_service.clone(),
-            })
-            .send_compressed(CompressionEncoding::Gzip)
-            .accept_compressed(CompressionEncoding::Gzip),
-        )
-        .add_service(
-            CloudProjectPolicyServiceServer::new(ProjectPolicyGrpcApi {
-                auth_service: services.auth_service.clone(),
-                project_policy_service: services.project_policy_service.clone(),
             })
             .send_compressed(CompressionEncoding::Gzip)
             .accept_compressed(CompressionEncoding::Gzip),

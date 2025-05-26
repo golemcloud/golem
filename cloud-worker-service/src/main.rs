@@ -30,10 +30,7 @@ async fn main() -> anyhow::Result<()> {
                     .await
                     .map_err(|e| {
                         error!("DB - init error: {}", &e);
-                        std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("Init error (pg): {e:?}"),
-                        )
+                        std::io::Error::other(format!("Init error (pg): {e:?}"))
                     })?;
             }
             DbConfig::Sqlite(c) => {
@@ -41,10 +38,7 @@ async fn main() -> anyhow::Result<()> {
                     .await
                     .map_err(|e| {
                         error!("DB - init error: {}", e);
-                        std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("Init error (sqlite): {e:?}"),
-                        )
+                        std::io::Error::other(format!("Init error (sqlite): {e:?}"))
                     })?;
             }
         };

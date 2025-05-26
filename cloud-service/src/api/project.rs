@@ -4,7 +4,7 @@ use crate::service::api_mapper::RemoteCloudApiMapper;
 use crate::service::auth::AuthService;
 use crate::service::project::ProjectService;
 use cloud_common::auth::GolemSecurityScheme;
-use cloud_common::model::ProjectAction;
+use cloud_common::model::ProjectPermisison;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
@@ -222,7 +222,7 @@ impl ProjectApi {
         &self,
         project_id: Path<ProjectId>,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<Vec<ProjectAction>>> {
+    ) -> LimitedApiResult<Json<Vec<ProjectPermisison>>> {
         let record = recorded_http_api_request!(
             "get_project_actions",
             project_id = project_id.0.to_string(),
@@ -239,7 +239,7 @@ impl ProjectApi {
         &self,
         project_id: ProjectId,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<Vec<ProjectAction>>> {
+    ) -> LimitedApiResult<Json<Vec<ProjectPermisison>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
         let result = self
             .auth_service
