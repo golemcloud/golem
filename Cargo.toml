@@ -104,6 +104,7 @@ colored = "3.0.0"
 combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
 console-subscriber = "0.4.1"
+darling = "=0.20.10"
 dashmap = "6.1.0"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 dirs = "4.0.0"
@@ -142,7 +143,7 @@ openidconnect = "3.5.0"
 opentelemetry = "0.28.0"
 opentelemetry-prometheus = "0.28.0"
 opentelemetry_sdk = "0.28.0"
-poem-openapi = { version = "5.1.14", features = [
+poem-openapi = { version = "=5.1.5", features = [
     "swagger-ui",
     "chrono",
     "time",
@@ -151,12 +152,12 @@ poem-openapi = { version = "5.1.14", features = [
     "url",
     "websocket",
 ] }
-poem = { version = "3.1.10", features = [
+poem = { version = "=3.1.6", features = [
     "prometheus",
     "opentelemetry",
     "test",
 ] }
-poem-openapi-derive = "5.1.14"
+poem-openapi-derive = "=5.1.4"
 postgres = "0.19.10"
 prometheus = { version = "0.13.4", features = ["process"] }
 proptest = "=1.5.0"
