@@ -19,7 +19,6 @@ use crate::inferred_type::TypeOrigin;
 pub(crate) use internal::*;
 pub(crate) use type_identifiers::*;
 
-
 // This module is responsible to merge the types when constructing InferredType::AllOf, while
 // selecting the type with maximum `TypeOrigin` information. This gives two advantages.
 

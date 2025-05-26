@@ -20,6 +20,7 @@ pub(crate) use unresolved_types::*;
 
 mod check_instance_returns;
 mod exhaustive_pattern_match;
+mod invalid_function_args;
 mod invalid_math_expr;
 mod invalid_worker_name;
 mod missing_fields;
@@ -28,6 +29,7 @@ mod unresolved_types;
 
 use crate::rib_type_error::RibTypeError;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
+use crate::type_checker::invalid_function_args::check_invalid_function_args;
 use crate::type_checker::invalid_math_expr::check_invalid_math_expr;
 use crate::type_checker::invalid_worker_name::check_invalid_worker_name;
 use crate::{Expr, FunctionTypeRegistry};
@@ -36,6 +38,7 @@ pub fn type_check(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
 ) -> Result<(), RibTypeError> {
+    check_invalid_function_args(expr, function_type_registry)?;
     check_unresolved_types(expr)?;
     check_invalid_worker_name(expr)?;
     check_invalid_program_return(expr)?;
@@ -50,8 +53,8 @@ mod type_check_tests {
     mod type_mismatch_errors {
         use test_r::test;
 
-        use crate::type_checker::type_check_tests::internal;
-        use crate::type_checker::type_check_tests::internal::strip_spaces;
+        use crate::type_checker::type_check_tests::test_utils;
+        use crate::type_checker::type_check_tests::test_utils::strip_spaces;
         use crate::{Expr, RibCompiler, RibCompilerConfig};
 
         #[test]
@@ -66,7 +69,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -92,7 +95,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -119,7 +122,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -147,7 +150,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -172,7 +175,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -190,7 +193,7 @@ mod type_check_tests {
         }
 
         #[test]
-        fn test_type_mismatch_in_record_in_function_call1() {
+        fn test_type_checker_invalid_function_call1() {
             let expr = r#"
           let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}});
           result
@@ -198,7 +201,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -213,7 +216,7 @@ mod type_check_tests {
         }
 
         #[test]
-        fn test_type_mismatch_in_record_in_function_call2() {
+        fn test_type_checker_invalid_function_call2() {
             let expr = r#"
           let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: ["foo", "bar"], d: {da: 4}});
           result
@@ -221,7 +224,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -236,7 +239,7 @@ mod type_check_tests {
         }
 
         #[test]
-        fn test_type_mismatch_in_record_in_function_call3() {
+        fn test_type_checker_invalid_function_call3() {
             let expr = r#"
           let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: "foo"}});
           result
@@ -244,7 +247,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -263,7 +266,7 @@ mod type_check_tests {
         // is type-mismatch, however, here we get an ambiguity error. This can be improved,
         // by not allowing accumulation of conflicting types into Exprs that are part of a function call
         #[test]
-        fn test_type_mismatch_in_record_in_function_call4() {
+        fn test_type_checker_invalid_function_call4() {
             let expr = r#"
           let result = foo({a: {aa: 1, ab: 2, ac: (1, 2), ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: 1}});
           result
@@ -271,7 +274,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -286,7 +289,7 @@ mod type_check_tests {
         }
 
         #[test]
-        fn test_type_mismatch_in_record_in_function_call5() {
+        fn test_type_checker_invalid_function_call5() {
             let expr = r#"
             let x = {a: "foo"};
           let result = foo({a: {aa: 1, ab: 2, ac: x, ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: 1}});
@@ -295,7 +298,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -310,7 +313,7 @@ mod type_check_tests {
         }
 
         #[test]
-        fn test_type_mismatch_in_nested_record_in_function_call1() {
+        fn test_type_checker_invalid_function_call6() {
             let expr = r#"
           let result = foo({a: {aa: "foo", ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}});
           result
@@ -318,7 +321,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -333,7 +336,7 @@ mod type_check_tests {
         }
 
         #[test]
-        fn test_type_mismatch_in_nested_record_in_function_call2() {
+        fn test_type_checker_invalid_function_call7() {
             let expr = r#"
           let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}});
           result
@@ -341,7 +344,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -356,7 +359,7 @@ mod type_check_tests {
         }
 
         #[test]
-        fn test_type_mismatch_in_nested_record_in_function_call3() {
+        fn test_type_checker_invalid_function_call8() {
             let expr = r#"
             let bar = {a: {ac: 1}};
             foo(bar)
@@ -364,7 +367,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -379,7 +382,7 @@ mod type_check_tests {
         }
 
         #[test]
-        fn test_type_mismatch_in_nested_record_in_function_call4() {
+        fn test_type_checker_invalid_function_call9() {
             let expr = r#"
           let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3], d: {da: 4}});
           result
@@ -387,7 +390,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata_with_record_input_params();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -400,9 +403,78 @@ mod type_check_tests {
 
             assert_eq!(error_msg, strip_spaces(expected));
         }
+
+        #[test]
+        fn test_type_checker_invalid_function_call10() {
+            let expr = r#"
+          let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3]});
+          result
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = test_utils::get_metadata_with_record_input_params();
+
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 2, column 28
+            `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3]}`
+            cause: invalid argument to the function `foo`.  missing field(s) in record: `d`
+            "#;
+
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
+        fn test_type_checker_invalid_function_call11() {
+            let expr = r#"
+          let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ad: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3], d: {da: 4}});
+          result
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = test_utils::get_metadata_with_record_input_params();
+
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 2, column 28
+            `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ad: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3], d: {da: 4}}`
+            cause: invalid argument to the function `foo`.  missing field(s) in record: `a.ad.ada`
+            "#;
+
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
+        fn test_type_checker_invalid_function_call12() {
+            let expr = r#"
+          let result = foo({aa: {aa: 1, ab: 2, ac: [1, 2], ad: {ad: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3], d: {da: 4}});
+          result
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = test_utils::get_metadata_with_record_input_params();
+
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 2, column 28
+            `{aa: {aa: 1, ab: 2, ac: [1, 2], ad: {ad: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3], d: {da: 4}}`
+            cause: invalid argument to the function `foo`.  missing field(s) in record: `a`
+            "#;
+
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
     }
 
-    mod internal {
+    mod test_utils {
         use golem_wasm_ast::analysis::analysed_type::{list, record, s32, str, tuple, u64};
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,

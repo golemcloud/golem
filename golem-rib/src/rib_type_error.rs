@@ -185,7 +185,7 @@ impl From<FunctionCallError> for RibTypeError {
 
                 RibTypeError {
                     cause: format!(
-                        "invalid argument to the function `{}`:  missing field(s) in record `{}`",
+                        "invalid argument to the function `{}`.  missing field(s) in record: `{}`",
                         call_type, missing_fields
                     ),
                     expr: argument,
