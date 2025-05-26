@@ -9,6 +9,8 @@ members = [
     "cloud-debugging-service",
     "cloud-service",
     "cloud-shard-manager",
+    "cloud-worker-executor",
+    "cloud-worker-service",
     "golem-api-grpc",
     "golem-client",
     "golem-cloud-client",
