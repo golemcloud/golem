@@ -490,15 +490,15 @@ pub trait ComponentService: ComponentServiceInternal {
 
                 match client
                     .create_component(
-                        file,
+                        name,
                         Some(&component_type),
+                        file,
+                        to_http_file_permissions(files).as_ref(),
+                        archive_file,
                         to_http_dynamic_linking(Some(dynamic_linking)).as_ref(),
                         Some(&golem_client::model::ComponentEnv {
                             key_values: env.clone(),
                         }),
-                        archive_file,
-                        to_http_file_permissions(files).as_ref(),
-                        name,
                     )
                     .await
                 {
@@ -632,15 +632,15 @@ pub trait ComponentService: ComponentServiceInternal {
                 match client
                     .update_component(
                         &component_id.0,
-                        file,
                         Some(&component_type),
-                        to_http_dynamic_linking(dynamic_linking).as_ref(),
-                        Some(&component_env),
-                        archive_file,
+                        file,
                         files
                             .as_ref()
                             .and_then(|files| to_http_file_permissions(files))
                             .as_ref(),
+                        archive_file,
+                        to_http_dynamic_linking(dynamic_linking).as_ref(),
+                        Some(&component_env),
                     )
                     .await
                 {
@@ -773,12 +773,12 @@ pub trait ComponentService: ComponentServiceInternal {
 
                         client
                             .create_library_plugin(
-                                &definition.description,
-                                &definition.homepage,
-                                definition.icon,
                                 &definition.name,
-                                &definition.scope,
                                 &definition.version,
+                                &definition.description,
+                                definition.icon,
+                                &definition.homepage,
+                                &definition.scope,
                                 data,
                             )
                             .await
@@ -794,12 +794,12 @@ pub trait ComponentService: ComponentServiceInternal {
 
                         client
                             .create_app_plugin(
-                                &definition.description,
-                                &definition.homepage,
-                                definition.icon,
                                 &definition.name,
-                                &definition.scope,
                                 &definition.version,
+                                &definition.description,
+                                definition.icon,
+                                &definition.homepage,
+                                &definition.scope,
                                 data,
                             )
                             .await
