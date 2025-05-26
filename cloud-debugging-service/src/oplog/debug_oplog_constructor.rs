@@ -42,10 +42,7 @@ impl CreateDebugOplogConstructor {
 
 #[async_trait]
 impl OplogConstructor for CreateDebugOplogConstructor {
-    async fn create_oplog(
-        self,
-        _close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    async fn create_oplog(self, _close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
         let inner = if let Some(initial_entry) = self.initial_entry {
             self.inner
                 .create(

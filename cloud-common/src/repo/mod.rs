@@ -57,6 +57,6 @@ where
     }
 
     fn push_bind<'a, Sep: Display>(&'a self, builder: &mut Separated<'_, 'a, DB, Sep>) {
-        builder.push(&self.account_id);
+        builder.push_bind(&self.account_id);
     }
 }

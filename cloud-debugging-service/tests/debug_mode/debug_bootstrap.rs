@@ -111,26 +111,26 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
         linker: Arc<Linker<DebugContext<DefaultGolemTypes>>>,
         runtime: Handle,
         component_service: Arc<dyn ComponentService<DefaultGolemTypes>>,
-        shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
-        worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
-        running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
-        promise_service: Arc<dyn PromiseService + Send + Sync>,
+        shard_manager_service: Arc<dyn ShardManagerService>,
+        worker_service: Arc<dyn WorkerService>,
+        worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
+        running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService>,
+        promise_service: Arc<dyn PromiseService>,
         golem_config: Arc<GolemConfig>,
-        shard_service: Arc<dyn ShardService + Send + Sync>,
-        key_value_service: Arc<dyn KeyValueService + Send + Sync>,
-        blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator<DebugContext<DefaultGolemTypes>> + Send + Sync>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        _worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        shard_service: Arc<dyn ShardService>,
+        key_value_service: Arc<dyn KeyValueService>,
+        blob_store_service: Arc<dyn BlobStoreService>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService>,
+        worker_activator: Arc<dyn WorkerActivator<DebugContext<DefaultGolemTypes>>>,
+        oplog_service: Arc<dyn OplogService>,
+        scheduler_service: Arc<dyn SchedulerService>,
+        _worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
-        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<DebugContext<DefaultGolemTypes>>> {
-        let auth_service: Arc<dyn AuthService + Send + Sync> = Arc::new(TestAuthService);
+        let auth_service: Arc<dyn AuthService> = Arc::new(TestAuthService);
 
         // The bootstrap of debug server uses a worker proxy which bypasses the worker service
         // but talks to the real regular executor directly
@@ -143,8 +143,7 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
             )),
         });
 
-        let debug_sessions: Arc<dyn DebugSessions + Sync + Send> =
-            Arc::new(DebugSessionsDefault::default());
+        let debug_sessions: Arc<dyn DebugSessions> = Arc::new(DebugSessionsDefault::default());
 
         let debug_oplog_service = Arc::new(DebugOplogService::new(
             Arc::clone(&oplog_service),

@@ -22,6 +22,7 @@ cloud-api-grpc = { path = "../cloud-api-grpc" }
 cloud-common = { path = "../cloud-common" }
 
 anyhow = { workspace = true }
+applying = { workspace = true }
 async-lock = { workspace = true }
 async-mutex = "1.4.0"
 async-trait = { workspace = true }

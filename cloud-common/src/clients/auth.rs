@@ -24,7 +24,7 @@ use tonic::Status;
 use uuid::Uuid;
 
 #[async_trait]
-pub trait BaseAuthService {
+pub trait BaseAuthService: Send + Sync {
     async fn get_account(&self, ctx: &CloudAuthCtx) -> Result<AccountId, AuthServiceError>;
 
     async fn authorize_project_action(

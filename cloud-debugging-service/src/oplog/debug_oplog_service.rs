@@ -12,16 +12,13 @@ use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, RwLock};
 
 pub struct DebugOplogService {
-    pub inner: Arc<dyn OplogService + Send + Sync>,
+    pub inner: Arc<dyn OplogService>,
     oplogs: OpenOplogs,
-    pub debug_session: Arc<dyn DebugSessions + Send + Sync>,
+    pub debug_session: Arc<dyn DebugSessions>,
 }
 
 impl DebugOplogService {
-    pub fn new(
-        inner: Arc<dyn OplogService + Send + Sync>,
-        debug_session: Arc<dyn DebugSessions + Send + Sync>,
-    ) -> Self {
+    pub fn new(inner: Arc<dyn OplogService>, debug_session: Arc<dyn DebugSessions>) -> Self {
         Self {
             inner,
             debug_session,
@@ -44,7 +41,7 @@ impl OplogService for DebugOplogService {
         initial_entry: OplogEntry,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + Send + Sync + 'static> {
+    ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
                 &owned_worker_id.worker_id,
@@ -67,7 +64,7 @@ impl OplogService for DebugOplogService {
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + Send + Sync + 'static> {
+    ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
                 &owned_worker_id.worker_id,

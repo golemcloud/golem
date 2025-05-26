@@ -61,7 +61,7 @@ where
     }
 
     fn push_bind<'a, Sep: Display>(&'a self, builder: &mut Separated<'_, 'a, DB, Sep>) {
-        builder.push(self.to_string());
+        builder.push_bind(self.to_string());
     }
 }
 

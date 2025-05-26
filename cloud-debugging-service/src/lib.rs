@@ -11,7 +11,6 @@ use axum::routing::any;
 use axum::Router;
 use cloud_common::clients::auth::CloudAuthService;
 use cloud_worker_executor::services::component::ComponentServiceCloudGrpc;
-use cloud_worker_executor::services::plugins::CloudPluginsWrapper;
 use cloud_worker_executor::CloudGolemTypes;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
@@ -40,7 +39,7 @@ use golem_worker_executor_base::services::worker_enumeration::{
 };
 use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{compiled_component, plugins, rdbms, All, HasConfig};
+use golem_worker_executor_base::services::{compiled_component, rdbms, All, HasConfig};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::{Bootstrap, GolemTypes};
 use prometheus::Registry;
@@ -142,10 +141,10 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
         Arc<dyn Plugins<CloudGolemTypes>>,
         Arc<dyn PluginsObservations>,
     ) {
-        let (plugins, plugin_observations) =
-            plugins::default_configured(&golem_config.plugin_service);
-        let wrapper = Arc::new(CloudPluginsWrapper::new(plugin_observations, plugins));
-        (wrapper.clone(), wrapper)
+        let plugins = cloud_worker_executor::services::plugins::cloud_configured(
+            &golem_config.plugin_service,
+        );
+        (plugins.clone(), plugins)
     }
 
     async fn create_services(
@@ -155,34 +154,33 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
         linker: Arc<Linker<DebugContext<CloudGolemTypes>>>,
         runtime: Handle,
         component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
-        shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
-        worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
-        running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
-        promise_service: Arc<dyn PromiseService + Send + Sync>,
+        shard_manager_service: Arc<dyn ShardManagerService>,
+        worker_service: Arc<dyn WorkerService>,
+        worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
+        running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService>,
+        promise_service: Arc<dyn PromiseService>,
         golem_config: Arc<GolemConfig>,
-        shard_service: Arc<dyn ShardService + Send + Sync>,
-        key_value_service: Arc<dyn KeyValueService + Send + Sync>,
-        blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator<DebugContext<CloudGolemTypes>> + Send + Sync>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        shard_service: Arc<dyn ShardService>,
+        key_value_service: Arc<dyn KeyValueService>,
+        blob_store_service: Arc<dyn BlobStoreService>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService>,
+        worker_activator: Arc<dyn WorkerActivator<DebugContext<CloudGolemTypes>>>,
+        oplog_service: Arc<dyn OplogService>,
+        scheduler_service: Arc<dyn SchedulerService>,
+        worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<CloudGolemTypes>>,
-        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<DebugContext<CloudGolemTypes>>> {
         let remote_cloud_service_config = self.debug_config.cloud_service.clone();
 
-        let auth_service: Arc<dyn AuthService + Send + Sync> = Arc::new(AuthServiceDefault::new(
+        let auth_service: Arc<dyn AuthService> = Arc::new(AuthServiceDefault::new(
             CloudAuthService::new(&remote_cloud_service_config),
             self.debug_config.component_service.clone(),
         ));
 
-        let debug_sessions: Arc<dyn DebugSessions + Sync + Send> =
-            Arc::new(DebugSessionsDefault::default());
+        let debug_sessions: Arc<dyn DebugSessions> = Arc::new(DebugSessionsDefault::default());
 
         let debug_oplog_service = Arc::new(DebugOplogService::new(
             Arc::clone(&oplog_service),

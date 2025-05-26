@@ -2,8 +2,7 @@ use crate::context::Context;
 use crate::services::config::AdditionalGolemConfig;
 use crate::services::{resource_limits, AdditionalDeps};
 use async_trait::async_trait;
-use cloud_common::model::CloudComponentOwner;
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, CloudPluginScope};
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
 use golem_worker_executor_base::preview2::{golem_api_1_x, golem_durability};
@@ -29,7 +28,7 @@ use golem_worker_executor_base::services::worker_enumeration::{
 };
 use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{compiled_component, plugins, rdbms, All};
+use golem_worker_executor_base::services::{compiled_component, rdbms, All};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::{Bootstrap, GolemTypes};
 use prometheus::Registry;
@@ -42,7 +41,6 @@ use wasmtime::component::Linker;
 use wasmtime::Engine;
 
 use self::services::component::ComponentServiceCloudGrpc;
-use self::services::plugins::CloudPluginsWrapper;
 
 #[cfg(test)]
 test_r::enable!();
@@ -55,10 +53,8 @@ pub struct CloudGolemTypes;
 
 impl GolemTypes for CloudGolemTypes {
     type ComponentOwner = CloudComponentOwner;
-
-    // TODO: These should eventually be cloud types
-    type PluginOwner = DefaultPluginOwner;
-    type PluginScope = DefaultPluginScope;
+    type PluginOwner = CloudPluginOwner;
+    type PluginScope = CloudPluginScope;
 }
 
 struct ServerBootstrap {
@@ -78,10 +74,8 @@ impl Bootstrap<Context> for ServerBootstrap {
         Arc<dyn Plugins<CloudGolemTypes>>,
         Arc<dyn PluginsObservations>,
     ) {
-        let (plugins, plugin_observations) =
-            plugins::default_configured(&golem_config.plugin_service);
-        let wrapper = Arc::new(CloudPluginsWrapper::new(plugin_observations, plugins));
-        (wrapper.clone(), wrapper)
+        let plugins = crate::services::plugins::cloud_configured(&golem_config.plugin_service);
+        (plugins.clone(), plugins)
     }
 
     fn create_component_service(
@@ -131,24 +125,24 @@ impl Bootstrap<Context> for ServerBootstrap {
         linker: Arc<Linker<Context>>,
         runtime: Handle,
         component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
-        shard_manager_service: Arc<dyn ShardManagerService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
-        worker_enumeration_service: Arc<dyn WorkerEnumerationService + Send + Sync>,
-        running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService + Send + Sync>,
-        promise_service: Arc<dyn PromiseService + Send + Sync>,
+        shard_manager_service: Arc<dyn ShardManagerService>,
+        worker_service: Arc<dyn WorkerService>,
+        worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
+        running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService>,
+        promise_service: Arc<dyn PromiseService>,
         golem_config: Arc<GolemConfig>,
-        shard_service: Arc<dyn ShardService + Send + Sync>,
-        key_value_service: Arc<dyn KeyValueService + Send + Sync>,
-        blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        rdbms_service: Arc<dyn rdbms::RdbmsService + Send + Sync>,
-        worker_activator: Arc<dyn WorkerActivator<Context> + Send + Sync>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        shard_service: Arc<dyn ShardService>,
+        key_value_service: Arc<dyn KeyValueService>,
+        blob_store_service: Arc<dyn BlobStoreService>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService>,
+        worker_activator: Arc<dyn WorkerActivator<Context>>,
+        oplog_service: Arc<dyn OplogService>,
+        scheduler_service: Arc<dyn SchedulerService>,
+        worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<CloudGolemTypes>>,
-        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin + Send + Sync>,
+        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<Context>> {
         let additional_golem_config = self.additional_golem_config.clone();
         let resource_limits =

@@ -181,7 +181,7 @@ impl TestDependencies for RegularWorkerExecutorPerTestDependencies {
         panic!("compilation service supported")
     }
 
-    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {
+    fn worker_service(&self) -> Arc<dyn WorkerService + 'static> {
         self.worker_service.clone()
     }
 
@@ -334,7 +334,7 @@ impl TestDependencies for RegularWorkerExecutorTestDependencies {
         panic!("component compilation service not supported")
     }
 
-    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {
+    fn worker_service(&self) -> Arc<dyn WorkerService + 'static> {
         panic!("worker service dependency not supported")
     }
 

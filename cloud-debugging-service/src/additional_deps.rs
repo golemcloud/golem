@@ -4,15 +4,12 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AdditionalDeps {
-    auth_service: Arc<dyn AuthService + Sync + Send>,
-    debug_session: Arc<dyn DebugSessions + Sync + Send>,
+    auth_service: Arc<dyn AuthService>,
+    debug_session: Arc<dyn DebugSessions>,
 }
 
 impl AdditionalDeps {
-    pub fn new(
-        auth_service: Arc<dyn AuthService + Sync + Send>,
-        debug_session: Arc<dyn DebugSessions + Sync + Send>,
-    ) -> Self {
+    pub fn new(auth_service: Arc<dyn AuthService>, debug_session: Arc<dyn DebugSessions>) -> Self {
         Self {
             auth_service,
             debug_session,

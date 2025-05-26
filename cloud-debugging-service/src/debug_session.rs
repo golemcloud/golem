@@ -44,7 +44,7 @@ use uuid::Uuid;
 // A shared debug session which will be internally used by the custom oplog service
 // dedicated to running debug executor
 #[async_trait]
-pub trait DebugSessions {
+pub trait DebugSessions: Send + Sync {
     async fn insert(
         &self,
         debug_session_id: DebugSessionId,
@@ -481,7 +481,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             attributes: start_span
                 .attributes
                 .into_iter()
-                .map(|(k, v)| (k, v.into()))
+                .map(|attr| (attr.key, attr.value.into()))
                 .collect(),
         }),
         PublicOplogEntry::FinishSpan(finish_span) => Ok(OplogEntry::FinishSpan {
@@ -1088,41 +1088,81 @@ fn get_serializable_invoke_request(
             let remote_worker_id = WorkerId::from_value(remote_worker_id)?;
             let idempotency_key = IdempotencyKey::from_uuid(Uuid::from_value(idempotency_key)?);
             let function_name = String::from_value(function_name)?;
-            let function_param_values: Vec<Value> = match function_params {
-                Value::Tuple(vec) => vec.clone(),
-                _ => return Err("Failed to get function_params".to_string()),
+
+            let function_param_cases = match &value_and_type.typ {
+                AnalysedType::Record(type_record) => {
+                    let function_param_type = type_record
+                        .fields
+                        .iter()
+                        .find(|x| x.name == "function-params")
+                        .ok_or("Failed to find function-params type".to_string())?;
+
+                    match function_param_type.typ.clone() {
+                        AnalysedType::List(inner) => match *inner.inner {
+                            AnalysedType::Record(inner) => {
+                                let nodes_types =
+                                    inner.fields.iter().find(|x| x.name == "nodes").ok_or(
+                                        "Failed to find nodes field inside function-params",
+                                    )?;
+                                match &nodes_types.typ {
+                                    AnalysedType::List(list_type) => match &*list_type.inner {
+                                        AnalysedType::Variant(cases) => cases.cases.clone(),
+                                        _ => Err("nodes element type was not of type variant"
+                                            .to_string())?,
+                                    },
+                                    _ => Err("nodes field was not of type list".to_string())?,
+                                }
+                            }
+                            _ => Err("function-params type was not a list".to_string())?,
+                        },
+                        _ => Err("Failed to get function param list".to_string())?,
+                    }
+                }
+                _ => Err("Internal Error. Failed to get SerializableInvokeRequest".to_string())?,
             };
 
-            let function_param_types = {
-                match &value_and_type.typ {
-                    AnalysedType::Record(type_record) => {
-                        let function_param_type = type_record
-                            .fields
-                            .iter()
-                            .find(|x| x.name == "function_params")
-                            .ok_or("Failed to find function_params type".to_string())?;
-
-                        match function_param_type.typ.clone() {
-                            AnalysedType::Tuple(tuple) => Ok(tuple.items),
-                            _ => Err("Failed to get function types".to_string()),
+            let mut parsed_function_params = Vec::new();
+            match function_params {
+                Value::List(params) => {
+                    for param in params {
+                        match param {
+                            Value::Record(fields) => {
+                                match fields.as_slice() {
+                                    [Value::List(list_values)] => match list_values.as_slice() {
+                                        [Value::Variant {
+                                            case_idx,
+                                            case_value: Some(case_value),
+                                        }] => {
+                                            let value_and_type = ValueAndType::new(
+                                                *case_value.clone(),
+                                                function_param_cases[*case_idx as usize]
+                                                    .typ
+                                                    .clone()
+                                                    .expect("Variant case should have typ"),
+                                            );
+                                            parsed_function_params.push(value_and_type);
+                                        }
+                                        _ => Err(
+                                            "Function param field did not contain a single variant"
+                                                .to_string(),
+                                        )?,
+                                    },
+                                    _ => Err("Function param did not have a single list field"
+                                        .to_string())?,
+                                }
+                            }
+                            _ => Err("Function was not a record".to_string())?,
                         }
                     }
-
-                    _ => Err("Internal Error. Failed to get SerializableInvokeRequest".to_string()),
                 }
-            }?;
-
-            let function_params = function_param_values
-                .into_iter()
-                .zip(function_param_types)
-                .map(|(value, typ)| ValueAndType::new(value, typ))
-                .collect::<Vec<_>>();
+                _ => Err("Function params were not a list".to_string())?,
+            }
 
             Ok(SerializableInvokeRequest {
                 remote_worker_id,
                 idempotency_key,
                 function_name,
-                function_params,
+                function_params: parsed_function_params,
             })
         }
         _ => Err("Failed to get SerializableInvokeRequest".to_string()),
