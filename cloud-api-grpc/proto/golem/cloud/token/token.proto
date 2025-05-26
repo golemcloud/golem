@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+import "golem/common/account_id.proto";
+import "golem/cloud/token/token_id.proto";
+
+package golem.cloud.token;
+
+
+message Token {
+  golem.cloud.token.TokenId id = 1;
+  golem.common.AccountId account_id = 2;
+  string created_at = 3;
+  string expires_at = 4;
+}

@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package golem.cloud.token.v1;
+
+import "golem/common/error_body.proto";
+
+message TokenError {
+  oneof error {
+    golem.common.ErrorsBody badRequest = 1;
+    golem.common.ErrorBody unauthorized = 2;
+    golem.common.ErrorBody notFound = 4;
+    golem.common.ErrorBody internalError = 6;
+  }
+}

@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package golem.cloud.component.v1;
+
+import "golem/common/project_id.proto";
+import "golem/component/v1/component_error.proto";
+import "golem/component/v1/plugin_service.proto";
+import "golem/cloud/component/plugin_definition.proto";
+
+service PluginService {
+  rpc ListPlugins (ListPluginsRequest) returns (ListPluginsResponse);
+  rpc ListPluginVersions (golem.component.v1.ListPluginVersionsRequest) returns (ListPluginsResponse);
+  rpc CreatePlugin (CreatePluginRequest) returns (golem.component.v1.CreatePluginResponse);
+  rpc GetPlugin (golem.component.v1.GetPluginRequest) returns (GetPluginResponse);
+  rpc DeletePlugin (golem.component.v1.DeletePluginRequest) returns (golem.component.v1.DeletePluginResponse);
+  rpc GetPluginById (GetPluginByIdRequest) returns (GetPluginByIdResponse);
+}
+
+message ListPluginsRequest {
+  optional golem.cloud.component.CloudPluginScope scope = 1;
+}
+
+message ListPluginsResponse {
+  oneof result {
+    ListPluginsSuccessResponse success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
+message ListPluginsSuccessResponse {
+  repeated golem.cloud.component.PluginDefinition plugins = 1;
+}
+
+message CreatePluginRequest {
+  golem.cloud.component.PluginDefinitionCreation plugin = 1;
+}
+
+message GetPluginResponse {
+  oneof result {
+    GetPluginSuccessResponse success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
+message GetPluginSuccessResponse {
+  golem.cloud.component.PluginDefinition plugin = 1;
+}
+
+message GetPluginByIdRequest {
+  golem.component.PluginId id = 1;
+}
+
+message GetPluginByIdResponse {
+  oneof result {
+    GetPluginSuccessResponse success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
