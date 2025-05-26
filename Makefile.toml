@@ -498,7 +498,8 @@ dependencies = [
     "publish-golem-client",
     "publish-golem-service-base",
     "publish-golem-test-framework",
-    "publish-golem-rib-repl"
+    "publish-golem-rib-repl",
+    "publish-golem-cloud-client",
 ]
 
 [tasks.set-version]
@@ -620,12 +621,17 @@ args = [
 [tasks.publish-golem-rib-repl]
 description = "Publishes golem-rib package to crates.io"
 command = "cargo"
+args = ["publish", "-p", "golem-rib-repl", "--allow-dirty", "--no-verify"]
+
+[tasks.publish-golem-cloud-client]
+description = "Publishes golem-cloud-client package to crates.io"
+command = "cargo"
 args = [
     "publish",
     "-p",
-    "golem-rib-repl",
+    "golem-cloud-client",
+    "--all-features",
     "--allow-dirty",
-    "--no-verify",
 ]
 
 ## ** PACKAGE RELEASE **
