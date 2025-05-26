@@ -86,14 +86,14 @@ enum TransactionEnd {
 #[derive(Debug, Clone)]
 struct StatementTest {
     pub action: StatementAction,
-    pub statement: &'static str,
+    pub statement: String,
     pub params: Vec<String>,
     pub sleep: Option<u64>,
     pub expected: Option<serde_json::Value>,
 }
 
 impl StatementTest {
-    fn execute_test(statement: &'static str, params: Vec<String>, expected: Option<u64>) -> Self {
+    fn execute_test(statement: String, params: Vec<String>, expected: Option<u64>) -> Self {
         Self {
             action: StatementAction::Execute,
             statement,
@@ -104,7 +104,7 @@ impl StatementTest {
     }
 
     fn query_test(
-        statement: &'static str,
+        statement: String,
         params: Vec<String>,
         expected: Option<serde_json::Value>,
     ) -> Self {
@@ -118,7 +118,7 @@ impl StatementTest {
     }
 
     fn query_stream_test(
-        statement: &'static str,
+        statement: String,
         params: Vec<String>,
         expected: Option<serde_json::Value>,
     ) -> Self {
@@ -191,48 +191,29 @@ async fn rdbms_postgres_crud(
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.component("rdbms-service").store().await;
 
-    let worker_ids1 = start_workers::<PostgresType>(&executor, &component_id, &db_address, 1).await;
+    let worker_ids1 =
+        start_workers::<PostgresType>(&executor, &component_id, &db_address, "", 1).await;
 
-    let worker_ids3 = start_workers::<PostgresType>(&executor, &component_id, &db_address, 3).await;
+    let worker_ids3 =
+        start_workers::<PostgresType>(&executor, &component_id, &db_address, "", 3).await;
 
-    let create_table_statement = r#"
-            CREATE TABLE IF NOT EXISTS test_users
-            (
-                user_id             uuid    NOT NULL PRIMARY KEY,
-                name                text    NOT NULL,
-                tags                text[],
-                created_on          timestamp DEFAULT NOW()
-            );
-        "#;
-
-    let insert_statement = r#"
-            INSERT INTO test_users
-            (user_id, name, tags)
-            VALUES
-            ($1::uuid, $2, $3)
-        "#;
+    let table_name = "test_users";
 
     let count = 60;
 
     let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
 
     insert_tests.push(StatementTest::execute_test(
-        create_table_statement,
+        postgres_create_table_statement(table_name),
         vec![],
         None,
     ));
 
     let expected_values: Vec<(Uuid, String, String)> = postgres_get_values(count);
-
-    for (user_id, name, tags) in expected_values.clone() {
-        let params: Vec<String> = vec![user_id.to_string(), name, tags];
-
-        insert_tests.push(StatementTest::execute_test(
-            insert_statement,
-            params.clone(),
-            Some(1),
-        ));
-    }
+    insert_tests.append(&mut postgres_insert_statements(
+        table_name,
+        expected_values.clone(),
+    ));
 
     rdbms_workers_test::<PostgresType>(
         &executor,
@@ -243,14 +224,14 @@ async fn rdbms_postgres_crud(
 
     let expected = postgres_get_expected(expected_values.clone());
     let select_test1 = StatementTest::query_stream_test(
-        "SELECT user_id, name, tags FROM test_users ORDER BY created_on ASC",
+        postgres_select_statement(table_name),
         vec![],
         Some(expected),
     );
 
     let expected = postgres_get_expected(vec![expected_values[0].clone()]);
     let select_test2 = StatementTest::query_test(
-        "SELECT user_id, name, tags FROM test_users WHERE user_id = $1::uuid ORDER BY created_on ASC",
+        "SELECT user_id, name, tags FROM test_users WHERE user_id = $1::uuid ORDER BY created_on ASC".to_string(),
         vec![expected_values[0].0.to_string()],
         Some(expected),
     );
@@ -265,7 +246,7 @@ async fn rdbms_postgres_crud(
     )
     .await;
 
-    let delete = StatementTest::execute_test("DELETE FROM test_users", vec![], None);
+    let delete = StatementTest::execute_test("DELETE FROM test_users".to_string(), vec![], None);
 
     rdbms_workers_test::<PostgresType>(
         &executor,
@@ -332,48 +313,28 @@ async fn rdbms_postgres_idempotency(
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.component("rdbms-service").store().await;
 
-    let worker_ids = start_workers::<PostgresType>(&executor, &component_id, &db_address, 1).await;
+    let worker_ids =
+        start_workers::<PostgresType>(&executor, &component_id, &db_address, "", 1).await;
 
     let worker_id = worker_ids[0].clone();
 
-    let create_table_statement = r#"
-            CREATE TABLE IF NOT EXISTS test_users_idem
-            (
-                user_id             uuid    NOT NULL PRIMARY KEY,
-                name                text    NOT NULL,
-                tags                text[],
-                created_on          timestamp DEFAULT NOW()
-            );
-        "#;
-
-    let insert_statement = r#"
-            INSERT INTO test_users_idem
-            (user_id, name, tags)
-            VALUES
-            ($1::uuid, $2, $3)
-        "#;
+    let table_name = "test_users_idem";
 
     let count = 10;
 
     let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
 
     insert_tests.push(StatementTest::execute_test(
-        create_table_statement,
+        postgres_create_table_statement(table_name),
         vec![],
         None,
     ));
 
     let expected_values: Vec<(Uuid, String, String)> = postgres_get_values(count);
-
-    for (user_id, name, tags) in expected_values.clone() {
-        let params: Vec<String> = vec![user_id.to_string(), name, tags];
-
-        insert_tests.push(StatementTest::execute_test(
-            insert_statement,
-            params.clone(),
-            Some(1),
-        ));
-    }
+    insert_tests.append(&mut postgres_insert_statements(
+        table_name,
+        expected_values.clone(),
+    ));
 
     let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
 
@@ -393,12 +354,12 @@ async fn rdbms_postgres_idempotency(
 
     let expected = postgres_get_expected(expected_values.clone());
     let select_test1 = StatementTest::query_stream_test(
-        "SELECT user_id, name, tags FROM test_users_idem ORDER BY created_on ASC",
+        postgres_select_statement(table_name),
         vec![],
         Some(expected.clone()),
     );
     let select_test2 = StatementTest::query_test(
-        "SELECT user_id, name, tags FROM test_users_idem ORDER BY created_on ASC",
+        postgres_select_statement(table_name),
         vec![],
         Some(expected.clone()),
     );
@@ -419,7 +380,8 @@ async fn rdbms_postgres_idempotency(
 
     check!(result2 == result1);
 
-    let delete = StatementTest::execute_test("DELETE FROM test_users_idem", vec![], None);
+    let delete =
+        StatementTest::execute_test("DELETE FROM test_users_idem".to_string(), vec![], None);
 
     let test = RdbmsTest::new(
         vec![select_test1, select_test2, delete],
@@ -443,11 +405,125 @@ async fn rdbms_postgres_idempotency(
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
-    println!("{}", oplog_json.unwrap());
+    // println!("{}", oplog_json.unwrap());
 
     check_transaction_oplog_entries::<PostgresType>(oplog);
 
     drop(executor);
+}
+
+// #[test]
+// #[tracing::instrument]
+// async fn rdbms_postgres_commit_recovery(
+//     last_unique_id: &LastUniqueId,
+//     deps: &WorkerExecutorTestDependencies,
+//     postgres: &DockerPostgresRdb,
+//     _tracing: &Tracing,
+// ) {
+//     let db_address = postgres.public_connection_string();
+//
+//     let context = TestContext::new(last_unique_id);
+//     let executor = start(deps, &context).await.unwrap();
+//     let component_id = executor.component("rdbms-service").store().await;
+//
+//     let worker_ids = start_workers::<PostgresType>(
+//         &executor,
+//         &component_id,
+//         &db_address,
+//         "-FailOnCommitedRemoteTransaction",
+//         1,
+//     )
+//     .await;
+//
+//     let worker_id = worker_ids[0].clone();
+//
+//     let table_name = "test_users_recover";
+//
+//     let count = 5;
+//
+//     let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
+//
+//     insert_tests.push(StatementTest::execute_test(
+//         postgres_create_table_statement(table_name),
+//         vec![],
+//         None,
+//     ));
+//
+//     let expected_values: Vec<(Uuid, String, String)> = postgres_get_values(count);
+//     insert_tests.append(&mut postgres_insert_statements(
+//         table_name,
+//         expected_values.clone(),
+//     ));
+//
+//     let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
+//
+//     let idempotency_key = IdempotencyKey::fresh();
+//
+//     let result1 =
+//         execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
+//             .await;
+//
+//     check_test_result(&worker_id, result1.clone(), test.clone());
+//
+//     let expected = postgres_get_expected(expected_values.clone());
+//     let select_test1 = StatementTest::query_stream_test(
+//         postgres_select_statement(table_name),
+//         vec![],
+//         Some(expected.clone()),
+//     );
+//     let select_test2 = StatementTest::query_test(
+//         postgres_select_statement(table_name),
+//         vec![],
+//         Some(expected.clone()),
+//     );
+//
+//     let test = RdbmsTest::new(vec![select_test1.clone(), select_test2.clone()], None);
+//
+//     let idempotency_key = IdempotencyKey::fresh();
+//
+//     let result1 =
+//         execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
+//             .await;
+//
+//     check_test_result(&worker_id, result1.clone(), test.clone());
+//
+//     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+//     let oplog_json = serde_json::to_string(&oplog);
+//     check!(oplog_json.is_ok());
+//     println!("{}", oplog_json.unwrap());
+//
+//     // check_transaction_oplog_entries::<PostgresType>(oplog);
+//
+//     drop(executor);
+// }
+
+fn postgres_create_table_statement(table_name: &str) -> String {
+    format!(
+        r#"
+            CREATE TABLE IF NOT EXISTS {table_name}
+            (
+                user_id             uuid    NOT NULL PRIMARY KEY,
+                name                text    NOT NULL,
+                tags                text[],
+                created_on          timestamp DEFAULT NOW()
+            );
+        "#
+    )
+}
+
+fn postgres_insert_statement(table_name: &str) -> String {
+    format!(
+        r#"
+         INSERT INTO {table_name}
+            (user_id, name, tags)
+            VALUES
+            ($1::uuid, $2, $3)
+        "#
+    )
+}
+
+fn postgres_select_statement(table_name: &str) -> String {
+    format!("SELECT user_id, name, tags FROM {table_name} ORDER BY created_on ASC")
 }
 
 fn postgres_get_values(count: usize) -> Vec<(Uuid, String, String)> {
@@ -462,6 +538,23 @@ fn postgres_get_values(count: usize) -> Vec<(Uuid, String, String)> {
         values.push((user_id, name, tags));
     }
     values
+}
+
+fn postgres_insert_statements(
+    table_name: &str,
+    values: Vec<(Uuid, String, String)>,
+) -> Vec<StatementTest> {
+    let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(values.len());
+    for (user_id, name, tags) in values {
+        let params: Vec<String> = vec![user_id.to_string(), name, tags];
+
+        insert_tests.push(StatementTest::execute_test(
+            postgres_insert_statement(table_name),
+            params.clone(),
+            Some(1),
+        ));
+    }
+    insert_tests
 }
 
 fn postgres_get_row(columns: (Uuid, String, String)) -> serde_json::Value {
@@ -533,7 +626,7 @@ async fn rdbms_postgres_select1(
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
-    let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(1));
+    let test1 = StatementTest::execute_test("SELECT 1".to_string(), vec![], Some(1));
 
     let expected_rows: Vec<serde_json::Value> = vec![json!({
        "values":[
@@ -552,7 +645,7 @@ async fn rdbms_postgres_select1(
     })];
     let expected = query_ok_response(expected_columns, expected_rows);
 
-    let test2 = StatementTest::query_test("SELECT 1", vec![], Some(expected));
+    let test2 = StatementTest::query_test("SELECT 1".to_string(), vec![], Some(expected));
 
     rdbms_component_test::<PostgresType>(
         last_unique_id,
@@ -578,48 +671,30 @@ async fn rdbms_mysql_crud(
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.component("rdbms-service").store().await;
 
-    let worker_ids1 = start_workers::<MysqlType>(&executor, &component_id, &db_address, 1).await;
+    let worker_ids1 =
+        start_workers::<MysqlType>(&executor, &component_id, &db_address, "", 1).await;
 
-    let worker_ids3 = start_workers::<MysqlType>(&executor, &component_id, &db_address, 3).await;
+    let worker_ids3 =
+        start_workers::<MysqlType>(&executor, &component_id, &db_address, "", 3).await;
 
-    let create_table_statement = r#"
-            CREATE TABLE IF NOT EXISTS test_users
-            (
-                user_id             varchar(25)    NOT NULL,
-                name                varchar(255)    NOT NULL,
-                created_on          timestamp NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (user_id)
-            );
-        "#;
-
-    let insert_statement = r#"
-            INSERT INTO test_users
-            (user_id, name)
-            VALUES
-            (?, ?)
-        "#;
+    let table_name = "test_users";
 
     let count = 60;
 
     let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
 
     insert_tests.push(StatementTest::execute_test(
-        create_table_statement,
+        mysql_create_table_statement(table_name),
         vec![],
         None,
     ));
 
     let expected_values: Vec<(String, String)> = mysql_get_values(count);
 
-    for (user_id, name) in expected_values.clone() {
-        let params: Vec<String> = vec![user_id, name];
-
-        insert_tests.push(StatementTest::execute_test(
-            insert_statement,
-            params.clone(),
-            Some(1),
-        ));
-    }
+    insert_tests.append(&mut mysql_insert_statements(
+        table_name,
+        expected_values.clone(),
+    ));
 
     rdbms_workers_test::<MysqlType>(
         &executor,
@@ -630,14 +705,14 @@ async fn rdbms_mysql_crud(
 
     let expected = mysql_get_expected(expected_values.clone());
     let select_test1 = StatementTest::query_stream_test(
-        "SELECT user_id, name FROM test_users ORDER BY user_id ASC",
+        mysql_select_statement(table_name),
         vec![],
         Some(expected),
     );
 
     let expected = mysql_get_expected(vec![expected_values[0].clone()]);
     let select_test2 = StatementTest::query_test(
-        "SELECT user_id, name FROM test_users WHERE user_id = ? ORDER BY user_id ASC",
+        "SELECT user_id, name FROM test_users WHERE user_id = ? ORDER BY user_id ASC".to_string(),
         vec![expected_values[0].clone().0],
         Some(expected),
     );
@@ -652,7 +727,7 @@ async fn rdbms_mysql_crud(
     )
     .await;
 
-    let delete = StatementTest::execute_test("DELETE FROM test_users", vec![], None);
+    let delete = StatementTest::execute_test("DELETE FROM test_users".to_string(), vec![], None);
 
     rdbms_workers_test::<MysqlType>(
         &executor,
@@ -721,48 +796,28 @@ async fn rdbms_mysql_idempotency(
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.component("rdbms-service").store().await;
 
-    let worker_ids = start_workers::<MysqlType>(&executor, &component_id, &db_address, 1).await;
+    let worker_ids = start_workers::<MysqlType>(&executor, &component_id, &db_address, "", 1).await;
 
     let worker_id = worker_ids[0].clone();
 
-    let create_table_statement = r#"
-            CREATE TABLE IF NOT EXISTS test_users_idem
-            (
-                user_id             varchar(25)    NOT NULL,
-                name                varchar(255)    NOT NULL,
-                created_on          timestamp NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (user_id)
-            );
-        "#;
-
-    let insert_statement = r#"
-            INSERT INTO test_users_idem
-            (user_id, name)
-            VALUES
-            (?, ?)
-        "#;
+    let table_name = "test_users_idem";
 
     let count = 10;
 
     let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
 
     insert_tests.push(StatementTest::execute_test(
-        create_table_statement,
+        mysql_create_table_statement(table_name),
         vec![],
         None,
     ));
 
     let expected_values: Vec<(String, String)> = mysql_get_values(count);
 
-    for (user_id, name) in expected_values.clone() {
-        let params: Vec<String> = vec![user_id, name];
-
-        insert_tests.push(StatementTest::execute_test(
-            insert_statement,
-            params.clone(),
-            Some(1),
-        ));
-    }
+    insert_tests.append(&mut mysql_insert_statements(
+        table_name,
+        expected_values.clone(),
+    ));
 
     let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
 
@@ -782,12 +837,12 @@ async fn rdbms_mysql_idempotency(
 
     let expected = mysql_get_expected(expected_values.clone());
     let select_test1 = StatementTest::query_stream_test(
-        "SELECT user_id, name FROM test_users_idem ORDER BY user_id ASC",
+        mysql_select_statement(table_name),
         vec![],
         Some(expected.clone()),
     );
     let select_test2 = StatementTest::query_test(
-        "SELECT user_id, name FROM test_users_idem ORDER BY user_id ASC",
+        mysql_select_statement(table_name),
         vec![],
         Some(expected.clone()),
     );
@@ -805,7 +860,8 @@ async fn rdbms_mysql_idempotency(
             .await;
     check!(result2 == result1);
 
-    let delete = StatementTest::execute_test("DELETE FROM test_users_idem", vec![], None);
+    let delete =
+        StatementTest::execute_test("DELETE FROM test_users_idem".to_string(), vec![], None);
 
     let test = RdbmsTest::new(
         vec![select_test1, select_test2, delete],
@@ -836,6 +892,35 @@ async fn rdbms_mysql_idempotency(
     drop(executor);
 }
 
+fn mysql_create_table_statement(table_name: &str) -> String {
+    format!(
+        r#"
+           CREATE TABLE IF NOT EXISTS {table_name}
+             (
+                user_id             varchar(25)    NOT NULL,
+                name                varchar(255)    NOT NULL,
+                created_on          timestamp NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (user_id)
+            );
+        "#
+    )
+}
+
+fn mysql_insert_statement(table_name: &str) -> String {
+    format!(
+        r#"
+            INSERT INTO {table_name}
+            (user_id, name)
+            VALUES
+            (?, ?)
+        "#
+    )
+}
+
+fn mysql_select_statement(table_name: &str) -> String {
+    format!("SELECT user_id, name FROM {table_name} ORDER BY user_id ASC")
+}
+
 fn mysql_get_values(count: usize) -> Vec<(String, String)> {
     let mut values: Vec<(String, String)> = Vec::with_capacity(count);
 
@@ -846,6 +931,20 @@ fn mysql_get_values(count: usize) -> Vec<(String, String)> {
         values.push((user_id, name));
     }
     values
+}
+
+fn mysql_insert_statements(table_name: &str, values: Vec<(String, String)>) -> Vec<StatementTest> {
+    let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(values.len());
+    for (user_id, name) in values {
+        let params: Vec<String> = vec![user_id.to_string(), name];
+
+        insert_tests.push(StatementTest::execute_test(
+            mysql_insert_statement(table_name),
+            params.clone(),
+            Some(1),
+        ));
+    }
+    insert_tests
 }
 
 fn mysql_get_row(columns: (String, String)) -> serde_json::Value {
@@ -904,7 +1003,7 @@ async fn rdbms_mysql_select1(
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
-    let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(0));
+    let test1 = StatementTest::execute_test("SELECT 1".to_string(), vec![], Some(0));
 
     let expected_rows: Vec<serde_json::Value> = vec![json!({
        "values":[
@@ -923,7 +1022,7 @@ async fn rdbms_mysql_select1(
     })];
     let expected = query_ok_response(expected_columns, expected_rows);
 
-    let test2 = StatementTest::query_test("SELECT 1", vec![], Some(expected));
+    let test2 = StatementTest::query_test("SELECT 1".to_string(), vec![], Some(expected));
 
     rdbms_component_test::<MysqlType>(
         last_unique_id,
@@ -945,7 +1044,7 @@ async fn rdbms_component_test<T: RdbmsType>(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.component("rdbms-service").store().await;
-    let worker_ids = start_workers::<T>(&executor, &component_id, db_address, n_workers).await;
+    let worker_ids = start_workers::<T>(&executor, &component_id, db_address, "", n_workers).await;
 
     rdbms_workers_test::<T>(&executor, worker_ids, test).await;
 }
@@ -1009,7 +1108,7 @@ async fn execute_worker_test<T: RdbmsType>(
     for s in test.statements {
         let params = Value::List(s.params.into_iter().map(Value::String).collect());
         statements.push(Value::Record(vec![
-            Value::String(s.statement.to_string()),
+            Value::String(s.statement),
             params,
             Value::Enum(s.action as u32),
             Value::Option(s.sleep.map(|v| Box::new(Value::U64(v)))),
@@ -1100,6 +1199,7 @@ async fn start_workers<T: RdbmsType>(
     executor: &TestWorkerExecutor,
     component_id: &ComponentId,
     db_address: &str,
+    name_suffix: &str,
     n_workers: u8,
 ) -> Vec<WorkerId> {
     let mut worker_ids: Vec<WorkerId> = Vec::new();
@@ -1110,7 +1210,12 @@ async fn start_workers<T: RdbmsType>(
     env.insert(db_env_var, db_address.to_string());
 
     for _ in 0..n_workers {
-        let worker_name = format!("rdbms-service-{}-{}", db_type, Uuid::new_v4());
+        let worker_name = format!(
+            "rdbms-service-{}-{}{}",
+            db_type,
+            Uuid::new_v4(),
+            name_suffix
+        );
         let worker_id = executor
             .start_worker_with(component_id, &worker_name, vec![], env.clone())
             .await;
