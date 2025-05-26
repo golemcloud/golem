@@ -247,7 +247,7 @@ impl InferredType {
 
         InferredType {
             inner: self.inner.clone(),
-            origin: new_origin,
+            origin: self.origin.add_origin(new_origin),
         }
     }
 
@@ -540,7 +540,7 @@ impl InferredType {
     // There is only one way to merge types. If they are different, they are merged into AllOf
     pub fn merge(&self, new_inferred_type: InferredType) -> InferredType {
         match (self.inner.deref(), new_inferred_type.inner.deref()) {
-            (TypeInternal::Unknown, _) => new_inferred_type,
+            (TypeInternal::Unknown, _) => new_inferred_type.add_origin(self.origin.clone()),
 
             (TypeInternal::AllOf(existing_types), TypeInternal::AllOf(new_types)) => {
                 let mut all_types = new_types.clone();
@@ -565,9 +565,9 @@ impl InferredType {
 
             (_, _) => {
                 if self != &new_inferred_type && !new_inferred_type.is_unknown() {
-                    InferredType::all_of(vec![self.clone(), new_inferred_type.clone()])
+                    InferredType::all_of(vec![self.clone(), new_inferred_type])
                 } else {
-                    self.clone()
+                    self.clone().add_origin(new_inferred_type.origin.clone())
                 }
             }
         }

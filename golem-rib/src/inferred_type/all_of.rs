@@ -462,11 +462,17 @@ pub enum MergeTask<'a> {
 }
 
 impl MergeTask<'_> {
-    pub fn inspect(path: Path, task_index: TaskIndex, inferred_type: &InferredType) -> MergeTask {
+    pub fn inspect(
+        path: Path,
+        task_index: TaskIndex,
+        inferred_type: &InferredType,
+        init: bool,
+    ) -> MergeTask {
         MergeTask::Inspect(Inspect {
             path,
             task_index,
             inferred_type,
+            init,
         })
     }
 
@@ -492,6 +498,7 @@ pub struct Inspect<'a> {
     path: Path,
     task_index: TaskIndex,
     inferred_type: &'a InferredType,
+    init: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -745,7 +752,7 @@ fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> 
     let merge_tasks: Vec<MergeTask<'a>> = inferred_types
         .iter()
         .enumerate()
-        .map(|(i, inf)| MergeTask::inspect(Path::default(), i, inf))
+        .map(|(i, inf)| MergeTask::inspect(Path::default(), i, inf, true))
         .collect::<Vec<_>>();
 
     temp_task_queue.extend(merge_tasks);
@@ -758,6 +765,7 @@ fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> 
                 path,
                 task_index,
                 inferred_type,
+                init,
             }) => {
                 match inferred_type.internal_type() {
                     TypeInternal::Record(fields) => {
@@ -781,7 +789,7 @@ fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> 
                             );
                         } else {
                             let (task_index, field_index) =
-                                if final_task_stack.get(*task_index) == Some(task) {
+                                if !init && final_task_stack.get(*task_index) == Some(task) {
                                     (*task_index, next_available_index - 1)
                                 } else {
                                     (next_available_index, next_available_index)
@@ -825,7 +833,7 @@ fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> 
                             );
                         } else {
                             let (task_index, field_index) =
-                                if final_task_stack.get(*task_index) == Some(task) {
+                                if !init && final_task_stack.get(*task_index) == Some(task) {
                                     (*task_index, next_available_index - 1)
                                 } else {
                                     (next_available_index, next_available_index)
@@ -869,7 +877,7 @@ fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> 
                             );
                         } else {
                             let (task_index, field_index) =
-                                if final_task_stack.get(*task_index) == Some(task) {
+                                if !init && final_task_stack.get(*task_index) == Some(task) {
                                     (*task_index, next_available_index - 1)
                                 } else {
                                     (next_available_index, next_available_index)
@@ -914,7 +922,7 @@ fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> 
                             );
                         } else {
                             let (task_index, field_index) =
-                                if final_task_stack.get(*task_index) == Some(task) {
+                                if !init && final_task_stack.get(*task_index) == Some(task) {
                                     (*task_index, next_available_index - 1)
                                 } else {
                                     (next_available_index, next_available_index)
@@ -961,7 +969,7 @@ fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> 
                             );
                         } else {
                             let (task_index, field_index) =
-                                if final_task_stack.get(*task_index) == Some(task) {
+                                if !init && final_task_stack.get(*task_index) == Some(task) {
                                     (*task_index, next_available_index - 1)
                                 } else {
                                     (next_available_index, next_available_index)
@@ -1006,7 +1014,7 @@ fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> 
                             );
                         } else {
                             let (task_index, field_index) =
-                                if final_task_stack.get(*task_index) == Some(task) {
+                                if !init && final_task_stack.get(*task_index) == Some(task) {
                                     (*task_index, next_available_index - 1)
                                 } else {
                                     (next_available_index, next_available_index)
@@ -1035,15 +1043,9 @@ fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> 
                         // the inspection task with all_of_builder
                         let existing_or_new = final_task_stack.get(*task_index);
 
-                        let all_of_builder_index = match existing_or_new {
-                            Some(_) => *task_index,
-                            None => final_task_stack.next_index(),
-                        };
-
-                        let mut task_index = match existing_or_new {
-                            // already exists
-                            Some(_) => final_task_stack.next_index() - 1,
-                            None => final_task_stack.next_index(),
+                        let (all_of_builder_index, mut task_index) = match existing_or_new {
+                            Some(_) => (*task_index, final_task_stack.next_index() - 1),
+                            None => (final_task_stack.next_index(), final_task_stack.next_index()),
                         };
 
                         let mut pointers = vec![];
@@ -1056,6 +1058,7 @@ fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> 
                                 path.clone(),
                                 task_index,
                                 inf,
+                                false,
                             ));
 
                             // We push the inspection task
@@ -1063,6 +1066,7 @@ fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> 
                                 path.clone(),
                                 task_index,
                                 inf,
+                                false,
                             ));
                         }
 
@@ -1097,8 +1101,16 @@ fn get_merge_task<'a>(inferred_types: &'a [InferredType]) -> MergeTaskStack<'a> 
                     | TypeInternal::Instance { .. }
                     | TypeInternal::Unknown
                     | TypeInternal::Range { .. }
-                    | TypeInternal::Str => final_task_stack
-                        .update(task_index, MergeTask::Complete(*task_index, inferred_type)),
+                    | TypeInternal::Str => {
+                        if !init {
+                            final_task_stack
+                                .update(task_index, MergeTask::Complete(*task_index, inferred_type))
+                        } else {
+                            let new_index = final_task_stack.next_index();
+                            final_task_stack
+                                .update(&new_index, MergeTask::Complete(new_index, inferred_type));
+                        }
+                    }
                 }
             }
 
@@ -1335,12 +1347,14 @@ mod internal {
                 current_path.clone(),
                 field_task_index,
                 inferred_type,
+                false,
             ));
 
             temp_task_queue.push_back(MergeTask::inspect(
                 current_path,
                 field_task_index,
                 inferred_type,
+                false,
             ));
         }
     }
@@ -1364,12 +1378,14 @@ mod internal {
             current_path.clone(),
             field_task_index,
             inferred_type,
+            false,
         ));
 
         temp_task_queue.push_back(MergeTask::inspect(
             current_path,
             field_task_index,
             inferred_type,
+            false,
         ));
     }
 
@@ -1392,12 +1408,14 @@ mod internal {
             current_path.clone(),
             field_task_index,
             inferred_type,
+            false,
         ));
 
         temp_task_queue.push_back(MergeTask::inspect(
             current_path,
             field_task_index,
             inferred_type,
+            false,
         ));
     }
 
@@ -1424,12 +1442,14 @@ mod internal {
                     path.clone(),
                     field_task_index,
                     inferred_type,
+                    false,
                 ));
 
                 temp_task_queue.push_back(MergeTask::inspect(
                     path,
                     field_task_index,
                     inferred_type,
+                    false,
                 ));
             }
         }
@@ -1462,12 +1482,14 @@ mod internal {
                 path.clone(),
                 field_task_index,
                 inferred_type,
+                false,
             ));
 
             temp_task_queue.push_back(MergeTask::inspect(
                 path.clone(),
                 field_task_index,
                 inferred_type,
+                false,
             ));
         }
 
@@ -1484,12 +1506,14 @@ mod internal {
                 path.clone(),
                 field_task_index,
                 inferred_type,
+                false,
             ));
 
             temp_task_queue.push_back(MergeTask::inspect(
                 path.clone(),
                 field_task_index,
                 inferred_type,
+                false,
             ));
         }
     }
@@ -1526,12 +1550,14 @@ mod internal {
                 path.clone(),
                 field_task_index,
                 inferred_type,
+                false,
             ));
 
             temp_task_queue.push_back(MergeTask::inspect(
                 path.clone(),
                 field_task_index,
                 inferred_type,
+                false,
             ));
         }
 

@@ -4142,12 +4142,9 @@ mod tests {
         let error_message = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
-            error in the following rib found at line 4, column 31
-            `{product-id: "mac", name: 1, quantity: 1, price: 1}`
-            found within:
-            `golem:it/api.{cart("bar").add-item}({product-id: "mac", name: 1, quantity: 1, price: 1})`
-            cause: type mismatch at path: `name`. expected string
-            invalid argument to the function `golem:it/api.{cart("bar").add-item}`
+            error in the following rib found at line 4, column 57
+            `1`
+            cause: type mismatch. expected string, found s32
             "#;
 
         assert_eq!(error_message, strip_spaces(expected));

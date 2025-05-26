@@ -15,7 +15,7 @@
 use crate::inferred_type::TypeOrigin;
 use crate::{Expr, ExprVisitor};
 
-pub fn set_pattern_match_origins(expr: &mut Expr) {
+pub fn set_origin(expr: &mut Expr) {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(expr) = visitor.pop_front() {

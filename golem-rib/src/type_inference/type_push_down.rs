@@ -759,8 +759,9 @@ mod internal {
         // If so, we trust this as this may handle majority of the cases
         // in compiler's best effort to create precise error message
         match AnalysedType::try_from(actual_inferred_type) {
-            Ok(wit_tpe) => {
-                TypeMismatchError::with_actual_type_kind(expr, None, wit_tpe, push_down_kind).into()
+            Ok(analysed_type) => {
+                TypeMismatchError::with_actual_type_kind(expr, None, analysed_type, push_down_kind)
+                    .into()
             }
 
             Err(_) => {

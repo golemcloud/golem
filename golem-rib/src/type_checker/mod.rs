@@ -41,7 +41,7 @@ pub fn type_check(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
 ) -> Result<(), RibTypeError> {
-    check_type_error_in_function_calls(expr, function_type_registry)?;
+    //check_type_error_in_function_calls(expr, function_type_registry)?;
     check_unresolved_types(expr)?;
     check_invalid_worker_name(expr)?;
     check_invalid_program_return(expr)?;
@@ -134,6 +134,7 @@ mod type_check_tests {
             error in the following rib found at line 5, column 27
             `"none"`
             cause: type mismatch. expected u64, found string
+            expected type u64 based on expression `x` found at line 4 column 27
             "#;
 
             //assert!(false);
@@ -183,12 +184,9 @@ mod type_check_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 28
-            `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}}`
-            found within:
-            `foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}})`
-            cause: type mismatch at path: `b`. expected u64
-            invalid argument to the function `foo`
+            error in the following rib found at line 2, column 93
+            `"foo"`
+            cause: type mismatch. expected u64, found string
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -209,12 +207,9 @@ mod type_check_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 28
-            `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: ["foo", "bar"], d: {da: 4}}`
-            found within:
-            `foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: ["foo", "bar"], d: {da: 4}})`
-            cause: type mismatch at path: `c`. expected list<s32>
-            invalid argument to the function `foo`
+            error in the following rib found at line 2, column 100
+            `"foo"`
+            cause: type mismatch. expected s32, found string
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -235,12 +230,9 @@ mod type_check_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 28
-            `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: "foo"}}`
-            found within:
-            `foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: "foo"}})`
-            cause: type mismatch at path: `d.da`. expected s32
-            invalid argument to the function `foo`
+            error in the following rib found at line 2, column 115
+            `"foo"`
+            cause: type mismatch. expected s32, found string
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -312,12 +304,9 @@ mod type_check_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 28
-            `{a: {aa: "foo", ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}}`
-            found within:
-            `foo({a: {aa: "foo", ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}})`
-            cause: type mismatch at path: `a.aa`. expected s32
-            invalid argument to the function `foo`
+            error in the following rib found at line 2, column 37
+            `"foo"`
+            cause: type mismatch. expected s32, found string
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -338,12 +327,9 @@ mod type_check_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 28
-            `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}}`
-            found within:
-            `foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}})`
-            cause: type mismatch at path: `a.ad.ada`. expected s32
-            invalid argument to the function `foo`
+            error in the following rib found at line 2, column 69
+            `"1"`
+            cause: type mismatch. expected s32, found string
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -352,9 +338,8 @@ mod type_check_tests {
         #[test]
         fn test_type_mismatch_in_nested_record_in_function_call3() {
             let expr = r#"
-            let bar = {a: {aa: 1, ab: 2, ac: 1, ad: {ada: 1}, ae:(1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}};
-            let result = foo(bar);
-            result
+            let bar = {a: {ac: 1}};
+            foo(bar)
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
@@ -365,12 +350,9 @@ mod type_check_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 3, column 30
-            `bar`
-            found within:
-            `foo(bar)`
-            cause: type mismatch at path: `a.ac`. expected list<s32>
-            invalid argument to the function `foo`
+            error in the following rib found at line 2, column 32
+            `1`
+            cause: type mismatch. expected list<s32>, found s32
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -391,12 +373,9 @@ mod type_check_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 28
-            `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3], d: {da: 4}}`
-            found within:
-            `foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3], d: {da: 4}})`
-            cause: type mismatch at path: `a.ae`. expected string
-            invalid argument to the function `foo`
+            error in the following rib found at line 2, column 81
+            `2`
+            cause: type mismatch. expected string, found s32
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));

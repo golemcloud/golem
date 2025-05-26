@@ -36,9 +36,25 @@ pub enum TypeOrigin {
 
 impl Debug for TypeOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<OriginInfo>")
+        write!(
+            f,
+            "{:?}",
+            match self {
+                TypeOrigin::OriginatedAt(span) => format!("OriginatedAt({})", span),
+                TypeOrigin::Default(default_type) => format!("Default({:?})", default_type),
+                TypeOrigin::NoOrigin => "NoOrigin".to_string(),
+                TypeOrigin::Declared(span) => format!("Declared({})", span),
+                TypeOrigin::Multiple(origins) => {
+                    let origins_str: Vec<String> =
+                        origins.iter().map(|o| format!("{:?}", o)).collect();
+                    format!("Multiple([{}])", origins_str.join(", "))
+                }
+                TypeOrigin::PatternMatch(span) => format!("PatternMatch({})", span),
+            }
+        )
     }
 }
+
 #[derive(Clone, Debug, Eq, PartialOrd, Ord)]
 pub enum DefaultType {
     String,
