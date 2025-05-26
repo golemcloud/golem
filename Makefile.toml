@@ -455,12 +455,34 @@ mkdir -pv ../data
 ./golem-worker-service --dump-openapi-yaml > ../golem-worker-service.yaml
 '''
 
+[tasks.generate-worker-service-openapi.windows]
+description = "Generates openapi spec for worker service (Windows override)"
+cwd = "./target"
+script_runner = "pwsh"
+script_extension = "ps1"
+script = '''
+mkdir data -ErrorAction SilentlyContinue
+cd debug
+cargo run -p golem-worker-service -- --dump-openapi-yaml > ../golem-worker-service.yaml
+'''
+
 [tasks.generate-component-service-openapi]
 description = "Generates openapi spec for component service"
 cwd = "./target/debug"
 script = '''
 mkdir -pv ../data
 ./golem-component-service --dump-openapi-yaml > ../golem-component-service.yaml
+'''
+
+[tasks.generate-component-service-openapi.windows]
+description = "Generates openapi spec for component service (Windows override)"
+cwd = "./target"
+script_runner = "pwsh"
+script_extension = "ps1"
+script = '''
+mkdir data -ErrorAction SilentlyContinue
+cd debug
+cargo run -p golem-component-service -- --dump-openapi-yaml > ../golem-component-service.yaml
 '''
 
 [tasks.merge-openapi]
@@ -771,6 +793,26 @@ export RUST_BACKTRACE=1
 ./target/debug/worker-executor --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
 '''
 
+[tasks.generate-configs.windows]
+description = "Generates default and example config files (Windows override)"
+dependencies = ["build-bins"]
+script_runner = "pwsh"
+script_extension = "ps1"
+script = '''
+$env:RUST_BACKTRACE = 1
+
+.\target\debug\golem-shard-manager.exe --dump-config-default-toml | Out-File -Encoding utf8 -FilePath golem-shard-manager/config/shard-manager.toml
+.\target\debug\golem-shard-manager.exe --dump-config-default-env-var | Out-File -Encoding utf8 -FilePath golem-shard-manager/config/shard-manager.sample.env
+.\target\debug\golem-component-compilation-service.exe --dump-config-default-toml | Out-File -Encoding utf8 -FilePath golem-component-compilation-service/config/component-compilation-service.toml
+.\target\debug\golem-component-compilation-service.exe --dump-config-default-env-var | Out-File -Encoding utf8 -FilePath golem-component-compilation-service/config/component-compilation-service.sample.env
+.\target\debug\golem-component-service.exe --dump-config-default-toml | Out-File -Encoding utf8 -FilePath golem-component-service/config/component-service.toml
+.\target\debug\golem-component-service.exe --dump-config-default-env-var | Out-File -Encoding utf8 -FilePath golem-component-service/config/component-service.sample.env
+.\target\debug\golem-worker-service.exe --dump-config-default-toml | Out-File -Encoding utf8 -FilePath golem-worker-service/config/worker-service.toml
+.\target\debug\golem-worker-service.exe --dump-config-default-env-var | Out-File -Encoding utf8 -FilePath golem-worker-service/config/worker-service.sample.env
+.\target\debug\worker-executor.exe --dump-config-default-toml | Out-File -Encoding utf8 -FilePath golem-worker-executor/config/worker-executor.toml
+.\target\debug\worker-executor.exe --dump-config-default-env-var | Out-File -Encoding utf8 -FilePath golem-worker-executor/config/worker-executor.sample.env
+'''
+
 ## ** CHECK CONFIGS **
 
 [tasks.check-configs]
@@ -789,6 +831,38 @@ git diff --exit-code \
     golem-worker-service/config/worker-service.sample.env \
     golem-worker-executor/config/worker-executor.toml \
     golem-worker-executor/config/worker-executor.sample.env
+'''
+
+[tasks.check-configs.windows]
+description = "Checks if generated configs are up to date (Windows override)"
+dependencies = ["generate-configs"]
+script_runner = "pwsh"
+script_extension = "ps1"
+script = '''
+$ErrorActionPreference = "Stop"
+$files = @(
+    "golem-shard-manager/config/shard-manager.toml",
+    "golem-shard-manager/config/shard-manager.sample.env",
+    "golem-component-compilation-service/config/component-compilation-service.toml",
+    "golem-component-compilation-service/config/component-compilation-service.sample.env",
+    "golem-component-service/config/component-service.toml",
+    "golem-component-service/config/component-service.sample.env",
+    "golem-worker-service/config/worker-service.toml",
+    "golem-worker-service/config/worker-service.sample.env",
+    "golem-worker-executor/config/worker-executor.toml",
+    "golem-worker-executor/config/worker-executor.sample.env"
+)
+$failed = $false
+foreach ($file in $files) {
+    git diff --ignore-cr-at-eol --exit-code $file
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "$file is not up to date with committed version."
+        $failed = $true
+    } else {
+        Write-Host "$file is up to date."
+    }
+}
+if ($failed) { exit 1 } else { Write-Host "All config files are up to date." }
 '''
 
 ## ** Elastic tasks **
