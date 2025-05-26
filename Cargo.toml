@@ -143,6 +143,12 @@ openidconnect = "3.5.0"
 opentelemetry = "0.28.0"
 opentelemetry-prometheus = "0.28.0"
 opentelemetry_sdk = "0.28.0"
+poem = { version = "=3.1.6", features = [
+    "prometheus",
+    "opentelemetry",
+    "test",
+] }
+poem-derive = { version = "=3.1.4"}
 poem-openapi = { version = "=5.1.5", features = [
     "swagger-ui",
     "chrono",
@@ -151,12 +157,7 @@ poem-openapi = { version = "=5.1.5", features = [
     "uuid",
     "url",
     "websocket",
-] }
-poem = { version = "=3.1.6", features = [
-    "prometheus",
-    "opentelemetry",
-    "test",
-] }
+    ] }
 poem-openapi-derive = "=5.1.4"
 postgres = "0.19.10"
 prometheus = { version = "0.13.4", features = ["process"] }
