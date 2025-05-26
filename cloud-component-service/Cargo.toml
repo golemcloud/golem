@@ -13,14 +13,14 @@ harness = false
 
 [dependencies]
 
-golem-common = { workspace = true }
-golem-api-grpc = { workspace = true }
-golem-wasm-rpc = { workspace = true }
-golem-component-service-base = { workspace = true }
-golem-service-base = { workspace = true }
-golem-wasm-ast = { workspace = true }
-cloud-api-grpc = { path = "../cloud-api-grpc" }
-cloud-common = { path = "../cloud-common" }
+cloud-api-grpc = { path = "../cloud-api-grpc", version = "=0.0.0" }
+cloud-common = { path = "../cloud-common", version = "=0.0.0" }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
+golem-component-service-base = { path = "../golem-component-service-base", version = "=0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

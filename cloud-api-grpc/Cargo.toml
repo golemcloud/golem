@@ -11,8 +11,8 @@ description = "GRPC API for Golem Cloud services"
 harness = false
 
 [dependencies]
-golem-api-grpc = { workspace = true }
-golem-wasm-rpc = { workspace = true }
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
 
 async-trait = { workspace = true }
 bincode = { workspace = true }

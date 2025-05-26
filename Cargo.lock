@@ -172,6 +172,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dcfed56ad506cb2c684a14971b8861fdc3baaaae314b9e5f9bb532cbe3ba7a4f"
 
 [[package]]
+name = "applying"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c757e77a2f5cc274e130a69db2159a6ae82cc6543b0d13f4a71e6671142a8d59"
+
+[[package]]
 name = "arbitrary"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -910,6 +916,7 @@ checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
  "axum-core",
+ "base64 0.22.1",
  "bytes 1.10.1",
  "futures-util",
  "http 1.3.1",
@@ -929,8 +936,10 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
+ "sha1",
  "sync_wrapper 1.0.2",
  "tokio",
+ "tokio-tungstenite 0.24.0",
  "tower 0.5.2",
  "tower-layer",
  "tower-service",
@@ -959,6 +968,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "axum-jrpc"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4d43309d9b4aa9a30523ea666138c5eca3af65d226c766c02c3042da63a08a2"
+dependencies = [
+ "async-trait",
+ "axum",
+ "cfg-if",
+ "mime",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "backoff"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -982,6 +1006,17 @@ dependencies = [
  "object",
  "rustc-demangle",
  "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "backtrace-on-stack-overflow"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fd2d70527f3737a1ad17355e260706c1badebabd1fa06a7a053407380df841b"
+dependencies = [
+ "backtrace",
+ "libc",
+ "nix 0.23.2",
 ]
 
 [[package]]
@@ -1345,6 +1380,20 @@ dependencies = [
 
 [[package]]
 name = "cargo_metadata"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d886547e41f740c616ae73108f6eb70afe6d940c7bc697cb30f13daec073037"
+dependencies = [
+ "camino",
+ "cargo-platform",
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "cargo_metadata"
 version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd5eb614ed4c27c5d706420e4320fbe3216ab31fa1c33cd8246ac36dae4479ba"
@@ -1531,6 +1580,308 @@ dependencies = [
 ]
 
 [[package]]
+name = "cloud-api-grpc"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bincode",
+ "bytes 1.10.1",
+ "cargo_metadata 0.18.1",
+ "futures-core",
+ "golem-api-grpc",
+ "golem-wasm-rpc",
+ "prost 0.13.5",
+ "serde",
+ "test-r",
+ "tokio",
+ "tonic",
+ "tonic-build 0.11.0",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "cloud-common"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bincode",
+ "cloud-api-grpc",
+ "darling",
+ "derive_more 2.0.1",
+ "figment",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-service-base",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "headers",
+ "http 1.3.1",
+ "num-traits",
+ "poem",
+ "poem-derive",
+ "poem-openapi",
+ "poem-openapi-derive",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "strum",
+ "strum_macros",
+ "test-r",
+ "thiserror 2.0.12",
+ "tokio",
+ "tonic",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "cloud-component-compilation-service"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "golem-common",
+ "golem-component-compilation-service",
+ "prometheus",
+ "tokio",
+]
+
+[[package]]
+name = "cloud-component-service"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bincode",
+ "bytes 1.10.1",
+ "chrono",
+ "cloud-api-grpc",
+ "cloud-common",
+ "console-subscriber",
+ "darling",
+ "figment",
+ "futures",
+ "futures-util",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-component-service-base",
+ "golem-service-base",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "http 1.3.1",
+ "humantime-serde",
+ "lazy_static",
+ "mappable-rc",
+ "opentelemetry 0.28.0",
+ "opentelemetry-prometheus 0.28.0",
+ "opentelemetry_sdk 0.28.0",
+ "poem",
+ "poem-derive",
+ "poem-openapi",
+ "poem-openapi-derive",
+ "prometheus",
+ "prost-types 0.13.5",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tap",
+ "test-r",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "cloud-debugging-service"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-dropper",
+ "async-dropper-simple",
+ "async-trait",
+ "axum",
+ "axum-jrpc",
+ "bincode",
+ "cloud-api-grpc",
+ "cloud-common",
+ "cloud-worker-executor",
+ "futures-util",
+ "gethostname 0.5.0",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-service-base",
+ "golem-test-framework",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "golem-worker-executor-base",
+ "log",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "test-r",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-tungstenite 0.25.0",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
+]
+
+[[package]]
+name = "cloud-service"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
+ "backtrace-on-stack-overflow",
+ "bigdecimal",
+ "bytes 1.10.1",
+ "chrono",
+ "cloud-api-grpc",
+ "cloud-common",
+ "conditional-trait-gen",
+ "console-subscriber",
+ "darling",
+ "figment",
+ "futures",
+ "futures-util",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-component-service-base",
+ "golem-service-base",
+ "http 1.3.1",
+ "humantime-serde",
+ "hyper 1.6.0",
+ "jsonwebtoken",
+ "lazy_static",
+ "mappable-rc",
+ "num-traits",
+ "opentelemetry 0.28.0",
+ "opentelemetry-prometheus 0.28.0",
+ "opentelemetry_sdk 0.28.0",
+ "poem",
+ "poem-derive",
+ "poem-openapi",
+ "poem-openapi-derive",
+ "prometheus",
+ "reqwest 0.12.14",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sqlx",
+ "strum",
+ "strum_macros",
+ "tap",
+ "test-r",
+ "testcontainers",
+ "testcontainers-modules",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "cloud-shard-manager"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "golem-common",
+ "golem-shard-manager",
+ "prometheus",
+ "rustls 0.23.23",
+ "tokio",
+]
+
+[[package]]
+name = "cloud-worker-executor"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "applying",
+ "async-lock",
+ "async-mutex",
+ "async-trait",
+ "bincode",
+ "bitflags 2.9.0",
+ "bytes 1.10.1",
+ "cap-fs-ext",
+ "cap-rand",
+ "cap-std",
+ "cap-time-ext",
+ "chrono",
+ "cloud-api-grpc",
+ "cloud-common",
+ "console-subscriber",
+ "dashmap 5.5.3",
+ "figment",
+ "flume",
+ "fred",
+ "futures",
+ "futures-util",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-service-base",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "golem-worker-executor-base",
+ "http 1.3.1",
+ "http-body 1.0.1",
+ "http-body-util",
+ "humantime-serde",
+ "hyper 1.6.0",
+ "io-extras",
+ "lazy_static",
+ "log",
+ "prometheus",
+ "prost 0.13.5",
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "test-r",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-rustls 0.26.2",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
+ "webpki-roots 0.26.8",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "cmake"
 version = "0.1.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1625,8 +1976,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8030735ecb0d128428b64cd379809817e620a40e5001c54465b99ec5feec2857"
 dependencies = [
  "futures-core",
- "prost",
- "prost-types",
+ "prost 0.13.5",
+ "prost-types 0.13.5",
  "tonic",
  "tracing-core",
 ]
@@ -1644,8 +1995,8 @@ dependencies = [
  "hdrhistogram",
  "humantime",
  "hyper-util",
- "prost",
- "prost-types",
+ "prost 0.13.5",
+ "prost-types 0.13.5",
  "serde",
  "serde_json",
  "thread_local",
@@ -2099,6 +2450,19 @@ dependencies = [
  "darling_core",
  "quote",
  "syn 2.0.100",
+]
+
+[[package]]
+name = "dashmap"
+version = "5.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
+dependencies = [
+ "cfg-if",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -2695,6 +3059,7 @@ checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
 dependencies = [
  "futures-core",
  "futures-sink",
+ "nanorand",
  "spin",
 ]
 
@@ -2973,6 +3338,16 @@ dependencies = [
 
 [[package]]
 name = "gethostname"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc3655aa6818d65bc620d6911f05aa7b6aeb596291e1e9f79e52df85583d1e30"
+dependencies = [
+ "rustix 0.38.44",
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "gethostname"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fd4b8790c0792e3b11895efdf5f289ebe8b59107a6624f1cce68f24ff8c7035"
@@ -3072,14 +3447,14 @@ dependencies = [
  "async-trait",
  "bincode",
  "bytes 1.10.1",
- "cargo_metadata",
+ "cargo_metadata 0.19.2",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "prost",
- "prost-types",
+ "prost 0.13.5",
+ "prost-types 0.13.5",
  "test-r",
  "tonic",
- "tonic-build",
+ "tonic-build 0.12.3",
  "uuid",
 ]
 
@@ -3090,6 +3465,30 @@ dependencies = [
  "async-trait",
  "bytes 1.10.1",
  "chrono",
+ "golem-common",
+ "golem-openapi-client-generator",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "http 1.3.1",
+ "reqwest 0.12.14",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "test-r",
+ "thiserror 2.0.12",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "golem-cloud-client"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bytes 1.10.1",
+ "chrono",
+ "futures-core",
+ "golem-client",
  "golem-common",
  "golem-openapi-client-generator",
  "golem-wasm-ast",
@@ -3117,7 +3516,7 @@ dependencies = [
  "chrono",
  "combine",
  "console-subscriber",
- "dashmap",
+ "dashmap 6.1.0",
  "derive_more 2.0.1",
  "figment",
  "fred",
@@ -3137,8 +3536,8 @@ dependencies = [
  "poem-openapi",
  "poem-openapi-derive",
  "prometheus",
- "prost",
- "prost-types",
+ "prost 0.13.5",
+ "prost-types 0.13.5",
  "rand 0.9.0",
  "range-set-blaze",
  "regex",
@@ -3238,8 +3637,8 @@ dependencies = [
  "poem",
  "poem-openapi",
  "poem-openapi-derive",
- "prost",
- "prost-types",
+ "prost 0.13.5",
+ "prost-types 0.13.5",
  "reqwest 0.12.14",
  "sanitize-filename",
  "serde",
@@ -3335,7 +3734,7 @@ dependencies = [
  "bytes 1.10.1",
  "chrono",
  "conditional-trait-gen",
- "dashmap",
+ "dashmap 6.1.0",
  "figment",
  "futures",
  "golem-api-grpc",
@@ -3354,7 +3753,7 @@ dependencies = [
  "poem-openapi",
  "poem-openapi-derive",
  "prometheus",
- "prost-types",
+ "prost-types 0.13.5",
  "reqwest 0.12.14",
  "serde",
  "serde_json",
@@ -3443,7 +3842,7 @@ dependencies = [
  "testcontainers-modules",
  "tokio",
  "tokio-stream",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.25.0",
  "tonic",
  "tracing",
  "url",
@@ -3464,8 +3863,8 @@ dependencies = [
  "poem-openapi",
  "poem-openapi-derive",
  "pretty_assertions",
- "prost",
- "prost-build",
+ "prost 0.13.5",
+ "prost-build 0.13.5",
  "semver",
  "serde",
  "serde_json",
@@ -3490,7 +3889,7 @@ dependencies = [
  "bincode",
  "bincode_derive",
  "bit-vec",
- "cargo_metadata",
+ "cargo_metadata 0.19.2",
  "chrono",
  "git-version",
  "golem-wasm-ast",
@@ -3498,8 +3897,8 @@ dependencies = [
  "poem-openapi-derive",
  "proptest",
  "proptest-arbitrary-interop",
- "prost",
- "prost-build",
+ "prost 0.13.5",
+ "prost-build 0.13.5",
  "serde",
  "serde_json",
  "test-r",
@@ -3561,7 +3960,7 @@ dependencies = [
  "cap-std",
  "cap-time-ext",
  "chrono",
- "dashmap",
+ "dashmap 6.1.0",
  "drop-stream",
  "evicting_cache_map",
  "figment",
@@ -3569,7 +3968,7 @@ dependencies = [
  "fs-set-times",
  "futures",
  "futures-util",
- "gethostname",
+ "gethostname 1.0.0",
  "goldenfile",
  "golem-api-grpc",
  "golem-common",
@@ -3595,7 +3994,7 @@ dependencies = [
  "nonempty-collections",
  "prometheus",
  "proptest",
- "prost",
+ "prost 0.13.5",
  "rand 0.9.0",
  "redis",
  "ringbuf",
@@ -3695,8 +4094,8 @@ dependencies = [
  "poem-openapi",
  "poem-openapi-derive",
  "prometheus",
- "prost",
- "prost-types",
+ "prost 0.13.5",
+ "prost-types 0.13.5",
  "regex",
  "rsa",
  "rustc-hash 2.1.1",
@@ -4662,6 +5061,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonwebtoken"
+version = "9.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a87cc7a48537badeae96744432de36f4be2b4a34a05a5ef32e9dd8a1c169dde"
+dependencies = [
+ "base64 0.22.1",
+ "js-sys",
+ "pem",
+ "ring",
+ "serde",
+ "serde_json",
+ "simple_asn1",
+]
+
+[[package]]
 name = "k8s-openapi"
 version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5025,6 +5439,15 @@ dependencies = [
 
 [[package]]
 name = "memoffset"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
+name = "memoffset"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
@@ -5105,6 +5528,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "defc4c55412d89136f966bbb339008b474350e5e6e78d2714439c386b3137a03"
 
 [[package]]
+name = "nanorand"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a51313c5820b0b02bd422f4b44776fbf47961755c74ce64afc73bfad10226c3"
+dependencies = [
+ "getrandom 0.2.15",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5132,6 +5564,19 @@ dependencies = [
 
 [[package]]
 name = "nix"
+version = "0.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f3790c00a0150112de0f4cd161e3d7fc4b2d8a5542ffc35f099a2562aecb35c"
+dependencies = [
+ "bitflags 1.3.2",
+ "cc",
+ "cfg-if",
+ "libc",
+ "memoffset 0.6.5",
+]
+
+[[package]]
+name = "nix"
 version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2eb04e9c688eff1c89d72b407f168cf79bb9e867a9d3323ed6c01519eb9cc053"
@@ -5151,7 +5596,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
- "memoffset",
+ "memoffset 0.9.1",
 ]
 
 [[package]]
@@ -5948,7 +6393,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-stream",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.25.0",
  "tokio-util",
  "tracing",
  "wildmatch",
@@ -6258,12 +6703,43 @@ dependencies = [
 
 [[package]]
 name = "prost"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "deb1435c188b76130da55f17a466d252ff7b1418b2ad3e037d127b94e3411f29"
+dependencies = [
+ "bytes 1.10.1",
+ "prost-derive 0.12.6",
+]
+
+[[package]]
+name = "prost"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
 dependencies = [
  "bytes 1.10.1",
- "prost-derive",
+ "prost-derive 0.13.5",
+]
+
+[[package]]
+name = "prost-build"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22505a5c94da8e3b7c2996394d1c933236c4d743e81a410bcca4e6989fc066a4"
+dependencies = [
+ "bytes 1.10.1",
+ "heck",
+ "itertools 0.12.1",
+ "log",
+ "multimap",
+ "once_cell",
+ "petgraph 0.6.5",
+ "prettyplease",
+ "prost 0.12.6",
+ "prost-types 0.12.6",
+ "regex",
+ "syn 2.0.100",
+ "tempfile",
 ]
 
 [[package]]
@@ -6279,11 +6755,24 @@ dependencies = [
  "once_cell",
  "petgraph 0.7.1",
  "prettyplease",
- "prost",
- "prost-types",
+ "prost 0.13.5",
+ "prost-types 0.13.5",
  "regex",
  "syn 2.0.100",
  "tempfile",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
+dependencies = [
+ "anyhow",
+ "itertools 0.12.1",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.100",
 ]
 
 [[package]]
@@ -6301,11 +6790,20 @@ dependencies = [
 
 [[package]]
 name = "prost-types"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9091c90b0a32608e984ff2fa4091273cbdd755d54935c51d520887f4a1dbd5b0"
+dependencies = [
+ "prost 0.12.6",
+]
+
+[[package]]
+name = "prost-types"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c2c1bf36ddb1a1c396b3601a3cec27c2462e45f07c386894ec3ccf5332bd16"
 dependencies = [
- "prost",
+ "prost 0.13.5",
 ]
 
 [[package]]
@@ -7398,6 +7896,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "simple_asn1"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "297f631f50729c8c99b84667867963997ec0b50f32b2a7dbcab828ef0541e8bb"
+dependencies = [
+ "num-bigint",
+ "num-traits",
+ "thiserror 2.0.12",
+ "time",
+]
+
+[[package]]
 name = "siphasher"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7741,6 +8251,25 @@ checksum = "152a0b65a590ff6c3da95cabe2353ee04e6167c896b28e3b14478c2636c922fc"
 dependencies = [
  "proc-macro2",
  "quote",
+ "syn 2.0.100",
+]
+
+[[package]]
+name = "strum"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f64def088c51c9510a8579e3c5d67c65349dcf755e5479ad3d010aa6454e2c32"
+
+[[package]]
+name = "strum_macros"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c77a8c5abcaf0f9ce05d62342b7d298c346515365c36b673df4ebe3ced01fde8"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "rustversion",
  "syn 2.0.100",
 ]
 
@@ -8234,6 +8763,18 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite 0.24.0",
+]
+
+[[package]]
+name = "tokio-tungstenite"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c28562dd8aea311048ed1ab9372a6b9a59977e1b308afb87c985c1f2b3206938"
@@ -8243,7 +8784,7 @@ dependencies = [
  "native-tls",
  "tokio",
  "tokio-native-tls",
- "tungstenite",
+ "tungstenite 0.25.0",
 ]
 
 [[package]]
@@ -8316,7 +8857,7 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project 1.1.10",
- "prost",
+ "prost 0.13.5",
  "socket2",
  "tokio",
  "tokio-stream",
@@ -8328,14 +8869,27 @@ dependencies = [
 
 [[package]]
 name = "tonic-build"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be4ef6dd70a610078cb4e338a0f79d06bc759ff1b22d2120c2ff02ae264ba9c2"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "prost-build 0.12.6",
+ "quote",
+ "syn 2.0.100",
+]
+
+[[package]]
+name = "tonic-build"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9557ce109ea773b399c9b9e5dca39294110b74f1f342cb347a80d1fce8c26a11"
 dependencies = [
  "prettyplease",
  "proc-macro2",
- "prost-build",
- "prost-types",
+ "prost-build 0.13.5",
+ "prost-types 0.13.5",
  "quote",
  "syn 2.0.100",
 ]
@@ -8347,7 +8901,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1eaf34ddb812120f5c601162d5429933c9b527d901ab0e7f930d3147e33a09b2"
 dependencies = [
  "async-stream",
- "prost",
+ "prost 0.13.5",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -8359,8 +8913,8 @@ version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "878d81f52e7fcfd80026b7fdb6a9b578b3c3653ba987f87f0dce4b64043cba27"
 dependencies = [
- "prost",
- "prost-types",
+ "prost 0.13.5",
+ "prost-types 0.13.5",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -8571,6 +9125,24 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.100",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18e5b8366ee7a95b16d32197d0b2604b43a0be89dc5fac9f8e96ccafbaedda8a"
+dependencies = [
+ "byteorder",
+ "bytes 1.10.1",
+ "data-encoding",
+ "http 1.3.1",
+ "httparse",
+ "log",
+ "rand 0.8.5",
+ "sha1",
+ "thiserror 1.0.69",
+ "utf-8",
 ]
 
 [[package]]

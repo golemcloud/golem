@@ -1,11 +1,11 @@
 [package]
 name = "cloud-shard-manager"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
 
 [dependencies]
-golem-common = { workspace = true }
-golem-shard-manager = { workspace = true }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-shard-manager = { path = "../golem-shard-manager", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 prometheus = { workspace = true }

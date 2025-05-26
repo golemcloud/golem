@@ -1,6 +1,6 @@
 [package]
 name = "cloud-worker-service"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -19,15 +19,14 @@ path = "tests/services_tests.rs"
 harness = false
 
 [dependencies]
-golem-common = { workspace = true }
-golem-api-grpc = { workspace = true }
-golem-rib = { workspace = true }
-golem-wasm-rpc = { workspace = true }
-golem-worker-service-base = { workspace = true }
-golem-service-base = { workspace = true }
-
-cloud-api-grpc = { path = "../cloud-api-grpc" }
-cloud-common = { path = "../cloud-common" }
+cloud-api-grpc = { path = "../cloud-api-grpc", version = "=0.0.0" }
+cloud-common = { path = "../cloud-common", version = "=0.0.0" }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
+golem-rib = { path = "../golem-rib", version = "=0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
+golem-wasm-rpc = { path = "../golem-wasm-rpc", version = "=0.0.0" }
+golem-worker-service-base = { path = "../golem-worker-service-base", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

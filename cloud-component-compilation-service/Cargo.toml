@@ -1,6 +1,6 @@
 [package]
 name = "cloud-component-compilation-service"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
 
 [[bin]]
@@ -8,8 +8,8 @@ name = "cloud-component-compilation-service"
 test = false
 
 [dependencies]
-golem-component-compilation-service = { workspace = true }
-golem-common = { workspace = true }
+golem-component-compilation-service = { path = "../golem-component-compilation-service", version = "=0.0.0" }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 prometheus = { workspace = true }

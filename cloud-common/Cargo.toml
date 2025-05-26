@@ -1,6 +1,6 @@
 [package]
 name = "cloud-common"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
 
 [lib]
@@ -13,12 +13,12 @@ protobuf = []
 model = []
 
 [dependencies]
-golem-api-grpc = { workspace = true }
-golem-common = { workspace = true }
-golem-wasm-ast = { workspace = true }
-golem-wasm-rpc = { workspace = true }
-golem-service-base = { workspace = true }
-cloud-api-grpc = { path = "../cloud-api-grpc" }
+cloud-api-grpc = { path = "../cloud-api-grpc", version = "=0.0.0" }
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
 
 async-trait = { workspace = true }
 axum = { workspace = true }

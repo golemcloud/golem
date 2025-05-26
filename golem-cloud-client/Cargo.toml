@@ -11,13 +11,12 @@ include = ["src/**/*", "Cargo.toml", "build.rs", "openapi/**/*"]
 harness = false
 
 [dependencies]
-# NOTE: these cannot be workspace (git) deps, as that breaks publishing
-golem-client = "=1.2.3"
-golem-common = "=1.2.3"
-golem-wasm-ast = { version = "=1.2.3", default-features = false, features = [
+golem-client = { path = "../golem-client", version = "=0.0.0" }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = [
     "analysis",
 ] }
-golem-wasm-rpc = { version = "=1.2.3", default-features = false }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false }
 
 async-trait = "^0.1"
 bytes = "^1.5"
