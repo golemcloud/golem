@@ -40,5 +40,5 @@ uuid = { version = "^1.6", features = ["serde"] }
 test-r = { workspace = true }
 
 [build-dependencies]
-golem-openapi-client-generator = "0.0.15"
+golem-openapi-client-generator = "0.0.16"
 serde_yaml = { workspace = true }
