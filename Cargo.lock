@@ -3301,9 +3301,9 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.15"
+version = "0.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cd99137495eaca67b860007b0393208c843a6559e730c40fe0e5a95b622cce2"
+checksum = "3734d815dd7b6e0cf067b90e286d30d18b43d7afdc60a773ee03d0ad6a6ebb9c"
 dependencies = [
  "clap",
  "convert_case",
@@ -5319,9 +5319,9 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "openapiv3"
-version = "2.1.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55d4d3d4fa3dd449b6e3b224701717a346f9c51ae5a19aa7ac6702b58f99d399"
+checksum = "cc02deea53ffe807708244e5914f6b099ad7015a207ee24317c22112e17d9c5c"
 dependencies = [
  "indexmap 2.9.0",
  "serde",
