@@ -150,59 +150,6 @@ impl TypeOrigin {
         matches!(self, TypeOrigin::NoOrigin)
     }
 
-    // It simply picks up the origin based on a priority
-    pub fn critical_origin(&self) -> TypeOrigin {
-        let mut queue = VecDeque::new();
-        queue.push_back(self);
-
-        let mut best: Option<TypeOrigin> = None;
-
-        while let Some(current) = queue.pop_front() {
-            match current {
-                TypeOrigin::PatternMatch(span) => {
-                    return TypeOrigin::PatternMatch(span.clone());
-                }
-                TypeOrigin::Declared(span) => {
-                    if best.is_none()
-                        || matches!(
-                            best,
-                            Some(TypeOrigin::Default(_))
-                                | Some(TypeOrigin::NoOrigin)
-                                | Some(TypeOrigin::OriginatedAt(_))
-                        )
-                    {
-                        best = Some(TypeOrigin::Declared(span.clone()));
-                    }
-                }
-                TypeOrigin::Default(default) => {
-                    if best.is_none()
-                        || matches!(
-                            best,
-                            Some(TypeOrigin::NoOrigin) | Some(TypeOrigin::OriginatedAt(_))
-                        )
-                    {
-                        best = Some(TypeOrigin::Default(default.clone()));
-                    }
-                }
-                TypeOrigin::OriginatedAt(source_span) => {
-                    if best.is_none() {
-                        best = Some(TypeOrigin::OriginatedAt(source_span.clone()));
-                    }
-                }
-                TypeOrigin::NoOrigin => {
-                    if best.is_none() {
-                        best = Some(TypeOrigin::NoOrigin);
-                    }
-                }
-                TypeOrigin::Multiple(origins) => {
-                    queue.extend(origins.iter());
-                }
-            }
-        }
-
-        best.unwrap_or(TypeOrigin::NoOrigin)
-    }
-
     pub fn is_default(&self) -> bool {
         match self {
             TypeOrigin::Default(_) => true,

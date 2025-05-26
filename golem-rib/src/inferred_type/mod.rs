@@ -40,36 +40,12 @@ pub struct InferredType {
 }
 
 impl InferredType {
-    pub fn description(&self) -> Option<String> {
-        match self.critical_origin() {
-            TypeOrigin::OriginatedAt(_) => None,
-            TypeOrigin::Default(_) => {
-                Some(format!("inferred as {} by default", self.get_type_hint()))
-            }
-            TypeOrigin::NoOrigin => None,
-            TypeOrigin::Declared(source_location) => Some(format!(
-                "inferred as {} due to the declaration at {}",
-                self.get_type_hint(),
-                source_location
-            )),
-            TypeOrigin::Multiple(_) => None,
-            TypeOrigin::PatternMatch(source_location) => Some(format!(
-                "inferred as {} due to the pattern match at {}",
-                self.get_type_hint(),
-                source_location
-            )),
-        }
-    }
     pub fn originated_at(&self, source_span: &SourceSpan) -> InferredType {
         self.add_origin(TypeOrigin::OriginatedAt(source_span.clone()))
     }
 
     pub fn origin(&self) -> TypeOrigin {
         self.origin.clone()
-    }
-
-    pub fn critical_origin(&self) -> TypeOrigin {
-        self.origin.critical_origin()
     }
 
     pub fn source_span(&self) -> Option<SourceSpan> {

@@ -12,7 +12,7 @@ path = "src/lib.rs"
 harness = false
 
 [dependencies]
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["typeinfo"] }
 golem-rib = { path = "../golem-rib", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = [
     "analysis",
@@ -30,6 +30,7 @@ tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+wasm-wave = {workspace = true}
 
 [dev-dependencies]
 test-r = { workspace = true }

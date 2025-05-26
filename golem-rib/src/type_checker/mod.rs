@@ -15,9 +15,7 @@
 pub(crate) use check_instance_returns::*;
 pub(crate) use exhaustive_pattern_match::*;
 pub(crate) use invalid_math_expr::*;
-pub(crate) use missing_fields::*;
 pub use path::*;
-pub(crate) use type_mismatch::*;
 pub(crate) use unresolved_types::*;
 
 mod check_instance_returns;
@@ -26,22 +24,18 @@ mod invalid_math_expr;
 mod invalid_worker_name;
 mod missing_fields;
 mod path;
-mod type_check_in_function_calls;
-mod type_mismatch;
 mod unresolved_types;
 
 use crate::rib_type_error::RibTypeError;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
 use crate::type_checker::invalid_math_expr::check_invalid_math_expr;
 use crate::type_checker::invalid_worker_name::check_invalid_worker_name;
-use crate::type_checker::type_check_in_function_calls::check_type_error_in_function_calls;
 use crate::{Expr, FunctionTypeRegistry};
 
 pub fn type_check(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
 ) -> Result<(), RibTypeError> {
-    //check_type_error_in_function_calls(expr, function_type_registry)?;
     check_unresolved_types(expr)?;
     check_invalid_worker_name(expr)?;
     check_invalid_program_return(expr)?;
@@ -166,6 +160,32 @@ mod type_check_tests {
             "#;
 
             //assert!(false);
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
+        fn test_type_mismatch_in_record_in_function_call0() {
+            let expr = r#"
+          let result = foo(1);
+          result
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = internal::get_metadata_with_record_input_params();
+
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 2, column 28
+            `1`
+            found within:
+            `foo(1)`
+            cause: type mismatch. expected record { a: record { aa: s32, ab: s32, ac: list<s32>, ad: record { ada: s32 }, ae: tuple<s32, string> }, b: u64, c: list<s32>, d: record { da: s32 } }, found s32
+            invalid argument to the function `foo`
+            "#;
+
             assert_eq!(error_msg, strip_spaces(expected));
         }
 

@@ -14,6 +14,7 @@
 
 use crate::rib_repl::ReplBootstrapError;
 use colored::Colorize;
+use golem_wasm_ast::analysis::AnalysedType;
 use rib::{RibCompilationError, RibResult, RibRuntimeError};
 
 pub trait ReplPrinter {
@@ -21,6 +22,7 @@ pub trait ReplPrinter {
     fn print_rib_compilation_error(&self, error: &RibCompilationError);
     fn print_bootstrap_error(&self, error: &ReplBootstrapError);
     fn print_rib_runtime_error(&self, error: &RibRuntimeError);
+    fn print_wasm_value_type(&self, analysed_type: &AnalysedType);
 }
 
 #[derive(Clone)]
@@ -56,21 +58,22 @@ impl ReplPrinter for DefaultReplResultPrinter {
             }
             RibCompilationError::RibTypeError(compilation_error) => {
                 let cause = &compilation_error.cause;
-                let position = compilation_error.expr.source_span().start_column();
+                let position = compilation_error.expr.source_span();
 
-                println!("{}", "[compilation error]".red());
-                println!("{} {}", "position:".yellow(), position.to_string().white());
-                println!("{} {}", "cause:".yellow(), cause.white());
+                println!("{}", "[compilation error]".red().bold());
+                println!("{} {}", "[position]".yellow(), position.start_column());
+                println!("{} {}", "[expression]".yellow(), compilation_error.expr.to_string().white());
+                println!("{} {}", "[cause]".yellow(), cause.bright_red().bold());
 
                 if !compilation_error.additional_error_details.is_empty() {
                     for detail in &compilation_error.additional_error_details {
-                        println!("{}", detail.white());
+                        println!("{} {}", "[help]".yellow(), detail.cyan());
                     }
                 }
 
                 if !compilation_error.help_messages.is_empty() {
                     for message in &compilation_error.help_messages {
-                        println!("{} {}", "help:".blue(), message.white());
+                        println!("{} {}", "[help]".yellow(), message.cyan());
                     }
                 }
             }
@@ -113,5 +116,9 @@ impl ReplPrinter for DefaultReplResultPrinter {
 
     fn print_rib_runtime_error(&self, error: &RibRuntimeError) {
         println!("{} {}", "[runtime error]".red(), error.to_string().white());
+    }
+
+    fn print_wasm_value_type(&self, analysed_type: &AnalysedType) {
+        println!("{}", wasm_wave::wasm::DisplayType(analysed_type).to_string().yellow());
     }
 }
