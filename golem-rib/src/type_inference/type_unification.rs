@@ -20,6 +20,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
     let original_expr = expr.clone();
     let mut visitor = ExprVisitor::bottom_up(expr);
 
+    // Pop front to get the innermost expression first that may have caused the type mismatch.
     while let Some(sub_expr) = visitor.pop_front() {
         match sub_expr {
             Expr::Let { .. } => {}
