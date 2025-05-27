@@ -38,7 +38,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
 pub type MysqlDbConnection = RdbmsConnection<MysqlType>;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     async fn open(
         &mut self,
@@ -88,7 +87,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
 pub type DbResultStreamEntry = RdbmsResultStreamEntry<MysqlType>;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
     async fn get_columns(
         &mut self,
@@ -111,7 +109,6 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
 
 pub type DbTransactionEntry = RdbmsTransactionEntry<MysqlType>;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
     async fn query(
         &mut self,

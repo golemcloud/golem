@@ -16,8 +16,7 @@ use crate::components::component_service::{
     new_component_client, new_plugin_client, ComponentService, ComponentServiceClient,
     PluginServiceClient,
 };
-use crate::components::docker::NETWORK;
-use crate::components::docker::{get_docker_container_name, ContainerHandle};
+use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
 use crate::components::rdb::Rdb;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
@@ -49,6 +48,7 @@ impl DockerComponentService {
     const GRPC_PORT: ContainerPort = ContainerPort::Tcp(9091);
 
     pub async fn new(
+        unique_network_id: &str,
         component_directory: PathBuf,
         component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
@@ -69,12 +69,12 @@ impl DockerComponentService {
         .await;
 
         let container = GolemComponentServiceImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars)
-            .with_network(NETWORK)
+            .with_network(network(unique_network_id))
             .start()
             .await
             .expect("Failed to start golem-component-service container");
 
-        let private_host = get_docker_container_name(container.id()).await;
+        let private_host = get_docker_container_name(unique_network_id, container.id()).await;
 
         let public_http_port = container
             .get_host_port_ipv4(Self::HTTP_PORT)

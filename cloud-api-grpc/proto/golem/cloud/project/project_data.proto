@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package golem.cloud.project;
+
+import "golem/common/account_id.proto";
+import "golem/cloud/project/project_type.proto";
+
+message ProjectData {
+  string name = 1;
+  golem.common.AccountId owner_account_id = 2;
+  string description = 3;
+  string default_environment_id = 4;
+  ProjectType project_type = 5;
+}

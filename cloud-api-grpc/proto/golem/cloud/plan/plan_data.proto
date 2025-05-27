@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package golem.cloud.plan;
+
+
+message PlanData {
+  int32 project_limit = 1;
+  int32 component_limit = 2;
+  int32 worker_limit = 3;
+  int32 storage_limit = 4;
+  int64 monthly_gas_limit = 5;
+  int32 monthly_upload_limit = 6;
+}

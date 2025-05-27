@@ -32,6 +32,7 @@ pub struct DockerWorkerExecutorCluster {
 
 impl DockerWorkerExecutorCluster {
     async fn make_worker_executor(
+        prefix: &str,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
@@ -41,6 +42,7 @@ impl DockerWorkerExecutorCluster {
     ) -> Arc<DockerWorkerExecutor> {
         Arc::new(
             DockerWorkerExecutor::new(
+                prefix,
                 redis,
                 component_service,
                 shard_manager,
@@ -54,6 +56,7 @@ impl DockerWorkerExecutorCluster {
 
     pub async fn new(
         size: usize,
+        unique_network_id: &str,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
@@ -65,15 +68,25 @@ impl DockerWorkerExecutorCluster {
         let mut worker_executors_joins = Vec::new();
 
         for _ in 0..size {
+            let unique_network_id_clone = unique_network_id.to_string();
+            let redis = redis.clone();
+            let component_service = component_service.clone();
+            let shard_manager = shard_manager.clone();
+            let worker_service = worker_service.clone();
             let worker_executor_join = tokio::spawn(
-                Self::make_worker_executor(
-                    redis.clone(),
-                    component_service.clone(),
-                    shard_manager.clone(),
-                    worker_service.clone(),
-                    verbosity,
-                    shared_client,
-                )
+                async move {
+                    let unique_network_id_clone = unique_network_id_clone.clone();
+                    Self::make_worker_executor(
+                        &unique_network_id_clone,
+                        redis.clone(),
+                        component_service.clone(),
+                        shard_manager.clone(),
+                        worker_service.clone(),
+                        verbosity,
+                        shared_client,
+                    )
+                    .await
+                }
                 .in_current_span(),
             );
 

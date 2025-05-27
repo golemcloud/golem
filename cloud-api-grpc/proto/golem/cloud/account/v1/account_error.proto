@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package golem.cloud.account.v1;
+
+import "golem/common/error_body.proto";
+
+message AccountError {
+  oneof error {
+    golem.common.ErrorsBody bad_request = 1;
+    golem.common.ErrorBody unauthorized = 2;
+    golem.common.ErrorBody not_found = 3;
+    golem.common.ErrorBody internal_error = 4;
+  }
+}

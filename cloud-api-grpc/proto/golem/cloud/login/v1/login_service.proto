@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package golem.cloud.login.v1;
+
+import "golem/common/empty.proto";
+import "golem/cloud/login/v1/login_error.proto";
+import "golem/cloud/login/o_auth2_data.proto";
+import "golem/cloud/token/token.proto";
+import "golem/cloud/token/unsafe_token.proto";
+
+service CloudLoginService {
+  rpc CompleteOAuth2 (CompleteOAuth2Request) returns (CompleteOAuth2Response);
+  rpc StartOAuth2 (golem.common.Empty) returns (StartOAuth2Response);
+  rpc CurrentToken (CurrentTokenRequest) returns (CurrentTokenResponse);
+  rpc OAuth2 (OAuth2Request) returns (OAuth2Response);
+}
+
+message CompleteOAuth2Request {
+  string body = 1;
+}
+
+message CompleteOAuth2Response {
+  oneof result {
+    golem.cloud.token.UnsafeToken success = 1;
+    golem.cloud.login.v1.LoginError error = 2;
+  }
+}
+
+message StartOAuth2Response {
+  oneof result {
+    golem.cloud.login.OAuth2Data success = 1;
+    golem.cloud.login.v1.LoginError error = 2;
+  }
+}
+
+message OAuth2Request {
+  string provider = 1;
+  string accessToken = 2;
+}
+
+message OAuth2Response {
+  oneof result {
+    golem.cloud.token.UnsafeToken success = 1;
+    golem.cloud.login.v1.LoginError error = 2;
+  }
+}
+
+message CurrentTokenRequest {
+}
+
+message CurrentTokenResponse {
+  oneof result {
+    golem.cloud.token.Token success = 1;
+    golem.cloud.login.v1.LoginError error = 2;
+  }
+}

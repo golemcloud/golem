@@ -4,7 +4,7 @@ IFS=$'\n\t'
 
 rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service"
 "option-service" "flags-service" "http-client-2" "stdio-cc" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
-"update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v3-sdk" "update-test-v4" "rust-echo" "golem-rust-tests" "durability-overhead" "logging" "oplog-processor" "rdbms-service" "component-resolve")
+"update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "rust-echo" "durability-overhead" "logging" "oplog-processor" "rdbms-service" "component-resolve")
 zig_test_components=("zig-3")
 tinygo_test_components=("tinygo-wasi" "tinygo-wasi-http")
 grain_test_components=("grain-1")
