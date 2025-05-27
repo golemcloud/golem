@@ -17,15 +17,11 @@ use crate::rib_source_span::SourceSpan;
 use crate::{Expr, ExprVisitor, InferredType, TypeUnificationError};
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
-
-    let mut original_expr = expr.clone();
-
+    let original_expr = expr.clone();
     let mut visitor = ExprVisitor::bottom_up(expr);
 
-    while let Some(expr) = visitor.pop_front() {
-        let sub_expr_cloned = expr.clone();
-
-        match expr {
+    while let Some(sub_expr) = visitor.pop_front() {
+        match sub_expr {
             Expr::Let { .. } => {}
             Expr::Boolean { .. } => {}
             Expr::Concat { .. } => {}
@@ -37,10 +33,8 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
             Expr::EqualTo { .. } => {}
             Expr::LessThan { .. } => {}
             Expr::InvokeMethodLazy { .. } => {}
-            expr => {
-                expr.with_inferred_type_mut(
-                    unify_inferred_type(&mut original_expr, sub_expr_cloned)?,
-                );
+            sub_expr => {
+                unify_inferred_type(&original_expr, sub_expr)?;
             }
         }
     }
@@ -50,12 +44,15 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
 
 fn unify_inferred_type(
     original_expr: &Expr,
-    sub_expr: Expr,
+    sub_expr: &mut Expr,
 ) -> Result<InferredType, TypeUnificationError> {
     let unification_result = sub_expr.inferred_type().unify();
 
     match unification_result {
-        Ok(unified_type) => Ok(unified_type),
+        Ok(unified_type) => {
+            sub_expr.with_inferred_type_mut(unified_type.clone());
+            Ok(unified_type)
+        }
         Err(e) => match e {
             UnificationFailureInternal::TypeMisMatch { left, right } => Err(
                 get_type_unification_error_from_mismatch(original_expr, &sub_expr, left, right),
@@ -77,7 +74,7 @@ fn unify_inferred_type(
                 additional_messages.extend(additional_error_detail);
 
                 Err(TypeUnificationError::unresolved_types_error(
-                    sub_expr,
+                    sub_expr.clone(),
                     None,
                     additional_messages,
                 ))
@@ -85,7 +82,7 @@ fn unify_inferred_type(
 
             UnificationFailureInternal::UnknownType => {
                 Err(TypeUnificationError::unresolved_types_error(
-                    sub_expr,
+                    sub_expr.clone(),
                     None,
                     vec!["cannot determine the type".to_string()],
                 ))
