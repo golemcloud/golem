@@ -6,13 +6,17 @@ use golem_worker_executor::cloud::CloudGolemTypes;
 use std::collections::HashSet;
 
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
 use golem_worker_executor::services::file_loader::FileLoader;
 use prometheus::Registry;
+use std::collections::HashSet;
+use std::fmt::{Debug, Formatter};
 
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
+use bytes::Bytes;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
@@ -42,7 +46,7 @@ use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::{ComponentMetadata, ComponentService};
 use golem_worker_executor::services::key_value::KeyValueService;
-use golem_worker_executor::services::oplog::{Oplog, OplogService};
+use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
@@ -72,10 +76,11 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
 };
+use golem_common::base_model::OplogIndex;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::WorkerResourceId;
+use golem_common::model::oplog::{OplogEntry, OplogPayload, WorkerResourceId};
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::rdb::Rdb;
 use golem_test_framework::components::redis::Redis;
@@ -678,6 +683,8 @@ impl WorkerCtx for TestWorkerCtx {
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
     ) -> Result<Self, GolemError> {
+        let oplog = Arc::new(TestOplog::new(owned_worker_id.clone(), oplog.clone()));
+
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
             component_metadata,
@@ -1143,4 +1150,94 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
 
 fn get_durable_ctx(ctx: &mut TestWorkerCtx) -> &mut DurableWorkerCtx<TestWorkerCtx> {
     &mut ctx.durable_ctx
+}
+
+#[derive(Clone)]
+struct TestOplog {
+    owned_worker_id: OwnedWorkerId,
+    oplog: Arc<dyn Oplog>,
+}
+
+impl TestOplog {
+    fn new(owned_worker_id: OwnedWorkerId, oplog: Arc<dyn Oplog>) -> Self {
+        println!("TestOplog for worker {}", owned_worker_id);
+        Self {
+            owned_worker_id,
+            oplog,
+        }
+    }
+
+    fn check_oplog(&self, entry: &OplogEntry) {
+        let entry_name = match entry {
+            OplogEntry::BeginRemoteTransaction { .. } => "BeginRemoteTransaction",
+            OplogEntry::PreRollbackRemoteTransaction { .. } => "PreRollbackRemoteTransaction",
+            OplogEntry::PreCommitRemoteTransaction { .. } => "PreCommitRemoteTransaction",
+            OplogEntry::CommitedRemoteTransaction { .. } => "CommitedRemoteTransaction",
+            OplogEntry::RolledBackRemoteTransaction { .. } => "RolledBackRemoteTransaction",
+            OplogEntry::AbortedRemoteTransaction { .. } => "AbortedRemoteTransaction",
+            OplogEntry::BeginRemoteWrite { .. } => "BeginRemoteWrite",
+            OplogEntry::EndRemoteWrite { .. } => "EndRemoteWrite",
+            _ => "Other",
+        };
+
+        let pattern = format!("FailOn{}", entry_name);
+
+        if self
+            .owned_worker_id
+            .worker_id
+            .worker_name
+            .contains(pattern.as_str())
+        {
+            panic!(
+                "worker {} failed on {}",
+                self.owned_worker_id.worker_id.worker_name, entry_name
+            );
+        }
+    }
+}
+
+#[async_trait]
+impl Oplog for TestOplog {
+    async fn add(&self, entry: OplogEntry) {
+        self.check_oplog(&entry);
+        self.oplog.add(entry).await
+    }
+
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
+        self.oplog.drop_prefix(last_dropped_id).await
+    }
+
+    async fn commit(&self, level: CommitLevel) {
+        self.oplog.commit(level).await
+    }
+
+    async fn current_oplog_index(&self) -> OplogIndex {
+        self.oplog.current_oplog_index().await
+    }
+
+    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
+        self.oplog.wait_for_replicas(replicas, timeout).await
+    }
+
+    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+        self.oplog.read(oplog_index).await
+    }
+
+    async fn length(&self) -> u64 {
+        self.oplog.length().await
+    }
+
+    async fn upload_payload(&self, data: &[u8]) -> Result<OplogPayload, String> {
+        self.oplog.upload_payload(data).await
+    }
+
+    async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
+        self.oplog.download_payload(payload).await
+    }
+}
+
+impl Debug for TestOplog {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.oplog)
+    }
 }
