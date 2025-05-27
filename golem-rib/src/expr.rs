@@ -14,7 +14,7 @@
 
 use crate::call_type::{CallType, InstanceCreationType};
 use crate::generic_type_parameter::GenericTypeParameter;
-use crate::inferred_type::DefaultType;
+use crate::inferred_type::{DefaultType, TypeOrigin};
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
@@ -1117,7 +1117,19 @@ impl Expr {
     }
 
     pub fn set_origin(&mut self) {
-        type_inference::set_origin(self);
+        let mut visitor = ExprVisitor::bottom_up(self);
+
+        while let Some(expr) = visitor.pop_front() {
+            match expr {
+                expr => {
+                    let source_location = expr.source_span();
+                    let origin = TypeOrigin::OriginatedAt(source_location.clone());
+                    let inferred_type = expr.inferred_type();
+                    let origin = inferred_type.add_origin(origin);
+                    expr.with_inferred_type_mut(origin);
+                }
+            }
+        }
     }
 
     // An inference is a single cycle of to-and-fro scanning of Rib expression, that it takes part in fix point of inference.
