@@ -1,11 +1,11 @@
-package golem:durability@1.2.0;
+package golem:durability@1.2.1;
 
 interface durability {
-    use golem:api/host@1.1.6.{persistence-level};
-    use golem:api/oplog@1.1.6.{oplog-index, wrapped-function-type};
-    use wasi:clocks/wall-clock@0.2.0.{datetime};
-    use wasi:io/poll@0.2.0.{pollable};
-    use golem:rpc/types@0.2.0.{value-and-type};
+    use golem:api/host@1.1.7.{persistence-level};
+    use golem:api/oplog@1.1.7.{oplog-index, wrapped-function-type};
+    use wasi:clocks/wall-clock@0.2.3.{datetime};
+    use wasi:io/poll@0.2.3.{pollable};
+    use golem:rpc/types@0.2.1.{value-and-type};
 
     type durable-function-type = wrapped-function-type;
 
