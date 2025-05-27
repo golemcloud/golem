@@ -19,13 +19,7 @@ use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Eq, PartialOrd, Ord)]
 pub enum TypeOrigin {
-    // the first OriginatedAt (if it's TypeOrigin::Multiple) at
-    // this level is the source span of the expression to which this
-    // type origin is attached
     OriginatedAt(SourceSpan),
-    // If an expression has an inferred type that was originated by default
-    // this becomes the first origin. So to see if an expression's inferred type
-    // was because it was `Default` then this is the first origin
     Default(DefaultType),
     NoOrigin,
     Declared(SourceSpan),
@@ -34,21 +28,7 @@ pub enum TypeOrigin {
 
 impl Debug for TypeOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{:?}",
-            match self {
-                TypeOrigin::OriginatedAt(span) => format!("OriginatedAt({})", span),
-                TypeOrigin::Default(default_type) => format!("Default({:?})", default_type),
-                TypeOrigin::NoOrigin => "NoOrigin".to_string(),
-                TypeOrigin::Declared(span) => format!("Declared({})", span),
-                TypeOrigin::Multiple(origins) => {
-                    let origins_str: Vec<String> =
-                        origins.iter().map(|o| format!("{:?}", o)).collect();
-                    format!("Multiple([{}])", origins_str.join(", "))
-                }
-            }
-        )
+        write!(f, "<TypeOrigin>")
     }
 }
 
