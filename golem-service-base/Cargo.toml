@@ -7,6 +7,8 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Shared code between Golem services"
 
+license-file = "../LICENSE"
+
 autotests = false
 
 [lib]

@@ -7,8 +7,9 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Golem Worker Executor base implementation"
 
-autotests = false
+license-file = "../LICENSE"
 
+autotests = false
 
 [lib]
 path = "src/lib.rs"
