@@ -475,6 +475,9 @@ script = '''
 dependencies = [
     "build-worker-service",
     "build-component-service",
+    "build-cloud-worker-service",
+    "build-cloud-component-service",
+    "build-cloud-service",
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
     "generate-cloud-worker-service-openapi",
