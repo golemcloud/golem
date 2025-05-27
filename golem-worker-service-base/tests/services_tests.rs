@@ -116,11 +116,16 @@ async fn start_docker_redis() -> (
     RedisConfig,
     ContainerAsync<testcontainers_modules::redis::Redis>,
 ) {
-    let container = testcontainers_modules::redis::Redis::default()
-        .with_tag("6.2.6")
-        .start()
-        .await
-        .expect("Failed to start redis container");
+    let container = tryhard::retry_fn(|| {
+        testcontainers_modules::redis::Redis::default()
+            .with_tag("6.2.6")
+            .start()
+    })
+    .retries(5)
+    .exponential_backoff(Duration::from_millis(10))
+    .max_delay(Duration::from_secs(10))
+    .await
+    .expect("Failed to start redis container");
 
     let redis_config = RedisConfig {
         host: "localhost".to_string(),
