@@ -164,18 +164,21 @@ opentelemetry = "0.28.0"
 opentelemetry-prometheus = "0.28.0"
 opentelemetry_sdk = "0.28.0"
 poem = { version = "=3.1.10", features = [
-    "prometheus",
+    "cookie",
+    "multipart",
     "opentelemetry",
+    "prometheus",
     "test",
 ] }
 poem-derive = { version = "=3.1.10"}
 poem-openapi = { version = "=5.1.14", features = [
-    "swagger-ui",
     "chrono",
-    "time",
+    "cookie",
     "humantime",
-    "uuid",
+    "swagger-ui",
+    "time",
     "url",
+    "uuid",
     "websocket",
     ] }
 poem-openapi-derive = "=5.1.14"
