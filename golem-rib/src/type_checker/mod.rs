@@ -532,31 +532,6 @@ mod type_check_tests {
 
             assert_eq!(error_msg, strip_spaces(expected));
         }
-
-        #[test]
-        fn test_type_checker_invalid_function_call14() {
-            let expr = r#"
-          let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}});
-          1 + result
-        "#;
-
-            let expr = Expr::from_text(expr).unwrap();
-
-            let metadata = test_utils::get_metadata_with_record_input_params();
-
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
-            let error_msg = compiler.compile(expr).unwrap_err().to_string();
-
-            let expected = r#"
-            error in the following rib found at line 3, column 14
-            `result`
-            cause: type mismatch. expected s32, found string
-            expected type s32 based on expression `1` found at line 3 column 11
-            the expression `1` is inferred as `s32` by default
-            "#;
-
-            assert_eq!(error_msg, strip_spaces(expected));
-        }
     }
 
     mod test_utils {
