@@ -1050,7 +1050,7 @@ where
 
         <T as GolemTransactionRepo<DB>>::create_transaction(&id, pool.deref()).await?;
 
-        DB::TransactionManager::begin(&mut connection)
+        DB::TransactionManager::begin(&mut connection, None)
             .await
             .map_err(Error::query_execution_failure)?;
 

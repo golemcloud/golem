@@ -80,7 +80,7 @@ impl BeginTransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
             .await
             .map_err(Error::connection_failure)?;
 
-        <sqlx::Postgres as sqlx::Database>::TransactionManager::begin(&mut connection)
+        <sqlx::Postgres as sqlx::Database>::TransactionManager::begin(&mut connection, None)
             .await
             .map_err(Error::query_execution_failure)?;
 
