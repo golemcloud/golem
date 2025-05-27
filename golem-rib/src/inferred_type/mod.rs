@@ -66,7 +66,6 @@ impl InferredType {
                 source_span
             }
             TypeOrigin::OriginatedAt(_) => None,
-            TypeOrigin::PatternMatch(_) => None,
         }
     }
 

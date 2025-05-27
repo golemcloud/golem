@@ -573,6 +573,12 @@ fn get_type_unification_error_from_mismatch(
     left: InferredType,
     right: InferredType,
 ) -> TypeUnificationError {
+    let left_default = left.origin.is_default();
+    let right_default = right.origin.is_default();
+
+    let left_declared = left.origin.is_declared();
+    let right_declared = right.origin.is_declared();
+
     let left_expr = left
         .source_span()
         .and_then(|span| rib.lookup(&span).map(|expr| (span, expr)));
@@ -584,6 +590,8 @@ fn get_type_unification_error_from_mismatch(
     match (left_expr, right_expr) {
         // We make the right expected
         (Some((_, left_expr)), Some((right_span, right_expr))) => {
+            let mut additional_error_detail = vec![];
+
             let error_detail = format!(
                 "expected type {} based on expression `{}` found at line {} column {}",
                 right.printable(),
@@ -591,24 +599,128 @@ fn get_type_unification_error_from_mismatch(
                 right_span.start_line(),
                 right_span.start_column()
             );
+
+            additional_error_detail.push(error_detail);
+
+            match right_declared {
+                Some(span) => {
+                    additional_error_detail.push(format!(
+                        "the type of `{}` is declared as `{}` at line {} column {}",
+                        right_expr,
+                        right.printable(),
+                        span.start_line(),
+                        span.start_column()
+                    ));
+                }
+                None => {
+                    if right_default {
+                        additional_error_detail.push(format!(
+                            "the expression `{}` is inferred as `{}` by default",
+                            right_expr,
+                            right.printable()
+                        ));
+                    }
+                }
+            }
+
+            match left_declared {
+                Some(span) => {
+                    additional_error_detail.push(format!(
+                        "the type of `{}` is declared as `{}` at line {} column {}",
+                        left_expr,
+                        left.printable(),
+                        span.start_line(),
+                        span.start_column()
+                    ));
+                }
+                None => {
+                    if left_default {
+                        additional_error_detail.push(format!(
+                            "the expression `{}` is inferred as `{}` by default",
+                            left_expr,
+                            left.printable()
+                        ));
+                    }
+                }
+            }
+
             TypeUnificationError::type_mismatch_error(
                 left_expr,
                 None,
                 right,
                 left,
-                vec![error_detail],
+                additional_error_detail,
             )
         }
 
-        // Only the info on left is available
+        // we have access to only the expression on the left
+        // and we tag it as the wrong type
         (Some((_, left_expr)), None) => {
-            TypeUnificationError::type_mismatch_error(left_expr, None, right, left, vec![])
+            let mut additional_error_detail = vec![];
+
+            match left_declared {
+                Some(span) => {
+                    additional_error_detail.push(format!(
+                        "the type of `{}` is declared as  `{}`  at line {} column {}",
+                        left_expr,
+                        left.printable(),
+                        span.start_line(),
+                        span.start_column()
+                    ));
+                }
+                None => {
+                    if left_default {
+                        additional_error_detail.push(format!(
+                            "the expression `{}` is inferred as `{}` by default",
+                            left_expr,
+                            left.printable()
+                        ));
+                    }
+                }
+            }
+
+            TypeUnificationError::type_mismatch_error(
+                left_expr,
+                None,
+                right,
+                left,
+                additional_error_detail,
+            )
         }
 
         // we have access to only the expression on the right
         // and we tag it as the wrong type
         (None, Some((_, right_expr))) => {
-            TypeUnificationError::type_mismatch_error(right_expr, None, left, right, vec![])
+            let mut additional_error_detail = vec![];
+
+            match right_declared {
+                Some(span) => {
+                    additional_error_detail.push(format!(
+                        "the type of `{}` is declared as  `{}`  at line {} column {}",
+                        right_expr,
+                        right.printable(),
+                        span.start_line(),
+                        span.start_column()
+                    ));
+                }
+                None => {
+                    if right_default {
+                        additional_error_detail.push(format!(
+                            "the expression `{}` is inferred as `{}` by default",
+                            right_expr,
+                            right.printable()
+                        ));
+                    }
+                }
+            }
+
+            TypeUnificationError::type_mismatch_error(
+                right_expr,
+                None,
+                left,
+                right,
+                additional_error_detail,
+            )
         }
 
         (None, None) => {

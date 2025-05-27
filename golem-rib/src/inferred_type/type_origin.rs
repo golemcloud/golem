@@ -30,7 +30,6 @@ pub enum TypeOrigin {
     NoOrigin,
     Declared(SourceSpan),
     Multiple(Vec<TypeOrigin>),
-    PatternMatch(SourceSpan),
 }
 
 impl Debug for TypeOrigin {
@@ -48,7 +47,6 @@ impl Debug for TypeOrigin {
                         origins.iter().map(|o| format!("{:?}", o)).collect();
                     format!("Multiple([{}])", origins_str.join(", "))
                 }
-                TypeOrigin::PatternMatch(span) => format!("PatternMatch({})", span),
             }
         )
     }
@@ -101,9 +99,6 @@ impl TypeOrigin {
             (TypeOrigin::Declared(source_span1), TypeOrigin::Declared(source_span2)) => {
                 source_span1.eq(source_span2)
             }
-            (TypeOrigin::PatternMatch(source_span1), TypeOrigin::PatternMatch(source_span2)) => {
-                source_span1.eq(source_span2)
-            }
             (TypeOrigin::Multiple(origins1), TypeOrigin::Multiple(origins2)) => {
                 if origins1.len() != origins2.len() {
                     false
@@ -133,7 +128,6 @@ impl TypeOrigin {
         while let Some(origin) = stack.pop() {
             match origin {
                 TypeOrigin::OriginatedAt(span) => return Some(span.clone()),
-                TypeOrigin::PatternMatch(span) => return Some(span.clone()),
                 TypeOrigin::Declared(span) => return Some(span.clone()),
                 TypeOrigin::Multiple(origins) => {
                     stack.extend(origins.iter());
@@ -155,12 +149,24 @@ impl TypeOrigin {
             TypeOrigin::OriginatedAt(_) => false,
             TypeOrigin::NoOrigin => false,
             TypeOrigin::Declared(_) => false,
-            TypeOrigin::Multiple(origins) => {
-                // if the origin was originated as part of "Default", then it will exist in the very beginning
-                origins.first().is_some_and(|origin| origin.is_default())
-            }
+            TypeOrigin::Multiple(origins) => origins.iter().any(|origin| origin.is_default()),
+        }
+    }
 
-            TypeOrigin::PatternMatch(_) => false,
+    pub fn is_declared(&self) -> Option<&SourceSpan> {
+        match self {
+            TypeOrigin::Declared(span) => Some(span),
+            TypeOrigin::OriginatedAt(_) => None,
+            TypeOrigin::NoOrigin => None,
+            TypeOrigin::Default(_) => None,
+            TypeOrigin::Multiple(origins) => {
+                for origin in origins {
+                    if let TypeOrigin::Declared(span) = origin {
+                        return Some(span);
+                    }
+                }
+                None
+            }
         }
     }
 
@@ -230,12 +236,8 @@ impl Hash for TypeOrigin {
                 3.hash(state);
                 span.hash(state);
             }
-            TypeOrigin::PatternMatch(span) => {
-                4.hash(state);
-                span.hash(state);
-            }
             TypeOrigin::OriginatedAt(span) => {
-                5.hash(state);
+                4.hash(state);
                 span.hash(state);
             }
         }

@@ -20,22 +20,6 @@ pub fn set_origin(expr: &mut Expr) {
 
     while let Some(expr) = visitor.pop_front() {
         match expr {
-            Expr::PatternMatch {
-                match_arms,
-                inferred_type,
-                source_span,
-                ..
-            } => {
-                for arm in match_arms.iter_mut() {
-                    let resolution = arm.arm_resolution_expr.as_mut();
-                    let inferred_type = resolution.inferred_type();
-                    let with_origin = inferred_type
-                        .add_origin(TypeOrigin::PatternMatch(resolution.source_span()));
-                    *resolution = resolution.with_inferred_type(with_origin);
-                }
-                *inferred_type =
-                    inferred_type.add_origin(TypeOrigin::OriginatedAt(source_span.clone()))
-            }
             expr => {
                 let source_location = expr.source_span();
                 let origin = TypeOrigin::OriginatedAt(source_location.clone());

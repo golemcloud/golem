@@ -78,6 +78,7 @@ mod type_check_tests {
             error in the following rib found at line 3, column 28
             `"bar"`
             cause: type mismatch. expected s32, found string
+            the expression `"bar"` is inferred as `string` by default
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -104,6 +105,7 @@ mod type_check_tests {
             error in the following rib found at line 2, column 19
             `1`
             cause: type mismatch. expected string, found s32
+            the expression `1` is inferred as `s32` by default
             "#;
 
             //assert!(false);
@@ -132,6 +134,7 @@ mod type_check_tests {
             `"none"`
             cause: type mismatch. expected u64, found string
             expected type u64 based on expression `x` found at line 4 column 27
+            the expression `"none"` is inferred as `string` by default
             "#;
 
             //assert!(false);
@@ -160,6 +163,40 @@ mod type_check_tests {
             `"none"`
             cause: type mismatch. expected s32, found string
             expected type s32 based on expression `1` found at line 5 column 27
+            the expression `1` is inferred as `s32` by default
+            the expression `"none"` is inferred as `string` by default
+            "#;
+
+            //assert!(false);
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_inference_pattern_match_invalid_4() {
+            let expr = r#"
+          let x: s32 = 1;
+          let y: u64 = 2;
+
+          match some(1) {
+            some(_) => ok(x),
+            none    => ok(y)
+          }
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = test_utils::get_metadata_with_record_input_params();
+
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 7, column 27
+            `y`
+            cause: type mismatch. expected s32, found u64
+            expected type s32 based on expression `x` found at line 6 column 27
+            the type of `x` is declared as `s32` at line 2 column 11
+            the type of `y` is declared as `u64` at line 3 column 11
             "#;
 
             //assert!(false);
@@ -210,6 +247,7 @@ mod type_check_tests {
             error in the following rib found at line 2, column 93
             `"foo"`
             cause: type mismatch. expected u64, found string
+            the expression `"foo"` is inferred as `string` by default
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -233,6 +271,7 @@ mod type_check_tests {
             error in the following rib found at line 2, column 100
             `"foo"`
             cause: type mismatch. expected s32, found string
+            the expression `"foo"` is inferred as `string` by default
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -256,6 +295,7 @@ mod type_check_tests {
             error in the following rib found at line 2, column 115
             `"foo"`
             cause: type mismatch. expected s32, found string
+            the expression `"foo"` is inferred as `string` by default
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -330,6 +370,7 @@ mod type_check_tests {
             error in the following rib found at line 2, column 37
             `"foo"`
             cause: type mismatch. expected s32, found string
+            the expression `"foo"` is inferred as `string` by default
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -353,6 +394,7 @@ mod type_check_tests {
             error in the following rib found at line 2, column 69
             `"1"`
             cause: type mismatch. expected s32, found string
+            the expression `"1"` is inferred as `string` by default
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -376,6 +418,7 @@ mod type_check_tests {
             error in the following rib found at line 2, column 32
             `1`
             cause: type mismatch. expected list<s32>, found s32
+            the expression `1` is inferred as `s32` by default
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));
@@ -399,6 +442,7 @@ mod type_check_tests {
             error in the following rib found at line 2, column 81
             `2`
             cause: type mismatch. expected string, found s32
+            the expression `2` is inferred as `s32` by default
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));

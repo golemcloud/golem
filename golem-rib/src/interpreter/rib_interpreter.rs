@@ -4145,6 +4145,7 @@ mod tests {
             error in the following rib found at line 4, column 57
             `1`
             cause: type mismatch. expected string, found s32
+            the expression `1` is inferred as `s32` by default
             "#;
 
         assert_eq!(error_message, strip_spaces(expected));
