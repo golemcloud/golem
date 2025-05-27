@@ -21,10 +21,6 @@ jobs:
         run: |
           npm install
 
-      - name: Update WIT deps
-        run: |
-          npm run update-wit-deps
-
       - name: Generate types
         run: |
           npm run generate-types
