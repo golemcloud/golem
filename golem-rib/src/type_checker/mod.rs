@@ -104,7 +104,6 @@ mod type_check_tests {
             the expression `1` is inferred as `s32` by default
             "#;
 
-            //assert!(false);
             assert_eq!(error_msg, strip_spaces(expected));
         }
 
@@ -133,7 +132,6 @@ mod type_check_tests {
             the expression `"none"` is inferred as `string` by default
             "#;
 
-            //assert!(false);
             assert_eq!(error_msg, strip_spaces(expected));
         }
 
@@ -163,7 +161,6 @@ mod type_check_tests {
             the expression `"none"` is inferred as `string` by default
             "#;
 
-            //assert!(false);
             assert_eq!(error_msg, strip_spaces(expected));
         }
 
@@ -195,7 +192,6 @@ mod type_check_tests {
             the type of `y` is declared as `u64` at line 3 column 11
             "#;
 
-            //assert!(false);
             assert_eq!(error_msg, strip_spaces(expected));
         }
 
