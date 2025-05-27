@@ -34,12 +34,17 @@ impl DockerRedis {
     pub async fn new(unique_network_id: &str, prefix: String) -> Self {
         info!("Starting Redis container");
 
-        let container = testcontainers_modules::redis::Redis::default()
-            .with_tag("7.2")
-            .with_network(network(unique_network_id))
-            .start()
-            .await
-            .expect("Failed to start Redis container");
+        let container = tryhard::retry_fn(|| {
+            testcontainers_modules::redis::Redis::default()
+                .with_tag("7.2")
+                .with_network(network(unique_network_id))
+                .start()
+        })
+        .retries(5)
+        .exponential_backoff(Duration::from_millis(10))
+        .max_delay(Duration::from_secs(10))
+        .await
+        .expect("Failed to start Redis container");
 
         let public_port = container
             .get_host_port_ipv4(REDIS_PORT)

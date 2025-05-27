@@ -76,6 +76,7 @@ tempfile = { workspace = true }
 test-r = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+tryhard = { workspace = true }
 uuid = { workspace = true }
 
 [[test]]
