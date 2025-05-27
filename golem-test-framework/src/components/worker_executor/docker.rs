@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::components::component_service::ComponentService;
-use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
+use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::{new_client, WorkerExecutor};
@@ -42,6 +42,7 @@ impl DockerWorkerExecutor {
     pub const GRPC_PORT: ContainerPort = ContainerPort::Tcp(9000);
 
     pub async fn new(
+        unique_network_id: &str,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
@@ -64,12 +65,12 @@ impl DockerWorkerExecutor {
 
         let container =
             WorkerExecutorImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars.clone())
-                .with_network(NETWORK)
+                .with_network(network(unique_network_id))
                 .start()
                 .await
                 .expect("Failed to start golem-worker-executor container");
 
-        let name = get_docker_container_name(container.id()).await;
+        let name = get_docker_container_name(unique_network_id, container.id()).await;
 
         let public_http_port = container
             .get_host_port_ipv4(Self::HTTP_PORT)
