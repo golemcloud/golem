@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
@@ -24,7 +23,6 @@ use wasmtime_wasi::bindings::sockets::udp::{
 };
 use wasmtime_wasi::SocketError;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
     async fn start_bind(
         &mut self,
@@ -154,7 +152,6 @@ impl<Ctx: WorkerCtx> HostIncomingDatagramStream for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
     fn check_send(&mut self, self_: Resource<OutgoingDatagramStream>) -> Result<u64, SocketError> {
         self.observe_function_call("sockets::udp", "check_send");
@@ -184,5 +181,4 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}

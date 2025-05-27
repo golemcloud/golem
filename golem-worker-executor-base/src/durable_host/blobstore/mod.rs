@@ -15,11 +15,10 @@
 pub mod container;
 pub mod types;
 
-use async_trait::async_trait;
 use futures_util::TryFutureExt;
 use golem_common::model::oplog::DurableFunctionType;
 use wasmtime::component::Resource;
-use wasmtime_wasi::WasiView;
+use wasmtime_wasi::IoView;
 
 use crate::durable_host::blobstore::types::ContainerEntry;
 use crate::durable_host::serialized::SerializableError;
@@ -29,7 +28,6 @@ use crate::preview2::wasi::blobstore::blobstore::{
 };
 use crate::workerctx::WorkerCtx;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn create_container(
         &mut self,

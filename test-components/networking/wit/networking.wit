@@ -5,9 +5,9 @@ interface api {
 }
 
 world networking {
-  import golem:api/host@1.1.6;
-  import wasi:sockets/ip-name-lookup@0.2.0;
-  import wasi:sockets/instance-network@0.2.0;
+  import golem:api/host@1.1.7;
+  import wasi:sockets/ip-name-lookup@0.2.3;
+  import wasi:sockets/instance-network@0.2.3;
 
   export api;
 }

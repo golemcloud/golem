@@ -220,7 +220,7 @@ jobs:
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - name: Install cargo-component
-        run: cargo install --force --locked cargo-component@0.20.0
+        run: cargo install --force --locked cargo-component@0.21.1
       - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: v2-rust

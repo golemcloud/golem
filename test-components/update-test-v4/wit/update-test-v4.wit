@@ -1,5 +1,5 @@
 package golem:component;
 
 world update-test-v4 {
-  export golem:api/load-snapshot@1.1.6;
+  export golem:api/load-snapshot@1.1.7;
 }

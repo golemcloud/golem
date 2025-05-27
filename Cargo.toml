@@ -104,6 +104,7 @@ colored = "3.0.0"
 combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
 console-subscriber = "0.4.1"
+darling = "=0.20.10"
 dashmap = "6.1.0"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 dirs = "4.0.0"
@@ -137,12 +138,18 @@ nom = "7.1.3"
 nonempty-collections = "0.3.0"
 num-traits = "0.2.19"
 once_cell = "1.21.0"
-openapiv3 = "2.0.0"
+openapiv3 = "=2.0.0"
 openidconnect = "3.5.0"
 opentelemetry = "0.28.0"
 opentelemetry-prometheus = "0.28.0"
 opentelemetry_sdk = "0.28.0"
-poem-openapi = { version = "=5.1.5", features = [# pinned temporarily because 5.1.8 generats invalid OpenAPI yaml
+poem = { version = "=3.1.10", features = [
+    "prometheus",
+    "opentelemetry",
+    "test",
+] }
+poem-derive = { version = "=3.1.10"}
+poem-openapi = { version = "=5.1.14", features = [
     "swagger-ui",
     "chrono",
     "time",
@@ -150,13 +157,8 @@ poem-openapi = { version = "=5.1.5", features = [# pinned temporarily because 5.
     "uuid",
     "url",
     "websocket",
-] }
-poem = { version = "=3.1.6", features = [
-    "prometheus",
-    "opentelemetry",
-    "test",
-] }
-poem-openapi-derive = "=5.1.4"
+    ] }
+poem-openapi-derive = "=5.1.14"
 postgres = "0.19.10"
 prometheus = { version = "0.13.4", features = ["process"] }
 proptest = "=1.5.0"
@@ -207,6 +209,7 @@ testcontainers-modules = { version = "0.11.6", features = [
 ] }
 test-r = { version = "2.1.0", default-features = true }
 thiserror = "2.0.12"
+time = { version = "0.3.41", features = ["default", "macros"] }
 tokio = { version = "1.44", features = [
     "macros",
     "rt-multi-thread",
@@ -239,15 +242,15 @@ url = { version = "2.5.4", features = ["serde"] }
 urlencoding = "2.1.3"
 uuid = { version = "1.15.1", features = ["serde", "v4", "v5"] }
 wac-graph = "=0.6.1"
-wasm-wave = "0.227.1"
-wasmtime = { version = "=27.0.0", features = ["component-model"] }
-wasmtime-wasi = { version = "=27.0.0" }
-wasmtime-wasi-http = { version = "=27.0.0" }
-wit-component = "0.227.1"
-wit-parser = "0.227.1"
+wasm-wave = "0.228"
+wasmtime = { version = "=32.0.0", features = ["component-model"] }
+wasmtime-wasi = { version = "=32.0.0" }
+wasmtime-wasi-http = { version = "=32.0.0" }
+wit-component = "0.228"
+wit-parser = "0.228"
 
 [patch.crates-io]
 redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }
-wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
-wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
-wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
+wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v32.0.0" }
+wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v32.0.0" }
+wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v32.0.0" }
