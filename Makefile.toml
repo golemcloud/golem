@@ -493,6 +493,7 @@ description = "Publishes packages to crates.io"
 dependencies = [
     "build-release",
     "publish-golem-wasm-ast",
+    "publish-golem-wasm-rpc-derive",
     "publish-golem-wasm-rpc",
     "publish-golem-api-grpc",
     "publish-golem-rib",
@@ -537,6 +538,18 @@ args = [
     "publish",
     "-p",
     "golem-wasm-ast",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
+[tasks.publish-golem-wasm-rpc-derive]
+description = "Publishes golem-wasm-rpc-derive package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-wasm-rpc-derive",
     "--all-features",
     "--allow-dirty",
     "--no-verify",
