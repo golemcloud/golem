@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
+use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
 use crate::components::redis::Redis;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,12 +31,12 @@ pub struct DockerRedis {
 }
 
 impl DockerRedis {
-    pub async fn new(prefix: String) -> Self {
+    pub async fn new(unique_network_id: &str, prefix: String) -> Self {
         info!("Starting Redis container");
 
         let container = testcontainers_modules::redis::Redis::default()
             .with_tag("7.2")
-            .with_network(NETWORK)
+            .with_network(network(unique_network_id))
             .start()
             .await
             .expect("Failed to start Redis container");
@@ -48,7 +48,7 @@ impl DockerRedis {
 
         super::wait_for_startup("localhost", public_port, Duration::from_secs(10));
 
-        let private_host = get_docker_container_name(container.id()).await;
+        let private_host = get_docker_container_name(unique_network_id, container.id()).await;
 
         Self {
             container: ContainerHandle::new(container),

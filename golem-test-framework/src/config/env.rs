@@ -48,6 +48,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
 use tracing::{Instrument, Level};
+use uuid::Uuid;
 
 pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,
@@ -61,6 +62,7 @@ pub struct EnvBasedTestDependenciesConfig {
     pub redis_key_prefix: String,
     pub golem_test_components: PathBuf,
     pub golem_client_protocol: GolemClientProtocol,
+    pub unique_network_id: String,
 }
 
 impl EnvBasedTestDependenciesConfig {
@@ -155,6 +157,7 @@ impl Default for EnvBasedTestDependenciesConfig {
             redis_key_prefix: "".to_string(),
             golem_test_components: Path::new("../test-components").to_path_buf(),
             golem_client_protocol: GolemClientProtocol::Grpc,
+            unique_network_id: Uuid::new_v4().to_string(),
         }
     }
 }
@@ -191,7 +194,7 @@ impl EnvBasedTestDependencies {
                 let sqlite_path = Path::new("../target/golem_test_db");
                 Arc::new(SqliteRdb::new(sqlite_path))
             }
-            DbType::Postgres => Arc::new(DockerPostgresRdb::new().await),
+            DbType::Postgres => Arc::new(DockerPostgresRdb::new(&config.unique_network_id).await),
         }
     }
 
@@ -200,7 +203,7 @@ impl EnvBasedTestDependencies {
     ) -> Arc<dyn Redis + Send + Sync + 'static> {
         let prefix = config.redis_key_prefix.clone();
         if config.golem_docker_services {
-            Arc::new(DockerRedis::new(prefix).await)
+            Arc::new(DockerRedis::new(&config.unique_network_id, prefix).await)
         } else {
             let host = config.redis_host.clone();
             let port = config.redis_port;
@@ -236,6 +239,7 @@ impl EnvBasedTestDependencies {
         if config.golem_docker_services {
             Arc::new(
                 DockerShardManager::new(
+                    &config.unique_network_id,
                     redis,
                     config.number_of_shards_override,
                     config.default_verbosity(),
@@ -268,6 +272,7 @@ impl EnvBasedTestDependencies {
         if config.golem_docker_services {
             Arc::new(
                 DockerComponentService::new(
+                    &config.unique_network_id,
                     config.golem_test_components.clone(),
                     Some((
                         DockerComponentCompilationService::NAME,
@@ -308,6 +313,7 @@ impl EnvBasedTestDependencies {
         if config.golem_docker_services {
             Arc::new(
                 DockerComponentCompilationService::new(
+                    &config.unique_network_id,
                     component_service,
                     config.default_verbosity(),
                 )
@@ -339,6 +345,7 @@ impl EnvBasedTestDependencies {
         if config.golem_docker_services {
             Arc::new(
                 DockerWorkerService::new(
+                    &config.unique_network_id,
                     component_service,
                     shard_manager,
                     rdb,
@@ -379,6 +386,7 @@ impl EnvBasedTestDependencies {
             Arc::new(
                 DockerWorkerExecutorCluster::new(
                     config.worker_executor_cluster_size,
+                    &config.unique_network_id,
                     redis,
                     component_service,
                     shard_manager,
