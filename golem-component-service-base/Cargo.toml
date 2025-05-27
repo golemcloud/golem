@@ -55,3 +55,4 @@ wac-graph = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
+tryhard = { workspace = true }

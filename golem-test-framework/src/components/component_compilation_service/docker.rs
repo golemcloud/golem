@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::component_service::ComponentService;
-use crate::components::docker::{ContainerHandle, NETWORK};
+use crate::components::docker::{network, ContainerHandle};
 use async_trait::async_trait;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
@@ -37,6 +37,7 @@ impl DockerComponentCompilationService {
     pub const GRPC_PORT: ContainerPort = ContainerPort::Tcp(9094);
 
     pub async fn new(
+        unique_network_id: &str,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         verbosity: Level,
     ) -> Self {
@@ -52,7 +53,7 @@ impl DockerComponentCompilationService {
 
         let container =
             GolemComponentCompilationServiceImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars)
-                .with_network(NETWORK)
+                .with_network(network(unique_network_id))
                 .with_container_name(Self::NAME)
                 .start()
                 .await
