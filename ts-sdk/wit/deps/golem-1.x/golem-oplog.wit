@@ -1,9 +1,9 @@
-package golem:api@1.1.6;
+package golem:api@1.1.7;
 
 /// Host interface for enumerating and searching for worker oplogs
 interface oplog {
-    use wasi:clocks/wall-clock@0.2.0.{datetime};
-    use golem:rpc/types@0.2.0.{wit-value};
+    use wasi:clocks/wall-clock@0.2.3.{datetime};
+    use golem:rpc/types@0.2.1.{wit-value};
 
     use host.{account-id, component-version, oplog-index, persistence-level, retry-policy, uuid, worker-id};
     use context.{attribute, attribute-value, span-id, trace-id};
