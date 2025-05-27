@@ -1,8 +1,8 @@
-package golem:api@1.1.6;
+package golem:api@1.1.7;
 
 /// Invocation context support
 interface context {
-    use wasi:clocks/wall-clock@0.2.0.{datetime};
+    use wasi:clocks/wall-clock@0.2.3.{datetime};
 
     /// Starts a new `span` with the given name, as a child of the current invocation context
     start-span: func(name: string) -> span;
