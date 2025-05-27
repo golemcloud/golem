@@ -14,14 +14,12 @@
 
 pub(crate) use check_instance_returns::*;
 pub(crate) use exhaustive_pattern_match::*;
-pub(crate) use invalid_math_expr::*;
 pub use path::*;
 pub(crate) use unresolved_types::*;
 
 mod check_instance_returns;
 mod exhaustive_pattern_match;
 mod invalid_function_args;
-mod invalid_math_expr;
 mod invalid_worker_name;
 mod missing_fields;
 mod path;
@@ -30,7 +28,6 @@ mod unresolved_types;
 use crate::rib_type_error::RibTypeError;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
 use crate::type_checker::invalid_function_args::check_invalid_function_args;
-use crate::type_checker::invalid_math_expr::check_invalid_math_expr;
 use crate::type_checker::invalid_worker_name::check_invalid_worker_name;
 use crate::{Expr, FunctionTypeRegistry};
 
@@ -42,7 +39,6 @@ pub fn type_check(
     check_unresolved_types(expr)?;
     check_invalid_worker_name(expr)?;
     check_invalid_program_return(expr)?;
-    check_invalid_math_expr(expr)?;
     check_exhaustive_pattern_match(expr, function_type_registry)?;
     Ok(())
 }
@@ -512,6 +508,55 @@ mod type_check_tests {
             error in the following rib found at line 2, column 28
             `{aa: {aa: 1, ab: 2, ac: [1, 2], ad: {ad: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3], d: {da: 4}}`
             cause: invalid argument to the function `foo`.  missing field(s) in record: `a`
+            "#;
+
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
+        fn test_type_checker_invalid_function_call13() {
+            let expr = r#"
+            let aa = 1;
+          let result = foo({aa: 1});
+          result
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = test_utils::get_metadata_with_record_input_params();
+
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 3, column 28
+            `{aa: 1}`
+            cause: invalid argument to the function `foo`.  missing field(s) in record: `a, b, c, d`
+            "#;
+
+            assert_eq!(error_msg, strip_spaces(expected));
+        }
+
+        #[test]
+        fn test_type_checker_invalid_function_call14() {
+            let expr = r#"
+          let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}});
+          1 + result
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let metadata = test_utils::get_metadata_with_record_input_params();
+
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let error_msg = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 3, column 14
+            `result`
+            cause: type mismatch. expected s32, found string
+            expected type s32 based on expression `1` found at line 3 column 11
+            the expression `1` is inferred as `s32` by default
             "#;
 
             assert_eq!(error_msg, strip_spaces(expected));

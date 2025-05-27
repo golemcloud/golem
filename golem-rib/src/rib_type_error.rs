@@ -1,6 +1,4 @@
-use crate::type_checker::{
-    ExhaustivePatternMatchError, InvalidMathExprError, InvalidProgramReturn,
-};
+use crate::type_checker::{ExhaustivePatternMatchError, InvalidProgramReturn};
 use crate::{
     ActualType, AmbiguousTypeError, CustomError, ExpectedType, Expr, FunctionCallError,
     InvalidPatternMatchError, InvalidWorkerName, MultipleUnResolvedTypesError, TypeMismatchError,
@@ -270,24 +268,6 @@ impl From<InvalidWorkerName> for RibTypeError {
         RibTypeError {
             cause: value.message,
             expr: value.worker_name_expr,
-            immediate_parent: None,
-            additional_error_details: vec![],
-            help_messages: vec![],
-        }
-    }
-}
-
-impl From<InvalidMathExprError> for RibTypeError {
-    fn from(value: InvalidMathExprError) -> Self {
-        let expr = match value {
-            InvalidMathExprError::Both { math_expr, .. }
-            | InvalidMathExprError::Left { math_expr, .. }
-            | InvalidMathExprError::Right { math_expr, .. } => math_expr,
-        };
-
-        RibTypeError {
-            cause: "invalid math expression".to_string(),
-            expr,
             immediate_parent: None,
             additional_error_details: vec![],
             help_messages: vec![],
