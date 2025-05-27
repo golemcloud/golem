@@ -57,7 +57,6 @@ use wasmtime_wasi::bindings::cli::environment::Host;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 use wasmtime_wasi::subscribe;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
@@ -682,7 +681,6 @@ impl SubscribeAny for FutureInvokeResultState {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
     async fn subscribe(
         &mut self,
@@ -984,7 +982,6 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
         let entry = self.table().get(&this)?;
@@ -1022,7 +1019,6 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
     async fn parse_uuid(
         &mut self,

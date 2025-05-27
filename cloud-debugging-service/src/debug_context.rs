@@ -368,7 +368,6 @@ impl<T: GolemTypes> ResourceLimiterAsync for DebugContext<T> {
     }
 }
 
-#[async_trait]
 impl<T: GolemTypes> HostWasmRpc for DebugContext<T> {
     async fn new(
         &mut self,
@@ -443,7 +442,6 @@ impl<T: GolemTypes> HostWasmRpc for DebugContext<T> {
     }
 }
 
-#[async_trait]
 impl<T: GolemTypes> HostFutureInvokeResult for DebugContext<T> {
     async fn subscribe(
         &mut self,

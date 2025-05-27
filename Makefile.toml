@@ -440,6 +440,8 @@ script = '''
     else
       echo "openapi/golem-service.yaml is not the same as produced by golem-service-yaml." 1>&2
       echo "Run cargo make generate-openapi to generate new spec." 1>&2
+      echo ""
+      diff openapi/golem-service.yaml target/golem-service.yaml
       exit 1
   fi
   if diff openapi/cloud-spec.yaml target/cloud-spec.yaml  >/dev/null 2>&1

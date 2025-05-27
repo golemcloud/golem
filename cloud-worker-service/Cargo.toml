@@ -61,14 +61,7 @@ rusoto_sts = "0.48.0"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-sqlx = { version = "=0.8.3", features = [
-    "runtime-tokio",
-    "sqlite",
-    "postgres",
-    "uuid",
-    "migrate",
-    "chrono",
-] }
+sqlx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 tap = { workspace = true }

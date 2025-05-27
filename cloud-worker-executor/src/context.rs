@@ -435,7 +435,6 @@ impl FileSystemReading for Context {
     }
 }
 
-#[async_trait]
 impl HostWasmRpc for Context {
     async fn new(
         &mut self,
@@ -510,7 +509,6 @@ impl HostWasmRpc for Context {
     }
 }
 
-#[async_trait]
 impl HostFutureInvokeResult for Context {
     async fn subscribe(
         &mut self,

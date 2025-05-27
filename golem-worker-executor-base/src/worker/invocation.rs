@@ -370,7 +370,8 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
         )))?
     };
 
-    let constructor_param_types = resource_constructor.params(store as &StoreContextMut<'a, Ctx>).iter().map(type_to_analysed_type).collect::<Result<Vec<_>, _>>()
+    let constructor_param_types = resource_constructor.params(store as &StoreContextMut<'a, Ctx>).iter().map(
+        |(_, t)| type_to_analysed_type(t)).collect::<Result<Vec<_>, _>>()
         .map_err(|err| GolemError::invalid_request(format!("Indexed resource invocation cannot be used with owned or borrowed resource handles in constructor parameter position! ({err})")))?;
 
     let raw_constructor_params = parsed_function_name
@@ -456,7 +457,7 @@ async fn invoke<Ctx: WorkerCtx>(
 
     let mut params = Vec::new();
     let mut resources_to_drop = Vec::new();
-    for (param, param_type) in function_input.iter().zip(param_types.iter()) {
+    for (param, (_, param_type)) in function_input.iter().zip(param_types.iter()) {
         let result = decode_param(param, param_type, store.data_mut())
             .await
             .map_err(GolemError::from)?;
