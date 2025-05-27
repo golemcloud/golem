@@ -7,6 +7,8 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Client for Golem Cloud's REST API"
 
+license-file = "../LICENSE"
+
 include = ["src/**/*", "Cargo.toml", "build.rs", "openapi/**/*"]
 
 [lib]
