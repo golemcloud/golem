@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+import "golem/common/account_id.proto";
+
+package golem.cloud.accountsummary.v1;
+
+
+message AccountSummary {
+  golem.common.AccountId id = 1;
+  string name = 2;
+  string email = 3;
+  int64 component_count = 4;
+  int64 worker_count = 5;
+  string created_at = 6;
+}

@@ -1,0 +1,2902 @@
+openapi: 3.0.0
+info:
+  title: Golem API
+  version: '1.0'
+servers: []
+tags:
+- name: Component
+- name: HealthCheck
+- name: Plugin
+paths:
+  /v1/components/{component_id}:
+    get:
+      tags:
+      - Component
+      summary: Get the metadata for all component versions
+      description: |-
+        Each component can have multiple versions. Every time a new WASM is uploaded for a given component id, that creates a new version.
+        This endpoint returns a list of all versions for the component id provided as part of the URL. Each element of the response describes a single version of a component, but does not contain the binary (WASM) itself:
+
+        - `versionedComponentId` associates a specific version with the component id
+        - `componentName` is the human-readable name of the component
+        - `componentSize` is the WASM binary's size in bytes
+        - `metadata` contains information extracted from the WASM itself
+        - `metadata.exports` is a list of exported functions, including their parameter's and return value's types
+        - `metadata.producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem component.
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Component'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_component_metadata_all_versions
+  /v1/components/{component_id}/upload:
+    put:
+      tags:
+      - Component
+      summary: Update a component
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: component_type
+        schema:
+          $ref: '#/components/schemas/ComponentType'
+        in: query
+        description: |-
+          Type of the new version of the component - if not specified, the type of the previous version
+          is used.
+        required: false
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Component'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: upload_component
+  /v1/components/{component_id}/updates:
+    post:
+      tags:
+      - Component
+      summary: Update a component
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - component
+              properties:
+                componentType:
+                  $ref: '#/components/schemas/ComponentType'
+                component:
+                  type: string
+                  format: binary
+                filesPermissions:
+                  $ref: '#/components/schemas/ComponentFilePathWithPermissionsList'
+                files:
+                  type: string
+                  format: binary
+                dynamicLinking:
+                  $ref: '#/components/schemas/DynamicLinking'
+                env:
+                  $ref: '#/components/schemas/ComponentEnv'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Component'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: update_component
+  /v1/components:
+    post:
+      tags:
+      - Component
+      summary: Create a new component
+      description: |-
+        The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+        If the component type is not specified, it will be considered as a `Durable` component.
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - query
+              - component
+              properties:
+                query:
+                  $ref: '#/components/schemas/ComponentQuery'
+                component:
+                  type: string
+                  format: binary
+                componentType:
+                  $ref: '#/components/schemas/ComponentType'
+                filesPermissions:
+                  $ref: '#/components/schemas/ComponentFilePathWithPermissionsList'
+                files:
+                  type: string
+                  format: binary
+                dynamicLinking:
+                  $ref: '#/components/schemas/DynamicLinking'
+                env:
+                  $ref: '#/components/schemas/ComponentEnv'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Component'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_component
+    get:
+      tags:
+      - Component
+      summary: Get all components
+      description: Gets all components, optionally filtered by project and/or component name.
+      parameters:
+      - name: project-id
+        schema:
+          type: string
+          format: uuid
+        in: query
+        description: Project ID to filter by
+        required: false
+        deprecated: false
+        explode: true
+      - name: component-name
+        schema:
+          type: string
+        in: query
+        description: Component name to filter by
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Component'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_components
+  /v1/components/{component_id}/download:
+    get:
+      tags:
+      - Component
+      summary: Download a component
+      description: Downloads a specific version of the component's WASM.
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: download_component
+  /v1/components/{component_id}/versions/{version}:
+    get:
+      tags:
+      - Component
+      summary: Get the version of a given component
+      description: Gets the version of a component.
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Component'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_component_metadata
+  /v1/components/{component_id}/latest:
+    get:
+      tags:
+      - Component
+      summary: Get the latest version of a given component
+      description: Gets the latest version of a component.
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Component'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_latest_component_metadata
+  /v1/components/search:
+    post:
+      tags:
+      - Component
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ComponentSearch'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Component'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: search_components
+  /v1/components/{component_id}/versions/{version}/plugins/installs:
+    get:
+      tags:
+      - Component
+      summary: Gets the list of plugins installed for the given component version
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PluginInstallation'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_installed_plugins
+  /v1/components/{component_id}/latest/plugins/installs:
+    post:
+      tags:
+      - Component
+      summary: Installs a new plugin for this component
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/PluginInstallationCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PluginInstallation'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: install_plugin
+  /v1/components/{component_id}/versions/latest/plugins/installs/{installation_id}:
+    put:
+      tags:
+      - Component
+      summary: Updates the priority or parameters of a plugin installation
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: installation_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/PluginInstallationUpdate'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: update_installed_plugin
+  /v1/components/{component_id}/latest/plugins/installs/{installation_id}:
+    delete:
+      tags:
+      - Component
+      summary: Uninstalls a plugin from this component
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: installation_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: uninstall_plugin
+  /v1/components/{component_id}/versions/latest/plugins/installs/batch:
+    post:
+      tags:
+      - Component
+      summary: Applies a batch of changes to the installed plugins of a component
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/BatchPluginInstallationUpdates'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: bath_update_installed_plugins
+  /v1/components/{component_id}/versions/{version}/file-contents/{file_path}:
+    get:
+      tags:
+      - Component
+      summary: Download file in a Component
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: file_path
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: download_component_file
+  /healthcheck:
+    get:
+      tags:
+      - HealthCheck
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HealthcheckResponse'
+      operationId: healthcheck
+  /version:
+    get:
+      tags:
+      - HealthCheck
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/VersionInfo'
+      operationId: version
+  /v1/plugins:
+    get:
+      tags:
+      - Plugin
+      summary: Lists all the registered plugins (including all versions of each).
+      parameters:
+      - name: scope
+        schema:
+          $ref: '#/components/schemas/CloudPluginScope'
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PluginDefinition_CloudPluginOwner_CloudPluginScope'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: list_plugins
+    post:
+      tags:
+      - Plugin
+      summary: Registers a new plugin
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/PluginDefinitionCreation_CloudPluginScope'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_plugin
+  /v1/plugins/{name}:
+    get:
+      tags:
+      - Plugin
+      summary: Lists all the registered versions of a specific plugin identified by its name
+      parameters:
+      - name: name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PluginDefinition_CloudPluginOwner_CloudPluginScope'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: list_plugin_versions
+  /v1/plugins/library-plugins:
+    post:
+      tags:
+      - Plugin
+      summary: Registers a new library plugin
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - name
+              - version
+              - description
+              - icon
+              - homepage
+              - scope
+              - wasm
+              properties:
+                name:
+                  type: string
+                version:
+                  type: string
+                description:
+                  type: string
+                icon:
+                  type: string
+                  format: binary
+                homepage:
+                  type: string
+                scope:
+                  $ref: '#/components/schemas/CloudPluginScope'
+                wasm:
+                  type: string
+                  format: binary
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_library_plugin
+  /v1/plugins/app-plugins:
+    post:
+      tags:
+      - Plugin
+      summary: Registers a new app plugin
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - name
+              - version
+              - description
+              - icon
+              - homepage
+              - scope
+              - wasm
+              properties:
+                name:
+                  type: string
+                version:
+                  type: string
+                description:
+                  type: string
+                icon:
+                  type: string
+                  format: binary
+                homepage:
+                  type: string
+                scope:
+                  $ref: '#/components/schemas/CloudPluginScope'
+                wasm:
+                  type: string
+                  format: binary
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_app_plugin
+  /v1/plugins/{name}/{version}:
+    get:
+      tags:
+      - Plugin
+      summary: Gets a registered plugin by its name and version
+      parameters:
+      - name: name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PluginDefinition_CloudPluginOwner_CloudPluginScope'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_plugin
+    delete:
+      tags:
+      - Plugin
+      summary: Deletes a registered plugin by its name and version
+      parameters:
+      - name: name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_plugin
+components:
+  schemas:
+    AnalysedExport:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/AnalysedExport_AnalysedFunction'
+      - $ref: '#/components/schemas/AnalysedExport_AnalysedInstance'
+      discriminator:
+        propertyName: type
+        mapping:
+          Function: '#/components/schemas/AnalysedExport_AnalysedFunction'
+          Instance: '#/components/schemas/AnalysedExport_AnalysedInstance'
+    AnalysedExport_AnalysedFunction:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Function
+            example: Function
+      - $ref: '#/components/schemas/AnalysedFunction'
+    AnalysedExport_AnalysedInstance:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Instance
+            example: Instance
+      - $ref: '#/components/schemas/AnalysedInstance'
+    AnalysedFunction:
+      type: object
+      title: AnalysedFunction
+      required:
+      - name
+      - parameters
+      - results
+      properties:
+        name:
+          type: string
+        parameters:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedFunctionParameter'
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedFunctionResult'
+    AnalysedFunctionParameter:
+      type: object
+      title: AnalysedFunctionParameter
+      required:
+      - name
+      - typ
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+    AnalysedFunctionResult:
+      type: object
+      title: AnalysedFunctionResult
+      required:
+      - typ
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+    AnalysedInstance:
+      type: object
+      title: AnalysedInstance
+      required:
+      - name
+      - functions
+      properties:
+        name:
+          type: string
+        functions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedFunction'
+    AnalysedResourceMode:
+      type: string
+      enum:
+      - Owned
+      - Borrowed
+    AnalysedType:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/AnalysedType_TypeVariant'
+      - $ref: '#/components/schemas/AnalysedType_TypeResult'
+      - $ref: '#/components/schemas/AnalysedType_TypeOption'
+      - $ref: '#/components/schemas/AnalysedType_TypeEnum'
+      - $ref: '#/components/schemas/AnalysedType_TypeFlags'
+      - $ref: '#/components/schemas/AnalysedType_TypeRecord'
+      - $ref: '#/components/schemas/AnalysedType_TypeTuple'
+      - $ref: '#/components/schemas/AnalysedType_TypeList'
+      - $ref: '#/components/schemas/AnalysedType_TypeStr'
+      - $ref: '#/components/schemas/AnalysedType_TypeChr'
+      - $ref: '#/components/schemas/AnalysedType_TypeF64'
+      - $ref: '#/components/schemas/AnalysedType_TypeF32'
+      - $ref: '#/components/schemas/AnalysedType_TypeU64'
+      - $ref: '#/components/schemas/AnalysedType_TypeS64'
+      - $ref: '#/components/schemas/AnalysedType_TypeU32'
+      - $ref: '#/components/schemas/AnalysedType_TypeS32'
+      - $ref: '#/components/schemas/AnalysedType_TypeU16'
+      - $ref: '#/components/schemas/AnalysedType_TypeS16'
+      - $ref: '#/components/schemas/AnalysedType_TypeU8'
+      - $ref: '#/components/schemas/AnalysedType_TypeS8'
+      - $ref: '#/components/schemas/AnalysedType_TypeBool'
+      - $ref: '#/components/schemas/AnalysedType_TypeHandle'
+      discriminator:
+        propertyName: type
+        mapping:
+          Variant: '#/components/schemas/AnalysedType_TypeVariant'
+          Result: '#/components/schemas/AnalysedType_TypeResult'
+          Option: '#/components/schemas/AnalysedType_TypeOption'
+          Enum: '#/components/schemas/AnalysedType_TypeEnum'
+          Flags: '#/components/schemas/AnalysedType_TypeFlags'
+          Record: '#/components/schemas/AnalysedType_TypeRecord'
+          Tuple: '#/components/schemas/AnalysedType_TypeTuple'
+          List: '#/components/schemas/AnalysedType_TypeList'
+          Str: '#/components/schemas/AnalysedType_TypeStr'
+          Chr: '#/components/schemas/AnalysedType_TypeChr'
+          F64: '#/components/schemas/AnalysedType_TypeF64'
+          F32: '#/components/schemas/AnalysedType_TypeF32'
+          U64: '#/components/schemas/AnalysedType_TypeU64'
+          S64: '#/components/schemas/AnalysedType_TypeS64'
+          U32: '#/components/schemas/AnalysedType_TypeU32'
+          S32: '#/components/schemas/AnalysedType_TypeS32'
+          U16: '#/components/schemas/AnalysedType_TypeU16'
+          S16: '#/components/schemas/AnalysedType_TypeS16'
+          U8: '#/components/schemas/AnalysedType_TypeU8'
+          S8: '#/components/schemas/AnalysedType_TypeS8'
+          Bool: '#/components/schemas/AnalysedType_TypeBool'
+          Handle: '#/components/schemas/AnalysedType_TypeHandle'
+    AnalysedType_TypeBool:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Bool
+            example: Bool
+      - $ref: '#/components/schemas/TypeBool'
+    AnalysedType_TypeChr:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Chr
+            example: Chr
+      - $ref: '#/components/schemas/TypeChr'
+    AnalysedType_TypeEnum:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Enum
+            example: Enum
+      - $ref: '#/components/schemas/TypeEnum'
+    AnalysedType_TypeF32:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - F32
+            example: F32
+      - $ref: '#/components/schemas/TypeF32'
+    AnalysedType_TypeF64:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - F64
+            example: F64
+      - $ref: '#/components/schemas/TypeF64'
+    AnalysedType_TypeFlags:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Flags
+            example: Flags
+      - $ref: '#/components/schemas/TypeFlags'
+    AnalysedType_TypeHandle:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Handle
+            example: Handle
+      - $ref: '#/components/schemas/TypeHandle'
+    AnalysedType_TypeList:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - List
+            example: List
+      - $ref: '#/components/schemas/TypeList'
+    AnalysedType_TypeOption:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Option
+            example: Option
+      - $ref: '#/components/schemas/TypeOption'
+    AnalysedType_TypeRecord:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Record
+            example: Record
+      - $ref: '#/components/schemas/TypeRecord'
+    AnalysedType_TypeResult:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Result
+            example: Result
+      - $ref: '#/components/schemas/TypeResult'
+    AnalysedType_TypeS16:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - S16
+            example: S16
+      - $ref: '#/components/schemas/TypeS16'
+    AnalysedType_TypeS32:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - S32
+            example: S32
+      - $ref: '#/components/schemas/TypeS32'
+    AnalysedType_TypeS64:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - S64
+            example: S64
+      - $ref: '#/components/schemas/TypeS64'
+    AnalysedType_TypeS8:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - S8
+            example: S8
+      - $ref: '#/components/schemas/TypeS8'
+    AnalysedType_TypeStr:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Str
+            example: Str
+      - $ref: '#/components/schemas/TypeStr'
+    AnalysedType_TypeTuple:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Tuple
+            example: Tuple
+      - $ref: '#/components/schemas/TypeTuple'
+    AnalysedType_TypeU16:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - U16
+            example: U16
+      - $ref: '#/components/schemas/TypeU16'
+    AnalysedType_TypeU32:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - U32
+            example: U32
+      - $ref: '#/components/schemas/TypeU32'
+    AnalysedType_TypeU64:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - U64
+            example: U64
+      - $ref: '#/components/schemas/TypeU64'
+    AnalysedType_TypeU8:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - U8
+            example: U8
+      - $ref: '#/components/schemas/TypeU8'
+    AnalysedType_TypeVariant:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Variant
+            example: Variant
+      - $ref: '#/components/schemas/TypeVariant'
+    AppPluginDefinition:
+      type: object
+      title: AppPluginDefinition
+      required:
+      - blobStorageKey
+      properties:
+        blobStorageKey:
+          type: string
+    BatchPluginInstallationUpdates:
+      type: object
+      title: BatchPluginInstallationUpdates
+      required:
+      - actions
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationAction'
+    CloudPluginOwner:
+      type: object
+      title: CloudPluginOwner
+      required:
+      - accountId
+      properties:
+        accountId:
+          type: string
+    CloudPluginScope:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/CloudPluginScope_Empty'
+      - $ref: '#/components/schemas/CloudPluginScope_ComponentPluginScope'
+      - $ref: '#/components/schemas/CloudPluginScope_ProjectPluginScope'
+      discriminator:
+        propertyName: type
+        mapping:
+          Global: '#/components/schemas/CloudPluginScope_Empty'
+          Component: '#/components/schemas/CloudPluginScope_ComponentPluginScope'
+          Project: '#/components/schemas/CloudPluginScope_ProjectPluginScope'
+    CloudPluginScope_ComponentPluginScope:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Component
+            example: Component
+      - $ref: '#/components/schemas/ComponentPluginScope'
+    CloudPluginScope_Empty:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Global
+            example: Global
+      - $ref: '#/components/schemas/Empty'
+    CloudPluginScope_ProjectPluginScope:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Project
+            example: Project
+      - $ref: '#/components/schemas/ProjectPluginScope'
+    Component:
+      type: object
+      title: Component
+      required:
+      - versionedComponentId
+      - componentName
+      - componentSize
+      - metadata
+      - accountId
+      - projectId
+      - createdAt
+      - componentType
+      - files
+      - installedPlugins
+      - env
+      properties:
+        versionedComponentId:
+          $ref: '#/components/schemas/VersionedComponentId'
+        componentName:
+          type: string
+        componentSize:
+          type: integer
+          format: uint64
+        metadata:
+          $ref: '#/components/schemas/ComponentMetadata'
+        accountId:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        componentType:
+          $ref: '#/components/schemas/ComponentType'
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/InitialComponentFile'
+        installedPlugins:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallation'
+        env:
+          type: object
+          additionalProperties:
+            type: string
+    ComponentEnv:
+      type: object
+      title: ComponentEnv
+      required:
+      - keyValues
+      properties:
+        keyValues:
+          type: object
+          additionalProperties:
+            type: string
+    ComponentFilePathWithPermissions:
+      type: object
+      title: ComponentFilePathWithPermissions
+      required:
+      - path
+      - permissions
+      properties:
+        path:
+          type: string
+          description: Path inside a component filesystem. Must be absolute.
+        permissions:
+          $ref: '#/components/schemas/ComponentFilePermissions'
+    ComponentFilePathWithPermissionsList:
+      type: object
+      title: ComponentFilePathWithPermissionsList
+      required:
+      - values
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComponentFilePathWithPermissions'
+    ComponentFilePermissions:
+      type: string
+      enum:
+      - read-only
+      - read-write
+    ComponentMetadata:
+      type: object
+      title: ComponentMetadata
+      required:
+      - exports
+      - producers
+      - memories
+      - binaryWit
+      - dynamicLinking
+      properties:
+        exports:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedExport'
+        producers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Producers'
+        memories:
+          type: array
+          items:
+            $ref: '#/components/schemas/LinearMemory'
+        binaryWit:
+          type: string
+          format: bytes
+        rootPackageName:
+          type: string
+        rootPackageVersion:
+          type: string
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
+    ComponentPluginScope:
+      type: object
+      title: ComponentPluginScope
+      required:
+      - componentId
+      properties:
+        componentId:
+          type: string
+          format: uuid
+    ComponentQuery:
+      type: object
+      title: ComponentQuery
+      required:
+      - componentName
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        componentName:
+          type: string
+    ComponentSearch:
+      type: object
+      title: ComponentSearch
+      required:
+      - components
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        components:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComponentSearchParameters'
+    ComponentSearchParameters:
+      type: object
+      title: ComponentSearchParameters
+      required:
+      - name
+      properties:
+        name:
+          type: string
+        version:
+          type: integer
+          format: uint64
+    ComponentTransformerDefinition:
+      type: object
+      title: ComponentTransformerDefinition
+      required:
+      - validateUrl
+      - transformUrl
+      properties:
+        providedWitPackage:
+          type: string
+        jsonSchema:
+          type: string
+        validateUrl:
+          type: string
+        transformUrl:
+          type: string
+    ComponentType:
+      type: string
+      enum:
+      - Durable
+      - Ephemeral
+    DynamicLinkedInstance:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+      discriminator:
+        propertyName: type
+        mapping:
+          WasmRpc: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
+    DynamicLinkedInstance_DynamicLinkedWasmRpc:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - WasmRpc
+            example: WasmRpc
+      - $ref: '#/components/schemas/DynamicLinkedWasmRpc'
+    DynamicLinkedWasmRpc:
+      type: object
+      title: DynamicLinkedWasmRpc
+      required:
+      - targets
+      properties:
+        targets:
+          type: object
+          description: Maps resource names within the dynamic linked interface to target information
+          additionalProperties:
+            $ref: '#/components/schemas/WasmRpcTarget'
+    DynamicLinking:
+      type: object
+      title: DynamicLinking
+      required:
+      - dynamicLinking
+      properties:
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
+    Empty:
+      type: object
+      title: Empty
+    ErrorBody:
+      type: object
+      title: ErrorBody
+      required:
+      - error
+      properties:
+        error:
+          type: string
+    ErrorsBody:
+      type: object
+      title: ErrorsBody
+      required:
+      - errors
+      properties:
+        errors:
+          type: array
+          items:
+            type: string
+    HealthcheckResponse:
+      type: object
+      title: HealthcheckResponse
+    InitialComponentFile:
+      type: object
+      title: InitialComponentFile
+      required:
+      - key
+      - path
+      - permissions
+      properties:
+        key:
+          type: string
+          title: |-
+            Key that can be used to identify a component file.
+            All files with the same content will have the same key.
+        path:
+          type: string
+          description: Path inside a component filesystem. Must be absolute.
+        permissions:
+          $ref: '#/components/schemas/ComponentFilePermissions'
+    LibraryPluginDefinition:
+      type: object
+      title: LibraryPluginDefinition
+      required:
+      - blobStorageKey
+      properties:
+        blobStorageKey:
+          type: string
+    LinearMemory:
+      type: object
+      title: LinearMemory
+      required:
+      - initial
+      properties:
+        initial:
+          type: integer
+          format: uint64
+          description: Initial size of the linear memory in bytes
+        maximum:
+          type: integer
+          format: uint64
+          description: Optional maximal size of the linear memory in bytes
+    NameOptionTypePair:
+      type: object
+      title: NameOptionTypePair
+      required:
+      - name
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+    NameTypePair:
+      type: object
+      title: NameTypePair
+      required:
+      - name
+      - typ
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+    OplogProcessorDefinition:
+      type: object
+      title: OplogProcessorDefinition
+      required:
+      - componentId
+      - componentVersion
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        componentVersion:
+          type: integer
+          format: uint64
+    PluginDefinitionCreation_CloudPluginScope:
+      type: object
+      title: PluginDefinitionCreation_CloudPluginScope
+      required:
+      - name
+      - version
+      - description
+      - icon
+      - homepage
+      - specs
+      - scope
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        icon:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        homepage:
+          type: string
+        specs:
+          $ref: '#/components/schemas/PluginTypeSpecificCreation'
+        scope:
+          $ref: '#/components/schemas/CloudPluginScope'
+    PluginDefinition_CloudPluginOwner_CloudPluginScope:
+      type: object
+      title: PluginDefinition_CloudPluginOwner_CloudPluginScope
+      required:
+      - id
+      - name
+      - version
+      - description
+      - icon
+      - homepage
+      - specs
+      - scope
+      - owner
+      - deleted
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        icon:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        homepage:
+          type: string
+        specs:
+          $ref: '#/components/schemas/PluginTypeSpecificDefinition'
+        scope:
+          $ref: '#/components/schemas/CloudPluginScope'
+        owner:
+          $ref: '#/components/schemas/CloudPluginOwner'
+        deleted:
+          type: boolean
+    PluginInstallation:
+      type: object
+      title: PluginInstallation
+      required:
+      - id
+      - pluginName
+      - pluginVersion
+      - pluginRegistered
+      - priority
+      - parameters
+      properties:
+        id:
+          type: string
+          format: uuid
+        pluginName:
+          type: string
+        pluginVersion:
+          type: string
+        pluginRegistered:
+          type: boolean
+          description: Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
+        priority:
+          type: integer
+          format: int32
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+    PluginInstallationAction:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationCreation'
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdateWithId'
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginUninstallation'
+      discriminator:
+        propertyName: type
+        mapping:
+          Install: '#/components/schemas/PluginInstallationAction_PluginInstallationCreation'
+          Update: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdateWithId'
+          Uninstall: '#/components/schemas/PluginInstallationAction_PluginUninstallation'
+    PluginInstallationAction_PluginInstallationCreation:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Install
+            example: Install
+      - $ref: '#/components/schemas/PluginInstallationCreation'
+    PluginInstallationAction_PluginInstallationUpdateWithId:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Update
+            example: Update
+      - $ref: '#/components/schemas/PluginInstallationUpdateWithId'
+    PluginInstallationAction_PluginUninstallation:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Uninstall
+            example: Uninstall
+      - $ref: '#/components/schemas/PluginUninstallation'
+    PluginInstallationCreation:
+      type: object
+      title: PluginInstallationCreation
+      required:
+      - name
+      - version
+      - priority
+      - parameters
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        priority:
+          type: integer
+          format: int32
+          description: Plugins will be applied in order of increasing priority
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+    PluginInstallationUpdate:
+      type: object
+      title: PluginInstallationUpdate
+      required:
+      - priority
+      - parameters
+      properties:
+        priority:
+          type: integer
+          format: int32
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+    PluginInstallationUpdateWithId:
+      type: object
+      title: PluginInstallationUpdateWithId
+      required:
+      - installationId
+      - priority
+      - parameters
+      properties:
+        installationId:
+          type: string
+          format: uuid
+        priority:
+          type: integer
+          format: int32
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+    PluginTypeSpecificCreation:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginTypeSpecificCreation_ComponentTransformerDefinition'
+      - $ref: '#/components/schemas/PluginTypeSpecificCreation_OplogProcessorDefinition'
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentTransformer: '#/components/schemas/PluginTypeSpecificCreation_ComponentTransformerDefinition'
+          OplogProcessor: '#/components/schemas/PluginTypeSpecificCreation_OplogProcessorDefinition'
+    PluginTypeSpecificCreation_ComponentTransformerDefinition:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ComponentTransformer
+            example: ComponentTransformer
+      - $ref: '#/components/schemas/ComponentTransformerDefinition'
+    PluginTypeSpecificCreation_OplogProcessorDefinition:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - OplogProcessor
+            example: OplogProcessor
+      - $ref: '#/components/schemas/OplogProcessorDefinition'
+    PluginTypeSpecificDefinition:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_ComponentTransformerDefinition'
+      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_OplogProcessorDefinition'
+      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_LibraryPluginDefinition'
+      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_AppPluginDefinition'
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentTransformer: '#/components/schemas/PluginTypeSpecificDefinition_ComponentTransformerDefinition'
+          OplogProcessor: '#/components/schemas/PluginTypeSpecificDefinition_OplogProcessorDefinition'
+          Library: '#/components/schemas/PluginTypeSpecificDefinition_LibraryPluginDefinition'
+          App: '#/components/schemas/PluginTypeSpecificDefinition_AppPluginDefinition'
+    PluginTypeSpecificDefinition_AppPluginDefinition:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - App
+            example: App
+      - $ref: '#/components/schemas/AppPluginDefinition'
+    PluginTypeSpecificDefinition_ComponentTransformerDefinition:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ComponentTransformer
+            example: ComponentTransformer
+      - $ref: '#/components/schemas/ComponentTransformerDefinition'
+    PluginTypeSpecificDefinition_LibraryPluginDefinition:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Library
+            example: Library
+      - $ref: '#/components/schemas/LibraryPluginDefinition'
+    PluginTypeSpecificDefinition_OplogProcessorDefinition:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - OplogProcessor
+            example: OplogProcessor
+      - $ref: '#/components/schemas/OplogProcessorDefinition'
+    PluginUninstallation:
+      type: object
+      title: PluginUninstallation
+      required:
+      - installationId
+      properties:
+        installationId:
+          type: string
+          format: uuid
+    ProducerField:
+      type: object
+      title: ProducerField
+      required:
+      - name
+      - values
+      properties:
+        name:
+          type: string
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/VersionedName'
+    Producers:
+      type: object
+      title: Producers
+      required:
+      - fields
+      properties:
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProducerField'
+    ProjectPluginScope:
+      type: object
+      title: ProjectPluginScope
+      required:
+      - projectId
+      properties:
+        projectId:
+          type: string
+          format: uuid
+    TypeBool:
+      type: object
+      title: TypeBool
+    TypeChr:
+      type: object
+      title: TypeChr
+    TypeEnum:
+      type: object
+      title: TypeEnum
+      required:
+      - cases
+      properties:
+        cases:
+          type: array
+          items:
+            type: string
+    TypeF32:
+      type: object
+      title: TypeF32
+    TypeF64:
+      type: object
+      title: TypeF64
+    TypeFlags:
+      type: object
+      title: TypeFlags
+      required:
+      - names
+      properties:
+        names:
+          type: array
+          items:
+            type: string
+    TypeHandle:
+      type: object
+      title: TypeHandle
+      required:
+      - resource_id
+      - mode
+      properties:
+        resource_id:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AnalysedResourceMode'
+    TypeList:
+      type: object
+      title: TypeList
+      required:
+      - inner
+      properties:
+        inner:
+          $ref: '#/components/schemas/AnalysedType'
+    TypeOption:
+      type: object
+      title: TypeOption
+      required:
+      - inner
+      properties:
+        inner:
+          $ref: '#/components/schemas/AnalysedType'
+    TypeRecord:
+      type: object
+      title: TypeRecord
+      required:
+      - fields
+      properties:
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/NameTypePair'
+    TypeResult:
+      type: object
+      title: TypeResult
+      properties:
+        ok:
+          $ref: '#/components/schemas/AnalysedType'
+        err:
+          $ref: '#/components/schemas/AnalysedType'
+    TypeS16:
+      type: object
+      title: TypeS16
+    TypeS32:
+      type: object
+      title: TypeS32
+    TypeS64:
+      type: object
+      title: TypeS64
+    TypeS8:
+      type: object
+      title: TypeS8
+    TypeStr:
+      type: object
+      title: TypeStr
+    TypeTuple:
+      type: object
+      title: TypeTuple
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedType'
+    TypeU16:
+      type: object
+      title: TypeU16
+    TypeU32:
+      type: object
+      title: TypeU32
+    TypeU64:
+      type: object
+      title: TypeU64
+    TypeU8:
+      type: object
+      title: TypeU8
+    TypeVariant:
+      type: object
+      title: TypeVariant
+      required:
+      - cases
+      properties:
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/NameOptionTypePair'
+    VersionInfo:
+      type: object
+      title: VersionInfo
+      required:
+      - version
+      properties:
+        version:
+          type: string
+    VersionedComponentId:
+      type: object
+      title: VersionedComponentId
+      required:
+      - componentId
+      - version
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: uint64
+    VersionedName:
+      type: object
+      title: VersionedName
+      required:
+      - name
+      - version
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+    WasmRpcTarget:
+      type: object
+      title: WasmRpcTarget
+      required:
+      - interfaceName
+      - componentName
+      - componentType
+      properties:
+        interfaceName:
+          type: string
+        componentName:
+          type: string
+        componentType:
+          $ref: '#/components/schemas/ComponentType'
+  securitySchemes:
+    Cookie:
+      type: apiKey
+      name: GOLEM_SESSION
+      in: cookie
+    Token:
+      type: http
+      scheme: bearer
+

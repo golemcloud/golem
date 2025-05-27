@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package golem.cloud.account.v1;
+
+import public "golem/common/empty.proto";
+import public "golem/cloud/account/account.proto";
+import public "golem/common/account_id.proto";
+import public "golem/cloud/account/account_data.proto";
+import public "golem/cloud/account/v1/account_error.proto";
+import public "golem/cloud/plan/plan.proto";
+
+service CloudAccountService {
+  rpc DeleteAccount (AccountDeleteRequest) returns (AccountDeleteResponse);
+  rpc GetAccount (AccountGetRequest) returns (AccountGetResponse);
+  rpc GetPlan (AccountGetPlanRequest) returns (AccountGetPlanResponse);
+  rpc UpdateAccount (AccountUpdateRequest) returns (AccountUpdateResponse);
+  rpc CreateAccount (AccountCreateRequest) returns (AccountCreateResponse);
+}
+
+message AccountDeleteRequest {
+  golem.common.AccountId accountId = 1;
+}
+
+message AccountDeleteResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.cloud.account.v1.AccountError error = 2;
+  }
+}
+
+message AccountGetRequest {
+  golem.common.AccountId accountId = 1;
+}
+
+message AccountGetResponse {
+  oneof result {
+    golem.cloud.account.Account account = 1;
+    golem.cloud.account.v1.AccountError error = 2;
+  }
+}
+
+message AccountGetPlanRequest {
+  golem.common.AccountId accountId = 1;
+}
+
+message AccountGetPlanResponse {
+  oneof result {
+    golem.cloud.plan.Plan plan = 1;
+    golem.cloud.account.v1.AccountError error = 2;
+  }
+}
+
+message AccountUpdateRequest {
+  golem.common.AccountId accountId = 1;
+  golem.cloud.account.AccountData accountData = 2;
+}
+
+message AccountUpdateResponse {
+  oneof result {
+    golem.cloud.account.Account account = 1;
+    golem.cloud.account.v1.AccountError error = 2;
+  }
+}
+
+message AccountCreateRequest {
+  golem.cloud.account.AccountData accountData = 1;
+}
+
+message AccountCreateResponse {
+  oneof result {
+    golem.cloud.account.Account account = 1;
+    golem.cloud.account.v1.AccountError error = 2;
+  }
+}

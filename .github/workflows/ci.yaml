@@ -48,7 +48,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci build
-        timeout-minutes: 30
+        timeout-minutes: 45
 
   unit-tests-and-checks:
     env:
@@ -196,7 +196,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 30
+        timeout-minutes: 45
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
         if: always()

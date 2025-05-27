@@ -1,0 +1,33 @@
+[package]
+name = "cloud-api-grpc"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+description = "GRPC API for Golem Cloud services"
+
+
+[lib]
+harness = false
+
+[dependencies]
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
+
+async-trait = { workspace = true }
+bincode = { workspace = true }
+bytes = { workspace = true }
+futures-core = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }
+
+[build-dependencies]
+cargo_metadata = "0.18.1"
+tonic-build = "0.11.0"
