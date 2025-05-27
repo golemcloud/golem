@@ -7,6 +7,7 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Golem Worker Service including API Gateway functionalities"
 
+license-file = "../LICENSE"
 
 [[bin]]
 name = "golem-worker-service"
