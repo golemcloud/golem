@@ -1623,6 +1623,7 @@ components:
       - $ref: '#/components/schemas/AnalysedInstance'
     AnalysedFunction:
       type: object
+      title: AnalysedFunction
       required:
       - name
       - parameters
@@ -1640,6 +1641,7 @@ components:
             $ref: '#/components/schemas/AnalysedFunctionResult'
     AnalysedFunctionParameter:
       type: object
+      title: AnalysedFunctionParameter
       required:
       - name
       - typ
@@ -1650,6 +1652,7 @@ components:
           $ref: '#/components/schemas/AnalysedType'
     AnalysedFunctionResult:
       type: object
+      title: AnalysedFunctionResult
       required:
       - typ
       properties:
@@ -1659,6 +1662,7 @@ components:
           $ref: '#/components/schemas/AnalysedType'
     AnalysedInstance:
       type: object
+      title: AnalysedInstance
       required:
       - name
       - functions
@@ -1990,6 +1994,7 @@ components:
       - $ref: '#/components/schemas/TypeVariant'
     AppPluginDefinition:
       type: object
+      title: AppPluginDefinition
       required:
       - blobStorageKey
       properties:
@@ -1997,6 +2002,7 @@ components:
           type: string
     BatchPluginInstallationUpdates:
       type: object
+      title: BatchPluginInstallationUpdates
       required:
       - actions
       properties:
@@ -2006,6 +2012,7 @@ components:
             $ref: '#/components/schemas/PluginInstallationAction'
     CloudPluginOwner:
       type: object
+      title: CloudPluginOwner
       required:
       - accountId
       properties:
@@ -2061,6 +2068,7 @@ components:
       - $ref: '#/components/schemas/ProjectPluginScope'
     Component:
       type: object
+      title: Component
       required:
       - versionedComponentId
       - componentName
@@ -2107,6 +2115,7 @@ components:
             type: string
     ComponentEnv:
       type: object
+      title: ComponentEnv
       required:
       - keyValues
       properties:
@@ -2116,6 +2125,7 @@ components:
             type: string
     ComponentFilePathWithPermissions:
       type: object
+      title: ComponentFilePathWithPermissions
       required:
       - path
       - permissions
@@ -2127,6 +2137,7 @@ components:
           $ref: '#/components/schemas/ComponentFilePermissions'
     ComponentFilePathWithPermissionsList:
       type: object
+      title: ComponentFilePathWithPermissionsList
       required:
       - values
       properties:
@@ -2141,6 +2152,7 @@ components:
       - read-write
     ComponentMetadata:
       type: object
+      title: ComponentMetadata
       required:
       - exports
       - producers
@@ -2173,6 +2185,7 @@ components:
             $ref: '#/components/schemas/DynamicLinkedInstance'
     ComponentPluginScope:
       type: object
+      title: ComponentPluginScope
       required:
       - componentId
       properties:
@@ -2181,6 +2194,7 @@ components:
           format: uuid
     ComponentQuery:
       type: object
+      title: ComponentQuery
       required:
       - componentName
       properties:
@@ -2191,6 +2205,7 @@ components:
           type: string
     ComponentSearch:
       type: object
+      title: ComponentSearch
       required:
       - components
       properties:
@@ -2203,6 +2218,7 @@ components:
             $ref: '#/components/schemas/ComponentSearchParameters'
     ComponentSearchParameters:
       type: object
+      title: ComponentSearchParameters
       required:
       - name
       properties:
@@ -2213,6 +2229,7 @@ components:
           format: uint64
     ComponentTransformerDefinition:
       type: object
+      title: ComponentTransformerDefinition
       required:
       - validateUrl
       - transformUrl
@@ -2252,6 +2269,7 @@ components:
       - $ref: '#/components/schemas/DynamicLinkedWasmRpc'
     DynamicLinkedWasmRpc:
       type: object
+      title: DynamicLinkedWasmRpc
       required:
       - targets
       properties:
@@ -2262,6 +2280,7 @@ components:
             $ref: '#/components/schemas/WasmRpcTarget'
     DynamicLinking:
       type: object
+      title: DynamicLinking
       required:
       - dynamicLinking
       properties:
@@ -2271,8 +2290,10 @@ components:
             $ref: '#/components/schemas/DynamicLinkedInstance'
     Empty:
       type: object
+      title: Empty
     ErrorBody:
       type: object
+      title: ErrorBody
       required:
       - error
       properties:
@@ -2280,6 +2301,7 @@ components:
           type: string
     ErrorsBody:
       type: object
+      title: ErrorsBody
       required:
       - errors
       properties:
@@ -2289,8 +2311,10 @@ components:
             type: string
     HealthcheckResponse:
       type: object
+      title: HealthcheckResponse
     InitialComponentFile:
       type: object
+      title: InitialComponentFile
       required:
       - key
       - path
@@ -2308,6 +2332,7 @@ components:
           $ref: '#/components/schemas/ComponentFilePermissions'
     LibraryPluginDefinition:
       type: object
+      title: LibraryPluginDefinition
       required:
       - blobStorageKey
       properties:
@@ -2315,6 +2340,7 @@ components:
           type: string
     LinearMemory:
       type: object
+      title: LinearMemory
       required:
       - initial
       properties:
@@ -2328,6 +2354,7 @@ components:
           description: Optional maximal size of the linear memory in bytes
     NameOptionTypePair:
       type: object
+      title: NameOptionTypePair
       required:
       - name
       properties:
@@ -2337,6 +2364,7 @@ components:
           $ref: '#/components/schemas/AnalysedType'
     NameTypePair:
       type: object
+      title: NameTypePair
       required:
       - name
       - typ
@@ -2347,6 +2375,7 @@ components:
           $ref: '#/components/schemas/AnalysedType'
     OplogProcessorDefinition:
       type: object
+      title: OplogProcessorDefinition
       required:
       - componentId
       - componentVersion
@@ -2359,6 +2388,7 @@ components:
           format: uint64
     PluginDefinitionCreation_CloudPluginScope:
       type: object
+      title: PluginDefinitionCreation_CloudPluginScope
       required:
       - name
       - version
@@ -2387,6 +2417,7 @@ components:
           $ref: '#/components/schemas/CloudPluginScope'
     PluginDefinition_CloudPluginOwner_CloudPluginScope:
       type: object
+      title: PluginDefinition_CloudPluginOwner_CloudPluginScope
       required:
       - id
       - name
@@ -2425,6 +2456,7 @@ components:
           type: boolean
     PluginInstallation:
       type: object
+      title: PluginInstallation
       required:
       - id
       - pluginName
@@ -2500,6 +2532,7 @@ components:
       - $ref: '#/components/schemas/PluginUninstallation'
     PluginInstallationCreation:
       type: object
+      title: PluginInstallationCreation
       required:
       - name
       - version
@@ -2520,6 +2553,7 @@ components:
             type: string
     PluginInstallationUpdate:
       type: object
+      title: PluginInstallationUpdate
       required:
       - priority
       - parameters
@@ -2533,6 +2567,7 @@ components:
             type: string
     PluginInstallationUpdateWithId:
       type: object
+      title: PluginInstallationUpdateWithId
       required:
       - installationId
       - priority
@@ -2646,6 +2681,7 @@ components:
       - $ref: '#/components/schemas/OplogProcessorDefinition'
     PluginUninstallation:
       type: object
+      title: PluginUninstallation
       required:
       - installationId
       properties:
@@ -2654,6 +2690,7 @@ components:
           format: uuid
     ProducerField:
       type: object
+      title: ProducerField
       required:
       - name
       - values
@@ -2666,6 +2703,7 @@ components:
             $ref: '#/components/schemas/VersionedName'
     Producers:
       type: object
+      title: Producers
       required:
       - fields
       properties:
@@ -2675,6 +2713,7 @@ components:
             $ref: '#/components/schemas/ProducerField'
     ProjectPluginScope:
       type: object
+      title: ProjectPluginScope
       required:
       - projectId
       properties:
@@ -2683,10 +2722,13 @@ components:
           format: uuid
     TypeBool:
       type: object
+      title: TypeBool
     TypeChr:
       type: object
+      title: TypeChr
     TypeEnum:
       type: object
+      title: TypeEnum
       required:
       - cases
       properties:
@@ -2696,10 +2738,13 @@ components:
             type: string
     TypeF32:
       type: object
+      title: TypeF32
     TypeF64:
       type: object
+      title: TypeF64
     TypeFlags:
       type: object
+      title: TypeFlags
       required:
       - names
       properties:
@@ -2709,6 +2754,7 @@ components:
             type: string
     TypeHandle:
       type: object
+      title: TypeHandle
       required:
       - resource_id
       - mode
@@ -2720,6 +2766,7 @@ components:
           $ref: '#/components/schemas/AnalysedResourceMode'
     TypeList:
       type: object
+      title: TypeList
       required:
       - inner
       properties:
@@ -2727,6 +2774,7 @@ components:
           $ref: '#/components/schemas/AnalysedType'
     TypeOption:
       type: object
+      title: TypeOption
       required:
       - inner
       properties:
@@ -2734,6 +2782,7 @@ components:
           $ref: '#/components/schemas/AnalysedType'
     TypeRecord:
       type: object
+      title: TypeRecord
       required:
       - fields
       properties:
@@ -2743,6 +2792,7 @@ components:
             $ref: '#/components/schemas/NameTypePair'
     TypeResult:
       type: object
+      title: TypeResult
       properties:
         ok:
           $ref: '#/components/schemas/AnalysedType'
@@ -2750,16 +2800,22 @@ components:
           $ref: '#/components/schemas/AnalysedType'
     TypeS16:
       type: object
+      title: TypeS16
     TypeS32:
       type: object
+      title: TypeS32
     TypeS64:
       type: object
+      title: TypeS64
     TypeS8:
       type: object
+      title: TypeS8
     TypeStr:
       type: object
+      title: TypeStr
     TypeTuple:
       type: object
+      title: TypeTuple
       required:
       - items
       properties:
@@ -2769,14 +2825,19 @@ components:
             $ref: '#/components/schemas/AnalysedType'
     TypeU16:
       type: object
+      title: TypeU16
     TypeU32:
       type: object
+      title: TypeU32
     TypeU64:
       type: object
+      title: TypeU64
     TypeU8:
       type: object
+      title: TypeU8
     TypeVariant:
       type: object
+      title: TypeVariant
       required:
       - cases
       properties:
@@ -2786,6 +2847,7 @@ components:
             $ref: '#/components/schemas/NameOptionTypePair'
     VersionInfo:
       type: object
+      title: VersionInfo
       required:
       - version
       properties:
@@ -2793,6 +2855,7 @@ components:
           type: string
     VersionedComponentId:
       type: object
+      title: VersionedComponentId
       required:
       - componentId
       - version
@@ -2805,6 +2868,7 @@ components:
           format: uint64
     VersionedName:
       type: object
+      title: VersionedName
       required:
       - name
       - version
@@ -2815,6 +2879,7 @@ components:
           type: string
     WasmRpcTarget:
       type: object
+      title: WasmRpcTarget
       required:
       - interfaceName
       - componentName

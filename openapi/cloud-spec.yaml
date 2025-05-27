@@ -2292,6 +2292,7 @@ components:
   schemas:
     Account:
       type: object
+      title: Account
       required:
       - id
       - name
@@ -2309,6 +2310,7 @@ components:
           format: uuid
     AccountData:
       type: object
+      title: AccountData
       required:
       - name
       - email
@@ -2319,6 +2321,7 @@ components:
           type: string
     AccountSummary:
       type: object
+      title: AccountSummary
       required:
       - id
       - name
@@ -2344,6 +2347,7 @@ components:
           format: date-time
     BatchPluginInstallationUpdates:
       type: object
+      title: BatchPluginInstallationUpdates
       required:
       - actions
       properties:
@@ -2353,6 +2357,7 @@ components:
             $ref: '#/components/schemas/PluginInstallationAction'
     BatchUpdateResourceLimits:
       type: object
+      title: BatchUpdateResourceLimits
       required:
       - updates
       properties:
@@ -2363,6 +2368,7 @@ components:
             format: int64
     CreateTokenDTO:
       type: object
+      title: CreateTokenDTO
       required:
       - expiresAt
       properties:
@@ -2371,18 +2377,25 @@ components:
           format: date-time
     DeleteAccountResponse:
       type: object
+      title: DeleteAccountResponse
     DeleteGrantResponse:
       type: object
+      title: DeleteGrantResponse
     DeleteProjectGrantResponse:
       type: object
+      title: DeleteProjectGrantResponse
     DeleteProjectResponse:
       type: object
+      title: DeleteProjectResponse
     DeleteTokenResponse:
       type: object
+      title: DeleteTokenResponse
     Empty:
       type: object
+      title: Empty
     ErrorBody:
       type: object
+      title: ErrorBody
       required:
       - error
       properties:
@@ -2390,6 +2403,7 @@ components:
           type: string
     ErrorsBody:
       type: object
+      title: ErrorsBody
       required:
       - errors
       properties:
@@ -2399,6 +2413,7 @@ components:
             type: string
     FindAccountsResponse:
       type: object
+      title: FindAccountsResponse
       required:
       - values
       properties:
@@ -2408,8 +2423,10 @@ components:
             $ref: '#/components/schemas/Account'
     HealthcheckResponse:
       type: object
+      title: HealthcheckResponse
     OAuth2Data:
       type: object
+      title: OAuth2Data
       required:
       - url
       - userCode
@@ -2427,8 +2444,10 @@ components:
           type: string
     PendingFlowCompletionResponse:
       type: object
+      title: PendingFlowCompletionResponse
     Plan:
       type: object
+      title: Plan
       required:
       - planId
       - planData
@@ -2440,6 +2459,7 @@ components:
           $ref: '#/components/schemas/PlanData'
     PlanData:
       type: object
+      title: PlanData
       required:
       - projectLimit
       - componentLimit
@@ -2468,6 +2488,7 @@ components:
           format: int32
     PluginInstallation:
       type: object
+      title: PluginInstallation
       required:
       - id
       - pluginName
@@ -2543,6 +2564,7 @@ components:
       - $ref: '#/components/schemas/PluginUninstallation'
     PluginInstallationCreation:
       type: object
+      title: PluginInstallationCreation
       required:
       - name
       - version
@@ -2563,6 +2585,7 @@ components:
             type: string
     PluginInstallationUpdate:
       type: object
+      title: PluginInstallationUpdate
       required:
       - priority
       - parameters
@@ -2576,6 +2599,7 @@ components:
             type: string
     PluginInstallationUpdateWithId:
       type: object
+      title: PluginInstallationUpdateWithId
       required:
       - installationId
       - priority
@@ -2593,6 +2617,7 @@ components:
             type: string
     PluginUninstallation:
       type: object
+      title: PluginUninstallation
       required:
       - installationId
       properties:
@@ -2601,6 +2626,7 @@ components:
           format: uuid
     Project:
       type: object
+      title: Project
       required:
       - projectId
       - projectData
@@ -2612,6 +2638,7 @@ components:
           $ref: '#/components/schemas/ProjectData'
     ProjectActions:
       type: object
+      title: ProjectActions
       required:
       - actions
       properties:
@@ -2621,6 +2648,7 @@ components:
             $ref: '#/components/schemas/ProjectPermisison'
     ProjectData:
       type: object
+      title: ProjectData
       required:
       - name
       - ownerAccountId
@@ -2640,6 +2668,7 @@ components:
           $ref: '#/components/schemas/ProjectType'
     ProjectDataRequest:
       type: object
+      title: ProjectDataRequest
       required:
       - name
       - ownerAccountId
@@ -2653,6 +2682,7 @@ components:
           type: string
     ProjectGrant:
       type: object
+      title: ProjectGrant
       required:
       - id
       - data
@@ -2664,6 +2694,7 @@ components:
           $ref: '#/components/schemas/ProjectGrantData'
     ProjectGrantData:
       type: object
+      title: ProjectGrantData
       required:
       - granteeAccountId
       - grantorProjectId
@@ -2679,6 +2710,7 @@ components:
           format: uuid
     ProjectGrantDataRequest:
       type: object
+      title: ProjectGrantDataRequest
       required:
       - projectActions
       properties:
@@ -2726,6 +2758,7 @@ components:
       - DeleteApiDomain
     ProjectPolicy:
       type: object
+      title: ProjectPolicy
       required:
       - id
       - name
@@ -2740,6 +2773,7 @@ components:
           $ref: '#/components/schemas/ProjectActions'
     ProjectPolicyData:
       type: object
+      title: ProjectPolicyData
       required:
       - name
       - projectActions
@@ -2755,6 +2789,7 @@ components:
       - NonDefault
     ResourceLimits:
       type: object
+      title: ResourceLimits
       required:
       - availableFuel
       - maxMemoryPerWorker
@@ -2772,6 +2807,7 @@ components:
       - MarketingAdmin
     Token:
       type: object
+      title: Token
       required:
       - id
       - accountId
@@ -2791,6 +2827,7 @@ components:
           format: date-time
     TokenSecret:
       type: object
+      title: TokenSecret
       required:
       - value
       properties:
@@ -2799,6 +2836,7 @@ components:
           format: uuid
     UnsafeToken:
       type: object
+      title: UnsafeToken
       required:
       - data
       - secret
@@ -2809,8 +2847,10 @@ components:
           $ref: '#/components/schemas/TokenSecret'
     UpdateResourceLimitsResponse:
       type: object
+      title: UpdateResourceLimitsResponse
     VersionInfo:
       type: object
+      title: VersionInfo
       required:
       - version
       properties:
@@ -2818,6 +2858,7 @@ components:
           type: string
     WebFlowAuthorizeUrlResponse:
       type: object
+      title: WebFlowAuthorizeUrlResponse
       required:
       - url
       - state
@@ -2828,6 +2869,7 @@ components:
           type: string
     WebFlowCallbackSuccessResponse:
       type: object
+      title: WebFlowCallbackSuccessResponse
   securitySchemes:
     Cookie:
       type: apiKey

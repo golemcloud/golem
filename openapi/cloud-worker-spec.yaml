@@ -3070,6 +3070,7 @@ components:
   schemas:
     ActivatePluginParameters:
       type: object
+      title: ActivatePluginParameters
       required:
       - timestamp
       - plugin
@@ -3081,6 +3082,7 @@ components:
           $ref: '#/components/schemas/PluginInstallationDescription'
     ActivatePluginResponse:
       type: object
+      title: ActivatePluginResponse
     AnalysedResourceMode:
       type: string
       enum:
@@ -3402,6 +3404,7 @@ components:
       - $ref: '#/components/schemas/TypeVariant'
     ApiDefinitionInfo:
       type: object
+      title: ApiDefinitionInfo
       required:
       - id
       - version
@@ -3412,6 +3415,7 @@ components:
           type: string
     ApiDeployment:
       type: object
+      title: ApiDeployment
       required:
       - apiDefinitions
       - projectId
@@ -3431,6 +3435,7 @@ components:
           format: date-time
     ApiDeploymentRequest:
       type: object
+      title: ApiDeploymentRequest
       required:
       - apiDefinitions
       - projectId
@@ -3447,6 +3452,7 @@ components:
           $ref: '#/components/schemas/ApiSite'
     ApiDomain:
       type: object
+      title: ApiDomain
       required:
       - projectId
       - domainName
@@ -3466,6 +3472,7 @@ components:
           format: date-time
     ApiSite:
       type: object
+      title: ApiSite
       required:
       - host
       properties:
@@ -3475,6 +3482,7 @@ components:
           type: string
     CancelInvocationParameters:
       type: object
+      title: CancelInvocationParameters
       required:
       - timestamp
       - idempotencyKey
@@ -3486,6 +3494,7 @@ components:
           type: string
     CancelInvocationResponse:
       type: object
+      title: CancelInvocationResponse
       required:
       - canceled
       properties:
@@ -3493,6 +3502,7 @@ components:
           type: boolean
     Certificate:
       type: object
+      title: Certificate
       required:
       - id
       - projectId
@@ -3511,6 +3521,7 @@ components:
           format: date-time
     CertificateRequest:
       type: object
+      title: CertificateRequest
       required:
       - projectId
       - domainName
@@ -3528,6 +3539,7 @@ components:
           type: string
     ChangePersistenceLevelParameters:
       type: object
+      title: ChangePersistenceLevelParameters
       required:
       - timestamp
       - persistenceLevel
@@ -3539,6 +3551,7 @@ components:
           $ref: '#/components/schemas/PersistenceLevel'
     ChangeRetryPolicyParameters:
       type: object
+      title: ChangeRetryPolicyParameters
       required:
       - timestamp
       - newPolicy
@@ -3550,6 +3563,7 @@ components:
           $ref: '#/components/schemas/PublicRetryConfig'
     CompleteParameters:
       type: object
+      title: CompleteParameters
       required:
       - oplogIdx
       - data
@@ -3569,6 +3583,7 @@ components:
       - read-write
     CreateParameters:
       type: object
+      title: CreateParameters
       required:
       - timestamp
       - workerId
@@ -3612,6 +3627,7 @@ components:
             $ref: '#/components/schemas/PluginInstallationDescription'
     DeactivatePluginParameters:
       type: object
+      title: DeactivatePluginParameters
       required:
       - timestamp
       - plugin
@@ -3623,10 +3639,13 @@ components:
           $ref: '#/components/schemas/PluginInstallationDescription'
     DeactivatePluginResponse:
       type: object
+      title: DeactivatePluginResponse
     DeleteWorkerResponse:
       type: object
+      title: DeleteWorkerResponse
     DescribeResourceParameters:
       type: object
+      title: DescribeResourceParameters
       required:
       - timestamp
       - id
@@ -3647,6 +3666,7 @@ components:
             $ref: '#/components/schemas/ValueAndType'
     DomainRequest:
       type: object
+      title: DomainRequest
       required:
       - projectId
       - domainName
@@ -3658,8 +3678,10 @@ components:
           type: string
     Empty:
       type: object
+      title: Empty
     EndRegionParameters:
       type: object
+      title: EndRegionParameters
       required:
       - timestamp
       - beginIndex
@@ -3672,6 +3694,7 @@ components:
           format: uint64
     ErrorBody:
       type: object
+      title: ErrorBody
       required:
       - error
       properties:
@@ -3679,6 +3702,7 @@ components:
           type: string
     ErrorParameters:
       type: object
+      title: ErrorParameters
       required:
       - timestamp
       - error
@@ -3690,6 +3714,7 @@ components:
           type: string
     ErrorsBody:
       type: object
+      title: ErrorsBody
       required:
       - errors
       properties:
@@ -3699,6 +3724,7 @@ components:
             type: string
     ExportedFunctionCompletedParameters:
       type: object
+      title: ExportedFunctionCompletedParameters
       required:
       - timestamp
       - response
@@ -3714,6 +3740,7 @@ components:
           format: int64
     ExportedFunctionInvokedParameters:
       type: object
+      title: ExportedFunctionInvokedParameters
       required:
       - timestamp
       - functionName
@@ -3748,6 +3775,7 @@ components:
               $ref: '#/components/schemas/PublicSpanData'
     ExportedFunctionParameters:
       type: object
+      title: ExportedFunctionParameters
       required:
       - idempotencyKey
       - fullFunctionName
@@ -3777,6 +3805,7 @@ components:
               $ref: '#/components/schemas/PublicSpanData'
     FailedUpdate:
       type: object
+      title: FailedUpdate
       required:
       - timestamp
       - targetVersion
@@ -3791,6 +3820,7 @@ components:
           type: string
     FailedUpdateParameters:
       type: object
+      title: FailedUpdateParameters
       required:
       - timestamp
       - targetVersion
@@ -3814,6 +3844,7 @@ components:
       - Less
     FinishSpanParameters:
       type: object
+      title: FinishSpanParameters
       required:
       - timestamp
       - spanId
@@ -3825,6 +3856,7 @@ components:
           type: string
     FlatComponentFileSystemNode:
       type: object
+      title: FlatComponentFileSystemNode
       required:
       - name
       - lastModified
@@ -3849,6 +3881,7 @@ components:
       - file
     GatewayBindingComponent:
       type: object
+      title: GatewayBindingComponent
       required:
       - name
       properties:
@@ -3863,6 +3896,7 @@ components:
             During runtime, the actual version of the worker or the latest version (in case no worker was found) is used.
     GatewayBindingData:
       type: object
+      title: GatewayBindingData
       properties:
         bindingType:
           $ref: '#/components/schemas/GatewayBindingType'
@@ -3878,6 +3912,7 @@ components:
           type: string
     GatewayBindingResponseData:
       type: object
+      title: GatewayBindingResponseData
       properties:
         component:
           $ref: '#/components/schemas/ResolvedGatewayBindingComponent'
@@ -3910,6 +3945,7 @@ components:
       - cors-preflight
     GetFilesResponse:
       type: object
+      title: GetFilesResponse
       required:
       - nodes
       properties:
@@ -3919,6 +3955,7 @@ components:
             $ref: '#/components/schemas/FlatComponentFileSystemNode'
     GetOplogResponse:
       type: object
+      title: GetOplogResponse
       required:
       - entries
       - firstIndexInChunk
@@ -3994,6 +4031,7 @@ components:
           FileSystemError: '#/components/schemas/GolemError_GolemErrorFileSystemError'
     GolemErrorBody:
       type: object
+      title: GolemErrorBody
       required:
       - golemError
       properties:
@@ -4001,6 +4039,7 @@ components:
           $ref: '#/components/schemas/GolemError'
     GolemErrorComponentDownloadFailed:
       type: object
+      title: GolemErrorComponentDownloadFailed
       required:
       - componentId
       - reason
@@ -4011,6 +4050,7 @@ components:
           type: string
     GolemErrorComponentParseFailed:
       type: object
+      title: GolemErrorComponentParseFailed
       required:
       - componentId
       - reason
@@ -4021,6 +4061,7 @@ components:
           type: string
     GolemErrorFailedToResumeWorker:
       type: object
+      title: GolemErrorFailedToResumeWorker
       required:
       - workerId
       - reason
@@ -4031,6 +4072,7 @@ components:
           $ref: '#/components/schemas/GolemError'
     GolemErrorFileSystemError:
       type: object
+      title: GolemErrorFileSystemError
       required:
       - path
       - reason
@@ -4041,6 +4083,7 @@ components:
           type: string
     GolemErrorGetLatestVersionOfComponentFailed:
       type: object
+      title: GolemErrorGetLatestVersionOfComponentFailed
       required:
       - componentId
       - reason
@@ -4052,6 +4095,7 @@ components:
           type: string
     GolemErrorInitialComponentFileDownloadFailed:
       type: object
+      title: GolemErrorInitialComponentFileDownloadFailed
       required:
       - path
       - reason
@@ -4062,6 +4106,7 @@ components:
           type: string
     GolemErrorInterrupted:
       type: object
+      title: GolemErrorInterrupted
       required:
       - recoverImmediately
       properties:
@@ -4069,8 +4114,10 @@ components:
           type: boolean
     GolemErrorInvalidAccount:
       type: object
+      title: GolemErrorInvalidAccount
     GolemErrorInvalidRequest:
       type: object
+      title: GolemErrorInvalidRequest
       required:
       - details
       properties:
@@ -4078,6 +4125,7 @@ components:
           type: string
     GolemErrorInvalidShardId:
       type: object
+      title: GolemErrorInvalidShardId
       required:
       - shardId
       - shardIds
@@ -4090,8 +4138,10 @@ components:
             $ref: '#/components/schemas/ShardId'
     GolemErrorNoValueInMessage:
       type: object
+      title: GolemErrorNoValueInMessage
     GolemErrorParamTypeMismatch:
       type: object
+      title: GolemErrorParamTypeMismatch
       required:
       - details
       properties:
@@ -4099,8 +4149,10 @@ components:
           type: string
     GolemErrorPreviousInvocationExited:
       type: object
+      title: GolemErrorPreviousInvocationExited
     GolemErrorPreviousInvocationFailed:
       type: object
+      title: GolemErrorPreviousInvocationFailed
       required:
       - details
       properties:
@@ -4108,6 +4160,7 @@ components:
           type: string
     GolemErrorPromiseAlreadyCompleted:
       type: object
+      title: GolemErrorPromiseAlreadyCompleted
       required:
       - promiseId
       properties:
@@ -4115,6 +4168,7 @@ components:
           $ref: '#/components/schemas/PromiseId'
     GolemErrorPromiseDropped:
       type: object
+      title: GolemErrorPromiseDropped
       required:
       - promiseId
       properties:
@@ -4122,6 +4176,7 @@ components:
           $ref: '#/components/schemas/PromiseId'
     GolemErrorPromiseNotFound:
       type: object
+      title: GolemErrorPromiseNotFound
       required:
       - promiseId
       properties:
@@ -4129,6 +4184,7 @@ components:
           $ref: '#/components/schemas/PromiseId'
     GolemErrorRuntimeError:
       type: object
+      title: GolemErrorRuntimeError
       required:
       - details
       properties:
@@ -4136,8 +4192,10 @@ components:
           type: string
     GolemErrorShardingNotReady:
       type: object
+      title: GolemErrorShardingNotReady
     GolemErrorUnexpectedOplogEntry:
       type: object
+      title: GolemErrorUnexpectedOplogEntry
       required:
       - expected
       - got
@@ -4148,6 +4206,7 @@ components:
           type: string
     GolemErrorUnknown:
       type: object
+      title: GolemErrorUnknown
       required:
       - details
       properties:
@@ -4155,6 +4214,7 @@ components:
           type: string
     GolemErrorValueMismatch:
       type: object
+      title: GolemErrorValueMismatch
       required:
       - details
       properties:
@@ -4162,6 +4222,7 @@ components:
           type: string
     GolemErrorWorkerAlreadyExists:
       type: object
+      title: GolemErrorWorkerAlreadyExists
       required:
       - workerId
       properties:
@@ -4169,6 +4230,7 @@ components:
           $ref: '#/components/schemas/WorkerId'
     GolemErrorWorkerCreationFailed:
       type: object
+      title: GolemErrorWorkerCreationFailed
       required:
       - workerId
       - details
@@ -4179,6 +4241,7 @@ components:
           type: string
     GolemErrorWorkerNotFound:
       type: object
+      title: GolemErrorWorkerNotFound
       required:
       - workerId
       properties:
@@ -4486,6 +4549,7 @@ components:
       - $ref: '#/components/schemas/GolemErrorWorkerNotFound'
     GrowMemoryParameters:
       type: object
+      title: GrowMemoryParameters
       required:
       - timestamp
       - delta
@@ -4498,8 +4562,10 @@ components:
           format: uint64
     HealthcheckResponse:
       type: object
+      title: HealthcheckResponse
     HttpApiDefinitionRequest:
       type: object
+      title: HttpApiDefinitionRequest
       required:
       - id
       - version
@@ -4522,6 +4588,7 @@ components:
           type: boolean
     HttpApiDefinitionResponseData:
       type: object
+      title: HttpApiDefinitionResponseData
       required:
       - id
       - version
@@ -4543,6 +4610,7 @@ components:
           format: date-time
     HttpCors:
       type: object
+      title: HttpCors
       required:
       - allowOrigin
       - allowMethods
@@ -4563,6 +4631,7 @@ components:
           format: uint64
     ImportedFunctionInvokedParameters:
       type: object
+      title: ImportedFunctionInvokedParameters
       required:
       - timestamp
       - functionName
@@ -4583,6 +4652,7 @@ components:
           $ref: '#/components/schemas/PublicDurableFunctionType'
     IndexedWorkerMetadata:
       type: object
+      title: IndexedWorkerMetadata
       required:
       - resourceName
       - resourceParams
@@ -4595,8 +4665,10 @@ components:
             type: string
     InterruptResponse:
       type: object
+      title: InterruptResponse
     InvokeParameters:
       type: object
+      title: InvokeParameters
       required:
       - params
       properties:
@@ -4606,8 +4678,10 @@ components:
             $ref: '#/components/schemas/ValueAndOptionalType'
     InvokeResponse:
       type: object
+      title: InvokeResponse
     InvokeResult:
       type: object
+      title: InvokeResult
       required:
       - result
       properties:
@@ -4615,6 +4689,7 @@ components:
           $ref: '#/components/schemas/TypeAnnotatedValue'
     JumpParameters:
       type: object
+      title: JumpParameters
       required:
       - timestamp
       - jump
@@ -4638,6 +4713,7 @@ components:
       - Critical
     LogParameters:
       type: object
+      title: LogParameters
       required:
       - timestamp
       - level
@@ -4655,6 +4731,7 @@ components:
           type: string
     ManualUpdateParameters:
       type: object
+      title: ManualUpdateParameters
       required:
       - targetVersion
       properties:
@@ -4663,6 +4740,7 @@ components:
           format: uint64
     MessageBody:
       type: object
+      title: MessageBody
       required:
       - message
       properties:
@@ -4670,6 +4748,7 @@ components:
           type: string
     MessagesErrorsBody:
       type: object
+      title: MessagesErrorsBody
       required:
       - errors
       properties:
@@ -4691,6 +4770,7 @@ components:
       - Head
     NameOptionTypePair:
       type: object
+      title: NameOptionTypePair
       required:
       - name
       properties:
@@ -4700,6 +4780,7 @@ components:
           $ref: '#/components/schemas/AnalysedType'
     NameTypePair:
       type: object
+      title: NameTypePair
       required:
       - name
       - typ
@@ -4710,6 +4791,7 @@ components:
           $ref: '#/components/schemas/AnalysedType'
     OplogCursor:
       type: object
+      title: OplogCursor
       required:
       - nextOplogIndex
       - currentComponentVersion
@@ -4722,6 +4804,7 @@ components:
           format: uint64
     OplogRegion:
       type: object
+      title: OplogRegion
       required:
       - start
       - end
@@ -4734,6 +4817,7 @@ components:
           format: uint64
     PendingUpdate:
       type: object
+      title: PendingUpdate
       required:
       - timestamp
       - targetVersion
@@ -4746,6 +4830,7 @@ components:
           format: uint64
     PendingUpdateParameters:
       type: object
+      title: PendingUpdateParameters
       required:
       - timestamp
       - target_version
@@ -4761,6 +4846,7 @@ components:
           $ref: '#/components/schemas/PublicUpdateDescription'
     PendingWorkerInvocationParameters:
       type: object
+      title: PendingWorkerInvocationParameters
       required:
       - timestamp
       - invocation
@@ -4778,6 +4864,7 @@ components:
       - Smart
     PluginInstallationDescription:
       type: object
+      title: PluginInstallationDescription
       required:
       - installationId
       - pluginName
@@ -4800,6 +4887,7 @@ components:
             type: string
     PromiseId:
       type: object
+      title: PromiseId
       required:
       - workerId
       - oplogIdx
@@ -4818,6 +4906,7 @@ components:
       - Gitlab
     PublicAttribute:
       type: object
+      title: PublicAttribute
       required:
       - key
       - value
@@ -4888,6 +4977,7 @@ components:
       - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
     PublicExternalSpanData:
       type: object
+      title: PublicExternalSpanData
       required:
       - spanId
       properties:
@@ -4895,6 +4985,7 @@ components:
           type: string
     PublicLocalSpanData:
       type: object
+      title: PublicLocalSpanData
       required:
       - spanId
       - start
@@ -5000,6 +5091,7 @@ components:
           ChangePersistenceLevel: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
     PublicOplogEntryWithIndex:
       type: object
+      title: PublicOplogEntryWithIndex
       required:
       - oplogIndex
       - entry
@@ -5010,6 +5102,15 @@ components:
         entry:
           $ref: '#/components/schemas/PublicOplogEntry'
     PublicOplogEntry_ActivatePluginParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5022,6 +5123,15 @@ components:
             example: ActivatePlugin
       - $ref: '#/components/schemas/ActivatePluginParameters'
     PublicOplogEntry_CancelInvocationParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5034,6 +5144,15 @@ components:
             example: CancelInvocation
       - $ref: '#/components/schemas/CancelInvocationParameters'
     PublicOplogEntry_ChangePersistenceLevelParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5046,6 +5165,15 @@ components:
             example: ChangePersistenceLevel
       - $ref: '#/components/schemas/ChangePersistenceLevelParameters'
     PublicOplogEntry_ChangeRetryPolicyParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5058,6 +5186,15 @@ components:
             example: ChangeRetryPolicy
       - $ref: '#/components/schemas/ChangeRetryPolicyParameters'
     PublicOplogEntry_CreateParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5070,6 +5207,15 @@ components:
             example: Create
       - $ref: '#/components/schemas/CreateParameters'
     PublicOplogEntry_DeactivatePluginParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5082,6 +5228,15 @@ components:
             example: DeactivatePlugin
       - $ref: '#/components/schemas/DeactivatePluginParameters'
     PublicOplogEntry_DescribeResourceParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5094,6 +5249,15 @@ components:
             example: DescribeResource
       - $ref: '#/components/schemas/DescribeResourceParameters'
     PublicOplogEntry_EndRegionParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5106,6 +5270,15 @@ components:
             example: EndRemoteWrite
       - $ref: '#/components/schemas/EndRegionParameters'
     PublicOplogEntry_ErrorParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5118,6 +5291,15 @@ components:
             example: Error
       - $ref: '#/components/schemas/ErrorParameters'
     PublicOplogEntry_ExportedFunctionCompletedParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5130,6 +5312,15 @@ components:
             example: ExportedFunctionCompleted
       - $ref: '#/components/schemas/ExportedFunctionCompletedParameters'
     PublicOplogEntry_ExportedFunctionInvokedParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5142,6 +5333,15 @@ components:
             example: ExportedFunctionInvoked
       - $ref: '#/components/schemas/ExportedFunctionInvokedParameters'
     PublicOplogEntry_FailedUpdateParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5154,6 +5354,15 @@ components:
             example: FailedUpdate
       - $ref: '#/components/schemas/FailedUpdateParameters'
     PublicOplogEntry_FinishSpanParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5166,6 +5375,15 @@ components:
             example: FinishSpan
       - $ref: '#/components/schemas/FinishSpanParameters'
     PublicOplogEntry_GrowMemoryParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5178,6 +5396,15 @@ components:
             example: GrowMemory
       - $ref: '#/components/schemas/GrowMemoryParameters'
     PublicOplogEntry_ImportedFunctionInvokedParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5190,6 +5417,15 @@ components:
             example: ImportedFunctionInvoked
       - $ref: '#/components/schemas/ImportedFunctionInvokedParameters'
     PublicOplogEntry_JumpParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5202,6 +5438,15 @@ components:
             example: Jump
       - $ref: '#/components/schemas/JumpParameters'
     PublicOplogEntry_LogParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5214,6 +5459,15 @@ components:
             example: Log
       - $ref: '#/components/schemas/LogParameters'
     PublicOplogEntry_PendingUpdateParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5226,6 +5480,15 @@ components:
             example: PendingUpdate
       - $ref: '#/components/schemas/PendingUpdateParameters'
     PublicOplogEntry_PendingWorkerInvocationParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5238,6 +5501,15 @@ components:
             example: PendingWorkerInvocation
       - $ref: '#/components/schemas/PendingWorkerInvocationParameters'
     PublicOplogEntry_ResourceParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5250,6 +5522,15 @@ components:
             example: DropResource
       - $ref: '#/components/schemas/ResourceParameters'
     PublicOplogEntry_RevertParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5262,6 +5543,15 @@ components:
             example: Revert
       - $ref: '#/components/schemas/RevertParameters'
     PublicOplogEntry_SetSpanAttributeParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5274,6 +5564,15 @@ components:
             example: SetSpanAttribute
       - $ref: '#/components/schemas/SetSpanAttributeParameters'
     PublicOplogEntry_StartSpanParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5286,6 +5585,15 @@ components:
             example: StartSpan
       - $ref: '#/components/schemas/StartSpanParameters'
     PublicOplogEntry_SuccessfulUpdateParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5298,6 +5606,15 @@ components:
             example: SuccessfulUpdate
       - $ref: '#/components/schemas/SuccessfulUpdateParameters'
     PublicOplogEntry_TimestampParameter:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
       allOf:
       - type: object
         required:
@@ -5311,6 +5628,7 @@ components:
       - $ref: '#/components/schemas/TimestampParameter'
     PublicRetryConfig:
       type: object
+      title: PublicRetryConfig
       required:
       - maxAttempts
       - minDelay
@@ -5436,6 +5754,7 @@ components:
       - $ref: '#/components/schemas/ManualUpdateParameters'
     ResolvedGatewayBindingComponent:
       type: object
+      title: ResolvedGatewayBindingComponent
       required:
       - name
       - version
@@ -5447,6 +5766,7 @@ components:
           format: uint64
     ResourceMetadata:
       type: object
+      title: ResourceMetadata
       required:
       - createdAt
       properties:
@@ -5457,6 +5777,7 @@ components:
           $ref: '#/components/schemas/IndexedWorkerMetadata'
     ResourceParameters:
       type: object
+      title: ResourceParameters
       required:
       - timestamp
       - id
@@ -5469,8 +5790,10 @@ components:
           format: uint64
     ResumeResponse:
       type: object
+      title: ResumeResponse
     RevertLastInvocations:
       type: object
+      title: RevertLastInvocations
       required:
       - numberOfInvocations
       properties:
@@ -5479,6 +5802,7 @@ components:
           format: uint64
     RevertParameters:
       type: object
+      title: RevertParameters
       required:
       - timestamp
       - droppedRegion
@@ -5490,6 +5814,7 @@ components:
           $ref: '#/components/schemas/OplogRegion'
     RevertToOplogIndex:
       type: object
+      title: RevertToOplogIndex
       required:
       - lastOplogIndex
       properties:
@@ -5498,6 +5823,7 @@ components:
           format: uint64
     RevertWorkerResponse:
       type: object
+      title: RevertWorkerResponse
     RevertWorkerTarget:
       type: object
       oneOf:
@@ -5534,6 +5860,7 @@ components:
       - $ref: '#/components/schemas/RevertToOplogIndex'
     RibInputTypeInfo:
       type: object
+      title: RibInputTypeInfo
       required:
       - types
       properties:
@@ -5543,6 +5870,7 @@ components:
             $ref: '#/components/schemas/AnalysedType'
     RibOutputTypeInfo:
       type: object
+      title: RibOutputTypeInfo
       required:
       - analysedType
       properties:
@@ -5550,6 +5878,7 @@ components:
           $ref: '#/components/schemas/AnalysedType'
     RouteRequestData:
       type: object
+      title: RouteRequestData
       required:
       - method
       - path
@@ -5565,6 +5894,7 @@ components:
           type: string
     RouteResponseData:
       type: object
+      title: RouteResponseData
       required:
       - method
       - path
@@ -5580,6 +5910,7 @@ components:
           $ref: '#/components/schemas/GatewayBindingResponseData'
     ScanCursor:
       type: object
+      title: ScanCursor
       required:
       - cursor
       - layer
@@ -5592,6 +5923,7 @@ components:
           format: uint64
     SecuritySchemeData:
       type: object
+      title: SecuritySchemeData
       required:
       - providerType
       - schemeIdentifier
@@ -5616,6 +5948,7 @@ components:
             type: string
     SetSpanAttributeParameters:
       type: object
+      title: SetSpanAttributeParameters
       required:
       - timestamp
       - spanId
@@ -5633,6 +5966,7 @@ components:
           $ref: '#/components/schemas/PublicAttributeValue'
     ShardId:
       type: object
+      title: ShardId
       required:
       - value
       properties:
@@ -5641,6 +5975,7 @@ components:
           format: int64
     SnapshotBasedUpdateParameters:
       type: object
+      title: SnapshotBasedUpdateParameters
       required:
       - payload
       properties:
@@ -5651,6 +5986,7 @@ components:
             format: uint8
     StartSpanParameters:
       type: object
+      title: StartSpanParameters
       required:
       - timestamp
       - spanId
@@ -5671,6 +6007,7 @@ components:
             $ref: '#/components/schemas/PublicAttribute'
     StringAttributeValue:
       type: object
+      title: StringAttributeValue
       required:
       - value
       properties:
@@ -5685,6 +6022,7 @@ components:
       - NotLike
     SuccessfulUpdate:
       type: object
+      title: SuccessfulUpdate
       required:
       - timestamp
       - targetVersion
@@ -5697,6 +6035,7 @@ components:
           format: uint64
     SuccessfulUpdateParameters:
       type: object
+      title: SuccessfulUpdateParameters
       required:
       - timestamp
       - target_version
@@ -5718,6 +6057,7 @@ components:
             $ref: '#/components/schemas/PluginInstallationDescription'
     TimestampParameter:
       type: object
+      title: TimestampParameter
       required:
       - timestamp
       properties:
@@ -5735,10 +6075,13 @@ components:
         value: {}
     TypeBool:
       type: object
+      title: TypeBool
     TypeChr:
       type: object
+      title: TypeChr
     TypeEnum:
       type: object
+      title: TypeEnum
       required:
       - cases
       properties:
@@ -5748,10 +6091,13 @@ components:
             type: string
     TypeF32:
       type: object
+      title: TypeF32
     TypeF64:
       type: object
+      title: TypeF64
     TypeFlags:
       type: object
+      title: TypeFlags
       required:
       - names
       properties:
@@ -5761,6 +6107,7 @@ components:
             type: string
     TypeHandle:
       type: object
+      title: TypeHandle
       required:
       - resource_id
       - mode
@@ -5772,6 +6119,7 @@ components:
           $ref: '#/components/schemas/AnalysedResourceMode'
     TypeList:
       type: object
+      title: TypeList
       required:
       - inner
       properties:
@@ -5779,6 +6127,7 @@ components:
           $ref: '#/components/schemas/AnalysedType'
     TypeOption:
       type: object
+      title: TypeOption
       required:
       - inner
       properties:
@@ -5786,6 +6135,7 @@ components:
           $ref: '#/components/schemas/AnalysedType'
     TypeRecord:
       type: object
+      title: TypeRecord
       required:
       - fields
       properties:
@@ -5795,6 +6145,7 @@ components:
             $ref: '#/components/schemas/NameTypePair'
     TypeResult:
       type: object
+      title: TypeResult
       properties:
         ok:
           $ref: '#/components/schemas/AnalysedType'
@@ -5802,16 +6153,22 @@ components:
           $ref: '#/components/schemas/AnalysedType'
     TypeS16:
       type: object
+      title: TypeS16
     TypeS32:
       type: object
+      title: TypeS32
     TypeS64:
       type: object
+      title: TypeS64
     TypeS8:
       type: object
+      title: TypeS8
     TypeStr:
       type: object
+      title: TypeStr
     TypeTuple:
       type: object
+      title: TypeTuple
       required:
       - items
       properties:
@@ -5821,14 +6178,19 @@ components:
             $ref: '#/components/schemas/AnalysedType'
     TypeU16:
       type: object
+      title: TypeU16
     TypeU32:
       type: object
+      title: TypeU32
     TypeU64:
       type: object
+      title: TypeU64
     TypeU8:
       type: object
+      title: TypeU8
     TypeVariant:
       type: object
+      title: TypeVariant
       required:
       - cases
       properties:
@@ -5886,6 +6248,7 @@ components:
       - $ref: '#/components/schemas/SuccessfulUpdate'
     UpdateWorkerRequest:
       type: object
+      title: UpdateWorkerRequest
       required:
       - mode
       - targetVersion
@@ -5897,8 +6260,10 @@ components:
           format: uint64
     UpdateWorkerResponse:
       type: object
+      title: UpdateWorkerResponse
     ValidationErrorsBody:
       type: object
+      title: ValidationErrorsBody
       required:
       - errors
       properties:
@@ -5925,6 +6290,7 @@ components:
         value: {}
     VersionInfo:
       type: object
+      title: VersionInfo
       required:
       - version
       properties:
@@ -5932,6 +6298,7 @@ components:
           type: string
     VersionedComponentId:
       type: object
+      title: VersionedComponentId
       required:
       - componentId
       - version
@@ -5944,6 +6311,7 @@ components:
           format: uint64
     WorkerAndFilter:
       type: object
+      title: WorkerAndFilter
       required:
       - filters
       properties:
@@ -5953,6 +6321,7 @@ components:
             $ref: '#/components/schemas/WorkerFilter'
     WorkerCreatedAtFilter:
       type: object
+      title: WorkerCreatedAtFilter
       required:
       - comparator
       - value
@@ -5964,6 +6333,7 @@ components:
           format: date-time
     WorkerCreationRequest:
       type: object
+      title: WorkerCreationRequest
       required:
       - name
       - args
@@ -5981,6 +6351,7 @@ components:
             type: string
     WorkerCreationResponse:
       type: object
+      title: WorkerCreationResponse
       required:
       - workerId
       - componentVersion
@@ -5992,6 +6363,7 @@ components:
           format: uint64
     WorkerEnvFilter:
       type: object
+      title: WorkerEnvFilter
       required:
       - name
       - comparator
@@ -6123,6 +6495,7 @@ components:
       - $ref: '#/components/schemas/WorkerVersionFilter'
     WorkerId:
       type: object
+      title: WorkerId
       required:
       - componentId
       - workerName
@@ -6134,6 +6507,7 @@ components:
           type: string
     WorkerMetadata:
       type: object
+      title: WorkerMetadata
       required:
       - workerId
       - accountId
@@ -6199,6 +6573,7 @@ components:
             format: uuid
     WorkerNameFilter:
       type: object
+      title: WorkerNameFilter
       required:
       - comparator
       - value
@@ -6209,6 +6584,7 @@ components:
           type: string
     WorkerNotFilter:
       type: object
+      title: WorkerNotFilter
       required:
       - filter
       properties:
@@ -6216,6 +6592,7 @@ components:
           $ref: '#/components/schemas/WorkerFilter'
     WorkerOrFilter:
       type: object
+      title: WorkerOrFilter
       required:
       - filters
       properties:
@@ -6274,6 +6651,7 @@ components:
       - Exited
     WorkerStatusFilter:
       type: object
+      title: WorkerStatusFilter
       required:
       - comparator
       - value
@@ -6289,6 +6667,7 @@ components:
       - Manual
     WorkerVersionFilter:
       type: object
+      title: WorkerVersionFilter
       required:
       - comparator
       - value
@@ -6300,6 +6679,7 @@ components:
           format: uint64
     WorkersMetadataRequest:
       type: object
+      title: WorkersMetadataRequest
       properties:
         filter:
           $ref: '#/components/schemas/WorkerFilter'
@@ -6312,6 +6692,7 @@ components:
           type: boolean
     WorkersMetadataResponse:
       type: object
+      title: WorkersMetadataResponse
       required:
       - workers
       properties:
@@ -6323,6 +6704,7 @@ components:
           $ref: '#/components/schemas/ScanCursor'
     WriteRemoteBatchedParameters:
       type: object
+      title: WriteRemoteBatchedParameters
       properties:
         index:
           type: integer
