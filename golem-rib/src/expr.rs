@@ -1120,15 +1120,11 @@ impl Expr {
         let mut visitor = ExprVisitor::bottom_up(self);
 
         while let Some(expr) = visitor.pop_front() {
-            match expr {
-                expr => {
-                    let source_location = expr.source_span();
-                    let origin = TypeOrigin::OriginatedAt(source_location.clone());
-                    let inferred_type = expr.inferred_type();
-                    let origin = inferred_type.add_origin(origin);
-                    expr.with_inferred_type_mut(origin);
-                }
-            }
+            let source_location = expr.source_span();
+            let origin = TypeOrigin::OriginatedAt(source_location.clone());
+            let inferred_type = expr.inferred_type();
+            let origin = inferred_type.add_origin(origin);
+            expr.with_inferred_type_mut(origin);
         }
     }
 
