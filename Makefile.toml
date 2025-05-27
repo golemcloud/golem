@@ -361,6 +361,9 @@ dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package golem-service-base --test integration -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package cloud-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package cloud-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package cloud-debugging-service --test 'integration' -- --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group5]
@@ -415,8 +418,14 @@ description = "Generates openapi spec from the code and checks if it is the same
 dependencies = [
     "build-worker-service",
     "build-component-service",
+    "build-cloud-worker-service",
+    "build-cloud-component-service",
+    "build-cloud-service",
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
+    "generate-cloud-worker-service-openapi",
+    "generate-cloud-component-service-openapi",
+    "generate-cloud-service-openapi",
     "merge-openapi",
     "diff-openapi",
 ]
@@ -435,6 +444,38 @@ script = '''
       diff openapi/golem-service.yaml target/golem-service.yaml
       exit 1
   fi
+  if diff openapi/cloud-spec.yaml target/cloud-spec.yaml  >/dev/null 2>&1
+    then
+      echo "Latest Golem OpenAPI spec version detected."
+    else
+      echo "openapi/cloud-spec.yaml is not the same as produced by cloud-service." 1>&2
+      echo "Run cargo make generate-openapi to generate new spec." 1>&2
+      exit 1
+  fi
+  if diff openapi/cloud-worker-spec.yaml target/cloud-worker-spec.yaml  >/dev/null 2>&1
+    then
+      echo "Latest Golem OpenAPI spec version detected."
+    else
+      echo "openapi/cloud-worker-spec.yaml is not the same as produced by cloud-worker-service." 1>&2
+      echo "Run cargo make generate-openapi to generate new spec." 1>&2
+      exit 1
+  fi
+  if diff openapi/cloud-component-spec.yaml target/cloud-component-spec.yaml  >/dev/null 2>&1
+    then
+      echo "Latest Golem OpenAPI spec version detected."
+    else
+      echo "openapi/cloud-component-spec.yaml is not the same as produced by cloud-component-service." 1>&2
+      echo "Run cargo make generate-openapi to generate new spec." 1>&2
+      exit 1
+  fi
+  if diff openapi/golem-cloud-service.yaml target/golem-cloud-service.yaml  >/dev/null 2>&1
+    then
+      echo "Latest Golem OpenAPI spec version detected."
+    else
+      echo "openapi/golem-cloud-service.yaml is not the same as produced by golem-cloud-service.yaml." 1>&2
+      echo "Run cargo make generate-openapi to generate new spec." 1>&2
+      exit 1
+  fi
 '''
 
 ## ** GENERATE-OPENAPI **
@@ -442,8 +483,14 @@ script = '''
 dependencies = [
     "build-worker-service",
     "build-component-service",
+    "build-cloud-worker-service",
+    "build-cloud-component-service",
+    "build-cloud-service",
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
+    "generate-cloud-worker-service-openapi",
+    "generate-cloud-component-service-openapi",
+    "generate-cloud-service-openapi",
     "merge-openapi",
     "store-openapi",
 ]
@@ -465,7 +512,76 @@ mkdir -pv ../data
 ./golem-component-service --dump-openapi-yaml > ../golem-component-service.yaml
 '''
 
-[tasks.merge-openapi]
+[tasks.build-cloud-worker-service-non-ci]
+condition = { env_not_set = ["CI"] }
+run_task = "build-cloud-worker-service"
+
+[tasks.build-cloud-worker-service]
+description = "Builds cloud worker service"
+command = "cargo"
+args = ["build", "-p", "cloud-worker-service"]
+
+[tasks.generate-cloud-worker-service-openapi]
+description = "Generates openapi spec for cloud worker service"
+dependencies = ["build-cloud-worker-service-non-ci"]
+script = '''
+mkdir -pv ../data
+./target/debug/cloud-worker-service --dump-openapi-yaml > ./target/cloud-worker-spec.yaml
+'''
+
+[tasks.build-cloud-component-service-non-ci]
+condition = { env_not_set = ["CI"] }
+run_task = "build-cloud-component-service"
+
+[tasks.build-cloud-component-service]
+description = "Builds cloud component service"
+command = "cargo"
+args = ["build", "-p", "cloud-component-service"]
+
+[tasks.generate-cloud-component-service-openapi]
+description = "Generates openapi spec for cloud worker service"
+dependencies = ["build-cloud-component-service-non-ci"]
+script = '''
+mkdir -pv ../data
+./target/debug/cloud-component-service --dump-openapi-yaml > ./target/cloud-component-spec.yaml
+'''
+
+[tasks.build-cloud-service-non-ci]
+condition = { env_not_set = ["CI"] }
+run_task = "build-cloud-service"
+
+[tasks.build-cloud-service]
+description = "Builds cloud service"
+command = "cargo"
+args = ["build", "-p", "cloud-service"]
+
+[tasks.generate-cloud-service-openapi]
+description = "Generates openapi spec for cloud service"
+dependencies = ["build-cloud-service-non-ci"]
+script = '''
+mkdir -pv ../data
+./target/debug/cloud-service --dump-openapi-yaml > ./target/cloud-spec.yaml
+'''
+
+[tasks.merge-cloud-openapi]
+install_crate = { crate_name = "golem-openapi-client-generator", version = "=0.0.16" }
+dependencies = [
+    "generate-cloud-worker-service-openapi",
+    "generate-cloud-component-service-openapi",
+    "generate-cloud-service-openapi",
+]
+command = "golem-openapi-client-generator"
+args = [
+    "merge",
+    "--spec-yaml",
+    "./target/cloud-component-spec.yaml",
+    "./target/cloud-worker-spec.yaml",
+    "./target/cloud-spec.yaml",
+    "--output-yaml",
+    "./target/golem-cloud-service.yaml",
+]
+
+[tasks.merge-oss-openapi]
 install_crate = { crate_name = "golem-openapi-client-generator", version = "=0.0.16" }
 dependencies = [
     "generate-worker-service-openapi",
@@ -481,11 +597,19 @@ args = [
     "./target/golem-service.yaml",
 ]
 
+[tasks.merge-openapi]
+dependencies = ["merge-oss-openapi", "merge-cloud-openapi"]
+
 [tasks.store-openapi]
 description = "Stores the generated openapi spec in the openapi directory"
 dependencies = ["merge-openapi"]
-command = "cp"
-args = ["-v", "./target/golem-service.yaml", "./openapi/golem-service.yaml"]
+script = [
+    "cp -v ./target/golem-service.yaml ./openapi/golem-service.yaml",
+    "cp -v ./target/cloud-spec.yaml ./openapi/",
+    "cp -v ./target/cloud-component-spec.yaml ./openapi/",
+    "cp -v ./target/cloud-worker-spec.yaml ./openapi/",
+    "cp -v ./target/golem-cloud-service.yaml ./openapi/",
+]
 
 ## ** PUBLISH **
 [tasks.publish]
@@ -501,7 +625,8 @@ dependencies = [
     "publish-golem-client",
     "publish-golem-service-base",
     "publish-golem-test-framework",
-    "publish-golem-rib-repl"
+    "publish-golem-rib-repl",
+    "publish-golem-cloud-client",
 ]
 
 [tasks.set-version]
@@ -635,12 +760,17 @@ args = [
 [tasks.publish-golem-rib-repl]
 description = "Publishes golem-rib package to crates.io"
 command = "cargo"
+args = ["publish", "-p", "golem-rib-repl", "--allow-dirty", "--no-verify"]
+
+[tasks.publish-golem-cloud-client]
+description = "Publishes golem-cloud-client package to crates.io"
+command = "cargo"
 args = [
     "publish",
     "-p",
-    "golem-rib-repl",
+    "golem-cloud-client",
+    "--all-features",
     "--allow-dirty",
-    "--no-verify",
 ]
 
 ## ** PACKAGE RELEASE **
@@ -784,6 +914,20 @@ export RUST_BACKTRACE=1
 ./target/debug/golem-worker-service --dump-config-default-env-var > golem-worker-service/config/worker-service.sample.env
 ./target/debug/worker-executor --dump-config-default-toml > golem-worker-executor/config/worker-executor.toml
 ./target/debug/worker-executor --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
+./target/debug/cloud-shard-manager --dump-config-default-toml > cloud-shard-manager/config/shard-manager.toml
+./target/debug/cloud-shard-manager --dump-config-default-env-var > cloud-shard-manager/config/shard-manager.sample.env
+./target/debug/cloud-component-compilation-service --dump-config-default-toml > cloud-component-compilation-service/config/component-compilation-service.toml
+./target/debug/cloud-component-compilation-service --dump-config-default-env-var > cloud-component-compilation-service/config/component-compilation-service.sample.env
+./target/debug/cloud-component-service --dump-config-default-toml > cloud-component-service/config/component-service.toml
+./target/debug/cloud-component-service --dump-config-default-env-var > cloud-component-service/config/component-service.sample.env
+./target/debug/cloud-worker-service --dump-config-default-toml > cloud-worker-service/config/worker-service.toml
+./target/debug/cloud-worker-service --dump-config-default-env-var > cloud-worker-service/config/worker-service.sample.env
+./target/debug/cloud-debugging-service --dump-config-default-toml > cloud-debugging-service/config/debug-worker-executor.toml
+./target/debug/cloud-debugging-service --dump-config-default-env-var > cloud-debugging-service/config/debug-worker-executor.sample.env
+./target/debug/cloud-worker-executor --dump-config-default-toml > cloud-worker-executor/config/worker-executor.toml
+./target/debug/cloud-worker-executor --dump-config-default-env-var > cloud-worker-executor/config/worker-executor.sample.env
+./target/debug/cloud-service --dump-config-default-toml > cloud-service/config/cloud-service.toml
+./target/debug/cloud-service --dump-config-default-env-var > cloud-service/config/cloud-service.sample.env
 '''
 
 ## ** CHECK CONFIGS **
@@ -803,7 +947,19 @@ git diff --exit-code \
     golem-worker-service/config/worker-service.toml \
     golem-worker-service/config/worker-service.sample.env \
     golem-worker-executor/config/worker-executor.toml \
-    golem-worker-executor/config/worker-executor.sample.env
+    golem-worker-executor/config/worker-executor.sample.env \
+    cloud-shard-manager/config/shard-manager.toml \
+    cloud-shard-manager/config/shard-manager.sample.env \
+    cloud-component-compilation-service/config/component-compilation-service.toml \
+    cloud-component-compilation-service/config/component-compilation-service.sample.env \
+    cloud-component-service/config/component-service.toml \
+    cloud-component-service/config/component-service.sample.env \
+    cloud-worker-service/config/worker-service.toml \
+    cloud-worker-service/config/worker-service.sample.env \
+    cloud-worker-executor/config/worker-executor.toml \
+    cloud-worker-executor/config/worker-executor.sample.env \
+    cloud-service/config/cloud-service.toml \
+    cloud-service/config/cloud-service.sample.env
 '''
 
 ## ** Elastic tasks **

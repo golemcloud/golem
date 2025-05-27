@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package golem.cloud.accountsummary.v1;
+
+import public "golem/common/empty.proto";
+import public "golem/cloud/accountsummary/v1/account_summary.proto";
+import public "golem/cloud/accountsummary/v1/account_summary_error.proto";
+
+service CloudAccountSummaryService {
+  rpc GetAccountCount (GetAccountCountRequest) returns (GetAccountCountResponse);
+  rpc GetAccounts (GetAccountsRequest) returns (GetAccountsResponse);
+}
+
+message GetAccountCountRequest {
+}
+
+message GetAccountCountResponse {
+  oneof result {
+    int64 success = 1;
+    golem.cloud.accountsummary.v1.AccountSummaryError error = 2;
+  }
+}
+
+message GetAccountsRequest {
+  int32 skip = 1;
+  int32 limit = 2;
+}
+
+message GetAccountsResponse {
+  oneof result {
+    GetAccountsSuccessResponse success = 1;
+    golem.cloud.accountsummary.v1.AccountSummaryError error = 2;
+  }
+}
+
+message GetAccountsSuccessResponse {
+  repeated golem.cloud.accountsummary.v1.AccountSummary accounts = 1;
+}

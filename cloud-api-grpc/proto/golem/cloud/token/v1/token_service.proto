@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package golem.cloud.token.v1;
+
+import public "golem/common/account_id.proto";
+import public "golem/common/empty.proto";
+import public "golem/cloud/token/create_token_dto.proto";
+import public "golem/cloud/token/token.proto";
+import public "golem/cloud/token/token_id.proto";
+import public "golem/cloud/token/v1/token_error.proto";
+import public "golem/cloud/token/unsafe_token.proto";
+
+service CloudTokenService {
+  rpc GetTokens (GetTokensRequest) returns (GetTokensResponse);
+  rpc CreateToken (CreateTokenRequest) returns (CreateTokenResponse);
+  rpc DeleteToken (DeleteTokenRequest) returns (DeleteTokenResponse);
+  rpc GetToken (GetTokenRequest) returns (GetTokenResponse);
+}
+
+message GetTokensRequest {
+  golem.common.AccountId accountId = 1;
+}
+
+message GetTokensResponse {
+  oneof result {
+    GetTokensSuccessResponse success = 1;
+    golem.cloud.token.v1.TokenError error = 2;
+  }
+}
+
+message GetTokensSuccessResponse {
+  repeated golem.cloud.token.Token data = 1;
+}
+
+message CreateTokenRequest {
+  golem.common.AccountId accountId = 1;
+  golem.cloud.token.CreateTokenDTO createTokenDTO = 2;
+}
+
+message CreateTokenResponse {
+  oneof result {
+    golem.cloud.token.UnsafeToken success = 1;
+    golem.cloud.token.v1.TokenError error = 2;
+  }
+}
+
+message DeleteTokenRequest {
+  golem.common.AccountId accountId = 1;
+  golem.cloud.token.TokenId tokenId = 2;
+}
+
+message DeleteTokenResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.cloud.token.v1.TokenError error = 2;
+  }
+}
+
+message GetTokenRequest {
+  golem.common.AccountId accountId = 1;
+  golem.cloud.token.TokenId tokenId = 2;
+}
+
+message GetTokenResponse {
+  oneof result {
+    golem.cloud.token.Token success = 1;
+    golem.cloud.token.v1.TokenError error = 2;
+  }
+}

@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package golem.cloud.limit.v1;
+
+import public "golem/common/account_id.proto";
+import public "golem/common/empty.proto";
+import public "golem/cloud/limit/v1/batch_update_resource_limits.proto";
+import public "golem/cloud/limit/v1/limits_error.proto";
+import public "golem/common/resource_limits.proto";
+import public "golem/worker/worker_id.proto";
+import public "golem/component/component_id.proto";
+
+service CloudLimitsService {
+  rpc UpdateWorkerLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
+  rpc UpdateWorkerConnectionLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
+  rpc UpdateComponentLimit (UpdateComponentLimitRequest) returns (UpdateComponentLimitResponse);
+  rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
+  rpc BatchUpdateResourceLimits (BatchUpdateResourceLimitsRequest) returns (BatchUpdateResourceLimitsResponse);
+}
+
+message GetResourceLimitsRequest {
+  golem.common.AccountId accountId = 1;
+}
+
+message GetResourceLimitsResponse {
+  oneof result {
+    golem.common.ResourceLimits success = 1;
+    golem.cloud.limit.v1.LimitsError error = 2;
+  }
+}
+
+message BatchUpdateResourceLimitsRequest {
+  golem.cloud.limit.v1.BatchUpdateResourceLimits resourceLimits = 1;
+}
+
+message BatchUpdateResourceLimitsResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.cloud.limit.v1.LimitsError error = 2;
+  }
+}
+
+message UpdateWorkerLimitRequest {
+  golem.common.AccountId accountId = 1;
+  golem.worker.WorkerId workerId = 2;
+  int32 value = 3;
+}
+
+message UpdateWorkerLimitResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.cloud.limit.v1.LimitsError error = 2;
+  }
+}
+
+message UpdateComponentLimitRequest {
+  golem.common.AccountId accountId = 1;
+  golem.component.ComponentId component_id = 2;
+  int32 count = 3;
+  int64 size = 4;
+}
+
+message UpdateComponentLimitResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.cloud.limit.v1.LimitsError error = 2;
+  }
+}

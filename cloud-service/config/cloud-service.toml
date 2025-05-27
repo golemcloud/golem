@@ -1,0 +1,88 @@
+## Generated from default config
+cors_origin_regex = "https://*.golem.cloud"
+environment = "dev"
+grpc_port = 8081
+http_port = 8080
+workspace = "release"
+
+[accounts.marketing]
+email = "marketing@user"
+id = "marketing"
+name = "Marketing User"
+role = "MarketingAdmin"
+token = "39c8e462-1a4c-464c-91d5-5265e1e1b0e5"
+
+[accounts.root]
+email = "initial@user"
+id = "root"
+name = "Initial User"
+role = "Admin"
+token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+
+[component_service]
+access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+host = "localhost"
+port = 8080
+
+[component_service.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[db]
+type = "Sqlite"
+
+[db.config]
+database = "golem_service.db"
+max_connections = 10
+
+[ed_dsa]
+private_key = "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
+public_key = "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg="
+
+[oauth2]
+github_client_id = "GITHUB_CLIENT_ID"
+github_client_secret = "GITHUB_CLIENT_SECRET"
+github_redirect_uri = "http://localhost:8080/v1/login/oauth2/web/callback/github"
+
+[plans.default]
+component_limit = 100
+monthly_gas_limit = 1000000000000
+monthly_upload_limit = 1000000000
+plan_id = "00000000-0000-0000-0000-000000000000"
+project_limit = 100
+storage_limit = 500000000
+worker_limit = 10000
+
+[tracing]
+console = false
+dtor_friendly = false
+file_name = "cloud-service.log"
+file_truncate = true
+
+[tracing.file]
+ansi = false
+compact = false
+enabled = false
+json = true
+json_flatten = true
+json_flatten_span = true
+pretty = false
+span_events_active = false
+span_events_full = false
+without_time = false
+
+[tracing.stdout]
+ansi = true
+compact = false
+enabled = true
+json = false
+json_flatten = true
+json_flatten_span = true
+pretty = false
+span_events_active = false
+span_events_full = false
+without_time = false
+

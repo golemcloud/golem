@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem.cloud.plan;
+
+import "golem/cloud/plan/plan_id.proto";
+import "golem/cloud/plan/plan_data.proto";
+
+message Plan {
+  PlanId plan_id = 1;
+  PlanData plan_data = 2;
+}
