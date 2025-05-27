@@ -418,8 +418,14 @@ description = "Generates openapi spec from the code and checks if it is the same
 dependencies = [
     "build-worker-service",
     "build-component-service",
+    "build-cloud-worker-service",
+    "build-cloud-component-service",
+    "build-cloud-service",
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
+    "generate-cloud-worker-service-openapi",
+    "generate-cloud-component-service-openapi",
+    "generate-cloud-service-openapi",
     "merge-openapi",
     "diff-openapi",
 ]
