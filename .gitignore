@@ -23,3 +23,11 @@ golem-client/*
 logs
 data
 .DS_Store
+
+.cargo/
+
+# Custom local files, e.g. for development purposes
+/.local/
+
+# IDE files
+.vscode/

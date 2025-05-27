@@ -1,0 +1,596 @@
+name: CI
+on:
+  push:
+    tags:
+      - "v*.*.*"
+    branches:
+      - main
+      - windows-dev
+  workflow_dispatch: # Added
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  checks: write
+  pull-requests: write
+
+env:
+  BUILD_TARGET: "x86_64-unknown-linux-gnu"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+        group:
+          - name: group1
+            crates: "golem-api-grpc golem-client golem-common golem-service-base"
+          - name: group2
+            crates: "golem-component-compilation-service golem-component-service-base golem-component-service golem-rib"
+          - name: group3
+            crates: "golem-rib-repl golem-test-framework golem-shard-manager"
+          - name: group4
+            crates: "golem-worker-executor golem-worker-service-base golem-worker-executor-base"
+          - name: group5
+            crates: "golem-worker-service golem-wasm-ast golem-wasm-rpc-derive golem-wasm-rpc"
+          - name: group6
+            crates: "integration-tests"
+    runs-on: ${{ matrix.os }}
+    name: build-${{ matrix.group.name }}-${{ matrix.os }}
+    env:
+      CARGO_BUILD_JOBS: ${{ matrix.group.name == 'group6' && '2' || '4' }}
+    steps:
+      - name: Configure Git line endings
+        run: git config --global core.autocrlf false
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: true
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Building all executables
+        shell: bash
+        env:
+          QUIET: true
+        run: |
+          for crate in ${{ matrix.group.crates }}; do
+            cargo build -p $crate --all-targets || exit 1
+          done
+        timeout-minutes: 90
+
+  unit-tests: # Renamed from unit-tests-and-checks and modified
+    env:
+      CARGO_BUILD_JOBS: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Configure Git line endings
+        run: git config --global core.autocrlf false
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Unit tests
+        shell: bash
+        run: cargo make --profile ci unit-tests
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v4
+        if: always()
+        with:
+          report_paths: "**/target/report-*.xml"
+          detailed_summary: true
+          include_passed: true
+
+  code-checks: # New job
+    env:
+      CARGO_BUILD_JOBS: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Configure Git line endings
+        run: git config --global core.autocrlf false
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check formatting and clippy rules
+        shell: bash
+        run: cargo make --profile ci check
+      - name: Check openapi is up to date
+        shell: bash
+        run: cargo make --profile ci check-openapi
+      - name: Check configs are up to date
+        shell: bash
+        run: cargo make --profile ci check-configs
+
+  worker-tests:
+    env:
+      CARGO_BUILD_JOBS: 10
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [windows-latest]
+        group:
+          - name: untagged
+          - name: group1
+          - name: group2
+          - name: group3
+          - name: group4
+          - name: group5
+          - name: group6
+          - name: group7
+          - name: group8
+    runs-on: ${{ matrix.os }}
+    name: worker-tests-${{ matrix.group.name }}-${{ matrix.os }}
+    steps:
+      - name: Configure Git line endings
+        run: git config --global core.autocrlf false
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Redis (Linux)
+        if: runner.os == 'Linux'
+        uses: shogo82148/actions-setup-redis@v1.35.1
+        with:
+          redis-version: latest
+          auto-start: false
+      - name: Setup Redis (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip" -OutFile "redis.zip"
+          Expand-Archive -Path redis.zip -DestinationPath redis
+          Start-Process -FilePath "redis\\redis-server.exe" -ArgumentList "--maxheap 256mb" -NoNewWindow
+      - name: Worker Executor integration tests
+        shell: bash
+        continue-on-error: true
+        run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
+        timeout-minutes: 40
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v4
+        if: always()
+        with:
+          report_paths: "**/target/report-*.xml"
+          detailed_summary: true
+          include_passed: true
+
+  api-and-integration-tests:
+    env:
+      CARGO_BUILD_JOBS: 10
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [windows-latest]
+        group:
+          - name: integration-tests-group1
+            description: "Full integration tests"
+          - name: integration-tests-group2
+            description: "Component service integration tests"
+          - name: integration-tests-group3
+            description: "Worker service integration tests"
+          - name: integration-tests-group4
+            description: "Base service integration tests"
+          - name: integration-tests-group5
+            description: "Sharding tests"
+          - name: api-tests
+            description: "API tests"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Configure Git line endings
+        run: git config --global core.autocrlf false
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Redis (Linux)
+        if: runner.os == 'Linux'
+        uses: shogo82148/actions-setup-redis@v1.35.1
+        with:
+          redis-version: latest
+          auto-start: false
+      - name: Setup Redis (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip" -OutFile "redis.zip"
+          Expand-Archive -Path redis.zip -DestinationPath redis
+          Start-Process -FilePath "redis\\redis-server.exe" -ArgumentList "--maxheap 256mb" -NoNewWindow
+      - name: ${{ matrix.group.description }}
+        shell: bash
+        continue-on-error: true
+        env:
+          QUIET: true
+        run: cargo make --profile ci ${{ matrix.group.name }}
+        timeout-minutes: 30
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v4
+        if: always()
+        with:
+          report_paths: "**/target/report-*.xml"
+          detailed_summary: true
+          include_passed: true
+
+  wasm-rpc-stub:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_BUILD_JOBS: 10
+    steps:
+      - name: Configure Git line endings
+        run: git config --global core.autocrlf false
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - name: Install cargo-component
+        run: cargo install --force --locked cargo-component@0.20.0
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare WIT dependencies
+        run: cargo make wit
+      - name: Build wasm-rpc in stub mode
+        run: cargo component build -p golem-wasm-rpc --no-default-features --features stub
+
+  docker-targets-build:
+    if: false
+    env:
+      CARGO_BUILD_JOBS: 10
+    # runs-on: blacksmith-16vcpu-ubuntu-2204
+    # if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - platform: linux/amd64
+            name: linux/amd64
+            target: x86_64-unknown-linux-gnu
+          - platform: linux/arm64
+            name: linux/arm64
+            target: aarch64-unknown-linux-gnu
+            cross: true
+    name: docker-targets-build (${{ matrix.platform.platform }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Prepare
+        run: |
+          platform=${{ matrix.platform.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.platform.target }}
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Rust Target
+        run: rustup target add ${{ matrix.platform.target }}
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: cargo install cross
+        if: ${{ matrix.platform.cross }}
+      - name: Build executables
+        run: cargo make --profile ci build-release
+        env:
+          PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
+      - name: Prepare Targets
+        env:
+          PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
+        run: cargo make --profile ci package-release
+      - uses: actions/upload-artifact@v4
+        name: Upload Targets
+        with:
+          name: docker-targets-build-${{ env.PLATFORM_PAIR }}
+          path: target/${{ matrix.platform.target }}.tar
+
+  docker-publish:
+    if: false
+    runs-on: ubuntu-22.04
+    needs:
+      - docker-targets-build
+    # if: github.event_name == 'push' && github.ref_type == 'tag'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Prepare
+        run: |
+          echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        name: Download Targets
+        with:
+          pattern: docker-targets-build-*
+          path: target
+          merge-multiple: true
+      - name: Extract Targets
+        run: |
+          ls -R target
+          cd target
+          for f in *.tar; do tar xvf "$f"; done
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Set Docker version
+        id: set-version
+        run: |
+          if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
+            DOCKER_VERSION=$(echo "${{ github.ref }}" | sed 's|^refs/tags/v||')
+            echo "DOCKER_VERSION=${DOCKER_VERSION}" >> $GITHUB_ENV
+          else
+            COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
+            echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
+          fi
+      - uses: jpribyl/action-docker-layer-caching@v0.1.1
+        continue-on-error: true
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      - name: Extract metadata (tags, labels) for worker executor
+        id: meta-worker-executor
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-worker-executor
+      - name: Build and push worker executor image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-worker-executor/docker/Dockerfile
+          push: true
+          platforms: ${{ env.PLATFORMS }}
+          tags: ${{ steps.meta-worker-executor.outputs.tags }}
+          labels: ${{ steps.meta-worker-executor.outputs.labels }}
+      - name: Extract metadata (tags, labels) for shard manager
+        id: meta-shard-manager
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-shard-manager
+      - name: Build and push shard manager image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-shard-manager/docker/Dockerfile
+          push: true
+          platforms: ${{ env.PLATFORMS }}
+          tags: ${{ steps.meta-shard-manager.outputs.tags }}
+          labels: ${{ steps.meta-shard-manager.outputs.labels }}
+      - name: Extract metadata (tags, labels) for golem component service
+        id: meta-golem-component-service
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-component-service
+      - name: Build and push golem component service image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-component-service/docker/Dockerfile
+          push: true
+          platforms: ${{ env.PLATFORMS }}
+          tags: ${{ steps.meta-golem-component-service.outputs.tags }}
+          labels: ${{ steps.meta-golem-component-service.outputs.labels }}
+      - name: Extract metadata (tags, labels) for golem worker service
+        id: meta-golem-worker-service
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-worker-service
+      - name: Build and push golem worker service image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-worker-service/docker/Dockerfile
+          push: true
+          platforms: ${{ env.PLATFORMS }}
+          tags: ${{ steps.meta-golem-worker-service.outputs.tags }}
+          labels: ${{ steps.meta-golem-worker-service.outputs.labels }}
+      - name: Extract metadata (tags, labels) for golem component compilation service
+        id: meta-golem-component-compilation-service
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-component-compilation-service
+      - name: Build and push golem component compilation service image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-component-compilation-service/docker/Dockerfile
+          push: true
+          platforms: ${{ env.PLATFORMS }}
+          tags: ${{ steps.meta-golem-component-compilation-service.outputs.tags }}
+          labels: ${{ steps.meta-golem-component-compilation-service.outputs.labels }}
+      - name: Extract metadata (tags, labels) for golem router
+        id: meta-golem-router
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-router
+      - name: Build and push golem router
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./golem-router/docker/Dockerfile
+          push: true
+          platforms: ${{ env.PLATFORMS }}
+          tags: ${{ steps.meta-golem-router.outputs.tags }}
+          labels: ${{ steps.meta-golem-router.outputs.labels }}
+
+  publish:
+    if: false
+    needs:
+      - build
+      - unit-tests # Changed from unit-tests-and-checks
+      - code-checks # Added
+      - wasm-rpc-stub
+      - worker-tests
+      - api-and-integration-tests
+    # if: "startsWith(github.ref, 'refs/tags/v')"
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v2-rust
+          shared-key: release
+          cache-all-crates: true
+          save-if: true
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - id: get_version
+        uses: battila7/get-version-action@v2
+      - name: Publish all packages
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ steps.get_version.outputs.version-without-v }}
+        run: cargo make --profile ci publish
+
+  publish-slack-notification:
+    if: false
+    needs:
+      - publish
+      - docker-publish
+    # -    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-22.04 # blacksmith
+    steps:
+      - name: Publish Slack Notification
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_COLOR: ${{ needs.publish.result }}
+          SLACK_ICON: https://uploads-ssl.webflow.com/64721eeec7cd7ef4f6f1683e/64831138b73a996d0e831773_32.png
+          SLACK_TITLE: "Release Notification"
+          SLACK_MESSAGE: "Publish - cargo result: `${{ needs.publish.result }}`, docker result: `${{ needs.docker-publish.result }}`"
+          SLACK_USERNAME: CI
+          SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_URL }}
