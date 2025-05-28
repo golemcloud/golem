@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::benchmarks::{
+    benchmark_invocations, delete_workers, run_benchmark, setup_benchmark, setup_simple_iteration,
+    SimpleBenchmarkContext, SimpleIterationContext,
+};
 use async_trait::async_trait;
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_wasm_rpc::IntoValueAndType;
-use integration_tests::benchmarks::{
-    benchmark_invocations, delete_workers, run_benchmark, setup_benchmark, setup_simple_iteration,
-    SimpleBenchmarkContext, SimpleIterationContext,
-};
 
 struct ColdStartEchoSmall {
     config: RunConfig,
@@ -97,7 +97,6 @@ impl Benchmark for ColdStartEchoSmall {
     }
 }
 
-#[tokio::main]
-async fn main() {
+pub async fn run() {
     run_benchmark::<ColdStartEchoSmall>().await;
 }

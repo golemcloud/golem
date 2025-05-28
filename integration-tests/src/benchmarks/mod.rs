@@ -28,6 +28,31 @@ use tracing::warn;
 
 pub mod data;
 
+pub mod cold_start_large;
+pub mod cold_start_medium;
+pub mod cold_start_small;
+
+pub mod durability_overhead;
+
+pub mod large_dynamic_memory;
+pub mod large_initial_memory;
+
+pub mod latency_large;
+pub mod latency_medium;
+pub mod latency_small;
+
+pub mod rpc;
+pub mod rpc_cpu_intensive;
+pub mod rpc_large_input;
+
+pub mod suspend_worker;
+
+pub mod simple_worker_echo;
+
+pub mod throughput;
+pub mod throughput_cpu_intensive;
+pub mod throughput_large_input;
+
 #[derive(Clone)]
 pub struct SimpleBenchmarkContext {
     pub deps: CliTestDependencies,
@@ -206,7 +231,7 @@ pub async fn get_benchmark_results<A: BenchmarkApi>(params: CliParams) -> Benchm
 }
 
 pub async fn run_benchmark<A: BenchmarkApi>() {
-    let params = CliParams::parse();
+    let params = CliParams::parse_from(std::env::args_os().skip(1));
     let result = get_benchmark_results::<A>(params.clone()).await;
     if params.json {
         let str = serde_json::to_string(&result).expect("Failed to serialize BenchmarkResult");

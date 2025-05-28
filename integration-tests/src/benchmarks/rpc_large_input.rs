@@ -13,6 +13,10 @@ use std::collections::HashMap;
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use crate::benchmarks::data::Data;
+use crate::benchmarks::{
+    invoke_and_await, run_benchmark, setup_benchmark, warmup_workers, SimpleBenchmarkContext,
+};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
@@ -21,10 +25,6 @@ use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm_rpc::{IntoValueAndType, ValueAndType};
-use integration_tests::benchmarks::data::Data;
-use integration_tests::benchmarks::{
-    invoke_and_await, run_benchmark, setup_benchmark, warmup_workers, SimpleBenchmarkContext,
-};
 use tokio::task::JoinSet;
 
 struct RpcLargeInput {
@@ -273,7 +273,6 @@ impl RpcLargeInput {
     }
 }
 
-#[tokio::main]
-async fn main() {
+pub async fn run() {
     run_benchmark::<RpcLargeInput>().await;
 }
