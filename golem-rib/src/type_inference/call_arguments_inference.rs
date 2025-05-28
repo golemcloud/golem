@@ -47,6 +47,7 @@ pub fn infer_function_call_types(
 
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
+    use crate::inferred_type::TypeOrigin;
     use crate::type_inference::GetTypeHint;
     use crate::{
         ActualType, DynamicParsedFunctionName, ExpectedType, Expr, FunctionCallError,
@@ -370,7 +371,9 @@ mod internal {
     ) -> Result<(), FunctionCallError> {
         for (arg, param_type) in args.iter_mut().zip(parameter_types) {
             check_function_arguments(function_call_expr, function_name, param_type, arg)?;
-            arg.add_infer_type_mut(param_type.into());
+            arg.add_infer_type_mut(
+                InferredType::from(param_type).add_origin(TypeOrigin::Declared(arg.source_span())),
+            );
         }
 
         Ok(())

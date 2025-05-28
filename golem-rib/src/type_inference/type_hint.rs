@@ -115,7 +115,7 @@ impl fmt::Display for TypeHint {
             }
             TypeHint::Flag(None) => write!(f, "flag"),
 
-            TypeHint::Str => write!(f, "str"),
+            TypeHint::Str => write!(f, "string"),
             TypeHint::Number => write!(f, "number"),
             TypeHint::List(None) => write!(f, "list"),
             TypeHint::List(Some(typ)) => {

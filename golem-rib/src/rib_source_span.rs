@@ -18,7 +18,7 @@ impl SourceSpan {
         self.end.line
     }
 
-    pub fn is_equal(&self, other: &SourceSpan) -> bool {
+    pub fn eq(&self, other: &SourceSpan) -> bool {
         self.start_line() == other.start_line()
             && self.start_column() == other.start_column()
             && self.end_line() == other.end_line()
@@ -76,8 +76,9 @@ impl Debug for SourceSpan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "SourceSpan {{ start: {}, end: {} }}",
-            self.start, self.end
+            "at line {}, column {}",
+            self.start_line(),
+            self.start_column()
         )
     }
 }
