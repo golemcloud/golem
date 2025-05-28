@@ -53,3 +53,9 @@ test-r = { workspace = true }
 name = "rib"
 path = "src/lib.rs"
 harness = false
+
+
+[[test]]
+name = "rib_regression"
+path = "tests/lib.rs"
+harness = false
