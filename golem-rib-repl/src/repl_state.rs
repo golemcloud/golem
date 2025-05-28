@@ -27,7 +27,7 @@ pub struct ReplState {
 
 impl ReplState {
     pub fn current_rib_program(&self) -> String {
-        self.rib_code_collection.join(";")
+        self.rib_code_collection.join(";\n")
     }
 
     pub fn update_rib(&mut self, rib: &str) {

@@ -18,7 +18,6 @@ use crate::durable_host::{
 };
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use anyhow::anyhow;
-use async_trait::async_trait;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_service_base::headers::TraceContextHeaders;
@@ -31,7 +30,6 @@ use wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::Host;
 use wasmtime_wasi_http::types::{HostFutureIncomingResponse, HostOutgoingRequest};
 use wasmtime_wasi_http::{HttpError, HttpResult};
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn handle(
         &mut self,

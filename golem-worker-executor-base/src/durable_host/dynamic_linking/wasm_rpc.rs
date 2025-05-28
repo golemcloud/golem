@@ -30,7 +30,7 @@ use uuid::Uuid;
 use wasmtime::component::types::{ComponentInstance, ComponentItem};
 use wasmtime::component::{LinkerInstance, Resource, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, Engine, StoreContextMut};
-use wasmtime_wasi::WasiView;
+use wasmtime_wasi::IoView;
 
 pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
     name: &str,
@@ -49,7 +49,7 @@ pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResu
 
         match inner_item {
             ComponentItem::ComponentFunc(fun) => {
-                let param_types: Vec<Type> = fun.params().collect();
+                let param_types: Vec<Type> = fun.params().map(|(_, t)| t).collect();
                 let result_types: Vec<Type> = fun.results().collect();
 
                 let function_name = ParsedFunctionName::parse(format!(

@@ -1,7 +1,7 @@
 package golem:it;
 
 interface api {
-    use golem:api/host@1.1.6.{promise-id};
+    use golem:api/host@1.1.7.{promise-id};
 
     create: func() -> promise-id;
     await: func(id: promise-id) -> list<u8>;
@@ -9,6 +9,6 @@ interface api {
 }
 
 world promise {
-  import golem:api/host@1.1.6;
+  import golem:api/host@1.1.7;
   export api;
 }

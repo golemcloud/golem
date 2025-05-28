@@ -11,5 +11,5 @@ interface api {
 
 world update-test-v2 {
   export api;
-  export golem:api/save-snapshot@1.1.6;
+  export golem:api/save-snapshot@1.1.7;
 }

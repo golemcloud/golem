@@ -62,8 +62,8 @@ where
         } else {
             Ok(Expr::record(
                 fields
-                    .iter()
-                    .map(|f| (f.key.clone(), f.value.clone()))
+                    .into_iter()
+                    .map(|f| (f.key, f.value))
                     .collect::<Vec<_>>(),
             ))
         }

@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use golem_common::model::oplog::DurableFunctionType;
 use wasmtime::component::Resource;
-use wasmtime_wasi::WasiView;
+use wasmtime_wasi::IoView;
 
 use crate::durable_host::blobstore::types::{
     ContainerEntry, IncomingValueEntry, OutgoingValueEntry, StreamObjectNamesEntry,
@@ -28,7 +27,6 @@ use crate::preview2::wasi::blobstore::container::{
 };
 use crate::workerctx::WorkerCtx;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
     async fn name(
         &mut self,
@@ -397,7 +395,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostStreamObjectNames for DurableWorkerCtx<Ctx> {
     async fn read_stream_object_names(
         &mut self,
@@ -458,5 +455,4 @@ impl<Ctx: WorkerCtx> HostStreamObjectNames for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}

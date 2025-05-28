@@ -1,0 +1,18 @@
+[package]
+name = "cloud-shard-manager"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-shard-manager = { path = "../golem-shard-manager", version = "=0.0.0" }
+
+anyhow = { workspace = true }
+prometheus = { workspace = true }
+rustls = { workspace = true }
+tokio = { workspace = true }
+
+[[bin]]
+name = "cloud-shard-manager"
+path = "src/main.rs"
+test = false

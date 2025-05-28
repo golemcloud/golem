@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::keyvalue::atomic::{Bucket, Error, Host, Key};
 use crate::workerctx::WorkerCtx;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn increment(
         &mut self,

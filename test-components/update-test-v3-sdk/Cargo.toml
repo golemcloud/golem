@@ -21,8 +21,8 @@ wit-bindgen-rt = { version = "0.40.0", features = ["bitflags"] }
 path = "wit"
 
 [package.metadata.component.bindings.with]
-"golem:api/save-snapshot@1.1.6" = "golem_rust::save_snapshot::exports::golem::api::save_snapshot"
-"golem:api/load-snapshot@1.1.6" = "golem_rust::load_snapshot::exports::golem::api::load_snapshot"
+"golem:api/save-snapshot@1.1.7" = "golem_rust::save_snapshot::exports::golem::api::save_snapshot"
+"golem:api/load-snapshot@1.1.7" = "golem_rust::load_snapshot::exports::golem::api::load_snapshot"
 
 
 [package.metadata.component.target.dependencies]

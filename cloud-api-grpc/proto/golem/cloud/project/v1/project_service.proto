@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package golem.cloud.project.v1;
+
+import public "golem/common/empty.proto";
+import public "golem/cloud/project/project.proto";
+import public "golem/cloud/project/v1/project_error.proto";
+import public "golem/common/project_id.proto";
+import public "golem/common/account_id.proto";
+import public "golem/cloud/projectpolicy/project_action.proto";
+
+service CloudProjectService {
+  rpc GetDefaultProject (GetDefaultProjectRequest) returns (GetDefaultProjectResponse);
+  rpc GetProjects (GetProjectsRequest) returns (GetProjectsResponse);
+  rpc CreateProject (CreateProjectRequest) returns (CreateProjectResponse);
+  rpc DeleteProject (DeleteProjectRequest) returns (DeleteProjectResponse);
+  rpc GetProject (GetProjectRequest) returns (GetProjectResponse);
+}
+
+message GetDefaultProjectRequest {
+}
+
+message GetDefaultProjectResponse {
+  oneof result {
+    golem.cloud.project.Project success = 1;
+    golem.cloud.project.v1.ProjectError error = 2;
+  }
+}
+
+message GetProjectsRequest {
+  optional string projectName = 1;
+}
+
+message GetProjectsResponse {
+  oneof result {
+    GetProjectsSuccessResponse success = 1;
+    golem.cloud.project.v1.ProjectError error = 2;
+  }
+}
+
+message GetProjectsSuccessResponse {
+  repeated golem.cloud.project.Project data = 1;
+}
+
+message CreateProjectRequest {
+  string name = 1;
+  golem.common.AccountId owner_account_id = 2;
+  string description = 3;
+}
+
+message CreateProjectResponse {
+  oneof result {
+    CreateProjectSuccessResponse success = 1;
+    golem.cloud.project.v1.ProjectError error = 2;
+  }
+}
+
+message CreateProjectSuccessResponse {
+  optional golem.cloud.project.Project project = 1;
+}
+
+message DeleteProjectRequest {
+  golem.common.ProjectId projectId = 1;
+}
+
+message DeleteProjectResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.cloud.project.v1.ProjectError error = 2;
+  }
+}
+
+message GetProjectRequest {
+  golem.common.ProjectId projectId = 1;
+}
+
+message GetProjectResponse {
+  oneof result {
+    golem.cloud.project.Project success = 1;
+    golem.cloud.project.v1.ProjectError error = 2;
+  }
+}

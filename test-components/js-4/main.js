@@ -1,4 +1,4 @@
-import { createPromise } from "golem:api/host@1.1.6";
+import { createPromise } from "golem:api/host@1.1.7";
 
 export const api = {
     createPromise() {
