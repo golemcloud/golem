@@ -57,27 +57,21 @@ pub async fn interpret_pure(
 
 #[macro_export]
 macro_rules! internal_corrupted_state {
-    // This handles the case where no arguments are passed after the format string
     ($fmt:expr) => {{
-        // Just return the error with the provided string
         $crate::interpreter::rib_runtime_error::RibRuntimeError::InvariantViolation($crate::interpreter::rib_runtime_error::InvariantViolation::InternalCorruptedState($fmt.to_string()))
     }};
 
-    // This handles the case where arguments are passed
     ($fmt:expr, $($arg:tt)*) => {{
-        // Create the error variant with the formatted message
         $crate::interpreter::rib_runtime_error::RibRuntimeError::InvariantViolation($crate::interpreter::rib_runtime_error::InvariantViolation::InternalCorruptedState(format!($fmt, $($arg)*)))
     }};
 }
 
 #[macro_export]
 macro_rules! bail_corrupted_state {
-    // This handles the case where no arguments are passed after the format string
     ($fmt:expr) => {{
         return Err($crate::interpreter::rib_runtime_error::RibRuntimeError::InvariantViolation($crate::interpreter::rib_runtime_error::InvariantViolation::InternalCorruptedState($fmt.to_string())));
     }};
 
-    // This handles the case where there are additional arguments
     ($fmt:expr, $($arg:tt)*) => {{
         return Err($crate::interpreter::rib_runtime_error::RibRuntimeError::InvariantViolation($crate::interpreter::rib_runtime_error::InvariantViolation::InternalCorruptedState(format!($fmt, $($arg)*))));
     }};

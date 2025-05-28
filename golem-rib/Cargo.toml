@@ -57,5 +57,5 @@ harness = false
 
 [[test]]
 name = "rib_regression"
-path = "tests/lib.rs"
+path = "regression_tests/lib.rs"
 harness = false
