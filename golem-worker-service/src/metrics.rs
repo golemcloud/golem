@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::VERSION;
+use golem_common::golem_version;
 use golem_service_base::metrics::VERSION_INFO;
 use prometheus::*;
 
 pub fn register_all() -> Registry {
-    VERSION_INFO.with_label_values(&[VERSION]).inc();
+    VERSION_INFO.with_label_values(&[golem_version()]).inc();
 
     default_registry().clone()
 }

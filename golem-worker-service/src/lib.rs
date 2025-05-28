@@ -37,9 +37,5 @@ pub mod path;
 pub mod repo;
 pub mod service;
 
-use golem_common::golem_version;
-
 #[cfg(test)]
 test_r::enable!();
-
-const VERSION: &str = golem_version!();

@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::golem_version;
-
 pub mod api;
 pub mod auth;
 pub mod bootstrap;
@@ -27,5 +25,3 @@ pub mod service;
 
 #[cfg(test)]
 test_r::enable!();
-
-const VERSION: &str = golem_version!();

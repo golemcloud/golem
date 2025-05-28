@@ -61,9 +61,6 @@ mod type_annotated_value;
 #[cfg(feature = "typeinfo")]
 mod value_and_type;
 
-/// For getting current lib version from git tags or cargo
-mod version;
-
 /// Conversion to/from wasmtime's value representation
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime;
@@ -561,8 +558,6 @@ impl TryFrom<Uri> for WorkerId {
         }
     }
 }
-
-pub const WASM_RPC_VERSION: &str = version::lib_version!();
 
 #[cfg(test)]
 mod tests {
