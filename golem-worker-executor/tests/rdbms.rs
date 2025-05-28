@@ -213,6 +213,7 @@ async fn rdbms_postgres_crud(
     insert_tests.append(&mut postgres_insert_statements(
         table_name,
         expected_values.clone(),
+        Some(1),
     ));
 
     rdbms_workers_test::<PostgresType>(
@@ -334,6 +335,7 @@ async fn rdbms_postgres_idempotency(
     insert_tests.append(&mut postgres_insert_statements(
         table_name,
         expected_values.clone(),
+        Some(1),
     ));
 
     let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
@@ -412,9 +414,95 @@ async fn rdbms_postgres_idempotency(
     drop(executor);
 }
 
+#[test]
+#[tracing::instrument]
+async fn rdbms_postgres_commit_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    postgres: &DockerPostgresRdb,
+    _tracing: &Tracing,
+) {
+    let db_address = postgres.public_connection_string();
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+    let component_id = executor.component("rdbms-service").store().await;
+
+    let worker_ids = start_workers::<PostgresType>(
+        &executor,
+        &component_id,
+        &db_address,
+        "-FailOnCommitedRemoteTransaction",
+        1,
+    )
+    .await;
+
+    let worker_id = worker_ids[0].clone();
+
+    let table_name = "test_users_recover1";
+
+    let count = 2;
+
+    let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
+
+    insert_tests.push(StatementTest::execute_test(
+        postgres_create_table_statement(table_name),
+        vec![],
+        None,
+    ));
+
+    let expected_values: Vec<(Uuid, String, String)> = postgres_get_values(count);
+    insert_tests.append(&mut postgres_insert_statements(
+        table_name,
+        expected_values.clone(),
+        None,
+    ));
+
+    let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
+
+    let idempotency_key = IdempotencyKey::fresh();
+
+    let result1 =
+        execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+    println!("rdbms_postgres_commit_recovery after insert");
+    check_test_result(&worker_id, result1.clone(), test.clone());
+
+    let expected = postgres_get_expected(expected_values.clone());
+    let select_test1 = StatementTest::query_stream_test(
+        postgres_select_statement(table_name),
+        vec![],
+        Some(expected.clone()),
+    );
+    let select_test2 = StatementTest::query_test(
+        postgres_select_statement(table_name),
+        vec![],
+        Some(expected.clone()),
+    );
+
+    let test = RdbmsTest::new(vec![select_test1.clone(), select_test2.clone()], None);
+
+    let idempotency_key = IdempotencyKey::fresh();
+
+    let result1 =
+        execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    check_test_result(&worker_id, result1.clone(), test.clone());
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog_json = serde_json::to_string(&oplog);
+    check!(oplog_json.is_ok());
+    // println!("{}", oplog_json.unwrap());
+
+    check_transaction_oplog_entries::<PostgresType>(oplog);
+
+    drop(executor);
+}
+
 // #[test]
 // #[tracing::instrument]
-// async fn rdbms_postgres_commit_recovery(
+// async fn rdbms_postgres_pre_commit_recovery(
 //     last_unique_id: &LastUniqueId,
 //     deps: &WorkerExecutorTestDependencies,
 //     postgres: &DockerPostgresRdb,
@@ -430,16 +518,16 @@ async fn rdbms_postgres_idempotency(
 //         &executor,
 //         &component_id,
 //         &db_address,
-//         "-FailOnCommitedRemoteTransaction",
+//         "-FailOnPreCommitRemoteTransaction",
 //         1,
 //     )
-//     .await;
+//         .await;
 //
 //     let worker_id = worker_ids[0].clone();
 //
-//     let table_name = "test_users_recover";
+//     let table_name = "test_users_recover2";
 //
-//     let count = 5;
+//     let count = 2;
 //
 //     let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
 //
@@ -453,6 +541,7 @@ async fn rdbms_postgres_idempotency(
 //     insert_tests.append(&mut postgres_insert_statements(
 //         table_name,
 //         expected_values.clone(),
+//         None
 //     ));
 //
 //     let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
@@ -492,7 +581,7 @@ async fn rdbms_postgres_idempotency(
 //     check!(oplog_json.is_ok());
 //     println!("{}", oplog_json.unwrap());
 //
-//     // check_transaction_oplog_entries::<PostgresType>(oplog);
+//     check_transaction_oplog_entries::<PostgresType>(oplog);
 //
 //     drop(executor);
 // }
@@ -543,6 +632,7 @@ fn postgres_get_values(count: usize) -> Vec<(Uuid, String, String)> {
 fn postgres_insert_statements(
     table_name: &str,
     values: Vec<(Uuid, String, String)>,
+    expected: Option<u64>,
 ) -> Vec<StatementTest> {
     let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(values.len());
     for (user_id, name, tags) in values {
@@ -551,7 +641,7 @@ fn postgres_insert_statements(
         insert_tests.push(StatementTest::execute_test(
             postgres_insert_statement(table_name),
             params.clone(),
-            Some(1),
+            expected.clone(),
         ));
     }
     insert_tests
@@ -694,6 +784,7 @@ async fn rdbms_mysql_crud(
     insert_tests.append(&mut mysql_insert_statements(
         table_name,
         expected_values.clone(),
+        Some(1),
     ));
 
     rdbms_workers_test::<MysqlType>(
@@ -817,6 +908,7 @@ async fn rdbms_mysql_idempotency(
     insert_tests.append(&mut mysql_insert_statements(
         table_name,
         expected_values.clone(),
+        Some(1),
     ));
 
     let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
@@ -892,6 +984,94 @@ async fn rdbms_mysql_idempotency(
     drop(executor);
 }
 
+#[test]
+#[tracing::instrument]
+async fn rdbms_mysql_commit_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    mysql: &DockerMysqlRdb,
+    _tracing: &Tracing,
+) {
+    let db_address = mysql.public_connection_string();
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+    let component_id = executor.component("rdbms-service").store().await;
+
+    let worker_ids = start_workers::<MysqlType>(
+        &executor,
+        &component_id,
+        &db_address,
+        "-FailOnCommitedRemoteTransaction",
+        1,
+    )
+    .await;
+
+    let worker_id = worker_ids[0].clone();
+
+    let table_name = "test_users_recover1";
+
+    let count = 2;
+
+    let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
+
+    insert_tests.push(StatementTest::execute_test(
+        mysql_create_table_statement(table_name),
+        vec![],
+        None,
+    ));
+
+    let expected_values: Vec<(String, String)> = mysql_get_values(count);
+
+    insert_tests.append(&mut mysql_insert_statements(
+        table_name,
+        expected_values.clone(),
+        None,
+    ));
+
+    let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
+
+    let idempotency_key = IdempotencyKey::fresh();
+
+    let result1 =
+        execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    println!("rdbms_mysql_commit_recovery after insert");
+    check_test_result(&worker_id, result1.clone(), test.clone());
+
+    let expected = mysql_get_expected(expected_values.clone());
+    let select_test1 = StatementTest::query_stream_test(
+        mysql_select_statement(table_name),
+        vec![],
+        Some(expected.clone()),
+    );
+    let select_test2 = StatementTest::query_test(
+        mysql_select_statement(table_name),
+        vec![],
+        Some(expected.clone()),
+    );
+
+    let test = RdbmsTest::new(vec![select_test1.clone(), select_test2.clone()], None);
+
+    let idempotency_key = IdempotencyKey::fresh();
+
+    let result1 =
+        execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await;
+
+    check_test_result(&worker_id, result1.clone(), test.clone());
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog_json = serde_json::to_string(&oplog);
+    check!(oplog_json.is_ok());
+    // println!("{}", oplog.unwrap());
+
+    check_transaction_oplog_entries::<MysqlType>(oplog);
+
+    drop(executor);
+}
+
 fn mysql_create_table_statement(table_name: &str) -> String {
     format!(
         r#"
@@ -933,7 +1113,11 @@ fn mysql_get_values(count: usize) -> Vec<(String, String)> {
     values
 }
 
-fn mysql_insert_statements(table_name: &str, values: Vec<(String, String)>) -> Vec<StatementTest> {
+fn mysql_insert_statements(
+    table_name: &str,
+    values: Vec<(String, String)>,
+    expected: Option<u64>,
+) -> Vec<StatementTest> {
     let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(values.len());
     for (user_id, name) in values {
         let params: Vec<String> = vec![user_id.to_string(), name];
@@ -941,7 +1125,7 @@ fn mysql_insert_statements(table_name: &str, values: Vec<(String, String)>) -> V
         insert_tests.push(StatementTest::execute_test(
             mysql_insert_statement(table_name),
             params.clone(),
-            Some(1),
+            expected.clone(),
         ));
     }
     insert_tests

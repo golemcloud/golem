@@ -2273,8 +2273,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             if self.is_live() {
                 let (tx_id, tx) = handler.create_new().await?;
                 self.oplog
-                    .add_and_commit(OplogEntry::begin_remote_transaction(tx_id))
-                    .await;
+                    .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
+                    .await
+                    .map_err(GolemError::runtime)?;
                 let begin_index = self.oplog.current_oplog_index().await;
                 Ok((begin_index, tx))
             } else {
@@ -2381,8 +2382,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         ) {
             if self.is_live() {
                 self.oplog
-                    .add_and_commit(OplogEntry::pre_commit_remote_transaction(*begin_index))
-                    .await;
+                    .add_and_commit_safe(OplogEntry::pre_commit_remote_transaction(*begin_index))
+                    .await
+                    .map_err(GolemError::runtime)?;
                 Ok(())
             } else {
                 let (_, _) = crate::get_oplog_entry!(
@@ -2406,8 +2408,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         ) {
             if self.is_live() {
                 self.oplog
-                    .add_and_commit(OplogEntry::pre_rollback_remote_transaction(*begin_index))
-                    .await;
+                    .add_and_commit_safe(OplogEntry::pre_rollback_remote_transaction(*begin_index))
+                    .await
+                    .map_err(GolemError::runtime)?;
                 Ok(())
             } else {
                 let (_, _) = crate::get_oplog_entry!(
@@ -2432,8 +2435,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         ) {
             if self.is_live() {
                 self.oplog
-                    .add_and_commit(OplogEntry::commited_remote_transaction(begin_index))
-                    .await;
+                    .add_and_commit_safe(OplogEntry::commited_remote_transaction(begin_index))
+                    .await
+                    .map_err(GolemError::runtime)?;
                 Ok(())
             } else {
                 let (_, _) = crate::get_oplog_entry!(
@@ -2458,8 +2462,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         ) {
             if self.is_live() {
                 self.oplog
-                    .add_and_commit(OplogEntry::rolled_back_remote_transaction(begin_index))
-                    .await;
+                    .add_and_commit_safe(OplogEntry::rolled_back_remote_transaction(begin_index))
+                    .await
+                    .map_err(GolemError::runtime)?;
                 Ok(())
             } else {
                 let (_, _) = crate::get_oplog_entry!(
@@ -2484,8 +2489,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         ) {
             if self.is_live() {
                 self.oplog
-                    .add_and_commit(OplogEntry::aborted_remote_transaction(begin_index))
-                    .await;
+                    .add_and_commit_safe(OplogEntry::aborted_remote_transaction(begin_index))
+                    .await
+                    .map_err(GolemError::runtime)?;
                 Ok(())
             } else {
                 let (_, _) = crate::get_oplog_entry!(

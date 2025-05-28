@@ -17,6 +17,7 @@ use std::fmt::{Debug, Formatter};
 
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
 use bytes::Bytes;
+use dashmap::DashMap;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
@@ -436,7 +437,7 @@ impl IndexedResourceStore for TestWorkerCtx {
 
 #[async_trait]
 impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
-    type ExtraDeps = ();
+    type ExtraDeps = AdditionalTestDeps;
 
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
@@ -674,7 +675,7 @@ impl WorkerCtx for TestWorkerCtx {
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
-        _extra_deps: Self::ExtraDeps,
+        extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
@@ -683,7 +684,11 @@ impl WorkerCtx for TestWorkerCtx {
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
     ) -> Result<Self, GolemError> {
-        let oplog = Arc::new(TestOplog::new(owned_worker_id.clone(), oplog.clone()));
+        let oplog = Arc::new(TestOplog::new(
+            owned_worker_id.clone(),
+            oplog.clone(),
+            extra_deps,
+        ));
 
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -1040,6 +1045,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(&golem_config.resource_limits);
+        let extra_deps = AdditionalTestDeps::new();
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
@@ -1069,7 +1075,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
-            (),
+            extra_deps.clone(),
         ));
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
@@ -1101,7 +1107,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
-            (),
+            extra_deps.clone(),
         ));
         Ok(All::new(
             active_workers,
@@ -1130,7 +1136,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             plugins,
             oplog_processor_plugin,
             resource_limits,
-            (),
+            extra_deps.clone(),
         ))
     }
 
@@ -1156,18 +1162,24 @@ fn get_durable_ctx(ctx: &mut TestWorkerCtx) -> &mut DurableWorkerCtx<TestWorkerC
 struct TestOplog {
     owned_worker_id: OwnedWorkerId,
     oplog: Arc<dyn Oplog>,
+    additional_test_deps: AdditionalTestDeps,
 }
 
 impl TestOplog {
-    fn new(owned_worker_id: OwnedWorkerId, oplog: Arc<dyn Oplog>) -> Self {
+    fn new(
+        owned_worker_id: OwnedWorkerId,
+        oplog: Arc<dyn Oplog>,
+        additional_test_deps: AdditionalTestDeps,
+    ) -> Self {
         println!("TestOplog for worker {}", owned_worker_id);
         Self {
             owned_worker_id,
             oplog,
+            additional_test_deps,
         }
     }
 
-    fn check_oplog(&self, entry: &OplogEntry) {
+    fn check_oplog(&self, entry: &OplogEntry) -> Result<(), String> {
         let entry_name = match entry {
             OplogEntry::BeginRemoteTransaction { .. } => "BeginRemoteTransaction",
             OplogEntry::PreRollbackRemoteTransaction { .. } => "PreRollbackRemoteTransaction",
@@ -1186,20 +1198,56 @@ impl TestOplog {
             .owned_worker_id
             .worker_id
             .worker_name
-            .contains(pattern.as_str())
+            .contains("FailOn")
         {
-            panic!(
-                "worker {} failed on {}",
+            println!(
+                "worker {} entry {}",
                 self.owned_worker_id.worker_id.worker_name, entry_name
             );
+        }
+
+        if self
+            .owned_worker_id
+            .worker_id
+            .worker_name
+            .contains(pattern.as_str())
+        {
+            let failed_before = self
+                .additional_test_deps
+                .has_oplog_failed(self.owned_worker_id.clone(), entry_name.to_string());
+
+            if failed_before {
+                println!(
+                    "worker {} failed on {} before",
+                    self.owned_worker_id.worker_id.worker_name, entry_name
+                );
+                Ok(())
+            } else {
+                self.additional_test_deps
+                    .set_oplog_failed(self.owned_worker_id.clone(), entry_name.to_string());
+                println!(
+                    "worker {} failed on {}",
+                    self.owned_worker_id.worker_id.worker_name, entry_name
+                );
+                Err(format!(
+                    "worker {} failed on {}",
+                    self.owned_worker_id.worker_id.worker_name, entry_name
+                ))
+            }
+        } else {
+            Ok(())
         }
     }
 }
 
 #[async_trait]
 impl Oplog for TestOplog {
+    async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
+        self.check_oplog(&entry)?;
+        self.oplog.add_safe(entry).await
+    }
+
     async fn add(&self, entry: OplogEntry) {
-        self.check_oplog(&entry);
         self.oplog.add(entry).await
     }
 
@@ -1239,5 +1287,29 @@ impl Oplog for TestOplog {
 impl Debug for TestOplog {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.oplog)
+    }
+}
+
+#[derive(Clone)]
+pub struct AdditionalTestDeps {
+    oplog_failures: Arc<DashMap<OwnedWorkerId, String>>,
+}
+
+impl AdditionalTestDeps {
+    pub fn new() -> Self {
+        let oplog_failed = Arc::new(DashMap::new());
+        Self {
+            oplog_failures: oplog_failed,
+        }
+    }
+
+    pub fn has_oplog_failed(&self, owned_worker_id: OwnedWorkerId, entry: String) -> bool {
+        self.oplog_failures
+            .get(&owned_worker_id)
+            .is_some_and(|v| v.contains(&entry))
+    }
+
+    pub fn set_oplog_failed(&self, owned_worker_id: OwnedWorkerId, entry: String) {
+        self.oplog_failures.insert(owned_worker_id, entry);
     }
 }
