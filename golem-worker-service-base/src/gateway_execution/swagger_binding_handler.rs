@@ -12,30 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_definition::http::oas_api_definition::OpenApiHttpApiDefinition;
-use crate::gateway_api_deployment::ApiSiteString;
-use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
-use crate::gateway_execution::request::RichRequest;
-use crate::service::gateway::api_definition::ApiDefinitionService;
-
+use crate::gateway_binding::SwaggerUiBinding;
 use async_trait::async_trait;
-use golem_common::SafeDisplay;
-use golem_service_base::auth::EmptyAuthCtx;
 use http::StatusCode;
 use indexmap::IndexMap;
 use openapiv3;
 use poem::Body;
-use tracing::error;
 
 const GOLEM_API_GATEWAY_BINDING: &str = "x-golem-api-gateway-binding";
 
 #[async_trait]
-pub trait SwaggerBindingHandler<Namespace> {
+pub trait SwaggerBindingHandler {
     async fn handle_swagger_binding_request(
         &self,
-        namespace: &Namespace,
         authority: &str,
-        request: &RichRequest,
+        swagger_binding: &SwaggerUiBinding,
     ) -> SwaggerBindingResult;
 }
 
@@ -63,26 +54,17 @@ impl From<SwaggerBindingError> for poem::Response {
     }
 }
 
-/// Default implementation of the SwaggerBindingHandler trait
-pub struct DefaultSwaggerBindingHandler<Namespace> {
-    pub api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
-    pub definition_service:
-        Option<Arc<dyn ApiDefinitionService<EmptyAuthCtx, Namespace> + Sync + Send>>,
+pub struct DefaultSwaggerBindingHandler;
+
+impl Default for DefaultSwaggerBindingHandler {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-use std::sync::Arc;
-
-impl<Namespace> DefaultSwaggerBindingHandler<Namespace> {
-    pub fn new(
-        api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
-        definition_service: Option<
-            Arc<dyn ApiDefinitionService<EmptyAuthCtx, Namespace> + Sync + Send>,
-        >,
-    ) -> Self {
-        Self {
-            api_definition_lookup_service,
-            definition_service,
-        }
+impl DefaultSwaggerBindingHandler {
+    pub fn new() -> Self {
+        Self
     }
 
     // Filters paths in the OpenAPI specification based on gateway binding types.
@@ -134,111 +116,29 @@ impl<Namespace> DefaultSwaggerBindingHandler<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
-    for DefaultSwaggerBindingHandler<Namespace>
-{
+impl SwaggerBindingHandler for DefaultSwaggerBindingHandler {
     /// Handles a Swagger binding request by:
-    /// 1. Looking up the appropriate API definition
-    /// 2. Converting it to OpenAPI format
-    /// 3. Filtering and modifying the OpenAPI spec
-    /// 4. Generating and returning Swagger UI HTML
-    /// Todo: Implement caching of the openapi spec
+    /// 1. Getting the OpenAPI spec from the SwaggerUI binding
+    /// 2. Filtering and modifying the OpenAPI spec
+    /// 3. Generating and returning Swagger UI HTML
     async fn handle_swagger_binding_request(
         &self,
-        namespace: &Namespace,
         authority: &str,
-        request: &RichRequest,
+        swagger_binding: &SwaggerUiBinding,
     ) -> SwaggerBindingResult {
-        // Get the request path
-        let request_path = request.underlying.uri().path().to_string();
-
-        // Get the API definitions
-        let api_definitions = match self
-            .api_definition_lookup_service
-            .get(&ApiSiteString(authority.to_string()))
-            .await
-        {
-            Ok(defs) => defs,
-            Err(api_defs_lookup_error) => {
-                error!(
-                    "API request host: {} - error: {}",
-                    authority,
-                    api_defs_lookup_error.to_safe_string()
-                );
-                return Err(SwaggerBindingError::InternalError(
-                    api_defs_lookup_error.to_safe_string(),
-                ));
-            }
-        };
-
-        // Find the API definition that matches the Swagger UI path
-        let api_def = api_definitions.iter().find(|def| {
-            def.routes.iter().any(|route| {
-                route.path.to_string() == request_path
-                    && matches!(
-                        route.binding,
-                        crate::gateway_binding::GatewayBindingCompiled::SwaggerUi
-                    )
-            })
-        });
-        // Filters dynamic paths, as it wont match the request path
-        // /{user}/swagger will not match irl /test/swagger
-        let api_def = match api_def {
-            Some(def) => def,
-            None => {
-                return Err(SwaggerBindingError::NotFound(
-                    "Swagger UI cannot have variable path".to_string(),
-                ))
-            }
-        };
-
-        // Get the compiled API definition using the definition_service
-        let definition_service = match &self.definition_service {
-            Some(service) => service,
-            None => {
-                return Err(SwaggerBindingError::InternalError(
-                    "Definition service not available".to_string(),
-                ))
-            }
-        };
-
-        let compiled_def = match definition_service
-            .get(
-                &api_def.id,
-                &api_def.version,
-                namespace,
-                &EmptyAuthCtx::default(),
+        // Get the OpenAPI spec from the SwaggerUI binding
+        let spec_json = swagger_binding.openapi_spec_json.as_ref().ok_or_else(|| {
+            SwaggerBindingError::InternalError(
+                "OpenAPI spec not found in SwaggerUI binding".to_string(),
             )
-            .await
-        {
-            Ok(Some(compiled_def)) => compiled_def,
-            Ok(None) => {
-                return Err(SwaggerBindingError::NotFound(
-                    "API definition not found".to_string(),
-                ))
-            }
-            Err(e) => {
-                return Err(SwaggerBindingError::InternalError(format!(
-                    "Error getting API definition: {}",
-                    e
-                )))
-            }
-        };
+        })?;
 
-        // Convert to OpenAPI spec
-        let openapi_req =
-            match OpenApiHttpApiDefinition::from_compiled_http_api_definition(&compiled_def) {
-                Ok(req) => req,
-                Err(e) => {
-                    return Err(SwaggerBindingError::InternalError(format!(
-                        "Error converting to OpenAPI: {}",
-                        e
-                    )))
-                }
-            };
+        // Parse and modify the OpenAPI spec
+        let mut spec: openapiv3::OpenAPI = serde_json::from_str(spec_json).map_err(|e| {
+            SwaggerBindingError::InternalError(format!("Failed to parse OpenAPI spec: {}", e))
+        })?;
 
         // Add server information to the OpenAPI spec
-        let mut spec = openapi_req.0;
         if spec.servers.is_empty() {
             spec.servers = Vec::new();
         }
@@ -249,27 +149,18 @@ impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
             extensions: Default::default(),
         });
 
-        // First collect paths to remove based on binding types
-        let paths_to_remove =
-            DefaultSwaggerBindingHandler::<Namespace>::filter_paths(&mut spec.paths.paths);
-
-        // Remove empty paths from the spec
+        // Filter paths based on binding types
+        let paths_to_remove = Self::filter_paths(&mut spec.paths.paths);
         for path in paths_to_remove {
             spec.paths.paths.shift_remove(&path);
         }
 
-        // Convert to JSON
-        let spec_json = match serde_json::to_string_pretty(&spec) {
-            Ok(json) => json,
-            Err(e) => {
-                error!("Failed to serialize OpenAPI spec: {:?}", e);
-                return Err(SwaggerBindingError::InternalError(
-                    "Failed to serialize OpenAPI spec".to_string(),
-                ));
-            }
-        };
+        // Convert back to JSON
+        let modified_spec_json = serde_json::to_string_pretty(&spec).map_err(|e| {
+            SwaggerBindingError::InternalError(format!("Failed to serialize OpenAPI spec: {}", e))
+        })?;
 
-        // Serve the Swagger UI HTML with the JSON embedded
+        // Generate Swagger UI HTML
         let html = format!(
             r#"
             <!DOCTYPE html>
@@ -299,7 +190,7 @@ impl<Namespace: Send + Sync + Clone + 'static> SwaggerBindingHandler<Namespace>
             </body>
             </html>
         "#,
-            spec_json
+            modified_spec_json
         );
 
         Ok(SwaggerBindingSuccess { html_content: html })

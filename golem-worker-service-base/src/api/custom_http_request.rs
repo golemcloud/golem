@@ -55,10 +55,7 @@ impl CustomHttpRequestApi {
 
         let auth_call_back_binding_handler = Arc::new(DefaultAuthCallBack);
 
-        let swagger_binding_handler = Arc::new(DefaultSwaggerBindingHandler::new(
-            api_definition_lookup_service.clone(),
-            definition_service.clone(),
-        ));
+        let swagger_binding_handler = Arc::new(DefaultSwaggerBindingHandler::new());
 
         let gateway_http_input_executor = Arc::new(DefaultGatewayInputExecutor {
             evaluator,

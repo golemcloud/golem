@@ -13,10 +13,11 @@
 // limitations under the License.
 
 pub(crate) use self::http_handler_binding::*;
-pub(crate) use self::worker_binding::*;
+pub use self::worker_binding::*; // Make worker binding structures public for tests
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
 use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
+pub use gateway_binding_compiled::SwaggerUiBinding;
 pub(crate) use gateway_binding_compiled::*;
 use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType;
 use golem_common::model::component::VersionedComponentId;
@@ -24,7 +25,7 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibCompilationError, RibInputTypeInfo};
 pub use static_binding::*;
 
-mod gateway_binding_compiled;
+pub mod gateway_binding_compiled;
 mod http_handler_binding;
 mod static_binding;
 mod worker_binding;
