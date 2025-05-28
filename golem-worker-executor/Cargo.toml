@@ -7,6 +7,8 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Golem worker executor service"
 
+license-file = "../LICENSE"
+
 [lib]
 harness = false
 

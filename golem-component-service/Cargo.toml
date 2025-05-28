@@ -3,6 +3,8 @@ name = "golem-component-service"
 version = "0.0.0"
 edition = "2021"
 
+license-file = "../LICENSE"
+
 [[bin]]
 name = "golem-component-service"
 path = "src/server.rs"

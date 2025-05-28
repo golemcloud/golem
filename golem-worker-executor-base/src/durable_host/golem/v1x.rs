@@ -31,7 +31,6 @@ use crate::services::oplog::CommitLevel;
 use crate::services::{HasOplogService, HasPlugins, HasWorker};
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
-use async_trait::async_trait;
 use bincode::de::Decoder;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
@@ -44,9 +43,8 @@ use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
-use wasmtime_wasi::WasiView;
+use wasmtime_wasi::IoView;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
@@ -85,8 +83,7 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
                 .get_workers(&component_id, filter, cursor, count, precise)
                 .await?;
 
-            let _ = self
-                .as_wasi_view()
+            self.as_wasi_view()
                 .table()
                 .get_mut::<GetWorkersEntry>(&self_)
                 .map(|e| e.set_next_cursor(new_cursor))?;
@@ -104,7 +101,6 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn create_promise(&mut self) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
         self.observe_function_call("golem::api", "create_promise");
@@ -770,7 +766,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
@@ -873,7 +868,6 @@ impl GetOplogEntry {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
@@ -992,7 +986,6 @@ impl SearchOplogEntry {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {}
 
 impl From<golem_api_1_x::host::RevertWorkerTarget>

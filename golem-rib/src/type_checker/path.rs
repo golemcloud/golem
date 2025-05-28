@@ -15,7 +15,7 @@
 use std::fmt;
 use std::fmt::Display;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Path(Vec<PathElem>);
 
 impl Path {
@@ -48,6 +48,10 @@ impl Path {
 
     pub fn push_front(&mut self, elem: PathElem) {
         self.0.insert(0, elem);
+    }
+
+    pub fn push_back(&mut self, elem: PathElem) {
+        self.0.push(elem);
     }
 }
 

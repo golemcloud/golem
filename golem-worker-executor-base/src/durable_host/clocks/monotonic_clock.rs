@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::durable_host::serialized::SerializableError;
@@ -22,7 +21,6 @@ use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::DurableFunctionType;
 use wasmtime_wasi::bindings::clocks::monotonic_clock::{Duration, Host, Instant, Pollable};
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Instant> {
         let durability = Durability::<Instant, SerializableError>::new(

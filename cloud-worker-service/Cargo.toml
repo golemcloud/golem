@@ -1,0 +1,84 @@
+[package]
+name = "cloud-worker-service"
+version = "0.0.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "cloud-worker-service"
+path = "src/main.rs"
+test = false
+
+[lib]
+harness = false
+
+[[test]]
+name = "services_tests"
+path = "tests/services_tests.rs"
+harness = false
+
+[dependencies]
+cloud-api-grpc = { path = "../cloud-api-grpc", version = "=0.0.0" }
+cloud-common = { path = "../cloud-common", version = "=0.0.0" }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
+golem-rib = { path = "../golem-rib", version = "=0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
+golem-worker-service-base = { path = "../golem-worker-service-base", version = "=0.0.0" }
+
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+bincode = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+conditional-trait-gen = { workspace = true }
+darling = { workspace = true }
+derive_more = { workspace = true }
+figment = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+headers = "0.3.9"
+http = { workspace = true }
+hyper = { workspace = true }
+nom = "7.1.3"
+opentelemetry = { workspace = true }
+opentelemetry-prometheus = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+poem = { workspace = true, features = ["prometheus", "opentelemetry"] }
+poem-derive = { workspace = true }
+poem-openapi = { workspace = true }
+poem-openapi-derive = { workspace = true }
+prometheus = { workspace = true }
+regex = "1.10.3"
+rusoto_acm = "0.48.0"
+rusoto_core = "0.48.0"
+rusoto_credential = "0.48.0"
+rusoto_elbv2 = "0.48.0"
+rusoto_route53 = "0.48.0"
+rusoto_sts = "0.48.0"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+sqlx = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+tap = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+tonic-reflection = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt", "std", "json"] }
+url = { workspace = true }
+uuid = { workspace = true }
+x509-certificate = "0.23.1"
+
+[dev-dependencies]
+reqwest = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+test-r = { workspace = true }

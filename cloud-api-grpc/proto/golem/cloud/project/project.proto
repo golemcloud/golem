@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem.cloud.project;
+
+import "golem/common/project_id.proto";
+import "golem/cloud/project/project_data.proto";
+
+message Project {
+  golem.common.ProjectId id = 1;
+  ProjectData data = 2;
+}

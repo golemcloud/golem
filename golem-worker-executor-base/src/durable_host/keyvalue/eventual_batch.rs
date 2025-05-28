@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use golem_common::model::oplog::DurableFunctionType;
 use wasmtime::component::Resource;
-use wasmtime_wasi::{ResourceTableError, WasiView};
+use wasmtime_wasi::{IoView, ResourceTableError};
 
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
@@ -26,7 +25,6 @@ use crate::preview2::wasi::keyvalue::eventual_batch::{
 };
 use crate::workerctx::WorkerCtx;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_many(
         &mut self,

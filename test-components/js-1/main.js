@@ -1,4 +1,4 @@
-import { now } from "wasi:clocks/wall-clock@0.2.0";
+import { now } from "wasi:clocks/wall-clock@0.2.3";
 
 export function hello(name) {
     console.log(`Hello ${name}!`);

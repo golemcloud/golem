@@ -18,7 +18,7 @@ use bigdecimal::BigDecimal;
 use http::header::*;
 use http::Method;
 use poem_openapi::Object;
-use rib::{Expr, GetLiteralValue, RibInput, TypeName};
+use rib::{Expr, GetLiteralValue, RibCompiler, RibInput, TypeName};
 use serde::{Deserialize, Serialize};
 
 // Make sure to store CORS headers as Vec<HeaderValue> and not as String
@@ -261,7 +261,9 @@ impl HttpCors {
     }
 
     pub fn from_cors_preflight_expr(expr: &CorsPreflightExpr) -> Result<HttpCors, String> {
-        let compiled_expr = rib::compile(expr.0.clone(), &vec![])
+        let rib_compiler = RibCompiler::default();
+        let compiled_expr = rib_compiler
+            .compile(expr.0.clone())
             .map_err(|err| format!("Rib compilation for cors-preflight response. {}", err))?;
 
         let rib_input = RibInput::default();

@@ -46,12 +46,14 @@ inherit_test_dep!(Tracing);
 
 #[test_dep]
 async fn postgres() -> DockerPostgresRdb {
-    DockerPostgresRdb::new().await
+    let unique_network_id = Uuid::new_v4().to_string();
+    DockerPostgresRdb::new(&unique_network_id).await
 }
 
 #[test_dep]
 async fn mysql() -> DockerMysqlRdb {
-    DockerMysqlRdb::new().await
+    let unique_network_id = Uuid::new_v4().to_string();
+    DockerMysqlRdb::new(&unique_network_id).await
 }
 
 #[repr(u8)]

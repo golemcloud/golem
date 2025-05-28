@@ -1,12 +1,12 @@
 package golem:it;
 
 interface api {
-  use golem:api/host@1.1.6.{promise-id};
+  use golem:api/host@1.1.7.{promise-id};
 
   create-promise: func() -> promise-id;
 }
 
 world js4 {
-  import golem:api/host@1.1.6;
+  import golem:api/host@1.1.7;
   export api;
 }

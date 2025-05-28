@@ -3,6 +3,8 @@ name = "golem-component-service-base"
 version = "0.0.0"
 edition = "2021"
 
+license-file = "../LICENSE"
+
 [lib]
 harness = false
 
@@ -53,3 +55,4 @@ wac-graph = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
+tryhard = { workspace = true }

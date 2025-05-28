@@ -7,6 +7,8 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Shared code between Golem services"
 
+license-file = "../LICENSE"
+
 [features]
 default = [
     "base-model",
@@ -38,6 +40,7 @@ observability = [
 ]
 poem = [
     "dep:poem",
+    "dep:poem-derive",
     "dep:poem-openapi",
     "dep:poem-openapi-derive",
     "golem-wasm-ast/poem_openapi",
@@ -84,6 +87,7 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 combine = { workspace = true }
 console-subscriber = { workspace = true, optional = true }
+darling = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true, optional = true }
@@ -96,6 +100,7 @@ itertools = { workspace = true }
 lazy_static = { workspace = true }
 nonempty-collections = { workspace = true }
 poem = { workspace = true, optional = true }
+poem-derive = { workspace = true, optional = true }
 poem-openapi = { workspace = true, optional = true }
 poem-openapi-derive = { workspace = true, optional = true }
 prometheus = { workspace = true, optional = true }
