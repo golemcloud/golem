@@ -2298,6 +2298,8 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                     .try_get_oplog_entry(|e| e.is_pre_remote_transaction(begin_index))
                     .await;
 
+                let mut restart = false;
+
                 if let Some((_, pre_entry)) = pre_entry {
                     let end_index = self
                         .replay_state
@@ -2345,6 +2347,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                             self.oplog
                                 .add_and_commit(OplogEntry::jump(deleted_region))
                                 .await;
+                            restart = true;
                         }
                     }
                 } else {
@@ -2364,8 +2367,20 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                     self.oplog
                         .add_and_commit(OplogEntry::jump(deleted_region))
                         .await;
+                    restart = true;
                 }
-                Ok((begin_index, tx))
+
+                if restart {
+                    let (tx_id, tx) = handler.create_new().await?;
+                    self.oplog
+                        .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
+                        .await
+                        .map_err(GolemError::runtime)?;
+                    let begin_index = self.oplog.current_oplog_index().await;
+                    Ok((begin_index, tx))
+                } else {
+                    Ok((begin_index, tx))
+                }
             }
         } else {
             Err(GolemError::runtime("Unexpected durable function type").into())
