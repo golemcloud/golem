@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #[cfg(test)]
-mod comprehensive_test {
+mod tests {
     use test_r::test;
 
     use crate::{Expr, RibCompiler, RibCompilerConfig};
@@ -24,7 +24,7 @@ mod comprehensive_test {
     use golem_wasm_rpc::ValueAndType;
 
     #[test]
-    async fn test_interpreter_complex_rib() {
+    async fn test_interpreter_regression() {
         let expr = r#"
 
               let str1: string = request.body.name;
@@ -780,7 +780,7 @@ mod comprehensive_test {
     }
 
     mod component_metadata {
-        use crate::interpreter::tests::comprehensive_test::function_metadata;
+        use crate::regression::tests::*;
         use golem_wasm_ast::analysis::AnalysedExport;
 
         pub(crate) fn component_metadata() -> Vec<AnalysedExport> {
@@ -844,7 +844,7 @@ mod comprehensive_test {
     }
 
     mod function_metadata {
-        use crate::interpreter::tests::comprehensive_test::{data_types, test_utils};
+        use crate::regression::tests::{data_types, test_utils};
         use golem_wasm_ast::analysis::AnalysedExport;
 
         pub(crate) fn function_unit_response() -> Vec<AnalysedExport> {
@@ -1302,7 +1302,7 @@ mod comprehensive_test {
     }
 
     mod data_types {
-        use crate::interpreter::tests::comprehensive_test::test_utils;
+        use crate::regression::tests::test_utils;
         use golem_wasm_ast::analysis::*;
 
         // Result
@@ -1739,7 +1739,7 @@ mod comprehensive_test {
     }
 
     mod mock_data {
-        use crate::interpreter::tests::comprehensive_test::{data_types, test_utils};
+        use crate::regression::tests::{data_types, test_utils};
         use golem_wasm_rpc::ValueAndType;
 
         pub(crate) fn ok_of_str() -> ValueAndType {
@@ -2045,8 +2045,8 @@ mod comprehensive_test {
     }
 
     mod mock_interpreter {
-        use crate::interpreter::rib_interpreter::Interpreter;
-        use crate::interpreter::tests::comprehensive_test::{mock_data, test_utils};
+        use crate::regression::tests::{mock_data, test_utils};
+        use crate::Interpreter;
         use crate::{
             EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke,
             RibFunctionInvokeResult, RibInput,

@@ -56,7 +56,7 @@ fn unify_inferred_type(
         }
         Err(e) => match e {
             UnificationFailureInternal::TypeMisMatch { left, right } => Err(
-                get_type_unification_error_from_mismatch(original_expr, &sub_expr, left, right),
+                get_type_unification_error_from_mismatch(original_expr, sub_expr, left, right),
             ),
 
             UnificationFailureInternal::ConflictingTypes {

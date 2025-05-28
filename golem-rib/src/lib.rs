@@ -39,6 +39,7 @@ mod inferred_type;
 mod instance_type;
 mod interpreter;
 mod parser;
+mod regression;
 mod rib_source_span;
 mod rib_type_error;
 mod text;
