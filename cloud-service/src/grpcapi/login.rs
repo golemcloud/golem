@@ -8,14 +8,14 @@ use crate::model;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::login;
 use crate::service::oauth2::{OAuth2Error, OAuth2Service};
-use cloud_api_grpc::proto::golem::cloud::login::v1::cloud_login_service_server::CloudLoginService;
-use cloud_api_grpc::proto::golem::cloud::login::v1::{
+use golem_api_grpc::proto::golem::login::v1::cloud_login_service_server::CloudLoginService;
+use golem_api_grpc::proto::golem::login::v1::{
     complete_o_auth2_response, current_token_response, login_error, o_auth2_response,
     start_o_auth2_response, CompleteOAuth2Request, CompleteOAuth2Response, CurrentTokenRequest,
     CurrentTokenResponse, LoginError, OAuth2Request, OAuth2Response, StartOAuth2Response,
 };
-use cloud_api_grpc::proto::golem::cloud::login::OAuth2Data;
-use cloud_api_grpc::proto::golem::cloud::token::{Token, UnsafeToken};
+use golem_api_grpc::proto::golem::login::OAuth2Data;
+use golem_api_grpc::proto::golem::token::{Token, UnsafeToken};
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::recorded_grpc_api_request;

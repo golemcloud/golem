@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package golem.worker;
 
-
 enum WorkerStatus {
   RUNNING = 0;
   IDLE = 1;

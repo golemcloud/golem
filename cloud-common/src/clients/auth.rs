@@ -2,8 +2,8 @@ use crate::auth::{CloudAuthCtx, CloudNamespace};
 use crate::config::RemoteCloudServiceConfig;
 use crate::model::{ProjectAction, TokenSecret};
 use async_trait::async_trait;
-use cloud_api_grpc::proto::golem::cloud::auth::v1::cloud_auth_service_client::CloudAuthServiceClient;
-use cloud_api_grpc::proto::golem::cloud::auth::v1::{
+use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::CloudAuthServiceClient;
+use golem_api_grpc::proto::golem::auth::v1::{
     authorize_project_action_response, get_account_response, AuthorizeProjectActionRequest,
     GetAccountRequest,
 };
@@ -206,14 +206,14 @@ impl From<AuthServiceError> for golem_api_grpc::proto::golem::worker::v1::Worker
 
 #[derive(Debug)]
 pub enum AuthClientError {
-    Server(cloud_api_grpc::proto::golem::cloud::auth::v1::AuthError),
+    Server(golem_api_grpc::proto::golem::auth::v1::AuthError),
     Connection(Status),
     Transport(tonic::transport::Error),
     Unknown(String),
 }
 
-impl From<cloud_api_grpc::proto::golem::cloud::auth::v1::AuthError> for AuthClientError {
-    fn from(value: cloud_api_grpc::proto::golem::cloud::auth::v1::AuthError) -> Self {
+impl From<golem_api_grpc::proto::golem::auth::v1::AuthError> for AuthClientError {
+    fn from(value: golem_api_grpc::proto::golem::auth::v1::AuthError) -> Self {
         Self::Server(value)
     }
 }
@@ -247,7 +247,7 @@ impl AuthClientError {
 
 impl From<AuthClientError> for AuthServiceError {
     fn from(value: AuthClientError) -> Self {
-        use cloud_api_grpc::proto::golem::cloud::auth::v1::auth_error::Error;
+        use golem_api_grpc::proto::golem::auth::v1::auth_error::Error;
 
         match value {
             AuthClientError::Server(err) => match err.error {
@@ -275,7 +275,7 @@ impl From<AuthClientError> for AuthServiceError {
 
 impl Display for AuthClientError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use cloud_api_grpc::proto::golem::cloud::auth::v1::auth_error::Error;
+        use golem_api_grpc::proto::golem::auth::v1::auth_error::Error;
 
         match &self {
             AuthClientError::Server(err) => match &err.error {

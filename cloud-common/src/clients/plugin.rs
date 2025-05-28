@@ -32,7 +32,7 @@ pub trait PluginServiceClient {
 
 #[derive(Clone)]
 pub struct PluginServiceClientDefault {
-    plugin_service_client: GrpcClient<cloud_api_grpc::proto::golem::cloud::component::v1::plugin_service_client::PluginServiceClient<Channel>>,
+    plugin_service_client: GrpcClient<golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient<Channel>>,
     retry_config: RetryConfig,
 }
 
@@ -41,7 +41,7 @@ impl PluginServiceClientDefault {
         let plugin_service_client = GrpcClient::new(
             "plugin",
             |channel| {
-                cloud_api_grpc::proto::golem::cloud::component::v1::plugin_service_client::PluginServiceClient::new(channel)
+                golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
             },
@@ -91,14 +91,14 @@ impl PluginServiceClient for PluginServiceClientDefault {
 
                     match response.result {
                         None => Err(PluginError::Unknown("Empty response".to_string())),
-                        Some(cloud_api_grpc::proto::golem::cloud::component::v1::get_plugin_response::Result::Success(plugin)) => {
+                        Some(golem_api_grpc::proto::golem::component::v1::get_plugin_response::Result::Success(plugin)) => {
                             if let Some(plugin) = plugin.plugin {
                                 Ok(Some(try_decode_plugin_definition(plugin)?))
                             } else {
                                 Ok(None)
                             }
                         }
-                        Some(cloud_api_grpc::proto::golem::cloud::component::v1::get_plugin_response::Result::Error(error)) => {
+                        Some(golem_api_grpc::proto::golem::component::v1::get_plugin_response::Result::Error(error)) => {
                             Err(PluginError::from(error))
                         }
                     }
@@ -124,7 +124,7 @@ impl PluginServiceClient for PluginServiceClientDefault {
                     let response = client
                         .call("get_by_id", move |client| {
                             let request = authorised_request(
-                                cloud_api_grpc::proto::golem::cloud::component::v1::GetPluginByIdRequest {
+                                golem_api_grpc::proto::golem::component::v1::GetPluginByIdRequest {
                                     id: Some(id.clone().into()),
                                 },
                                 &token.value,
@@ -136,14 +136,14 @@ impl PluginServiceClient for PluginServiceClientDefault {
 
                     match response.result {
                         None => Err(PluginError::Unknown("Empty response".to_string())),
-                        Some(cloud_api_grpc::proto::golem::cloud::component::v1::get_plugin_by_id_response::Result::Success(plugin)) => {
+                        Some(golem_api_grpc::proto::golem::component::v1::get_plugin_by_id_response::Result::Success(plugin)) => {
                             if let Some(plugin) = plugin.plugin {
                                 Ok(Some(try_decode_plugin_definition(plugin)?))
                             } else {
                                 Ok(None)
                             }
                         }
-                        Some(cloud_api_grpc::proto::golem::cloud::component::v1::get_plugin_by_id_response::Result::Error(error)) => {
+                        Some(golem_api_grpc::proto::golem::component::v1::get_plugin_by_id_response::Result::Error(error)) => {
                             Err(PluginError::from(error))
                         }
                     }

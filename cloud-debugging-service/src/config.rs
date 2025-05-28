@@ -1,5 +1,5 @@
 use cloud_common::config::RemoteCloudServiceConfig;
-use cloud_worker_executor::services::config::{
+use golem_worker_executor::services::config::{
     CloudComponentCacheConfig, CloudComponentServiceConfig,
 };
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};

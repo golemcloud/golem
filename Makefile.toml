@@ -137,6 +137,11 @@ description = "Builds the component-service"
 command = "cargo"
 args = ["build", "-p", "golem-component-service"]
 
+[tasks.build-cloud-service]
+description = "Builds cloud service"
+command = "cargo"
+args = ["build", "-p", "cloud-service"]
+
 [tasks.build-release]
 description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
 to build for other target than the current one, can be linux/amd64 or linux/arm64. This is used for cross-compiling
@@ -214,6 +219,7 @@ args = [
     "--no-deps",
     "-Dwarnings",
 ]
+
 ## ** TEST **
 
 [tasks.test]
@@ -413,19 +419,10 @@ cargo test --package integration-tests --test api -- :tag: --nocapture --report-
 '''
 
 ## ** CHECK-OPENAPI **
+
 [tasks.check-openapi]
 description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
 dependencies = [
-    "build-worker-service",
-    "build-component-service",
-    "build-cloud-worker-service",
-    "build-cloud-component-service",
-    "build-cloud-service",
-    "generate-worker-service-openapi",
-    "generate-component-service-openapi",
-    "generate-cloud-worker-service-openapi",
-    "generate-cloud-component-service-openapi",
-    "generate-cloud-service-openapi",
     "merge-openapi",
     "diff-openapi",
 ]
@@ -452,45 +449,28 @@ script = '''
       echo "Run cargo make generate-openapi to generate new spec." 1>&2
       exit 1
   fi
-  if diff openapi/cloud-worker-spec.yaml target/cloud-worker-spec.yaml  >/dev/null 2>&1
+  if diff openapi/golem-component-service.yaml target/golem-component-service.yaml  >/dev/null 2>&1
     then
       echo "Latest Golem OpenAPI spec version detected."
     else
-      echo "openapi/cloud-worker-spec.yaml is not the same as produced by cloud-worker-service." 1>&2
+      echo "openapi/golem-component-service.yaml is not the same as produced by golem-component-service." 1>&2
       echo "Run cargo make generate-openapi to generate new spec." 1>&2
       exit 1
   fi
-  if diff openapi/cloud-component-spec.yaml target/cloud-component-spec.yaml  >/dev/null 2>&1
+  if diff openapi/golem-worker-service.yaml target/golem-worker-service.yaml  >/dev/null 2>&1
     then
       echo "Latest Golem OpenAPI spec version detected."
     else
-      echo "openapi/cloud-component-spec.yaml is not the same as produced by cloud-component-service." 1>&2
-      echo "Run cargo make generate-openapi to generate new spec." 1>&2
-      exit 1
-  fi
-  if diff openapi/golem-cloud-service.yaml target/golem-cloud-service.yaml  >/dev/null 2>&1
-    then
-      echo "Latest Golem OpenAPI spec version detected."
-    else
-      echo "openapi/golem-cloud-service.yaml is not the same as produced by golem-cloud-service.yaml." 1>&2
+      echo "openapi/golem-worker-service.yaml is not the same as produced by golem-worker-service." 1>&2
       echo "Run cargo make generate-openapi to generate new spec." 1>&2
       exit 1
   fi
 '''
 
 ## ** GENERATE-OPENAPI **
+
 [tasks.generate-openapi]
 dependencies = [
-    "build-worker-service",
-    "build-component-service",
-    "build-cloud-worker-service",
-    "build-cloud-component-service",
-    "build-cloud-service",
-    "generate-worker-service-openapi",
-    "generate-component-service-openapi",
-    "generate-cloud-worker-service-openapi",
-    "generate-cloud-component-service-openapi",
-    "generate-cloud-service-openapi",
     "merge-openapi",
     "store-openapi",
 ]
@@ -498,6 +478,7 @@ description = "Generates openapi spec from the code and saves it to the openapi 
 
 [tasks.generate-worker-service-openapi]
 description = "Generates openapi spec for worker service"
+dependencies = [ "build-worker-service" ]
 cwd = "./target/debug"
 script = '''
 mkdir -pv ../data
@@ -506,99 +487,39 @@ mkdir -pv ../data
 
 [tasks.generate-component-service-openapi]
 description = "Generates openapi spec for component service"
+dependencies = [ "build-component-service" ]
 cwd = "./target/debug"
 script = '''
 mkdir -pv ../data
 ./golem-component-service --dump-openapi-yaml > ../golem-component-service.yaml
 '''
 
-[tasks.build-cloud-worker-service-non-ci]
-condition = { env_not_set = ["CI"] }
-run_task = "build-cloud-worker-service"
-
-[tasks.build-cloud-worker-service]
-description = "Builds cloud worker service"
-command = "cargo"
-args = ["build", "-p", "cloud-worker-service"]
-
-[tasks.generate-cloud-worker-service-openapi]
-description = "Generates openapi spec for cloud worker service"
-dependencies = ["build-cloud-worker-service-non-ci"]
-script = '''
-mkdir -pv ../data
-./target/debug/cloud-worker-service --dump-openapi-yaml > ./target/cloud-worker-spec.yaml
-'''
-
-[tasks.build-cloud-component-service-non-ci]
-condition = { env_not_set = ["CI"] }
-run_task = "build-cloud-component-service"
-
-[tasks.build-cloud-component-service]
-description = "Builds cloud component service"
-command = "cargo"
-args = ["build", "-p", "cloud-component-service"]
-
-[tasks.generate-cloud-component-service-openapi]
-description = "Generates openapi spec for cloud worker service"
-dependencies = ["build-cloud-component-service-non-ci"]
-script = '''
-mkdir -pv ../data
-./target/debug/cloud-component-service --dump-openapi-yaml > ./target/cloud-component-spec.yaml
-'''
-
-[tasks.build-cloud-service-non-ci]
-condition = { env_not_set = ["CI"] }
-run_task = "build-cloud-service"
-
-[tasks.build-cloud-service]
-description = "Builds cloud service"
-command = "cargo"
-args = ["build", "-p", "cloud-service"]
-
 [tasks.generate-cloud-service-openapi]
 description = "Generates openapi spec for cloud service"
-dependencies = ["build-cloud-service-non-ci"]
+dependencies = [ "build-cloud-service" ]
+cwd = "./target/debug"
 script = '''
 mkdir -pv ../data
-./target/debug/cloud-service --dump-openapi-yaml > ./target/cloud-spec.yaml
+./cloud-service --dump-openapi-yaml > ../cloud-spec.yaml
 '''
 
-[tasks.merge-cloud-openapi]
-install_crate = { crate_name = "golem-openapi-client-generator", version = "=0.0.16" }
-dependencies = [
-    "generate-cloud-worker-service-openapi",
-    "generate-cloud-component-service-openapi",
-    "generate-cloud-service-openapi",
-]
-command = "golem-openapi-client-generator"
-args = [
-    "merge",
-    "--spec-yaml",
-    "./target/cloud-component-spec.yaml",
-    "./target/cloud-worker-spec.yaml",
-    "./target/cloud-spec.yaml",
-    "--output-yaml",
-    "./target/golem-cloud-service.yaml",
-]
-
-[tasks.merge-oss-openapi]
-install_crate = { crate_name = "golem-openapi-client-generator", version = "=0.0.16" }
+[tasks.merge-openapi]
 dependencies = [
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
+    "generate-cloud-service-openapi",
 ]
+install_crate = { crate_name = "golem-openapi-client-generator", version = "=0.0.16" }
 command = "golem-openapi-client-generator"
 args = [
     "merge",
     "--spec-yaml",
     "./target/golem-component-service.yaml",
     "./target/golem-worker-service.yaml",
+    "./target/cloud-spec.yaml",
     "--output-yaml",
     "./target/golem-service.yaml",
 ]
-
-[tasks.merge-openapi]
-dependencies = ["merge-oss-openapi", "merge-cloud-openapi"]
 
 [tasks.store-openapi]
 description = "Stores the generated openapi spec in the openapi directory"
@@ -606,9 +527,8 @@ dependencies = ["merge-openapi"]
 script = [
     "cp -v ./target/golem-service.yaml ./openapi/golem-service.yaml",
     "cp -v ./target/cloud-spec.yaml ./openapi/",
-    "cp -v ./target/cloud-component-spec.yaml ./openapi/",
-    "cp -v ./target/cloud-worker-spec.yaml ./openapi/",
-    "cp -v ./target/golem-cloud-service.yaml ./openapi/",
+    "cp -v ./target/golem-component-service.yaml ./openapi/",
+    "cp -v ./target/golem-worker-service.yaml ./openapi/",
 ]
 
 ## ** PUBLISH **
@@ -625,8 +545,7 @@ dependencies = [
     "publish-golem-client",
     "publish-golem-service-base",
     "publish-golem-test-framework",
-    "publish-golem-rib-repl",
-    "publish-golem-cloud-client",
+    "publish-golem-rib-repl"
 ]
 
 [tasks.set-version]
@@ -761,17 +680,6 @@ args = [
 description = "Publishes golem-rib package to crates.io"
 command = "cargo"
 args = ["publish", "-p", "golem-rib-repl", "--allow-dirty", "--no-verify"]
-
-[tasks.publish-golem-cloud-client]
-description = "Publishes golem-cloud-client package to crates.io"
-command = "cargo"
-args = [
-    "publish",
-    "-p",
-    "golem-cloud-client",
-    "--all-features",
-    "--allow-dirty",
-]
 
 ## ** PACKAGE RELEASE **
 

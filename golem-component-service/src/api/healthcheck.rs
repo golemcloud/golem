@@ -1,11 +1,10 @@
-use golem_common::golem_version;
-use golem_service_base::api_tags::ApiTags;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 
-pub struct HealthcheckApi;
+use crate::api::ApiTags;
+use crate::VERSION;
 
-const VERSION: &str = golem_version!();
+pub struct HealthcheckApi;
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,

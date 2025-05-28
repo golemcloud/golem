@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package golem.apidefinition;
 
-import "golem/component/component_id.proto";
 import "golem/rib/expr.proto";
 import "golem/rib/rib_input.proto";
 import "golem/rib/rib_output.proto";
