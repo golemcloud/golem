@@ -259,7 +259,7 @@ mod internal {
     use crate::type_refinement::TypeRefinement;
     use crate::{
         ActualType, AmbiguousTypeError, ArmPattern, ExpectedType, Expr, InferredType,
-        InvalidPatternMatchError, TypeInternal, TypeMismatchError, VariableId,
+        InvalidPatternMatchError, Path, TypeInternal, TypeMismatchError, VariableId,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::collections::VecDeque;
@@ -760,8 +760,15 @@ mod internal {
         // in compiler's best effort to create precise error message
         match AnalysedType::try_from(actual_inferred_type) {
             Ok(analysed_type) => {
-                TypeMismatchError::with_actual_type_kind(expr, None, analysed_type, push_down_kind)
-                    .into()
+                let type_mismatch_error = TypeMismatchError {
+                    expr_with_wrong_type: expr.clone(),
+                    parent_expr: None,
+                    expected_type: ExpectedType::AnalysedType(analysed_type),
+                    actual_type: ActualType::Hint(push_down_kind.clone()),
+                    field_path: Path::default(),
+                    additional_error_detail: Vec::new(),
+                };
+                type_mismatch_error.into()
             }
 
             Err(_) => {

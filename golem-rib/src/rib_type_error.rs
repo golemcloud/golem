@@ -1,8 +1,8 @@
 use crate::type_checker::{ExhaustivePatternMatchError, InvalidProgramReturn};
 use crate::{
     ActualType, AmbiguousTypeError, CustomError, ExpectedType, Expr, FunctionCallError,
-    InvalidPatternMatchError, InvalidWorkerName, MultipleUnResolvedTypesError, TypeMismatchError,
-    TypeName, TypeUnificationError, UnResolvedTypesError,
+    InvalidPatternMatchError, InvalidWorkerName, TypeMismatchError, TypeName, TypeUnificationError,
+    UnResolvedTypesError,
 };
 use std::fmt;
 use std::fmt::{Debug, Display};
@@ -380,26 +380,6 @@ impl From<InvalidPatternMatchError> for RibTypeError {
             immediate_parent: immediate_parent.cloned(),
             additional_error_details: vec![],
             help_messages: vec![],
-        }
-    }
-}
-
-impl From<MultipleUnResolvedTypesError> for RibTypeError {
-    fn from(value: MultipleUnResolvedTypesError) -> Self {
-        let mut errors: Vec<UnResolvedTypesError> = value.0;
-
-        let mut first_error = errors.remove(0);
-
-        if errors.is_empty() {
-            RibTypeError::from(first_error.clone())
-        } else {
-            for error in errors {
-                first_error
-                    .additional_messages
-                    .push(RibTypeError::from(error.clone()).to_string());
-            }
-
-            first_error.clone().into()
         }
     }
 }
