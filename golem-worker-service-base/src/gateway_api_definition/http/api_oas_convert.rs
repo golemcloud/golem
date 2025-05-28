@@ -20,6 +20,7 @@ use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
 use crate::gateway_middleware::HttpCors;
 use golem_wasm_ast::analysis::AnalysedType;
+use http::StatusCode;
 use rib::RibInputTypeInfo;
 use serde::{Deserialize, Serialize};
 
@@ -129,7 +130,7 @@ fn process_route(
         openapiv3::ReferenceOr<openapiv3::SecurityScheme>,
     >,
 ) -> Result<(), String> {
-    let path_str = route.path.to_string();
+    let path_str = route.path.to_string(); // AllPathPatterns to String
     let path_item = paths.entry(path_str.clone()).or_default();
 
     let operation = create_operation(route, security_schemes)?;
@@ -335,9 +336,11 @@ fn add_request_body(operation: &mut openapiv3::Operation, route: &CompiledRoute)
     match &route.binding {
         GatewayBindingCompiled::Worker(worker_binding)
         | GatewayBindingCompiled::FileServer(worker_binding) => {
-            let request_body =
-                create_request_body(route, &worker_binding.response_compiled.rib_input);
-            operation.request_body = Some(openapiv3::ReferenceOr::Item(request_body));
+            if let Some(request_body) =
+                create_request_body(route, &worker_binding.response_compiled.rib_input)
+            {
+                operation.request_body = Some(openapiv3::ReferenceOr::Item(request_body));
+            }
         }
         _ => {}
     }
@@ -442,39 +445,42 @@ fn finalize_openapi<N: Clone>(
 fn create_request_body(
     _route: &CompiledRoute,
     response_mapping_input: &RibInputTypeInfo,
-) -> openapiv3::RequestBody {
-    let body_schema = determine_request_body_schema(response_mapping_input);
-    let media_type = openapiv3::MediaType {
-        schema: Some(openapiv3::ReferenceOr::Item(body_schema)),
-        ..Default::default()
-    };
+) -> Option<openapiv3::RequestBody> {
+    if let Some(body_schema) = determine_request_body_schema(response_mapping_input) {
+        let media_type = openapiv3::MediaType {
+            schema: Some(openapiv3::ReferenceOr::Item(body_schema)),
+            ..Default::default()
+        };
 
-    let mut content = indexmap::IndexMap::new();
-    content.insert("application/json".to_string(), media_type);
+        let mut content = indexmap::IndexMap::new();
+        content.insert("application/json".to_string(), media_type);
 
-    // If we have response_mapping_input, body is always required
-    let required = true;
-
-    openapiv3::RequestBody {
-        description: Some("Request payload".to_string()),
-        content,
-        required,
-        extensions: Default::default(),
+        Some(openapiv3::RequestBody {
+            description: Some("Request payload".to_string()),
+            content,
+            required: true,
+            extensions: Default::default(),
+        })
+    } else {
+        // No request body schema found, return None
+        None
     }
 }
 
 // Helper function: Determines request body schema
-fn determine_request_body_schema(response_mapping_input: &RibInputTypeInfo) -> openapiv3::Schema {
+fn determine_request_body_schema(
+    response_mapping_input: &RibInputTypeInfo,
+) -> Option<openapiv3::Schema> {
     // Check request key and then look for body field within the request
     if let Some(AnalysedType::Record(request_record)) = response_mapping_input.types.get("request")
     {
         if let Some(body_field) = request_record.fields.iter().find(|f| f.name == "body") {
-            return create_schema_from_analysed_type(&body_field.typ);
+            return Some(create_schema_from_analysed_type(&body_field.typ));
         }
     }
 
-    // Fallback to default object schema if no body is found
-    create_default_object_schema()
+    // No body field found, return None to indicate no request body
+    None
 }
 
 // Helper function: Gets default status code based on method
@@ -499,37 +505,33 @@ fn create_response(status_code: u16, route: &CompiledRoute) -> openapiv3::Respon
         ..Default::default()
     };
 
-    // Only add content for non-204 responses
+    // Only add content if we have a response schema and it's not a 204 response
     if status_code != 204 {
-        let mut content = indexmap::IndexMap::new();
-        let media = openapiv3::MediaType {
-            schema: Some(openapiv3::ReferenceOr::Item(determine_response_schema(
-                route,
-            ))),
-            ..Default::default()
-        };
-        content.insert("application/json".to_string(), media);
-        response.content = content;
+        if let Some(response_schema) = determine_response_schema(route) {
+            let mut content = indexmap::IndexMap::new();
+            let media = openapiv3::MediaType {
+                schema: Some(openapiv3::ReferenceOr::Item(response_schema)),
+                ..Default::default()
+            };
+            content.insert("application/json".to_string(), media);
+            response.content = content;
+        }
+        // If no response schema, don't add content at all
     }
 
     response
 }
 
 // Helper function: Gets status code description
+// Limited to 200, 201, 204 from possible MethodPattern
 fn get_status_description(status_code: u16) -> String {
-    match status_code {
-        204 => "No Content".to_string(),
-        201 => "Created".to_string(),
-        200 => "OK".to_string(),
-        400 => "Bad Request".to_string(),
-        404 => "Not Found".to_string(),
-        500 => "Internal Server Error".to_string(),
-        _ => "Response".to_string(),
-    }
+    StatusCode::from_u16(status_code)
+        .map(|code| code.canonical_reason().unwrap_or("Unknown").to_string())
+        .unwrap_or_else(|_| "Unknown".to_string())
 }
 
 // Helper function: Determines response schema
-fn determine_response_schema(route: &CompiledRoute) -> openapiv3::Schema {
+fn determine_response_schema(route: &CompiledRoute) -> Option<openapiv3::Schema> {
     // We check if it has both status and body fields, then use the body field
     match &route.binding {
         GatewayBindingCompiled::Worker(worker_binding)
@@ -544,20 +546,19 @@ fn determine_response_schema(route: &CompiledRoute) -> openapiv3::Schema {
                             .fields
                             .iter()
                             .find(|f| f.name == "body")
-                            .map(|body_field| create_schema_from_analysed_type(&body_field.typ))
-                            .unwrap_or_else(create_default_object_schema),
-                        (true, false) => create_default_object_schema(),
-                        _ => create_schema_from_analysed_type(&output_info.analysed_type),
+                            .map(|body_field| create_schema_from_analysed_type(&body_field.typ)),
+                        (true, false) => None, // Status only, no body
+                        _ => Some(create_schema_from_analysed_type(&output_info.analysed_type)),
                     };
                 }
-                return create_schema_from_analysed_type(&output_info.analysed_type);
+                return Some(create_schema_from_analysed_type(&output_info.analysed_type));
             }
         }
         _ => {}
     }
 
-    // Fallback to default object
-    create_default_object_schema()
+    // No response schema found
+    None
 }
 
 // Helper function: Creates binding info
@@ -599,7 +600,7 @@ fn create_binding_info(route: &CompiledRoute) -> serde_json::Map<String, serde_j
                 );
             }
         },
-        GatewayBindingCompiled::SwaggerUi => {
+        GatewayBindingCompiled::SwaggerUi(_) => {
             binding_info.insert(
                 "binding-type".to_string(),
                 serde_json::Value::String("swagger-ui".to_string()),
@@ -838,12 +839,21 @@ fn add_operation_to_path_item(
     Ok(())
 }
 
-// Helper function: Creates a default object schema
-// Used as fallback in case type or fields are missing
-fn create_default_object_schema() -> openapiv3::Schema {
+// Helper function: Creates a default schema for unknown/unhandled types
+// This should never get triggered since we don't support Handle(_)
+fn create_default_schema() -> openapiv3::Schema {
     openapiv3::Schema {
-        schema_data: Default::default(),
-        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(Default::default())),
+        schema_data: openapiv3::SchemaData {
+            description: Some("Default schema for unknown type".to_string()),
+            ..Default::default()
+        },
+        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(openapiv3::ObjectType {
+            properties: indexmap::IndexMap::new(),
+            required: Vec::new(),
+            additional_properties: Some(openapiv3::AdditionalProperties::Any(true)),
+            min_properties: None,
+            max_properties: None,
+        })),
     }
 }
 
@@ -1197,7 +1207,65 @@ fn create_schema_from_analysed_type(
                 },
             }
         }
-        // Handle any other cases with a generic object type
-        _ => create_default_object_schema(),
+        AnalysedType::Flags(type_flags) => {
+            // Flags in WIT are like bitflags - multiple values can be set
+            // Represent as an array of strings where each string is a flag name
+            let enum_values: Vec<Option<String>> = type_flags
+                .names
+                .iter()
+                .map(|name| Some(name.clone()))
+                .collect();
+
+            // Create an array schema where items are string enums
+            let items_schema = openapiv3::Schema {
+                schema_data: Default::default(),
+                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
+                    openapiv3::StringType {
+                        format: openapiv3::VariantOrUnknownOrEmpty::Empty,
+                        pattern: None,
+                        enumeration: enum_values,
+                        min_length: None,
+                        max_length: None,
+                    },
+                )),
+            };
+
+            openapiv3::Schema {
+                schema_data: openapiv3::SchemaData {
+                    description: Some("Flags type - array of flag names".to_string()),
+                    ..Default::default()
+                },
+                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Array(
+                    openapiv3::ArrayType {
+                        items: Some(openapiv3::ReferenceOr::Item(Box::new(items_schema))),
+                        min_items: Some(0),
+                        max_items: Some(type_flags.names.len()),
+                        unique_items: true,
+                    },
+                )),
+            }
+        }
+        AnalysedType::Chr(_) => {
+            // Chr represents a Unicode character in WIT
+            // Represent as a string with length constraints
+            openapiv3::Schema {
+                schema_data: openapiv3::SchemaData {
+                    description: Some("Unicode character".to_string()),
+                    ..Default::default()
+                },
+                schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
+                    openapiv3::StringType {
+                        format: openapiv3::VariantOrUnknownOrEmpty::Empty,
+                        pattern: Some("^.{1}$".to_string()), // Exactly one character
+                        enumeration: vec![],
+                        min_length: Some(1),
+                        max_length: Some(1),
+                    },
+                )),
+            }
+        }
+        // Handle(_) => todo!()
+        // This will not trigger for any case since Handle(_) is todo!()
+        _ => create_default_schema(),
     }
 }

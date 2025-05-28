@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::gateway_api_definition::http::oas_api_definition::OpenApiHttpApiDefinition;
 use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern;
 use crate::gateway_api_definition::http::{HttpApiDefinitionRequest, RouteRequest};
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
 use crate::gateway_api_definition_transformer::transform_http_api_definition;
+use crate::gateway_binding::SwaggerUiBinding;
 use crate::gateway_binding::{
     GatewayBinding, GatewayBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
     ResponseMappingCompiled, StaticBinding, WorkerNameCompiled,
@@ -297,14 +299,47 @@ impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
             compiled_routes.push(compiled_route);
         }
 
-        Ok(CompiledHttpApiDefinition {
+        let mut result = CompiledHttpApiDefinition {
             id: http_api_definition.id.clone(),
             version: http_api_definition.version.clone(),
             routes: compiled_routes,
             draft: http_api_definition.draft,
             created_at: http_api_definition.created_at,
             namespace: namespace.clone(),
-        })
+        };
+
+        // Update SwaggerUI routes with actual OpenAPI spec
+        result.update_swagger_ui_openapi_specs();
+
+        Ok(result)
+    }
+
+    /// Updates SwaggerUI routes with the actual OpenAPI specification
+    pub fn update_swagger_ui_openapi_specs(&mut self) {
+        // Generate the OpenAPI spec from this compiled definition
+        let openapi_spec_json = match self.generate_openapi_spec_json() {
+            Ok(spec) => spec,
+            Err(_) => {
+                // If we can't generate the spec, keep the boilerplate
+                return;
+            }
+        };
+
+        // Update all SwaggerUI routes with the actual OpenAPI spec
+        for route in &mut self.routes {
+            if let crate::gateway_binding::GatewayBindingCompiled::SwaggerUi(swagger_binding) =
+                &mut route.binding
+            {
+                swagger_binding.openapi_spec_json = Some(openapi_spec_json.clone());
+            }
+        }
+    }
+
+    /// Generates the OpenAPI specification JSON for this compiled API definition
+    fn generate_openapi_spec_json(&self) -> Result<String, String> {
+        let openapi = OpenApiHttpApiDefinition::from_compiled_http_api_definition(self)?;
+        serde_json::to_string_pretty(&openapi.0)
+            .map_err(|e| format!("Failed to serialize OpenAPI to JSON: {}", e))
     }
 }
 
@@ -762,6 +797,21 @@ impl ComponentMetadataDictionary {
     }
 }
 
+/// Creates a basic OpenAPI 3.0.0 boilerplate specification
+fn create_boilerplate_openapi_spec() -> String {
+    serde_json::json!({
+        "openapi": "3.0.0",
+        "info": {
+            "title": "API",
+            "version": "1.0.0",
+            "description": "Basic OpenAPI specification"
+        },
+        "paths": {},
+        "components": {}
+    })
+    .to_string()
+}
+
 impl CompiledRoute {
     pub fn get_security_middleware(&self) -> Option<HttpAuthenticationMiddleware> {
         match &self.middlewares {
@@ -882,12 +932,19 @@ impl CompiledRoute {
                 middlewares: route.middlewares.clone(),
             }),
 
-            GatewayBinding::SwaggerUi => Ok(CompiledRoute {
-                method: route.method.clone(),
-                path: route.path.clone(),
-                binding: GatewayBindingCompiled::SwaggerUi,
-                middlewares: route.middlewares.clone(),
-            }),
+            GatewayBinding::SwaggerUi => {
+                // Create a basic OpenAPI 3.0.0 boilerplate spec for SwaggerUI
+                let boilerplate_spec = create_boilerplate_openapi_spec();
+
+                Ok(CompiledRoute {
+                    method: route.method.clone(),
+                    path: route.path.clone(),
+                    binding: GatewayBindingCompiled::SwaggerUi(
+                        SwaggerUiBinding::update_openapi_spec(boilerplate_spec),
+                    ),
+                    middlewares: route.middlewares.clone(),
+                })
+            }
         }
     }
 

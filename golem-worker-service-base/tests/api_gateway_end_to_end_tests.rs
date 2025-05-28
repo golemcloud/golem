@@ -2611,6 +2611,7 @@ mod internal {
         CompiledHttpApiDefinition, ComponentMetadataDictionary,
     };
     use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
+    use golem_worker_service_base::gateway_binding::SwaggerUiBinding;
     use golem_worker_service_base::gateway_execution::api_definition_lookup::{
         ApiDefinitionLookupError, HttpApiDefinitionsLookup,
     };
@@ -2623,7 +2624,6 @@ mod internal {
     use golem_worker_service_base::gateway_execution::http_handler_binding_handler::{
         HttpHandlerBindingHandler, HttpHandlerBindingResult,
     };
-    use golem_worker_service_base::gateway_execution::request::RichRequest;
     use golem_worker_service_base::gateway_execution::swagger_binding_handler::{
         SwaggerBindingHandler, SwaggerBindingResult, SwaggerBindingSuccess,
     };
@@ -3268,12 +3268,11 @@ mod internal {
     struct TestSwaggerBindingHandler {}
     // Create a test swagger binding handler which outputs a static html page
     #[async_trait]
-    impl<Namespace> SwaggerBindingHandler<Namespace> for TestSwaggerBindingHandler {
+    impl SwaggerBindingHandler for TestSwaggerBindingHandler {
         async fn handle_swagger_binding_request(
             &self,
-            _namespace: &Namespace,
             _authority: &str,
-            _request: &RichRequest,
+            _swagger_binding: &SwaggerUiBinding,
         ) -> SwaggerBindingResult {
             Ok(SwaggerBindingSuccess {
                 html_content: "<html><body>Test Swagger UI</body></html>".to_string(),
@@ -3281,8 +3280,7 @@ mod internal {
         }
     }
 
-    pub fn get_test_swagger_binding_handler<Namespace>(
-    ) -> Arc<dyn SwaggerBindingHandler<Namespace> + Sync + Send> {
+    pub fn get_test_swagger_binding_handler() -> Arc<dyn SwaggerBindingHandler + Sync + Send> {
         Arc::new(TestSwaggerBindingHandler {})
     }
 }

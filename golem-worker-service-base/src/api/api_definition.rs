@@ -602,7 +602,7 @@ impl GatewayBindingResponseData {
                     response_mapping_output: None,
                 })
             }
-            GatewayBindingCompiled::SwaggerUi => Ok(GatewayBindingResponseData {
+            GatewayBindingCompiled::SwaggerUi(_) => Ok(GatewayBindingResponseData {
                 component: None,
                 worker_name: None,
                 idempotency_key: None,

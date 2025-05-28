@@ -75,7 +75,7 @@ pub struct DefaultGatewayInputExecutor<Namespace> {
     pub file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
     pub auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler + Sync + Send>,
     pub http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send>,
-    pub swagger_binding_handler: Arc<dyn SwaggerBindingHandler<Namespace> + Sync + Send>,
+    pub swagger_binding_handler: Arc<dyn SwaggerBindingHandler + Sync + Send>,
     pub api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
     pub gateway_session_store: GatewaySessionStore,
     pub identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
@@ -89,7 +89,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
         auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler + Sync + Send>,
         http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send>,
-        swagger_binding_handler: Arc<dyn SwaggerBindingHandler<Namespace> + Sync + Send>,
+        swagger_binding_handler: Arc<dyn SwaggerBindingHandler + Sync + Send>,
         api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
         gateway_session_store: GatewaySessionStore,
         identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
@@ -671,10 +671,10 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                 maybe_apply_middlewares_out(response, &middlewares).await
             }
 
-            GatewayBindingCompiled::SwaggerUi => {
+            GatewayBindingCompiled::SwaggerUi(swagger_binding) => {
                 let result = self
                     .swagger_binding_handler
-                    .handle_swagger_binding_request(&namespace, &authority, &rich_request)
+                    .handle_swagger_binding_request(&authority, &swagger_binding)
                     .await;
 
                 let response = result

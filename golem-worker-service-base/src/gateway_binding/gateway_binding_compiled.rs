@@ -24,6 +24,31 @@ use rib::RibOutputTypeInfo;
 use super::http_handler_binding::HttpHandlerBindingCompiled;
 use super::HttpHandlerBinding;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwaggerUiBinding {
+    pub openapi_spec_json: Option<String>,
+}
+
+impl Default for SwaggerUiBinding {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SwaggerUiBinding {
+    pub fn new() -> Self {
+        Self {
+            openapi_spec_json: None,
+        }
+    }
+
+    pub fn update_openapi_spec(openapi_spec_json: String) -> Self {
+        Self {
+            openapi_spec_json: Some(openapi_spec_json),
+        }
+    }
+}
+
 // A compiled binding is a binding with all existence of Rib Expr
 // get replaced with their compiled form - RibByteCode.
 #[derive(Debug, Clone, PartialEq)]
@@ -32,7 +57,7 @@ pub enum GatewayBindingCompiled {
     Static(StaticBinding),
     FileServer(WorkerBindingCompiled),
     HttpHandler(HttpHandlerBindingCompiled),
-    SwaggerUi,
+    SwaggerUi(SwaggerUiBinding),
 }
 
 impl GatewayBindingCompiled {
@@ -41,7 +66,7 @@ impl GatewayBindingCompiled {
             GatewayBindingCompiled::Worker(_) => false,
             GatewayBindingCompiled::FileServer(_) => false,
             GatewayBindingCompiled::HttpHandler(_) => false,
-            GatewayBindingCompiled::SwaggerUi => false,
+            GatewayBindingCompiled::SwaggerUi(_) => false,
             GatewayBindingCompiled::Static(static_binding) => match static_binding {
                 StaticBinding::HttpCorsPreflight(_) => false,
                 StaticBinding::HttpAuthCallBack(_) => true,
@@ -77,7 +102,7 @@ impl From<GatewayBindingCompiled> for GatewayBinding {
 
                 GatewayBinding::HttpHandler(worker_binding)
             }
-            GatewayBindingCompiled::SwaggerUi => GatewayBinding::SwaggerUi,
+            GatewayBindingCompiled::SwaggerUi(_) => GatewayBinding::SwaggerUi,
         }
     }
 }
@@ -141,7 +166,7 @@ impl TryFrom<GatewayBindingCompiled>
                     },
                 )
             }
-            GatewayBindingCompiled::SwaggerUi => Ok(
+            GatewayBindingCompiled::SwaggerUi(_) => Ok(
                 golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
                     component: None,
                     worker_name: None,
@@ -344,7 +369,9 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
 
                 Ok(GatewayBindingCompiled::Static(static_binding.try_into()?))
             }
-            ProtoGatewayBindingType::SwaggerUi => Ok(GatewayBindingCompiled::SwaggerUi),
+            ProtoGatewayBindingType::SwaggerUi => {
+                Ok(GatewayBindingCompiled::SwaggerUi(SwaggerUiBinding::new()))
+            }
         }
     }
 }
