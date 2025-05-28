@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+package golem.worker;
+
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
 import "golem/common/plugin_installation_id.proto";
@@ -8,9 +10,6 @@ import "golem/worker/invocation_context.proto";
 import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
 import "wasm/rpc/type_annotated_value.proto";
-
-
-package golem.worker;
 
 message OplogEntry {
   oneof entry {

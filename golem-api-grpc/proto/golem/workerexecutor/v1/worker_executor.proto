@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+package golem.workerexecutor.v1;
+
 import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
 import public "golem/common/plugin_installation_id.proto";
@@ -25,8 +27,6 @@ import public "golem/worker/filesystem.proto";
 
 import public "wasm/rpc/val.proto";
 import public "wasm/rpc/type_annotated_value.proto";
-
-package golem.workerexecutor.v1;
 
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);

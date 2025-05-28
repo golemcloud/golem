@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package golem.shardmanager;
 
-
 message ShardId {
   int64 value = 1;
 }

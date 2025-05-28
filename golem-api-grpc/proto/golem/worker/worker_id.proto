@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-import "golem/component/component_id.proto";
-
 package golem.worker;
+
+import "golem/component/component_id.proto";
 
 message WorkerId {
   golem.component.ComponentId component_id = 1;

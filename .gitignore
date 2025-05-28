@@ -16,9 +16,7 @@ test-components/csharp-1/bin/
 test-components/csharp-1/obj/
 test-components/python-1/__pycache__/
 test-components/tinygo-wasi*/tinygo_wasi/
-golem-client/*
-!golem-client/Cargo.toml
-!golem-client/build.rs
+golem-client/openapi/
 logs
 data
 .DS_Store

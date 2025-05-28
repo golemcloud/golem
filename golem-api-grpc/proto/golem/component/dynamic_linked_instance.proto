@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-import "golem/component/component_type.proto";
-
 package golem.component;
+
+import "golem/component/component_type.proto";
 
 message DynamicLinkedInstance {
   oneof dynamic_linked_instance {

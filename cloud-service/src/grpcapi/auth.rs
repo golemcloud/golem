@@ -4,8 +4,8 @@ use std::sync::Arc;
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
 use crate::service::auth::{AuthService, AuthServiceError};
-use cloud_api_grpc::proto::golem::cloud::auth::v1::cloud_auth_service_server::CloudAuthService;
-use cloud_api_grpc::proto::golem::cloud::auth::v1::{
+use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_server::CloudAuthService;
+use golem_api_grpc::proto::golem::auth::v1::{
     auth_error, authorize_project_action_response, get_account_response, AuthError,
     AuthorizeProjectActionRequest, AuthorizeProjectActionResponse,
     AuthorizeProjectActionSuccessResponse, GetAccountRequest, GetAccountResponse,

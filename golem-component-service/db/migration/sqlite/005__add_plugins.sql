@@ -7,6 +7,8 @@ CREATE TABLE plugins
     homepage             text     NOT NULL,
     plugin_type          smallint NOT NULL,
     scope_component_id   uuid REFERENCES components (component_id),
+    scope_project_id     uuid,
+    account_id           character varying(100) NOT NULL,
     provided_wit_package text,
     json_schema          text,
     validate_url         text,
@@ -15,7 +17,7 @@ CREATE TABLE plugins
     component_version    bigint,
     deleted              boolean  NOT NULL DEFAULT FALSE,
 
-    PRIMARY KEY (name, version)
+    PRIMARY KEY (account_id, name, version)
 );
 
 CREATE TABLE component_plugin_installation
@@ -27,6 +29,7 @@ CREATE TABLE component_plugin_installation
     parameters        blob    NOT NULL,
     component_id      uuid REFERENCES components (component_id),
     component_version bigint,
-
-    FOREIGN KEY (plugin_name, plugin_version) REFERENCES plugins (name, version)
+    account_id        character varying(100) NOT NULL,
+    
+    FOREIGN KEY (account_id, plugin_name, plugin_version) REFERENCES plugins (account_id, name, version)
 );

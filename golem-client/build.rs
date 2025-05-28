@@ -38,6 +38,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         &[
             ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
             ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
+            ("CloudPluginScope", "crate::CloudPluginScope"),
             (
                 "ComponentMetadata",
                 "golem_common::model::component_metadata::ComponentMetadata",
@@ -53,10 +54,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::plugin::DefaultPluginScope",
             ),
             ("DefaultPluginOwner", "crate::DefaultPluginOwner"),
-            (
-                "OplogCursor",
-                "golem_common::model::public_oplog::OplogCursor",
-            ),
             ("Empty", "golem_common::model::Empty"),
             (
                 "InitialComponentFile",
@@ -66,18 +63,26 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("ErrorsBody", "golem_common::model::error::ErrorsBody"),
             ("GolemError", "golem_common::model::error::GolemError"),
             (
-                "ValueAndOptionalType",
-                "golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson",
-            ),
-            (
                 "PluginInstallationAction",
                 "golem_common::model::plugin::PluginInstallationAction",
             ),
+            (
+                "OplogCursor",
+                "golem_common::model::public_oplog::OplogCursor",
+            ),
             ("PromiseId", "golem_common::model::PromiseId"),
+            (
+                "PublicOplogEntry",
+                "golem_common::model::public_oplog::PublicOplogEntry",
+            ),
             ("ShardId", "golem_common::model::ShardId"),
             (
                 "TypeAnnotatedValue",
                 "golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue",
+            ),
+            (
+                "ValueAndOptionalType",
+                "golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson",
             ),
             (
                 "WasmRpcTarget",
@@ -90,10 +95,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::WorkerBindingType",
             ),
             ("WorkerStatus", "golem_common::model::WorkerStatus"),
-            (
-                "PublicOplogEntry",
-                "golem_common::model::public_oplog::PublicOplogEntry",
-            ),
         ],
         &["/v1/components/{component_id}/workers/{worker_name}/connect"],
     )

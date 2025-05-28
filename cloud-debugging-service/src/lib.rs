@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use axum::routing::any;
 use axum::Router;
 use cloud_common::clients::auth::CloudAuthService;
-use cloud_worker_executor::services::component::ComponentServiceCloudGrpc;
-use cloud_worker_executor::CloudGolemTypes;
+use golem_worker_executor::services::component::ComponentServiceCloudGrpc;
+use golem_worker_executor::CloudGolemTypes;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
 use golem_worker_executor_base::preview2::{golem_api_1_x, golem_durability};
@@ -141,7 +141,7 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
         Arc<dyn Plugins<CloudGolemTypes>>,
         Arc<dyn PluginsObservations>,
     ) {
-        let plugins = cloud_worker_executor::services::plugins::cloud_configured(
+        let plugins = golem_worker_executor::services::plugins::cloud_configured(
             &golem_config.plugin_service,
         );
         (plugins.clone(), plugins)

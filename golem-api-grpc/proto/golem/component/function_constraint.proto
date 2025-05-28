@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 package golem.component;
+
 import "wasm/ast/type.proto";
 import "golem/rib/registry_key.proto";
 
