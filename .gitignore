@@ -3,7 +3,6 @@ debug/
 target/
 **/*.rs.bk
 *.pdb
-.idea/
 golem-worker-executor/data/
 golem-worker-executor-base/data/
 golem-worker-executor-base/golem-wit/
@@ -23,3 +22,12 @@ golem-client/*
 logs
 data
 .DS_Store
+
+# locally kept custom dev files
+/.local/
+
+# IDEs
+.idea/
+.vscode/
+.cursorrules
+.cursorignore
