@@ -14,12 +14,12 @@
 
 use async_trait::async_trait;
 
-use golem_test_framework::config::{CliParams, TestDependencies};
-use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use integration_tests::benchmarks::{
+use crate::benchmarks::{
     benchmark_invocations, delete_workers, invoke_and_await, run_benchmark, setup_benchmark,
     setup_simple_iteration, SimpleBenchmarkContext, SimpleIterationContext,
 };
+use golem_test_framework::config::{CliParams, TestDependencies};
+use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 
 struct LargeInitialMemory {
     config: RunConfig,
@@ -101,7 +101,6 @@ impl Benchmark for LargeInitialMemory {
     }
 }
 
-#[tokio::main]
-async fn main() {
+pub async fn run() {
     run_benchmark::<LargeInitialMemory>().await;
 }
