@@ -5,6 +5,8 @@ edition = "2021"
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem-cli"
 description = "Golem templates"
+license-file = "../LICENSE"
+
 default-run = "golem-templates-test-cli"
 autotests = false
 

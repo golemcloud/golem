@@ -710,7 +710,7 @@ impl From<golem_cloud_client::model::Role> for Role {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter)]
-pub enum ProjectAction {
+pub enum ProjectPermission {
     ViewComponent,
     CreateComponent,
     UpdateComponent,
@@ -727,7 +727,6 @@ pub enum ProjectAction {
     UpdateApiDefinition,
     DeleteApiDefinition,
     DeleteProject,
-    ViewProject,
     ViewPluginInstallations,
     CreatePluginInstallation,
     UpdatePluginInstallation,
@@ -738,64 +737,61 @@ pub enum ProjectAction {
     UpsertApiDomain,
     ViewApiDomain,
     DeleteApiDomain,
-    BatchUpdatePluginInstallations,
 }
 
-impl Display for ProjectAction {
+impl Display for ProjectPermission {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            ProjectAction::ViewComponent => "ViewComponent",
-            ProjectAction::CreateComponent => "CreateComponent",
-            ProjectAction::UpdateComponent => "UpdateComponent",
-            ProjectAction::DeleteComponent => "DeleteComponent",
-            ProjectAction::ViewWorker => "ViewWorker",
-            ProjectAction::CreateWorker => "CreateWorker",
-            ProjectAction::UpdateWorker => "UpdateWorker",
-            ProjectAction::DeleteWorker => "DeleteWorker",
-            ProjectAction::ViewProjectGrants => "ViewProjectGrants",
-            ProjectAction::CreateProjectGrants => "CreateProjectGrants",
-            ProjectAction::DeleteProjectGrants => "DeleteProjectGrants",
-            ProjectAction::ViewApiDefinition => "ViewApiDefinition",
-            ProjectAction::CreateApiDefinition => "CreateApiDefinition",
-            ProjectAction::UpdateApiDefinition => "UpdateApiDefinition",
-            ProjectAction::DeleteApiDefinition => "DeleteApiDefinition",
-            ProjectAction::DeleteProject => "DeleteProject",
-            ProjectAction::ViewProject => "ViewProject",
-            ProjectAction::ViewPluginInstallations => "ViewPluginInstallations",
-            ProjectAction::CreatePluginInstallation => "CreatePluginInstallation",
-            ProjectAction::UpdatePluginInstallation => "UpdatePluginInstallation",
-            ProjectAction::DeletePluginInstallation => "DeletePluginInstallation",
-            ProjectAction::UpsertApiDeployment => "UpsertApiDeployment",
-            ProjectAction::ViewApiDeployment => "ViewApiDeployment",
-            ProjectAction::DeleteApiDeployment => "DeleteApiDeployment",
-            ProjectAction::UpsertApiDomain => "UpsertApiDomain",
-            ProjectAction::ViewApiDomain => "ViewApiDomain",
-            ProjectAction::DeleteApiDomain => "DeleteApiDomain",
-            ProjectAction::BatchUpdatePluginInstallations => "BatchUpdatePluginInstallations",
+            ProjectPermission::ViewComponent => "ViewComponent",
+            ProjectPermission::CreateComponent => "CreateComponent",
+            ProjectPermission::UpdateComponent => "UpdateComponent",
+            ProjectPermission::DeleteComponent => "DeleteComponent",
+            ProjectPermission::ViewWorker => "ViewWorker",
+            ProjectPermission::CreateWorker => "CreateWorker",
+            ProjectPermission::UpdateWorker => "UpdateWorker",
+            ProjectPermission::DeleteWorker => "DeleteWorker",
+            ProjectPermission::ViewProjectGrants => "ViewProjectGrants",
+            ProjectPermission::CreateProjectGrants => "CreateProjectGrants",
+            ProjectPermission::DeleteProjectGrants => "DeleteProjectGrants",
+            ProjectPermission::ViewApiDefinition => "ViewApiDefinition",
+            ProjectPermission::CreateApiDefinition => "CreateApiDefinition",
+            ProjectPermission::UpdateApiDefinition => "UpdateApiDefinition",
+            ProjectPermission::DeleteApiDefinition => "DeleteApiDefinition",
+            ProjectPermission::DeleteProject => "DeleteProject",
+            ProjectPermission::ViewPluginInstallations => "ViewPluginInstallations",
+            ProjectPermission::CreatePluginInstallation => "CreatePluginInstallation",
+            ProjectPermission::UpdatePluginInstallation => "UpdatePluginInstallation",
+            ProjectPermission::DeletePluginInstallation => "DeletePluginInstallation",
+            ProjectPermission::UpsertApiDeployment => "UpsertApiDeployment",
+            ProjectPermission::ViewApiDeployment => "ViewApiDeployment",
+            ProjectPermission::DeleteApiDeployment => "DeleteApiDeployment",
+            ProjectPermission::UpsertApiDomain => "UpsertApiDomain",
+            ProjectPermission::ViewApiDomain => "ViewApiDomain",
+            ProjectPermission::DeleteApiDomain => "DeleteApiDomain",
         };
 
         Display::fmt(s, f)
     }
 }
 
-impl FromStr for ProjectAction {
+impl FromStr for ProjectPermission {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ViewComponent" => Ok(ProjectAction::ViewComponent),
-            "CreateComponent" => Ok(ProjectAction::CreateComponent),
-            "UpdateComponent" => Ok(ProjectAction::UpdateComponent),
-            "DeleteComponent" => Ok(ProjectAction::DeleteComponent),
-            "ViewWorker" => Ok(ProjectAction::ViewWorker),
-            "CreateWorker" => Ok(ProjectAction::CreateWorker),
-            "UpdateWorker" => Ok(ProjectAction::UpdateWorker),
-            "DeleteWorker" => Ok(ProjectAction::DeleteWorker),
-            "ViewProjectGrants" => Ok(ProjectAction::ViewProjectGrants),
-            "CreateProjectGrants" => Ok(ProjectAction::CreateProjectGrants),
-            "DeleteProjectGrants" => Ok(ProjectAction::DeleteProjectGrants),
+            "ViewComponent" => Ok(ProjectPermission::ViewComponent),
+            "CreateComponent" => Ok(ProjectPermission::CreateComponent),
+            "UpdateComponent" => Ok(ProjectPermission::UpdateComponent),
+            "DeleteComponent" => Ok(ProjectPermission::DeleteComponent),
+            "ViewWorker" => Ok(ProjectPermission::ViewWorker),
+            "CreateWorker" => Ok(ProjectPermission::CreateWorker),
+            "UpdateWorker" => Ok(ProjectPermission::UpdateWorker),
+            "DeleteWorker" => Ok(ProjectPermission::DeleteWorker),
+            "ViewProjectGrants" => Ok(ProjectPermission::ViewProjectGrants),
+            "CreateProjectGrants" => Ok(ProjectPermission::CreateProjectGrants),
+            "DeleteProjectGrants" => Ok(ProjectPermission::DeleteProjectGrants),
             _ => {
-                let all = ProjectAction::iter()
+                let all = ProjectPermission::iter()
                     .map(|x| format!("\"{x}\""))
                     .collect::<Vec<String>>()
                     .join(", ");
@@ -805,47 +801,45 @@ impl FromStr for ProjectAction {
     }
 }
 
-impl From<ProjectAction> for golem_cloud_client::model::ProjectAction {
-    fn from(value: ProjectAction) -> Self {
-        use golem_cloud_client::model::ProjectAction as ClientProjectAction;
+impl From<ProjectPermission> for golem_cloud_client::model::ProjectPermisison {
+    fn from(value: ProjectPermission) -> Self {
+        use golem_cloud_client::model::ProjectPermisison as ClientProjectPermission;
 
         match value {
-            ProjectAction::ViewComponent => ClientProjectAction::ViewComponent,
-            ProjectAction::CreateComponent => ClientProjectAction::CreateComponent,
-            ProjectAction::UpdateComponent => ClientProjectAction::UpdateComponent,
-            ProjectAction::DeleteComponent => ClientProjectAction::DeleteComponent,
-            ProjectAction::ViewWorker => ClientProjectAction::ViewWorker,
-            ProjectAction::CreateWorker => ClientProjectAction::CreateWorker,
-            ProjectAction::UpdateWorker => ClientProjectAction::UpdateWorker,
-            ProjectAction::DeleteWorker => ClientProjectAction::DeleteWorker,
-            ProjectAction::ViewProjectGrants => ClientProjectAction::ViewProjectGrants,
-            ProjectAction::CreateProjectGrants => ClientProjectAction::CreateProjectGrants,
-            ProjectAction::DeleteProjectGrants => ClientProjectAction::DeleteProjectGrants,
-            ProjectAction::ViewApiDefinition => ClientProjectAction::ViewApiDefinition,
-            ProjectAction::CreateApiDefinition => ClientProjectAction::CreateApiDefinition,
-            ProjectAction::UpdateApiDefinition => ClientProjectAction::UpdateApiDefinition,
-            ProjectAction::DeleteApiDefinition => ClientProjectAction::DeleteApiDefinition,
-            ProjectAction::DeleteProject => ClientProjectAction::DeleteProject,
-            ProjectAction::ViewProject => ClientProjectAction::ViewProject,
-            ProjectAction::ViewPluginInstallations => ClientProjectAction::ViewPluginInstallations,
-            ProjectAction::CreatePluginInstallation => {
-                ClientProjectAction::CreatePluginInstallation
+            ProjectPermission::ViewComponent => ClientProjectPermission::ViewComponent,
+            ProjectPermission::CreateComponent => ClientProjectPermission::CreateComponent,
+            ProjectPermission::UpdateComponent => ClientProjectPermission::UpdateComponent,
+            ProjectPermission::DeleteComponent => ClientProjectPermission::DeleteComponent,
+            ProjectPermission::ViewWorker => ClientProjectPermission::ViewWorker,
+            ProjectPermission::CreateWorker => ClientProjectPermission::CreateWorker,
+            ProjectPermission::UpdateWorker => ClientProjectPermission::UpdateWorker,
+            ProjectPermission::DeleteWorker => ClientProjectPermission::DeleteWorker,
+            ProjectPermission::ViewProjectGrants => ClientProjectPermission::ViewProjectGrants,
+            ProjectPermission::CreateProjectGrants => ClientProjectPermission::CreateProjectGrants,
+            ProjectPermission::DeleteProjectGrants => ClientProjectPermission::DeleteProjectGrants,
+            ProjectPermission::ViewApiDefinition => ClientProjectPermission::ViewApiDefinition,
+            ProjectPermission::CreateApiDefinition => ClientProjectPermission::CreateApiDefinition,
+            ProjectPermission::UpdateApiDefinition => ClientProjectPermission::UpdateApiDefinition,
+            ProjectPermission::DeleteApiDefinition => ClientProjectPermission::DeleteApiDefinition,
+            ProjectPermission::DeleteProject => ClientProjectPermission::DeleteProject,
+            ProjectPermission::ViewPluginInstallations => {
+                ClientProjectPermission::ViewPluginInstallations
             }
-            ProjectAction::UpdatePluginInstallation => {
-                ClientProjectAction::UpdatePluginInstallation
+            ProjectPermission::CreatePluginInstallation => {
+                ClientProjectPermission::CreatePluginInstallation
             }
-            ProjectAction::DeletePluginInstallation => {
-                ClientProjectAction::DeletePluginInstallation
+            ProjectPermission::UpdatePluginInstallation => {
+                ClientProjectPermission::UpdatePluginInstallation
             }
-            ProjectAction::UpsertApiDeployment => ClientProjectAction::UpsertApiDeployment,
-            ProjectAction::ViewApiDeployment => ClientProjectAction::ViewApiDeployment,
-            ProjectAction::DeleteApiDeployment => ClientProjectAction::DeleteApiDeployment,
-            ProjectAction::UpsertApiDomain => ClientProjectAction::UpsertApiDomain,
-            ProjectAction::ViewApiDomain => ClientProjectAction::ViewApiDomain,
-            ProjectAction::DeleteApiDomain => ClientProjectAction::DeleteApiDomain,
-            ProjectAction::BatchUpdatePluginInstallations => {
-                ClientProjectAction::BatchUpdatePluginInstallations
+            ProjectPermission::DeletePluginInstallation => {
+                ClientProjectPermission::DeletePluginInstallation
             }
+            ProjectPermission::UpsertApiDeployment => ClientProjectPermission::UpsertApiDeployment,
+            ProjectPermission::ViewApiDeployment => ClientProjectPermission::ViewApiDeployment,
+            ProjectPermission::DeleteApiDeployment => ClientProjectPermission::DeleteApiDeployment,
+            ProjectPermission::UpsertApiDomain => ClientProjectPermission::UpsertApiDomain,
+            ProjectPermission::ViewApiDomain => ClientProjectPermission::ViewApiDomain,
+            ProjectPermission::DeleteApiDomain => ClientProjectPermission::DeleteApiDomain,
         }
     }
 }

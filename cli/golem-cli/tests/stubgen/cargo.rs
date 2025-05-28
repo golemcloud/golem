@@ -31,7 +31,7 @@ fn regenerate_cargo_toml() {
     // Check that we have the original comments
     let cargo_toml = fs::read_to_string(&cargo_toml_path).unwrap();
     println!(">\n{}", cargo_toml);
-    check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.39.0\""));
+    check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.40.0\""));
     check!(cargo_toml.contains("\n# This is the comment for lib\n[lib]"));
     check!(cargo_toml.contains("\n# Another comment\ncrate-type = [\"cdylib\"] # Hello again"));
     check!(!cargo_toml.contains("[package.metadata.component.target]\npath = \"wit\""));
@@ -44,7 +44,7 @@ fn regenerate_cargo_toml() {
     let cargo_toml = fs::read_to_string(&cargo_toml_path).unwrap();
     println!(">\n{}", cargo_toml);
     cargo_component_build(project_dir.path());
-    check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.39.0\""));
+    check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.40.0\""));
     check!(cargo_toml.contains("\n# This is the comment for lib\n[lib]"));
     check!(cargo_toml.contains("\n# Another comment\ncrate-type = [\"cdylib\"] # Hello again"));
     check!(cargo_toml.contains("[package.metadata.component.target]\npath = \"wit\""));
@@ -57,7 +57,7 @@ fn regenerate_cargo_toml() {
     let cargo_toml = fs::read_to_string(&cargo_toml_path).unwrap();
     println!(">\n{}", cargo_toml);
     cargo_component_build(project_dir.path());
-    check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.39.0\""));
+    check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.40.0\""));
     check!(cargo_toml.contains("\n# This is the comment for lib\n[lib]"));
     check!(cargo_toml.contains("\n# Another comment\ncrate-type = [\"cdylib\"] # Hello again"));
     check!(cargo_toml.contains("[package.metadata.component.target]\npath = \"wit\""));
@@ -77,7 +77,7 @@ fn regenerate_cargo_toml() {
     let cargo_toml = fs::read_to_string(&cargo_toml_path).unwrap();
     println!(">\n{}", cargo_toml);
     cargo_component_build(project_dir.path());
-    check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.39.0\""));
+    check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.40.0\""));
     check!(cargo_toml.contains("\n# This is the comment for lib\n[lib]"));
     check!(cargo_toml.contains("\n# Another comment\ncrate-type = [\"cdylib\"] # Hello again"));
     check!(cargo_toml.contains("[package.metadata.component.target]\npath = \"wit\""));
@@ -97,7 +97,7 @@ fn regenerate_cargo_toml() {
     let cargo_toml = fs::read_to_string(&cargo_toml_path).unwrap();
     println!(">\n{}", cargo_toml);
     cargo_component_build(project_dir.path());
-    check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.39.0\""));
+    check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.40.0\""));
     check!(cargo_toml.contains("\n# This is the comment for lib\n[lib]"));
     check!(cargo_toml.contains("\n# Another comment\ncrate-type = [\"cdylib\"] # Hello again"));
     check!(cargo_toml.contains("[package.metadata.component.target]\npath = \"wit\""));
@@ -120,7 +120,7 @@ generate_unused_types = true
     let cargo_toml = fs::read_to_string(&cargo_toml_path).unwrap();
     println!(">\n{}", cargo_toml);
     cargo_component_build(project_dir.path());
-    check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.39.0\""));
+    check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.40.0\""));
     check!(cargo_toml.contains("\n# This is the comment for lib\n[lib]"));
     check!(cargo_toml.contains("\n# Another comment\ncrate-type = [\"cdylib\"] # Hello again"));
     check!(cargo_toml.contains("[package.metadata.component.target]\npath = \"wit\""));

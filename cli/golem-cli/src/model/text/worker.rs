@@ -706,11 +706,11 @@ impl TextView for PublicOplogEntry {
                     logln(format!("{pad}linked span:       {}", format_id(&linked_id),));
                 }
                 logln(format!("{pad}attributes:"));
-                for (k, v) in &params.attributes {
+                for kv in &params.attributes {
                     logln(format!(
                         "{pad}  - {}: {}",
-                        k,
-                        match v {
+                        kv.key,
+                        match &kv.value {
                             PublicAttributeValue::String(StringAttributeValue { value }) =>
                                 format_id(value),
                         }

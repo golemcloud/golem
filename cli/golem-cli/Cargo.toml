@@ -5,6 +5,8 @@ edition = "2021"
 homepage = "https://golem.cloud/"
 repository = "https://github.com/golemcloud/golem-cli"
 description = "Command line interface for Golem."
+license-file = "../LICENSE"
+
 autotests = false
 build = "build.rs"
 
@@ -45,6 +47,7 @@ anyhow = { workspace = true }
 assert2 = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true }
+auditable-serde = { version = "0.8.0" }
 base64 = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
@@ -59,6 +62,7 @@ cli-table = { workspace = true }
 colored = { workspace = true }
 dirs = { workspace = true }
 envsubst = { workspace = true }
+flate2 = { version = "1.1.0" }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
@@ -70,12 +74,10 @@ inquire = { workspace = true }
 iso8601 = { workspace = true }
 itertools = { workspace = true }
 lenient_bool = { workspace = true }
-log = { workspace = true }
 minijinja = { workspace = true }
 native-tls = { workspace = true }
 nondestructive = { workspace = true }
 phf = { workspace = true }
-pretty_env_logger = { workspace = true }
 prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
@@ -83,11 +85,13 @@ regex = { workspace = true }
 reqwest = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
+serde_derive = "1.0.219"
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 shadow-rs = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
+spdx = "0.10.8"
 strum = { workspace = true }
 strum_macros = { workspace = true }
 syn = { workspace = true }
@@ -106,9 +110,9 @@ uuid = { workspace = true }
 version-compare = { workspace = true }
 wac-graph = { workspace = true }
 walkdir = { workspace = true }
-wasm-metadata = { workspace = true }
-wasm-wave = { workspace = true }
 wax = { workspace = true }
+wasmparser = { workspace = true }
+wasm-encoder = { workspace = true }
 wit-bindgen-rust = { workspace = true }
 wit-component = { workspace = true }
 wit-encoder = { workspace = true }

@@ -17,7 +17,7 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::text::project::{ProjectPolicyGetView, ProjectPolicyNewView};
-use crate::model::{ProjectAction, ProjectPolicyId};
+use crate::model::{ProjectPermission, ProjectPolicyId};
 use golem_cloud_client::api::ProjectPolicyClient;
 use golem_cloud_client::model::{ProjectActions, ProjectPolicyData};
 use std::sync::Arc;
@@ -44,7 +44,7 @@ impl CloudProjectPolicyCommandHandler {
     async fn cmd_new(
         &self,
         policy_name: String,
-        actions: Vec<ProjectAction>,
+        actions: Vec<ProjectPermission>,
     ) -> anyhow::Result<()> {
         let policy = self
             .ctx

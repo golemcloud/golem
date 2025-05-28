@@ -36,11 +36,11 @@ jobs:
       - uses: davidB/rust-cargo-make@v1
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo install cargo-component@0.20.0
+        run: cargo install cargo-component@0.21.1
       - name: Install wasm-tools
-        run: cargo binstall --force --locked wasm-tools@1.223.0
+        run: cargo binstall --force --locked wasm-tools@1.227.1
       - name: Install wit-bindgen
-        run: cargo binstall --force --locked wit-bindgen-cli@0.37.0
+        run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -55,11 +55,11 @@ jobs:
           tar -xvf wasi-sdk-${WASI_VERSION}.0-x86_64-linux.tar.gz
           sudo mv wasi-sdk-${WASI_VERSION}.0-x86_64-linux ${WASI_SDK_PATH}
           echo "WASI_SDK_PATH=${WASI_SDK_PATH}" >> $GITHUB_ENV
-      - uses: mlugg/setup-zig@v1
+      - uses: mlugg/setup-zig@v2
       - uses: actions/setup-go@v5.3.0
       - uses: acifani/setup-tinygo@v2.0.0
         with:
-          tinygo-version: '0.37.0'
+          tinygo-version: "0.37.0"
       - uses: sbt/setup-sbt@v1.1.7
       - name: Install moonbit
         run: |
@@ -67,7 +67,7 @@ jobs:
           echo "$HOME/.moon/bin" >> $GITHUB_PATH
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: 'v0-rust'
+          prefix-key: "v0-rust"
           shared-key: debug
           cache-all-crates: true
           save-if: true
@@ -83,7 +83,7 @@ jobs:
         uses: mikepenz/action-junit-report@v5
         if: always()
         with:
-          report_paths: '**/target/report-*.xml'
+          report_paths: "**/target/report-*.xml"
           detailed_summary: true
           include_passed: true
 
@@ -110,7 +110,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: 'v0-rust'
+          prefix-key: "v0-rust"
           shared-key: release
           cache-all-crates: true
           save-if: true
@@ -162,7 +162,7 @@ jobs:
       - uses: davidB/rust-cargo-make@v1
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: 'v0-rust'
+          prefix-key: "v0-rust"
           shared-key: release-${{ matrix.cfg.rust-target }}
           cache-all-crates: true
           save-if: true

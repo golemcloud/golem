@@ -10,6 +10,6 @@ interface component-name-api {
 world component-name {
   export component-name-api;
 
-  export golem:api/save-snapshot@1.1.6;
-  export golem:api/load-snapshot@1.1.6;
+  export golem:api/save-snapshot@1.1.7;
+  export golem:api/load-snapshot@1.1.7;
 }

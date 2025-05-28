@@ -41,8 +41,8 @@ void exports_component_name_exports_component_name_api_send(component_name_strin
     // Setting up the outgoing request
     wasi_http_types_own_fields_t headers;
     wasi_http_types_header_error_t headers_err;
-    component_name_list_tuple2_field_key_field_value_t entries;
-    entries.ptr = malloc(2 * sizeof(component_name_tuple2_field_key_field_value_t));
+    component_name_list_tuple2_field_name_field_value_t entries;
+    entries.ptr = malloc(2 * sizeof(component_name_tuple2_field_name_field_value_t));
     entries.len = 2;
     set_string(&entries.ptr[0].f0, "Content-Type");
     set_string_field(&entries.ptr[0].f1, "application/json");

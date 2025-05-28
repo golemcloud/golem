@@ -1620,7 +1620,7 @@ pub mod cloud {
 
         use crate::command::cloud::project::plugin::ProjectPluginSubcommand;
         use crate::command::cloud::project::policy::PolicySubcommand;
-        use crate::model::{ProjectAction, ProjectName, ProjectPolicyId, ProjectReference};
+        use crate::model::{ProjectName, ProjectPermission, ProjectPolicyId, ProjectReference};
         use clap::Subcommand;
 
         #[derive(clap::Args, Debug)]
@@ -1631,7 +1631,7 @@ pub mod cloud {
             pub policy_id: Option<ProjectPolicyId>,
             /// A list of actions to be granted to the recipient account. If not provided, use `--policy-id` instead
             #[arg(long, required = true, group = "project_actions_or_policy")]
-            pub action: Option<Vec<ProjectAction>>,
+            pub action: Option<Vec<ProjectPermission>>,
         }
 
         #[derive(Debug, Subcommand)]
@@ -1673,7 +1673,7 @@ pub mod cloud {
         }
 
         pub mod policy {
-            use crate::model::{ProjectAction, ProjectPolicyId};
+            use crate::model::{ProjectPermission, ProjectPolicyId};
             use clap::Subcommand;
 
             #[derive(Subcommand, Debug)]
@@ -1683,7 +1683,7 @@ pub mod cloud {
                     /// Name of the policy
                     policy_name: String,
                     /// List of actions allowed by the policy
-                    actions: Vec<ProjectAction>,
+                    actions: Vec<ProjectPermission>,
                 },
                 /// Gets the existing project sharing policies
                 #[command()]

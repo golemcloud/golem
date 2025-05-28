@@ -80,7 +80,7 @@ interface component-name-api {
 }
 
 world component-name {
-  import wasi:http/outgoing-handler@0.2.0;
+  import wasi:http/outgoing-handler@0.2.3;
   import golem:llm/llm@1.0.0;
 
   export component-name-api;

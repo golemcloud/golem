@@ -13,14 +13,15 @@
 // limitations under the License.
 
 use crate::fs::{create_dir_all, PathExtra};
+use crate::wasm_metadata::{AddMetadata, AddMetadataField};
 use anyhow::Context;
 use std::fs;
 use std::path::Path;
-use wasm_metadata::AddMetadata;
 use wit_parser::PackageName;
 
 /// Writes a name and a version metadata section based on the provided `root_package-name`
 /// to the WASM read from `source`, saving the result to `target`
+#[allow(clippy::field_reassign_with_default)]
 pub fn add_metadata(
     source: &impl AsRef<Path>,
     root_package_name: PackageName,
@@ -29,15 +30,14 @@ pub fn add_metadata(
     let wasm = fs::read(source)
         .with_context(|| format!("Reading linked WASM from {:?}", source.as_ref()))?;
 
-    let metadata = AddMetadata {
-        name: Some(format!(
-            "{}:{}",
-            root_package_name.namespace, root_package_name.name
-        )),
-        version: root_package_name
-            .version
-            .map(|v| wasm_metadata::Version::new(v.to_string())),
-        ..Default::default()
+    let mut metadata = AddMetadata::default();
+    metadata.name = AddMetadataField::Set(format!(
+        "{}:{}",
+        root_package_name.namespace, root_package_name.name
+    ));
+    metadata.version = match &root_package_name.version {
+        None => AddMetadataField::Clear,
+        Some(v) => AddMetadataField::Set(crate::wasm_metadata::Version::new(v.to_string())),
     };
 
     let updated_wasm = metadata

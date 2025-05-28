@@ -23,6 +23,6 @@ pub mod wit_generate;
 pub mod wit_resolve;
 
 pub const WIT_BINDGEN_VERSION: &str = "0.40.0";
-pub const WASI_WIT_VERSION: &str = "0.2.0";
-pub const GOLEM_RPC_WIT_VERSION: &str = "0.2.0";
-pub const GOLEM_API_VERSION: &str = "1.1.6";
+pub const WASI_WIT_VERSION: &str = "0.2.3";
+pub const GOLEM_RPC_WIT_VERSION: &str = "0.2.1";
+pub const GOLEM_API_VERSION: &str = "1.1.7";

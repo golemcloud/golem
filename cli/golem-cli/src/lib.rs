@@ -32,6 +32,9 @@ pub mod model;
 pub mod validation;
 pub mod wasm_rpc_stubgen;
 
+#[allow(unused)]
+mod wasm_metadata;
+
 #[cfg(test)]
 test_r::enable!();
 
