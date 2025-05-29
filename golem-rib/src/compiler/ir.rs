@@ -153,7 +153,7 @@ pub enum FunctionReferenceType {
 // This is more efficient than assigning index to every instruction and incrementing it
 // as we care about it only if we need to jump through instructions.
 // Jumping to an ID is simply draining the stack until we find a Label instruction with the same ID.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq, Serialize, Deserialize, Encode, Decode)]
 pub struct InstructionId {
     pub index: usize,
 }

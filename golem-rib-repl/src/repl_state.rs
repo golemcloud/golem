@@ -12,45 +12,60 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use crate::dependency_manager::RibComponentMetadata;
-use rib::{
-    Interpreter, InterpreterEnv, InterpreterStack, RibByteCode, RibFunctionInvoke, RibInput,
-};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use golem_wasm_rpc::ValueAndType;
+use rib::InstructionId;
+use crate::{WorkerFunctionInvoke};
 
 pub struct ReplState {
-    byte_code: RibByteCode,
-    interpreter: Interpreter,
     dependency: RibComponentMetadata,
-    rib_code_collection: Vec<String>,
+    rib_code_collection: Mutex<Vec<String>>,
+    worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
+    invocation_results: InvocationResultCache,
 }
 
 impl ReplState {
-    pub fn current_rib_program(&self) -> String {
-        self.rib_code_collection.join(";\n")
+    pub fn worker_function_invoke(&self) -> &Arc<dyn WorkerFunctionInvoke + Sync + Send> {
+        &self.worker_function_invoke
     }
 
-    pub fn update_rib(&mut self, rib: &str) {
-        self.rib_code_collection.push(rib.to_string());
+    pub fn invocation_results(&self) -> &InvocationResultCache {
+        &self.invocation_results
+    }
+
+    pub fn update_result(
+        &self,
+        instruction_id: &InstructionId,
+        result: ValueAndType,
+    ) {
+        self.invocation_results.results
+            .lock()
+            .unwrap()
+            .insert(instruction_id.clone(), result);
+    }
+
+    pub fn current_rib_program(&self) -> String {
+        self.rib_code_collection.lock().unwrap().join(";\n")
+    }
+
+    pub fn update_rib(&self, rib: &str) {
+        self.rib_code_collection
+            .lock()
+            .unwrap()
+            .push(rib.to_string());
     }
 
     pub fn update_dependency(&mut self, dependency: RibComponentMetadata) {
         self.dependency = dependency;
     }
 
-    pub fn pop_rib_text(&mut self) {
-        self.rib_code_collection.pop();
-    }
-
-    pub fn interpreter(&mut self) -> &mut Interpreter {
-        &mut self.interpreter
-    }
-    pub fn byte_code(&self) -> &RibByteCode {
-        &self.byte_code
-    }
-
-    pub fn update_byte_code(&mut self, byte_code: RibByteCode) {
-        self.byte_code = byte_code;
+    pub fn pop_rib_text(&self) {
+        self.rib_code_collection
+            .lock()
+            .unwrap()
+            .pop();
     }
 
     pub fn dependency(&self) -> &RibComponentMetadata {
@@ -59,20 +74,29 @@ impl ReplState {
 
     pub fn new(
         dependency: &RibComponentMetadata,
-        invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
+        worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
     ) -> Self {
-        let interpreter_env = InterpreterEnv::from(&RibInput::default(), &invoke);
-
         Self {
-            byte_code: RibByteCode::default(),
-            interpreter: Interpreter::new(
-                RibInput::default(),
-                invoke,
-                Some(InterpreterStack::default()),
-                Some(interpreter_env),
-            ),
             dependency: dependency.clone(),
-            rib_code_collection: vec![],
+            rib_code_collection: Mutex::new(Vec::new()),
+            worker_function_invoke,
+            invocation_results: InvocationResultCache {
+                results: Mutex::new(HashMap::new())
+            },
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct InvocationResultCache {
+   pub results: Mutex<HashMap<InstructionId, ValueAndType>>,
+}
+
+impl InvocationResultCache {
+    pub fn get(
+        &self,
+        script_id: &InstructionId,
+    ) -> Option<ValueAndType> {
+        self.results.lock().unwrap().get(script_id).cloned()
     }
 }

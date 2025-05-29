@@ -2032,6 +2032,7 @@ mod mock_interpreter {
     use golem_wasm_rpc::{Value, ValueAndType};
     use std::collections::HashMap;
     use std::sync::Arc;
+    use rib::InstructionId;
 
     pub(crate) fn interpreter() -> Interpreter {
         let functions_and_results: Vec<(&str, Option<ValueAndType>)> = vec![
@@ -2226,8 +2227,6 @@ mod mock_interpreter {
         Interpreter::new(
             RibInput::new(interpreter_env_input),
             dynamic_worker_invoke,
-            None,
-            None,
         )
     }
 
@@ -2239,6 +2238,7 @@ mod mock_interpreter {
     impl RibFunctionInvoke for DynamicRibFunctionInvoke {
         async fn invoke(
             &self,
+            _instruction_id: &InstructionId,
             _worker_name: Option<EvaluatedWorkerName>,
             function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,

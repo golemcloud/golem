@@ -40,7 +40,7 @@ pub async fn interpret(
     rib_input: RibInput,
     function_invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
 ) -> Result<RibResult, RibRuntimeError> {
-    let mut interpreter = Interpreter::new(rib_input, function_invoke, None, None);
+    let mut interpreter = Interpreter::new(rib_input, function_invoke);
     interpreter.run(rib).await
 }
 
@@ -51,7 +51,7 @@ pub async fn interpret_pure(
     rib: RibByteCode,
     rib_input: RibInput,
 ) -> Result<RibResult, RibRuntimeError> {
-    let mut interpreter = Interpreter::pure(rib_input, None, None);
+    let mut interpreter = Interpreter::pure(rib_input);
     interpreter.run(rib.clone()).await
 }
 

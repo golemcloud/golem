@@ -17,10 +17,11 @@ use golem_wasm_ast::analysis::{TypeEnum, TypeVariant};
 use rib::*;
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::sync::Arc;
 
 pub fn compile_rib_script(
     rib_script: &str,
-    repl_state: &mut ReplState,
+    repl_state: &Arc<ReplState>,
 ) -> Result<CompilerOutput, RibCompilationError> {
     let expr = Expr::from_text(rib_script)
         .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
@@ -38,12 +39,8 @@ pub fn compile_rib_script(
     let variants = function_registry.get_variants();
     let enums = function_registry.get_enums();
 
-    let new_byte_code = RibByteCode::from_expr(&inferred_expr)
+    let byte_code = RibByteCode::from_expr(&inferred_expr)
         .map_err(|e| RibCompilationError::RibStaticAnalysisError(e.to_string()))?;
-
-    let byte_code = new_byte_code.diff(repl_state.byte_code());
-
-    repl_state.update_byte_code(new_byte_code);
 
     Ok(CompilerOutput {
         rib_byte_code: byte_code,
