@@ -44,8 +44,12 @@ impl ReplState {
             .insert(instruction_id.clone(), result);
     }
 
-    pub fn last_instruction(&self) -> InstructionId {
-        self.last_instruction.read().unwrap().clone().unwrap_or(InstructionId { index: 0 })
+    pub fn last_executed_instruction(&self) -> InstructionId {
+        self.last_instruction
+            .read()
+            .unwrap()
+            .clone()
+            .unwrap_or(InstructionId { index: 0 })
     }
 
     pub fn update_instruction(&self, instruction_id: InstructionId) {

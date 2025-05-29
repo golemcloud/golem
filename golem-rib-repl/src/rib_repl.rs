@@ -164,8 +164,7 @@ impl RibRepl {
                     helper.update_progression(&compilation);
 
                     // Before evaluation
-                    let result =
-                        eval(compilation.rib_byte_code, &self.repl_state).await;
+                    let result = eval(compilation.rib_byte_code, &self.repl_state).await;
 
                     match result {
                         Ok(result) => Ok(Some(result)),
@@ -267,11 +266,10 @@ async fn eval(
     repl_state: &Arc<ReplState>,
 ) -> Result<RibResult, RibRuntimeError> {
     let instruction_id = InstructionId {
-        index: rib_byte_code.len()
+        index: rib_byte_code.len(),
     };
 
-    let result =
-        interpreter(repl_state).run(rib_byte_code).await;
+    let result = interpreter(repl_state).run(rib_byte_code).await;
 
     repl_state.update_instruction(instruction_id);
 
@@ -360,13 +358,17 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
         let component_id = self.repl_state.dependency().component_id;
         let component_name = &self.repl_state.dependency().component_name;
 
-        let result = if self.repl_state.last_instruction().index < instruction_id.index {
-            None 
-        } else {
-            self.repl_state.invocation_results().get(instruction_id)
-        };
+        let cached_result =
+            if self.repl_state.last_executed_instruction().index < instruction_id.index {
+                // If the running instruction is newer than the last played index result,
+                // then we shouldn't use the cache result. This logic comes into a play
+                // when the same instruction is executed multiple times live (e.g., in a loop).
+                None
+            } else {
+                self.repl_state.invocation_results().get(instruction_id)
+            };
 
-        match result {
+        match cached_result {
             None => {
                 let rib_invocation_result = self
                     .repl_state
