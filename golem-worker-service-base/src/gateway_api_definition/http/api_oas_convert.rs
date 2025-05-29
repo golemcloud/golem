@@ -17,9 +17,14 @@ use crate::gateway_api_definition::http::{
     CompiledHttpApiDefinition, CompiledRoute, MethodPattern,
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
-use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
-use crate::gateway_middleware::CorsPreflightExpr;
+use crate::gateway_binding::{
+    GatewayBindingCompiled, StaticBinding, WorkerNameCompiled,
+    ResponseMappingCompiled, InvocationContextCompiled,
+};
+use crate::gateway_middleware::{CorsPreflightExpr, HttpCors};
 use crate::service::gateway::BoxConversionContext;
+use golem_common::model::GatewayBindingType;
+use golem_common::model::component::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::NameTypePair;
 use http::StatusCode;
@@ -655,174 +660,129 @@ fn determine_response_schema(route: &CompiledRoute) -> Option<openapiv3::Schema>
     None
 }
 
-// Helper function: Creates binding info
-// fileserver, default, http-handler and swagger-ui binding info are handled by common binding info
-// cors-preflight binding info is handled by cors-preflight binding info
+// Helper function: Converts GatewayBindingCompiled to GatewayBindingType for automatic kebab-case serialization
+fn get_binding_type_from_compiled(binding: &GatewayBindingCompiled) -> GatewayBindingType {
+    match binding {
+        GatewayBindingCompiled::Worker(_) => GatewayBindingType::Default,
+        GatewayBindingCompiled::FileServer(_) => GatewayBindingType::FileServer,
+        GatewayBindingCompiled::HttpHandler(_) => GatewayBindingType::HttpHandler,
+        GatewayBindingCompiled::Static(static_binding) => match static_binding {
+            StaticBinding::HttpCorsPreflight(_) => GatewayBindingType::CorsPreflight,
+            StaticBinding::HttpAuthCallBack(_) => GatewayBindingType::CorsPreflight,
+        },
+        GatewayBindingCompiled::SwaggerUi(_) => GatewayBindingType::SwaggerUi,
+    }
+}
+
+// Unified binding data extraction - only the fields we actually need
+#[derive(Default)]
+struct ExtractedBindingData<'a> {
+    component_id: Option<&'a VersionedComponentId>,
+    worker_name: Option<&'a WorkerNameCompiled>,
+    response: Option<&'a ResponseMappingCompiled>,
+    invocation_context: Option<&'a InvocationContextCompiled>,
+    cors_preflight: Option<&'a HttpCors>,
+}
+
+fn extract_binding_data(binding: &GatewayBindingCompiled) -> ExtractedBindingData {
+    match binding {
+        GatewayBindingCompiled::Worker(w) => {
+            ExtractedBindingData {
+                component_id: Some(&w.component_id),
+                worker_name: w.worker_name_compiled.as_ref(),
+                response: Some(&w.response_compiled),
+                ..Default::default()
+            }
+        }
+        GatewayBindingCompiled::FileServer(w) => {
+            ExtractedBindingData {
+                component_id: Some(&w.component_id),
+                worker_name: w.worker_name_compiled.as_ref(),
+                response: Some(&w.response_compiled),
+                ..Default::default()
+            }
+        }
+        GatewayBindingCompiled::HttpHandler(h) => {
+            ExtractedBindingData {
+                component_id: Some(&h.component_id),
+                worker_name: h.worker_name_compiled.as_ref(),
+                ..Default::default()
+            }
+        }
+        GatewayBindingCompiled::Static(StaticBinding::HttpCorsPreflight(cors)) => {
+            ExtractedBindingData {
+                cors_preflight: Some(cors),
+                ..Default::default()
+            }
+        }
+        _ => ExtractedBindingData::default(), // SwaggerUi, AuthCallBack need no extra fields
+    }
+}
+
 async fn create_binding_info(
     route: &CompiledRoute,
     conversion_ctx: &BoxConversionContext<'_>,
 ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     let mut binding_info = serde_json::Map::new();
 
-    match &route.binding {
-        GatewayBindingCompiled::Worker(_) => {
-            binding_info.insert(
-                "binding-type".to_string(),
-                serde_json::Value::String("default".to_string()),
-            );
-            add_common_binding_info(&mut binding_info, route, conversion_ctx).await?;
-        }
-        GatewayBindingCompiled::HttpHandler(_) => {
-            binding_info.insert(
-                "binding-type".to_string(),
-                serde_json::Value::String("http-handler".to_string()),
-            );
-            add_common_binding_info(&mut binding_info, route, conversion_ctx).await?;
-        }
-        GatewayBindingCompiled::FileServer(_) => {
-            binding_info.insert(
-                "binding-type".to_string(),
-                serde_json::Value::String("file-server".to_string()),
-            );
-            add_common_binding_info(&mut binding_info, route, conversion_ctx).await?;
-        }
-        GatewayBindingCompiled::Static(static_binding) => match static_binding {
-            StaticBinding::HttpCorsPreflight(_) => {
-                add_cors_preflight_binding_info(&mut binding_info, route);
-            }
-            StaticBinding::HttpAuthCallBack(_) => {
-                binding_info.insert(
-                    "binding-type".to_string(),
-                    serde_json::Value::String("auth-callback".to_string()),
-                );
-            }
-        },
-        GatewayBindingCompiled::SwaggerUi(_) => {
-            binding_info.insert(
-                "binding-type".to_string(),
-                serde_json::Value::String("swagger-ui".to_string()),
-            );
-        }
-    }
+    // Get binding type and serialize it to kebab-case string automatically
+    let binding_type = get_binding_type_from_compiled(&route.binding);
+    let binding_type_str = serde_json::to_value(&binding_type)
+        .map_err(|e| format!("Failed to serialize binding type: {}", e))?
+        .as_str()
+        .unwrap()
+        .to_string();
 
-    Ok(binding_info)
-}
-
-// Helper function: Adds common binding info
-async fn add_common_binding_info(
-    binding_info: &mut serde_json::Map<String, serde_json::Value>,
-    route: &CompiledRoute,
-    conversion_ctx: &BoxConversionContext<'_>,
-) -> Result<(), String> {
-    match &route.binding {
-        GatewayBindingCompiled::Worker(worker_binding)
-        | GatewayBindingCompiled::FileServer(worker_binding) => {
-            // Add worker name if available
-            if let Some(worker_name_compiled) = &worker_binding.worker_name_compiled {
-                binding_info.insert(
-                    "worker-name".to_string(),
-                    serde_json::Value::String(worker_name_compiled.worker_name.to_string()),
-                );
-            }
-
-            // Get component name from conversion context
-            let component_view = conversion_ctx
-                .component_by_id(&worker_binding.component_id.component_id)
-                .await?;
-
-            // Add component info with actual name
-            binding_info.insert(
-                "component-name".to_string(),
-                serde_json::Value::String(component_view.name.0),
-            );
-            binding_info.insert(
-                "component-version".to_string(),
-                serde_json::Value::Number(serde_json::Number::from(
-                    worker_binding.component_id.version,
-                )),
-            );
-
-            // Add idempotency key if available
-            if let Some(idempotency_key_compiled) = &worker_binding.idempotency_key_compiled {
-                binding_info.insert(
-                    "idempotency-key".to_string(),
-                    serde_json::Value::String(idempotency_key_compiled.idempotency_key.to_string()),
-                );
-            }
-
-            // Add response mapping
-            binding_info.insert(
-                "response".to_string(),
-                serde_json::Value::String(
-                    worker_binding
-                        .response_compiled
-                        .response_mapping_expr
-                        .to_string(),
-                ),
-            );
-        }
-        GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
-            // Add worker name if available
-            if let Some(worker_name_compiled) = &http_handler_binding.worker_name_compiled {
-                binding_info.insert(
-                    "worker-name".to_string(),
-                    serde_json::Value::String(worker_name_compiled.worker_name.to_string()),
-                );
-            }
-
-            // Get component name from conversion context
-            let component_view = conversion_ctx
-                .component_by_id(&http_handler_binding.component_id.component_id)
-                .await?;
-
-            // Add component info with actual name
-            binding_info.insert(
-                "component-name".to_string(),
-                serde_json::Value::String(component_view.name.0),
-            );
-            binding_info.insert(
-                "component-version".to_string(),
-                serde_json::Value::Number(serde_json::Number::from(
-                    http_handler_binding.component_id.version,
-                )),
-            );
-
-            // Add idempotency key if available
-            if let Some(idempotency_key_compiled) = &http_handler_binding.idempotency_key_compiled {
-                binding_info.insert(
-                    "idempotency-key".to_string(),
-                    serde_json::Value::String(idempotency_key_compiled.idempotency_key.to_string()),
-                );
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-// Helper function: Adds cors-preflight binding info
-fn add_cors_preflight_binding_info(
-    binding_info: &mut serde_json::Map<String, serde_json::Value>,
-    route: &CompiledRoute,
-) {
     binding_info.insert(
         "binding-type".to_string(),
-        serde_json::Value::String("cors-preflight".to_string()),
+        serde_json::Value::String(binding_type_str),
     );
 
-    if let GatewayBindingCompiled::Static(StaticBinding::HttpCorsPreflight(cors)) = &route.binding {
-        // Use the compiled response expression to recreate the response
+    // Extract all binding data in one place
+    let data = extract_binding_data(&route.binding);
+
+    // Add component info
+    if let Some(component_id) = data.component_id {
+        let component_view = conversion_ctx
+            .component_by_id(&component_id.component_id)
+            .await?;
+
+        binding_info.insert(
+            "component-name".to_string(),
+            serde_json::Value::String(component_view.name.0),
+        );
+        binding_info.insert(
+            "component-version".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(component_id.version)),
+        );
+    }
+
+    // Add worker name
+    if let Some(worker_name) = data.worker_name {
+        binding_info.insert(
+            "worker-name".to_string(),
+            serde_json::Value::String(worker_name.worker_name.to_string()),
+        );
+    }
+
+    // Add response
+    if let Some(response) = data.response {
+        binding_info.insert(
+            "response".to_string(),
+            serde_json::Value::String(response.response_mapping_expr.to_string()),
+        );
+    }
+
+    // Add CORS preflight response for Cors Binding
+    if let Some(cors) = data.cors_preflight {
         let cors_expr = CorsPreflightExpr::from_cors(cors);
         binding_info.insert(
             "response".to_string(),
             serde_json::Value::String(cors_expr.0.to_string()),
         );
-    } else {
-        binding_info.insert(
-            "response".to_string(),
-            serde_json::Value::String("{\n}".to_string()),
-        );
     }
+
+    Ok(binding_info)
 }
 
 // Helper function: Creates a security scheme
