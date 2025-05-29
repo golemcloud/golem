@@ -26,6 +26,18 @@ impl RibByteCodeCursor {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.position = 0;
+    }
+
+    pub fn last(&self) -> Option<&RibIR> {
+        if self.byte_code.instructions.len() > 0 {
+            self.byte_code.instructions.get(self.byte_code.instructions.len() - 1)
+        } else {
+            None
+        }
+    }
+
     pub fn from_rib_byte_code(byte_code: RibByteCode) -> RibByteCodeCursor {
         RibByteCodeCursor {
             byte_code,

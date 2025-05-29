@@ -287,14 +287,19 @@ impl Interpreter {
             }
         }
 
-        let stack_value = stack
-            .pop()
-            .unwrap_or_else(|| RibInterpreterStackValue::Unit);
+        match byte_code_cursor.last() {
+            Some(RibIR::AssignVar(_)) => Ok(RibResult::Unit),
+            _ => {
+                let stack_value = stack
+                    .pop()
+                    .unwrap_or_else(|| RibInterpreterStackValue::Unit);
 
-        let rib_result =
-            RibResult::from_rib_interpreter_stack_value(&stack_value).ok_or_else(no_result)?;
+                let rib_result = RibResult::from_rib_interpreter_stack_value(&stack_value)
+                    .ok_or_else(no_result)?;
+                Ok(rib_result)
+            }
+        }
 
-        Ok(rib_result)
     }
 }
 
