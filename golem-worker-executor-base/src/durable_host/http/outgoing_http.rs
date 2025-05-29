@@ -16,10 +16,11 @@ use crate::durable_host::http::serialized::{SerializableHttpMethod, Serializable
 use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
 };
-use crate::workerctx::{InvocationContextManagement, WorkerCtx};
+use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
 use anyhow::anyhow;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::DurableFunctionType;
+use golem_common::model::IdempotencyKey;
 use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
@@ -87,6 +88,26 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     HeaderValue::from_str(&value).unwrap(),
                 );
                 headers.insert(key, value);
+            }
+        }
+
+        if self.state.set_outgoing_http_idempotency_key {
+            let current_idempotency_key = self
+                .get_current_idempotency_key()
+                .await
+                .unwrap_or(IdempotencyKey::fresh());
+            let oplog_index = self.state.current_oplog_index().await;
+            // this is guaranteed to be a unique new index because of the `begin_durable_function` call above
+            let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+
+            let header_name = HeaderName::from_static("idempotency-key");
+
+            let host_request = self.table().get_mut(&request)?;
+            if !host_request.headers.contains_key(&header_name) {
+                host_request.headers.insert(
+                    header_name,
+                    HeaderValue::from_str(&idempotency_key.to_string()).unwrap(),
+                );
             }
         }
 
