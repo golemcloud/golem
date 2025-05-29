@@ -50,9 +50,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::RetryConfig;
-use golem_common::model::{
-    ComponentFilePath, ComponentType, PluginInstallationId, WorkerStatusRecordExtensions,
-};
+use golem_common::model::{ComponentFilePath, ComponentType, PluginInstallationId};
 use golem_common::model::{
     ComponentVersion, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation,
     WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
@@ -206,6 +204,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             parent,
         )
         .await?;
+
         let initial_component_metadata = deps
             .component_service()
             .get_metadata(
@@ -1289,20 +1288,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     parent,
                     last_known_status: WorkerStatusRecord {
                         component_version: component_metadata.version,
+                        component_version_for_replay: component_metadata.version,
                         component_size: component_metadata.size,
                         total_linear_memory_size: component_metadata
                             .memories
                             .iter()
                             .map(|m| m.initial)
                             .sum(),
-                        extensions: WorkerStatusRecordExtensions::Extension2 {
-                            active_plugins: component_metadata
-                                .plugin_installations
-                                .iter()
-                                .map(|i| i.id.clone())
-                                .collect(),
-                            deleted_regions: initial_status.deleted_regions().clone(),
-                        },
+                        active_plugins: component_metadata
+                            .plugin_installations
+                            .iter()
+                            .map(|i| i.id.clone())
+                            .collect(),
                         ..initial_status
                     },
                 };
@@ -1551,43 +1548,59 @@ impl RunningWorker {
         let component_id = parent.owned_worker_id.component_id();
         let worker_metadata = parent.get_metadata()?;
 
-        let component_version = worker_metadata
-            .last_known_status
-            .pending_updates
-            .front()
-            .map_or(
-                worker_metadata.last_known_status.component_version,
-                |update| {
-                    let target_version = *update.description.target_version();
-                    info!(
-                        "Attempting {} update from {} to version {target_version}",
-                        match update.description {
-                            UpdateDescription::Automatic { .. } => "automatic",
-                            UpdateDescription::SnapshotBased { .. } => "snapshot based",
-                        },
-                        worker_metadata.last_known_status.component_version
-                    );
-                    target_version
-                },
-            );
-        let (component, component_metadata) = parent
-            .component_service()
-            .get(
-                &parent.engine(),
-                &account_id,
-                &component_id,
-                component_version,
-            )
-            .await?;
+        let (component, component_metadata) = {
+            let component_version = worker_metadata
+                .last_known_status
+                .pending_updates
+                .front()
+                .map_or(
+                    worker_metadata.last_known_status.component_version,
+                    |update| {
+                        let target_version = *update.description.target_version();
+                        info!(
+                            "Attempting {} update from {} to version {target_version}",
+                            match update.description {
+                                UpdateDescription::Automatic { .. } => "automatic",
+                                UpdateDescription::SnapshotBased { .. } => "snapshot based",
+                            },
+                            worker_metadata.last_known_status.component_version
+                        );
+                        target_version
+                    },
+                );
+
+            parent
+                .component_service()
+                .get(
+                    &parent.engine(),
+                    &account_id,
+                    &component_id,
+                    component_version,
+                )
+                .await?
+        };
 
         let component_env = component_metadata.env.clone();
 
         let worker_env =
             merge_worker_env_with_component_env(Some(worker_metadata.env), component_env);
 
+        let component_version_for_replay = worker_metadata
+            .last_known_status
+            .pending_updates
+            .front()
+            .and_then(|update| match update.description {
+                UpdateDescription::SnapshotBased { target_version, .. } => Some(target_version),
+                _ => None,
+            })
+            .unwrap_or(
+                worker_metadata
+                    .last_known_status
+                    .component_version_for_replay,
+            );
+
         let context = Ctx::create(
             OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
-            component_metadata.clone(),
             parent.promise_service(),
             parent.worker_service(),
             parent.worker_enumeration_service(),
@@ -1612,6 +1625,7 @@ impl RunningWorker {
                 worker_env,
                 worker_metadata.last_known_status.skipped_regions.clone(),
                 worker_metadata.last_known_status.total_linear_memory_size,
+                component_version_for_replay,
             ),
             parent.execution_status.clone(),
             parent.file_loader(),

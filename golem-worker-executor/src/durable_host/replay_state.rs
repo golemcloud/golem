@@ -19,7 +19,7 @@ use golem_common::model::oplog::{
     AtomicOplogIndex, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{IdempotencyKey, OwnedWorkerId};
+use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
 use metrohash::MetroHash128;
@@ -29,6 +29,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
+
+#[derive(Debug, Clone)]
+pub enum ReplayAction {
+    ExportedFunctionInvoked {
+        function_name: String,
+        function_input: Vec<Value>,
+        idempotency_key: IdempotencyKey,
+        invocation_context: InvocationContextStack,
+    },
+    UpdateSucceeded {
+        new_version: ComponentVersion,
+    },
+    Done,
+}
 
 #[derive(Clone)]
 pub struct ReplayState {
@@ -356,10 +370,7 @@ impl ReplayState {
     }
 
     // TODO: can we rewrite this on top of get_oplog_entry?
-    pub async fn get_oplog_entry_exported_function_invoked(
-        &mut self,
-    ) -> Result<Option<(String, Vec<Value>, IdempotencyKey, InvocationContextStack)>, GolemError>
-    {
+    pub async fn get_next_replay_action(&mut self) -> Result<ReplayAction, GolemError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
@@ -382,12 +393,12 @@ impl ReplayState {
                                     .expect("failed to decode serialized protobuf value")
                             })
                             .collect::<Vec<Value>>();
-                        break Ok(Some((
-                            function_name.to_string(),
-                            request,
-                            idempotency_key.clone(),
-                            InvocationContextStack::fresh(),
-                        )));
+                        break Ok(ReplayAction::ExportedFunctionInvoked {
+                            function_name: function_name.to_string(),
+                            function_input: request,
+                            idempotency_key: idempotency_key.clone(),
+                            invocation_context: InvocationContextStack::fresh(),
+                        });
                     }
                     OplogEntry::ExportedFunctionInvoked {
                         function_name,
@@ -414,12 +425,22 @@ impl ReplayState {
                         let invocation_context =
                             InvocationContextStack::from_oplog_data(trace_id, trace_state, spans);
 
-                        break Ok(Some((
-                            function_name.to_string(),
-                            request,
-                            idempotency_key.clone(),
+                        break Ok(ReplayAction::ExportedFunctionInvoked {
+                            function_name: function_name.to_string(),
+                            function_input: request,
+                            idempotency_key: idempotency_key.clone(),
                             invocation_context,
-                        )));
+                        });
+                    }
+                    OplogEntry::SuccessfulUpdateV1 { target_version, .. } => {
+                        break Ok(ReplayAction::UpdateSucceeded {
+                            new_version: *target_version,
+                        })
+                    }
+                    OplogEntry::SuccessfulUpdate { target_version, .. } => {
+                        break Ok(ReplayAction::UpdateSucceeded {
+                            new_version: *target_version,
+                        })
                     }
                     entry if entry.is_hint() => {}
                     _ => {
@@ -430,7 +451,7 @@ impl ReplayState {
                     }
                 }
             } else {
-                break Ok(None);
+                break Ok(ReplayAction::Done);
             }
         }
     }

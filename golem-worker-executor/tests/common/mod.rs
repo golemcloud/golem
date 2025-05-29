@@ -1,80 +1,27 @@
+use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
-use std::collections::HashSet;
-
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::storage::blob::BlobStorage;
-use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, WitValue};
-use golem_worker_executor::services::file_loader::FileLoader;
-use prometheus::Registry;
-
-use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    get_running_workers_metadata_response, get_workers_metadata_response,
+    GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
+    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
+};
+use golem_common::config::RedisConfig;
+use golem_common::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
+};
+use golem_common::model::oplog::UpdateDescription;
+use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     PluginInstallationId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_worker_executor::error::GolemError;
-use golem_worker_executor::services::golem_config::{
-    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
-    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
-    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
-};
-use std::path::Path;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, RwLock, Weak};
-
-use golem_worker_executor::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
-};
-use golem_worker_executor::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
-    ReadFileResult, TrapType, WorkerConfig,
-};
-use golem_worker_executor::services::active_workers::ActiveWorkers;
-use golem_worker_executor::services::blob_store::BlobStoreService;
-use golem_worker_executor::services::component::{ComponentMetadata, ComponentService};
-use golem_worker_executor::services::key_value::KeyValueService;
-use golem_worker_executor::services::oplog::{Oplog, OplogService};
-use golem_worker_executor::services::promise::PromiseService;
-use golem_worker_executor::services::scheduler::SchedulerService;
-use golem_worker_executor::services::shard::ShardService;
-use golem_worker_executor::services::shard_manager::ShardManagerService;
-use golem_worker_executor::services::worker::WorkerService;
-use golem_worker_executor::services::worker_activator::WorkerActivator;
-use golem_worker_executor::services::worker_event::WorkerEventService;
-use golem_worker_executor::services::{
-    plugins, rdbms, resource_limits, All, HasAll, HasConfig, HasOplogService,
-};
-use golem_worker_executor::wasi_host::create_linker;
-use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
-    UpdateManagement, WorkerCtx,
-};
-use golem_worker_executor::{Bootstrap, DefaultGolemTypes, RunDetails};
-
-use tokio::runtime::Handle;
-
-use tokio::task::JoinSet;
-
-use golem_common::config::RedisConfig;
-
-use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    get_running_workers_metadata_response, get_workers_metadata_response,
-    GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
-};
-use golem_common::model::invocation_context::{
-    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
-};
-use golem_common::model::oplog::WorkerResourceId;
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
+use golem_service_base::storage::blob::BlobStorage;
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::rdb::Rdb;
 use golem_test_framework::components::redis::Redis;
@@ -85,20 +32,67 @@ use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{FutureInvokeResult, WasmRpc};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{HostFutureInvokeResult, Pollable};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, WitValue};
+use golem_worker_executor::durable_host::{
+    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
+};
+use golem_worker_executor::error::GolemError;
+use golem_worker_executor::model::{
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
+    ReadFileResult, TrapType, WorkerConfig,
+};
 use golem_worker_executor::preview2::golem::durability;
 use golem_worker_executor::preview2::golem_api_1_x;
+use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component;
+use golem_worker_executor::services::component::{ComponentMetadata, ComponentService};
 use golem_worker_executor::services::events::Events;
+use golem_worker_executor::services::file_loader::FileLoader;
+use golem_worker_executor::services::golem_config::{
+    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
+    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
+    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
+    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+};
+use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
+use golem_worker_executor::services::oplog::{Oplog, OplogService};
 use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
+use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
+use golem_worker_executor::services::scheduler::SchedulerService;
+use golem_worker_executor::services::shard::ShardService;
+use golem_worker_executor::services::shard_manager::ShardManagerService;
+use golem_worker_executor::services::worker::WorkerService;
+use golem_worker_executor::services::worker_activator::WorkerActivator;
 use golem_worker_executor::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
+use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::{DefaultWorkerFork, WorkerForkService};
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
+use golem_worker_executor::services::{
+    plugins, rdbms, resource_limits, All, HasAll, HasConfig, HasOplogService,
+};
+use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
+use golem_worker_executor::workerctx::{
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
+    UpdateManagement, WorkerCtx,
+};
+use golem_worker_executor::{Bootstrap, DefaultGolemTypes, RunDetails};
+use prometheus::Registry;
+use std::collections::HashSet;
+use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, RwLock, Weak};
+use tokio::runtime::Handle;
+use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -632,12 +626,12 @@ impl UpdateManagement for TestWorkerCtx {
 
     async fn on_worker_update_succeeded(
         &self,
-        target_version: ComponentVersion,
+        update: &UpdateDescription,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(target_version, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(update, new_component_size, new_active_plugins)
             .await
     }
 }
@@ -651,7 +645,6 @@ impl WorkerCtx for TestWorkerCtx {
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
-        component_metadata: ComponentMetadata<DefaultGolemTypes>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -678,7 +671,6 @@ impl WorkerCtx for TestWorkerCtx {
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
-            component_metadata,
             promise_service,
             worker_service,
             worker_enumeration_service,

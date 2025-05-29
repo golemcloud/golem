@@ -585,18 +585,11 @@ pub struct WorkerStatusRecord {
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
     pub oplog_idx: OplogIndex,
-    pub extensions: WorkerStatusRecordExtensions,
-}
-
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
-pub enum WorkerStatusRecordExtensions {
-    Extension1 {
-        active_plugins: HashSet<PluginInstallationId>,
-    },
-    Extension2 {
-        active_plugins: HashSet<PluginInstallationId>,
-        deleted_regions: DeletedRegions,
-    },
+    pub active_plugins: HashSet<PluginInstallationId>,
+    pub deleted_regions: DeletedRegions,
+    /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
+    /// if only automatic updates were used or the version of the latest snapshot based update
+    pub component_version_for_replay: ComponentVersion,
 }
 
 impl ::bincode::Decode for WorkerStatusRecord {
@@ -616,7 +609,9 @@ impl ::bincode::Decode for WorkerStatusRecord {
             total_linear_memory_size: Decode::decode(decoder)?,
             owned_resources: Decode::decode(decoder)?,
             oplog_idx: Decode::decode(decoder)?,
-            extensions: WorkerStatusRecord::handle_decoded_extensions(Decode::decode(decoder))?,
+            active_plugins: Decode::decode(decoder)?,
+            deleted_regions: Decode::decode(decoder)?,
+            component_version_for_replay: Decode::decode(decoder)?,
         })
     }
 }
@@ -637,65 +632,10 @@ impl<'__de> BorrowDecode<'__de> for WorkerStatusRecord {
             total_linear_memory_size: BorrowDecode::borrow_decode(decoder)?,
             owned_resources: BorrowDecode::borrow_decode(decoder)?,
             oplog_idx: BorrowDecode::borrow_decode(decoder)?,
-            extensions: WorkerStatusRecord::handle_decoded_extensions(
-                BorrowDecode::borrow_decode(decoder),
-            )?,
+            active_plugins: BorrowDecode::borrow_decode(decoder)?,
+            deleted_regions: BorrowDecode::borrow_decode(decoder)?,
+            component_version_for_replay: BorrowDecode::borrow_decode(decoder)?,
         })
-    }
-}
-
-impl WorkerStatusRecord {
-    pub fn active_plugins(&self) -> &HashSet<PluginInstallationId> {
-        match &self.extensions {
-            WorkerStatusRecordExtensions::Extension1 { active_plugins } => active_plugins,
-            WorkerStatusRecordExtensions::Extension2 { active_plugins, .. } => active_plugins,
-        }
-    }
-
-    pub fn active_plugins_mut(&mut self) -> &mut HashSet<PluginInstallationId> {
-        match &mut self.extensions {
-            WorkerStatusRecordExtensions::Extension1 { active_plugins } => active_plugins,
-            WorkerStatusRecordExtensions::Extension2 { active_plugins, .. } => active_plugins,
-        }
-    }
-
-    pub fn deleted_regions(&self) -> &DeletedRegions {
-        match &self.extensions {
-            WorkerStatusRecordExtensions::Extension1 { .. } => unreachable!(),
-            WorkerStatusRecordExtensions::Extension2 {
-                deleted_regions, ..
-            } => deleted_regions,
-        }
-    }
-
-    pub fn deleted_regions_mut(&mut self) -> &mut DeletedRegions {
-        match &mut self.extensions {
-            WorkerStatusRecordExtensions::Extension1 { .. } => unreachable!(),
-            WorkerStatusRecordExtensions::Extension2 {
-                deleted_regions, ..
-            } => deleted_regions,
-        }
-    }
-
-    fn handle_decoded_extensions(
-        result: Result<WorkerStatusRecordExtensions, DecodeError>,
-    ) -> Result<WorkerStatusRecordExtensions, DecodeError> {
-        match result {
-            Ok(WorkerStatusRecordExtensions::Extension1 { active_plugins }) => {
-                Ok(WorkerStatusRecordExtensions::Extension2 {
-                    active_plugins,
-                    deleted_regions: DeletedRegions::new(),
-                })
-            }
-            Ok(ex @ WorkerStatusRecordExtensions::Extension2 { .. }) => Ok(ex),
-            Err(DecodeError::UnexpectedEnd { .. }) => {
-                Ok(WorkerStatusRecordExtensions::Extension2 {
-                    active_plugins: HashSet::new(),
-                    deleted_regions: DeletedRegions::new(),
-                })
-            }
-            Err(err) => Err(err),
-        }
     }
 }
 
@@ -716,10 +656,9 @@ impl Default for WorkerStatusRecord {
             total_linear_memory_size: 0,
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
-            extensions: WorkerStatusRecordExtensions::Extension2 {
-                active_plugins: HashSet::new(),
-                deleted_regions: DeletedRegions::new(),
-            },
+            active_plugins: HashSet::new(),
+            deleted_regions: DeletedRegions::new(),
+            component_version_for_replay: 0,
         }
     }
 }

@@ -1455,7 +1455,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 // Worker exists
 
                 if worker_status
-                    .active_plugins()
+                    .active_plugins
                     .contains(&plugin_installation_id)
                 {
                     warn!("Plugin is already activated");
@@ -1521,7 +1521,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 // Worker exists
 
                 if !worker_status
-                    .active_plugins()
+                    .active_plugins
                     .contains(&plugin_installation_id)
                 {
                     warn!("Plugin is already deactivated");
@@ -1569,7 +1569,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> golem::worker::WorkerMetadata {
         let mut updates = Vec::new();
 
-        let latest_status = &metadata.last_known_status;
+        let latest_status = metadata.last_known_status;
         for pending_invocation in &latest_status.pending_invocations {
             if let TimestampedWorkerInvocation {
                 timestamp,
@@ -1620,7 +1620,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         });
 
         let mut owned_resources = HashMap::new();
-        for (resource_id, resource) in metadata.last_known_status.owned_resources.clone() {
+        for (resource_id, resource) in latest_status.owned_resources {
             owned_resources.insert(
                 resource_id.0,
                 ResourceMetadata {
@@ -1630,7 +1630,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             );
         }
 
-        let active_plugins = metadata.last_known_status.active_plugins().clone();
+        let active_plugins = latest_status.active_plugins;
 
         golem::worker::WorkerMetadata {
             worker_id: Some(metadata.worker_id.into()),
@@ -1649,8 +1649,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             created_at: Some(metadata.created_at.into()),
             last_error: last_error_and_retry_count
                 .map(|last_error| last_error.error.to_string(&last_error.stderr)),
-            component_size: metadata.last_known_status.component_size,
-            total_linear_memory_size: metadata.last_known_status.total_linear_memory_size,
+            component_size: latest_status.component_size,
+            total_linear_memory_size: latest_status.total_linear_memory_size,
             owned_resources,
             active_plugins: active_plugins.into_iter().map(|id| id.into()).collect(),
         }

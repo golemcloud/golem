@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
+use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
@@ -269,12 +270,12 @@ impl<T: GolemTypes> UpdateManagement for DebugContext<T> {
 
     async fn on_worker_update_succeeded(
         &self,
-        target_version: ComponentVersion,
+        update: &UpdateDescription,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(target_version, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(update, new_component_size, new_active_plugins)
             .await
     }
 }
@@ -524,7 +525,6 @@ impl<T: GolemTypes> WorkerCtx for DebugContext<T> {
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
-        component_metadata: ComponentMetadata<T>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -551,7 +551,6 @@ impl<T: GolemTypes> WorkerCtx for DebugContext<T> {
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
-            component_metadata,
             promise_service,
             worker_service,
             worker_enumeration_service,

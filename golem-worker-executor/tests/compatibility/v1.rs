@@ -19,8 +19,6 @@
 //! The tests are assuming composability of the serializer implementation, so if a given type A has a field of type B,
 //! the test for A only contains an example value of B but there exists a separate test that tests the serialization of B.
 
-use test_r::test;
-
 use bincode::{Decode, Encode};
 use goldenfile::differs::Differ;
 use goldenfile::Mint;
@@ -34,8 +32,7 @@ use golem_common::model::RetryConfig;
 use golem_common::model::{
     AccountId, ComponentId, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, PromiseId,
     ScheduledAction, ShardId, SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation,
-    WorkerId, WorkerInvocation, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
-    WorkerStatusRecordExtensions,
+    WorkerId, WorkerInvocation, WorkerResourceDescription, WorkerStatus,
 };
 use golem_common::serialization::{deserialize, serialize};
 use golem_wasm_ast::analysis::{
@@ -61,11 +58,12 @@ use golem_worker_executor::services::blob_store;
 use golem_worker_executor::services::promise::RedisPromiseState;
 use golem_worker_executor::services::rpc::RpcError;
 use golem_worker_executor::services::worker_proxy::WorkerProxyError;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
+use test_r::test;
 use uuid::Uuid;
 
 fn is_deserializable<T: Encode + Decode + PartialEq + Debug>(old: &Path, new: &Path) {
@@ -432,97 +430,6 @@ pub fn oplog_payload() {
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("oplog_payload_inline", &mut mint, op1);
     backward_compatible("oplog_payload_external", &mut mint, op2);
-}
-
-#[test]
-pub fn worker_status_record() {
-    let wsr1 = WorkerStatusRecord {
-        status: WorkerStatus::Running,
-        skipped_regions: Default::default(),
-        overridden_retry_config: Some(RetryConfig::default()),
-        pending_invocations: vec![TimestampedWorkerInvocation {
-            timestamp: Timestamp::from(1724701938466),
-            invocation: WorkerInvocation::ManualUpdate {
-                target_version: 100,
-            },
-        }],
-        pending_updates: Default::default(),
-        failed_updates: vec![FailedUpdateRecord {
-            timestamp: Timestamp::from(1724701938466),
-            target_version: 123,
-            details: None,
-        }],
-        successful_updates: vec![SuccessfulUpdateRecord {
-            timestamp: Timestamp::from(1724701938466),
-            target_version: 123,
-        }],
-        invocation_results: HashMap::from_iter(vec![(
-            IdempotencyKey {
-                value: "id1".to_string(),
-            },
-            OplogIndex::from_u64(111),
-        )]),
-        current_idempotency_key: Some(IdempotencyKey {
-            value: "id1".to_string(),
-        }),
-        component_version: 2,
-        component_size: 100_000_000,
-        total_linear_memory_size: 500_000_000,
-        owned_resources: HashMap::from_iter(vec![(
-            WorkerResourceId(1),
-            WorkerResourceDescription {
-                created_at: Timestamp::from(1724701938466),
-                indexed_resource_key: None,
-            },
-        )]),
-        oplog_idx: OplogIndex::from_u64(10000),
-        extensions: WorkerStatusRecordExtensions::Extension1 {
-            active_plugins: HashSet::new(),
-        },
-    };
-
-    let wsr2 = WorkerStatusRecord {
-        status: WorkerStatus::Running,
-        skipped_regions: Default::default(),
-        overridden_retry_config: Some(RetryConfig::default()),
-        pending_invocations: vec![TimestampedWorkerInvocation {
-            timestamp: Timestamp::from(1724701938466),
-            invocation: WorkerInvocation::ManualUpdate {
-                target_version: 100,
-            },
-        }],
-        pending_updates: Default::default(),
-        failed_updates: vec![],
-        successful_updates: vec![],
-        invocation_results: HashMap::from_iter(vec![(
-            IdempotencyKey {
-                value: "id1".to_string(),
-            },
-            OplogIndex::from_u64(111),
-        )]),
-        current_idempotency_key: None,
-        component_version: 2,
-        component_size: 100_000_000,
-        total_linear_memory_size: 500_000_000,
-        owned_resources: HashMap::from_iter(vec![(
-            WorkerResourceId(1),
-            WorkerResourceDescription {
-                created_at: Timestamp::from(1724701938466),
-                indexed_resource_key: Some(IndexedResourceKey {
-                    resource_name: "r1".to_string(),
-                    resource_params: vec!["a".to_string(), "b".to_string()],
-                }),
-            },
-        )]),
-        oplog_idx: OplogIndex::from_u64(10000),
-        extensions: WorkerStatusRecordExtensions::Extension1 {
-            active_plugins: HashSet::new(),
-        },
-    };
-
-    let mut mint = Mint::new("tests/goldenfiles");
-    backward_compatible("worker_status_record", &mut mint, wsr1);
-    backward_compatible("worker_status_record_indexed", &mut mint, wsr2);
 }
 
 #[test]
