@@ -17,7 +17,7 @@ use crate::WorkerFunctionInvoke;
 use golem_wasm_rpc::ValueAndType;
 use rib::InstructionId;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 pub struct ReplState {
     dependency: RibComponentMetadata,
@@ -38,7 +38,7 @@ impl ReplState {
     pub fn update_result(&self, instruction_id: &InstructionId, result: ValueAndType) {
         self.invocation_results
             .results
-            .lock()
+            .write()
             .unwrap()
             .insert(instruction_id.clone(), result);
     }
@@ -72,7 +72,7 @@ impl ReplState {
             raw_rib_script: RwLock::new(Vec::new()),
             worker_function_invoke,
             invocation_results: InvocationResultCache {
-                results: Mutex::new(HashMap::new()),
+                results: RwLock::new(HashMap::new()),
             },
         }
     }
@@ -80,11 +80,11 @@ impl ReplState {
 
 #[derive(Debug)]
 pub struct InvocationResultCache {
-    pub results: Mutex<HashMap<InstructionId, ValueAndType>>,
+    pub results: RwLock<HashMap<InstructionId, ValueAndType>>,
 }
 
 impl InvocationResultCache {
     pub fn get(&self, script_id: &InstructionId) -> Option<ValueAndType> {
-        self.results.lock().unwrap().get(script_id).cloned()
+        self.results.read().unwrap().get(script_id).cloned()
     }
 }
