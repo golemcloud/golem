@@ -24,11 +24,11 @@ use golem_common::metrics::external_calls::record_external_call_response_size_by
 use golem_common::model::ComponentId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
-use golem_worker_executor_base::grpc::authorised_grpc_request;
-use golem_worker_executor_base::grpc::is_grpc_retriable;
-use golem_worker_executor_base::grpc::GrpcError;
-use golem_worker_executor_base::metrics::component::record_compilation_time;
-use golem_worker_executor_base::services::compiled_component::CompiledComponentService;
+use golem_worker_executor::grpc::authorised_grpc_request;
+use golem_worker_executor::grpc::is_grpc_retriable;
+use golem_worker_executor::grpc::GrpcError;
+use golem_worker_executor::metrics::component::record_compilation_time;
+use golem_worker_executor::services::compiled_component::CompiledComponentService;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, Mutex};

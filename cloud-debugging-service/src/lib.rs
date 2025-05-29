@@ -10,38 +10,35 @@ use async_trait::async_trait;
 use axum::routing::any;
 use axum::Router;
 use cloud_common::clients::auth::CloudAuthService;
-use cloud_worker_executor::services::component::ComponentServiceCloudGrpc;
-use cloud_worker_executor::CloudGolemTypes;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_worker_executor_base::durable_host::DurableWorkerCtx;
-use golem_worker_executor_base::preview2::{golem_api_1_x, golem_durability};
-use golem_worker_executor_base::services::active_workers::ActiveWorkers;
-use golem_worker_executor_base::services::blob_store::BlobStoreService;
-use golem_worker_executor_base::services::component::ComponentService;
-use golem_worker_executor_base::services::events::Events;
-use golem_worker_executor_base::services::file_loader::FileLoader;
-use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::key_value::KeyValueService;
-use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
-use golem_worker_executor_base::services::oplog::OplogService;
-use golem_worker_executor_base::services::plugins::{Plugins, PluginsObservations};
-use golem_worker_executor_base::services::promise::PromiseService;
-use golem_worker_executor_base::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
-use golem_worker_executor_base::services::scheduler::SchedulerService;
-use golem_worker_executor_base::services::shard::ShardService;
-use golem_worker_executor_base::services::shard_manager::ShardManagerService;
-use golem_worker_executor_base::services::worker::WorkerService;
-use golem_worker_executor_base::services::worker_activator::{
-    LazyWorkerActivator, WorkerActivator,
-};
-use golem_worker_executor_base::services::worker_enumeration::{
+use golem_worker_executor::cloud::CloudGolemTypes;
+use golem_worker_executor::durable_host::DurableWorkerCtx;
+use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
+use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::blob_store::BlobStoreService;
+use golem_worker_executor::services::component::ComponentService;
+use golem_worker_executor::services::events::Events;
+use golem_worker_executor::services::file_loader::FileLoader;
+use golem_worker_executor::services::golem_config::GolemConfig;
+use golem_worker_executor::services::key_value::KeyValueService;
+use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
+use golem_worker_executor::services::oplog::OplogService;
+use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
+use golem_worker_executor::services::promise::PromiseService;
+use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
+use golem_worker_executor::services::scheduler::SchedulerService;
+use golem_worker_executor::services::shard::ShardService;
+use golem_worker_executor::services::shard_manager::ShardManagerService;
+use golem_worker_executor::services::worker::WorkerService;
+use golem_worker_executor::services::worker_activator::{LazyWorkerActivator, WorkerActivator};
+use golem_worker_executor::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
-use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
-use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{compiled_component, rdbms, All, HasConfig};
-use golem_worker_executor_base::wasi_host::create_linker;
-use golem_worker_executor_base::{Bootstrap, GolemTypes};
+use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
+use golem_worker_executor::services::worker_proxy::WorkerProxy;
+use golem_worker_executor::services::{rdbms, resource_limits, All, HasConfig};
+use golem_worker_executor::wasi_host::create_linker;
+use golem_worker_executor::{Bootstrap, GolemTypes};
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
@@ -49,7 +46,6 @@ use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::{info, Instrument};
-use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
@@ -90,39 +86,14 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         plugins: Arc<dyn PluginsObservations>,
     ) -> Arc<dyn ComponentService<CloudGolemTypes>> {
-        let compiled_component_service =
-            compiled_component::configured(&golem_config.compiled_component_service, blob_storage);
-
-        let component_service_config = &self.debug_config.component_service;
-        let component_cache_config = &self.debug_config.component_cache;
-
-        let access_token = component_service_config
-            .access_token
-            .parse::<Uuid>()
-            .expect("Access token must be an UUID");
-
-        info!(
-            "Creating component service with config: {{ host: {}, port: {}, project_host: {}, project_port: {} }}",
-            component_service_config.host,
-            component_service_config.port,
-            component_service_config.project_host,
-            component_service_config.project_port
-        );
-
-        Arc::new(ComponentServiceCloudGrpc::new(
-            component_service_config.component_uri(),
-            component_service_config.project_uri(),
-            access_token,
-            component_cache_config.max_capacity,
-            component_cache_config.max_metadata_capacity,
-            component_cache_config.max_resolved_component_capacity,
-            component_cache_config.max_resolved_project_capacity,
-            component_cache_config.time_to_idle,
-            golem_config.retry.clone(),
-            compiled_component_service,
-            component_service_config.max_component_size,
+        golem_worker_executor::services::cloud::component::configured(
+            &golem_config.component_service,
+            &golem_config.project_service,
+            &golem_config.component_cache,
+            &golem_config.compiled_component_service,
+            blob_storage,
             plugins,
-        ))
+        )
     }
 
     async fn run_grpc_server(
@@ -141,7 +112,7 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
         Arc<dyn Plugins<CloudGolemTypes>>,
         Arc<dyn PluginsObservations>,
     ) {
-        let plugins = cloud_worker_executor::services::plugins::cloud_configured(
+        let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(
             &golem_config.plugin_service,
         );
         (plugins.clone(), plugins)
@@ -189,6 +160,8 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
 
         let addition_deps = AdditionalDeps::new(auth_service, debug_sessions);
 
+        let resource_limits = resource_limits::configured(&golem_config.resource_limits);
+
         // When it comes to fork, we need the original oplog service
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
@@ -220,6 +193,7 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
+            resource_limits.clone(),
             addition_deps.clone(),
         ));
 
@@ -251,6 +225,7 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
+            resource_limits.clone(),
             addition_deps.clone(),
         ));
 
@@ -280,6 +255,7 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
+            resource_limits,
             addition_deps,
         ))
     }

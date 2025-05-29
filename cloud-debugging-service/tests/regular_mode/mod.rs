@@ -10,8 +10,8 @@ use crate::regular_mode::context::RegularExecutorTestContext;
 use crate::regular_mode::regular_bootstrap::RegularWorkerExecutorBootstrap;
 use crate::regular_mode::regular_worker_executor::TestRegularWorkerExecutor;
 use crate::{get_golem_config, RegularWorkerExecutorTestDependencies};
-use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::Bootstrap;
+use golem_worker_executor::services::golem_config::GolemConfig;
+use golem_worker_executor::Bootstrap;
 use prometheus::Registry;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -27,7 +27,7 @@ pub async fn start_regular_worker_executor(
     redis_monitor.assert_valid();
     println!("Using Redis on port {}", redis.public_port());
 
-    let prometheus = golem_worker_executor_base::metrics::register_all();
+    let prometheus = golem_worker_executor::metrics::register_all();
     let config = get_golem_config(
         redis.public_port(),
         context.redis_prefix(),

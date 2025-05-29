@@ -12,8 +12,8 @@ use golem_service_base::model::RevertWorkerTarget;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::WitValue;
-use golem_worker_executor_base::error::GolemError;
-use golem_worker_executor_base::services::worker_proxy::{WorkerProxy, WorkerProxyError};
+use golem_worker_executor::error::GolemError;
+use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use std::collections::HashMap;
 use std::sync::Arc;
 
