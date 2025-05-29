@@ -1,11 +1,11 @@
-package golem:api@1.1.6;
+package golem:api@1.1.7;
 
 /// Host interface for enumerating and searching for worker oplogs
 interface oplog {
-    use wasi:clocks/wall-clock@0.2.0.{datetime};
-    use golem:rpc/types@0.2.0.{wit-value};
+    use wasi:clocks/wall-clock@0.2.3.{datetime};
+    use golem:rpc/types@0.2.1.{wit-value};
 
-    use host.{account-id, component-version, oplog-index, retry-policy, uuid, worker-id};
+    use host.{account-id, component-version, oplog-index, persistence-level, retry-policy, uuid, worker-id};
     use context.{attribute, attribute-value, span-id, trace-id};
 
     variant wrapped-function-type {
@@ -244,6 +244,11 @@ interface oplog {
         value: attribute-value
     }
 
+    record change-persistence-level-parameters {
+        timestamp: datetime,
+        persistence-level: persistence-level
+    }
+
     variant oplog-entry {
         /// The initial worker oplog entry
         create(create-parameters),
@@ -319,6 +324,8 @@ interface oplog {
         finish-span(finish-span-parameters),
         /// Set an attribute on an open span in the invocation context
         set-span-attribute(set-span-attribute-parameters),
+        /// Change the current persistence level
+        change-persistence-level(change-persistence-level-parameters)
     }
 
     resource get-oplog {

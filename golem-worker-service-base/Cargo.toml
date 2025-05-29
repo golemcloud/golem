@@ -2,10 +2,12 @@
 name = "golem-worker-service-base"
 version = "0.0.0"
 edition = "2021"
-license = "Apache-2.0"
+
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Base functionalities of Golem Worker Service"
+
+license-file = "../LICENSE"
 
 [lib]
 harness = false
@@ -84,6 +86,7 @@ fastrand = "2.3.0"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
+tryhard = { workspace = true }
 
 [[bench]]
 name = "tree"

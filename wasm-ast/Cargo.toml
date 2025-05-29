@@ -2,10 +2,12 @@
 name = "golem-wasm-ast"
 version = "0.0.0"
 edition = "2021"
-license = "Apache-2.0"
+
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem/"
 description = "WASM AST"
+
+license-file = "../LICENSE"
 
 [dependencies]
 bincode = { workspace = true, optional = true }
@@ -19,6 +21,7 @@ prost = { workspace = true, optional = true }
 semver = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
+time = { workspace = true, optional = true }
 wasmparser = { version = "0.227.1", optional = true }
 wasm-encoder = { version = "0.227.1", optional = true }
 wasm-metadata = { version = "0.227.1", optional = true }
@@ -78,7 +81,7 @@ bincode = ["dep:bincode", "dep:bincode_derive"]
 json = ["dep:serde", "dep:serde_json"]
 
 # poem-openapi instances for analysis output
-poem_openapi = ["json", "dep:poem-openapi", "dep:poem-openapi-derive"]
+poem_openapi = ["json", "dep:poem-openapi", "dep:poem-openapi-derive", "dep:time"]
 
 # Protobuf representation of analysed types
 protobuf = ["dep:prost", "dep:prost-build"]

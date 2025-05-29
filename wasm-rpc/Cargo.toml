@@ -2,10 +2,12 @@
 name = "golem-wasm-rpc"
 version = "0.0.0"
 edition = "2021"
-license = "Apache-2.0"
+
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Golem WASM RPC support library"
+
+license-file = "../LICENSE"
 
 include = []
 
@@ -23,6 +25,7 @@ async-trait = { workspace = true, optional = true }
 bigdecimal = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
 bincode_derive = { workspace = true, optional = true }
+bit-vec = { workspace = true, optional = true }
 chrono = { workspace = true }
 git-version = "0.3.9"
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", optional = true }
@@ -32,6 +35,7 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 uuid = { workspace = true }
+url = { workspace = true, optional = true }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
 wasm-wave = { workspace = true, optional = true }
@@ -46,7 +50,7 @@ prost-build = { version = "0.13.5", optional = true }
 cargo_metadata = "0.19.2"
 
 [features]
-default = ["host"]
+default = ["host", "extra-bindings"]
 host-bindings = ["dep:async-trait", "wasmtime"]
 host = [
     "arbitrary",
@@ -61,6 +65,7 @@ host = [
 ]
 arbitrary = ["dep:arbitrary"]
 bincode = ["dep:bincode", "dep:bincode_derive", "golem-wasm-ast/bincode"]
+extra-bindings = ["dep:bigdecimal", "dep:bit-vec", "dep:url"]
 json = [
     "dep:serde",
     "dep:serde_json",

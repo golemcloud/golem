@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::components::component_service::ComponentService;
-use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
+use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{
@@ -53,6 +53,7 @@ impl DockerWorkerService {
     const CUSTOM_REQUEST_PORT: ContainerPort = ContainerPort::Tcp(9093);
 
     pub async fn new(
+        unique_network_id: &str,
         component_service: Arc<dyn ComponentService>,
         shard_manager: Arc<dyn ShardManager + Send + Sync>,
         rdb: Arc<dyn Rdb + Send + Sync>,
@@ -79,12 +80,12 @@ impl DockerWorkerService {
             Self::CUSTOM_REQUEST_PORT,
             env_vars,
         )
-        .with_network(NETWORK)
+        .with_network(network(unique_network_id))
         .start()
         .await
         .expect("Failed to start golem-worker-service container");
 
-        let private_host = get_docker_container_name(container.id()).await;
+        let private_host = get_docker_container_name(unique_network_id, container.id()).await;
 
         let public_http_port = container
             .get_host_port_ipv4(Self::HTTP_PORT)

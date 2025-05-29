@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,10 +21,10 @@ use crate::error::GolemError;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::DurableFunctionType;
 use wasmtime_wasi::bindings::sockets::ip_name_lookup::{
-    Host, HostResolveAddressStream, IpAddress, Network, Pollable, ResolveAddressStream,
+    Host, HostResolveAddressStream, IpAddress, Network, ResolveAddressStream,
 };
 use wasmtime_wasi::bindings::sockets::network::ErrorCode;
-use wasmtime_wasi::{SocketError, Subscribe};
+use wasmtime_wasi::{DynPollable, Pollable, SocketError};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostResolveAddressStream for DurableWorkerCtx<Ctx> {
@@ -42,7 +42,7 @@ impl<Ctx: WorkerCtx> HostResolveAddressStream for DurableWorkerCtx<Ctx> {
     fn subscribe(
         &mut self,
         self_: Resource<ResolveAddressStream>,
-    ) -> anyhow::Result<Resource<Pollable>> {
+    ) -> anyhow::Result<Resource<DynPollable>> {
         self.observe_function_call(
             "sockets::ip_name_lookup::resolve_address_stream",
             "subscribe",
@@ -56,7 +56,6 @@ impl<Ctx: WorkerCtx> HostResolveAddressStream for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn resolve_addresses(
         &mut self,

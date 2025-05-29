@@ -2,11 +2,11 @@ use std::collections::HashMap;
 
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,15 +17,15 @@ use async_trait::async_trait;
 use golem_wasm_rpc::{IntoValueAndType, ValueAndType};
 use tokio::task::JoinSet;
 
+use crate::benchmarks::{
+    invoke_and_await, run_benchmark, setup_benchmark, warmup_workers, SimpleBenchmarkContext,
+};
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
 use golem_common::model::{RoutingTable, WorkerId};
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
-use integration_tests::benchmarks::{
-    invoke_and_await, run_benchmark, setup_benchmark, warmup_workers, SimpleBenchmarkContext,
-};
 
 struct RpcCpuIntensive {
     config: RunConfig,
@@ -275,7 +275,6 @@ impl RpcCpuIntensive {
     }
 }
 
-#[tokio::main]
-async fn main() {
+pub async fn run() {
     run_benchmark::<RpcCpuIntensive>().await;
 }

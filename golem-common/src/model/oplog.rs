@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use crate::base_model::OplogIndex;
+use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
 use crate::model::RetryConfig;
 use crate::model::{
@@ -24,9 +26,7 @@ use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
-use golem_wasm_ast::analysis::analysed_type::{r#enum, u64};
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm_rpc_derive::IntoValue;
 use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -34,9 +34,6 @@ use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use uuid::Uuid;
-
-pub use crate::base_model::OplogIndex;
-use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 
 pub struct OplogIndexRange {
     current: u64,
@@ -166,7 +163,19 @@ impl<'de> BorrowDecode<'de> for PayloadId {
 }
 
 #[derive(
-    Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Encode,
+    Decode,
+    Serialize,
+    Deserialize,
+    IntoValue,
 )]
 #[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
 pub struct WorkerResourceId(pub u64);
@@ -185,16 +194,6 @@ impl Display for WorkerResourceId {
     }
 }
 
-impl IntoValue for WorkerResourceId {
-    fn into_value(self) -> Value {
-        Value::U64(self.0)
-    }
-
-    fn get_type() -> AnalysedType {
-        u64()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct IndexedResourceKey {
     pub resource_name: String,
@@ -202,7 +201,7 @@ pub struct IndexedResourceKey {
 }
 
 /// Worker log levels including the special stdout and stderr channels
-#[derive(Copy, Clone, Debug, PartialEq, Encode, Decode, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Encode, Decode, Serialize, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
 #[repr(u8)]
 pub enum LogLevel {
@@ -214,27 +213,6 @@ pub enum LogLevel {
     Warn,
     Error,
     Critical,
-}
-
-impl IntoValue for LogLevel {
-    fn into_value(self) -> Value {
-        match self {
-            LogLevel::Stdout => Value::Enum(0),
-            LogLevel::Stderr => Value::Enum(1),
-            LogLevel::Trace => Value::Enum(2),
-            LogLevel::Debug => Value::Enum(3),
-            LogLevel::Info => Value::Enum(4),
-            LogLevel::Warn => Value::Enum(5),
-            LogLevel::Error => Value::Enum(6),
-            LogLevel::Critical => Value::Enum(7),
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        r#enum(&[
-            "stdout", "stderr", "trace", "debug", "info", "warn", "error", "critical",
-        ])
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
@@ -288,26 +266,14 @@ impl SpanData {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialOrd, PartialEq, Encode, Decode, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, PartialOrd, PartialEq, Encode, Decode, Serialize, Deserialize, IntoValue,
+)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
 pub enum PersistenceLevel {
     PersistNothing,
     PersistRemoteSideEffects,
     Smart,
-}
-
-impl IntoValue for PersistenceLevel {
-    fn into_value(self) -> Value {
-        match self {
-            PersistenceLevel::PersistNothing => Value::Enum(0),
-            PersistenceLevel::PersistRemoteSideEffects => Value::Enum(1),
-            PersistenceLevel::Smart => Value::Enum(2),
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        r#enum(&["persist-nothing", "persist-remote-side-effects", "smart"])
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]

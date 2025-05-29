@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,10 +23,10 @@ use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
 use async_trait::async_trait;
 use bincode::{BorrowDecode, Decode, Encode};
-use chrono::{Datelike, Offset, Timelike};
 use golem_common::model::WorkerId;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
+use golem_wasm_rpc_derive::IntoValue;
 use itertools::Itertools;
 use mac_address::MacAddress;
 use std::collections::{Bound, HashMap, HashSet};
@@ -145,7 +145,7 @@ pub trait Rdbms<T: RdbmsType> {
     fn status(&self) -> RdbmsStatus;
 }
 
-pub trait RdbmsService {
+pub trait RdbmsService: Send + Sync {
     fn mysql(&self) -> Arc<dyn Rdbms<MysqlType> + Send + Sync>;
     fn postgres(&self) -> Arc<dyn Rdbms<PostgresType> + Send + Sync>;
 }
@@ -154,13 +154,13 @@ pub trait RdbmsTypeService<T: RdbmsType> {
     fn rdbms_type_service(&self) -> Arc<dyn Rdbms<T> + Send + Sync>;
 }
 
-impl RdbmsTypeService<MysqlType> for dyn RdbmsService + Send + Sync {
+impl RdbmsTypeService<MysqlType> for dyn RdbmsService {
     fn rdbms_type_service(&self) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
         self.mysql()
     }
 }
 
-impl RdbmsTypeService<PostgresType> for dyn RdbmsService + Send + Sync {
+impl RdbmsTypeService<PostgresType> for dyn RdbmsService {
     fn rdbms_type_service(&self) -> Arc<dyn Rdbms<PostgresType> + Send + Sync> {
         self.postgres()
     }
@@ -197,7 +197,7 @@ impl RdbmsService for RdbmsServiceDefault {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode, IntoValue)]
 pub struct RdbmsPoolKey {
     #[bincode(with_serde)]
     pub address: Url,
@@ -267,16 +267,6 @@ impl RdbmsPoolKey {
 impl Display for RdbmsPoolKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.masked_address())
-    }
-}
-
-impl IntoValue for RdbmsPoolKey {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.address.to_string().into_value()])
-    }
-
-    fn get_type() -> AnalysedType {
-        analysed_type::record(vec![analysed_type::field("address", analysed_type::str())])
     }
 }
 
@@ -400,7 +390,7 @@ where
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue)]
 pub enum Error {
     ConnectionFailure(String),
     QueryParameterFailure(String),
@@ -436,43 +426,6 @@ impl Display for Error {
             Error::QueryResponseFailure(msg) => write!(f, "QueryResponseFailure: {}", msg),
             Error::Other(msg) => write!(f, "Other: {}", msg),
         }
-    }
-}
-
-impl IntoValue for Error {
-    fn into_value(self) -> Value {
-        match self {
-            Error::ConnectionFailure(errors) => Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(errors.into_value())),
-            },
-            Error::QueryParameterFailure(error) => Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(error.into_value())),
-            },
-            Error::QueryExecutionFailure(error) => Value::Variant {
-                case_idx: 2,
-                case_value: Some(Box::new(error.into_value())),
-            },
-            Error::QueryResponseFailure(error) => Value::Variant {
-                case_idx: 3,
-                case_value: Some(Box::new(error.into_value())),
-            },
-            Error::Other(error) => Value::Variant {
-                case_idx: 4,
-                case_value: Some(Box::new(error.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        analysed_type::variant(vec![
-            analysed_type::case("ConnectionFailure", analysed_type::str()),
-            analysed_type::case("QueryParameterFailure", analysed_type::str()),
-            analysed_type::case("QueryExecutionFailure", analysed_type::str()),
-            analysed_type::case("QueryResponseFailure", analysed_type::str()),
-            analysed_type::case("Other", analysed_type::str()),
-        ])
     }
 }
 
@@ -575,89 +528,6 @@ impl<T: RdbmsIntoValueAndType + AnalysedTypeMerger> RdbmsIntoValueAndType for Ve
 
     fn get_base_type() -> AnalysedType {
         analysed_type::list(T::get_base_type())
-    }
-}
-
-impl RdbmsIntoValueAndType for chrono::NaiveDate {
-    fn into_value_and_type(self) -> ValueAndType {
-        let year = self.year();
-        let month = self.month() as u8;
-        let day = self.day() as u8;
-        ValueAndType::new(
-            Value::Record(vec![Value::S32(year), Value::U8(month), Value::U8(day)]),
-            Self::get_base_type(),
-        )
-    }
-
-    fn get_base_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("year", analysed_type::s32()),
-            analysed_type::field("month", analysed_type::u8()),
-            analysed_type::field("day", analysed_type::u8()),
-        ])
-    }
-}
-
-impl RdbmsIntoValueAndType for chrono::NaiveTime {
-    fn into_value_and_type(self) -> ValueAndType {
-        let hour = self.hour() as u8;
-        let minute = self.minute() as u8;
-        let second = self.second() as u8;
-        let nanosecond = self.nanosecond();
-        ValueAndType::new(
-            Value::Record(vec![
-                Value::U8(hour),
-                Value::U8(minute),
-                Value::U8(second),
-                Value::U32(nanosecond),
-            ]),
-            Self::get_base_type(),
-        )
-    }
-
-    fn get_base_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("hours", analysed_type::u8()),
-            analysed_type::field("minutes", analysed_type::u8()),
-            analysed_type::field("seconds", analysed_type::u8()),
-            analysed_type::field("nanoseconds", analysed_type::u32()),
-        ])
-    }
-}
-
-impl RdbmsIntoValueAndType for chrono::NaiveDateTime {
-    fn into_value_and_type(self) -> ValueAndType {
-        let date = self.date().into_value_and_type();
-        let time = self.time().into_value_and_type();
-        ValueAndType::new(
-            Value::Record(vec![date.value, time.value]),
-            Self::get_base_type(),
-        )
-    }
-
-    fn get_base_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("date", chrono::NaiveDate::get_base_type()),
-            analysed_type::field("time", chrono::NaiveTime::get_base_type()),
-        ])
-    }
-}
-
-impl RdbmsIntoValueAndType for chrono::DateTime<chrono::Utc> {
-    fn into_value_and_type(self) -> ValueAndType {
-        let timestamp = self.naive_utc().into_value_and_type();
-        let offset = self.offset().fix().local_minus_utc();
-        ValueAndType::new(
-            Value::Record(vec![timestamp.value, Value::S32(offset)]),
-            Self::get_base_type(),
-        )
-    }
-
-    fn get_base_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("timestamp", chrono::NaiveDateTime::get_base_type()),
-            analysed_type::field("offset", analysed_type::s32()),
-        ])
     }
 }
 

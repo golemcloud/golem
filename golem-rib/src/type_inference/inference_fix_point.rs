@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn test_inferred_type_equality_5() {
         let left = InferredType::unknown();
-        let right = InferredType::all_of(vec![InferredType::string()]).unwrap();
+        let right = InferredType::all_of(vec![InferredType::string()]);
 
         assert!(!compare_inferred_types(&left, &right));
     }
@@ -231,49 +231,42 @@ mod tests {
     #[test]
     fn test_inferred_type_equality_6() {
         let left = InferredType::unknown();
-        let right =
-            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]).unwrap();
+        let right = InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]);
 
         assert!(!compare_inferred_types(&left, &right));
     }
 
     #[test]
     fn test_inferred_type_equality_7() {
-        let left =
-            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]).unwrap();
+        let left = InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]);
         let right = InferredType::all_of(vec![InferredType::all_of(vec![
             InferredType::string(),
             InferredType::unknown(),
-        ])
-        .unwrap()])
-        .unwrap();
+        ])]);
 
         assert!(compare_inferred_types(&left, &right));
     }
 
     #[test]
     fn test_inferred_type_equality_8() {
-        let left =
-            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]).unwrap();
+        let left = InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]);
         let right = InferredType::all_of(vec![
             InferredType::u64(),
-            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]).unwrap(),
-        ])
-        .unwrap();
+            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]),
+        ]);
 
         assert!(!compare_inferred_types(&left, &right));
     }
 
     #[test]
     fn test_inferred_type_equality_9() {
-        let left =
-            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]).unwrap();
+        let left = InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]);
+
         let right = InferredType::all_of(vec![
             InferredType::string(),
             InferredType::unknown(),
-            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]).unwrap(),
-        ])
-        .unwrap();
+            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]),
+        ]);
 
         assert!(compare_inferred_types(&left, &right));
     }
@@ -283,11 +276,10 @@ mod tests {
         let left = InferredType::all_of(vec![
             InferredType::string(),
             InferredType::unknown(),
-            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]).unwrap(),
-        ])
-        .unwrap();
-        let right =
-            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]).unwrap();
+            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]),
+        ]);
+
+        let right = InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]);
 
         assert!(compare_inferred_types(&left, &right));
     }
@@ -305,12 +297,10 @@ mod tests {
         let left = InferredType::all_of(vec![
             InferredType::string(),
             InferredType::unknown(),
-            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]).unwrap(),
-        ])
-        .unwrap();
+            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]),
+        ]);
 
-        let right =
-            InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]).unwrap();
+        let right = InferredType::all_of(vec![InferredType::string(), InferredType::unknown()]);
 
         let mut left = Expr::identifier_global("x", None).merge_inferred_type(left);
         let mut right = Expr::identifier_global("x", None).merge_inferred_type(right);

@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -738,7 +738,7 @@ mod internal {
 
 #[cfg(test)]
 mod unresolved_types_tests {
-    use crate::{compile, Expr};
+    use crate::{Expr, RibCompiler};
     use test_r::test;
 
     fn strip_spaces(input: &str) -> String {
@@ -767,7 +767,8 @@ mod unresolved_types_tests {
     #[test]
     fn test_unresolved_types_identifier() {
         let expr = Expr::from_text("hello").unwrap();
-        let error_msg = compile(expr, &vec![]).unwrap_err().to_string();
+        let compiler = RibCompiler::default();
+        let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let error = r#"
         error in the following rib found at line 1, column 1
@@ -784,7 +785,8 @@ mod unresolved_types_tests {
     #[test]
     fn test_unresolved_type_nested_record_index() {
         let expr = Expr::from_text("{foo: {a: \"bar\", b: (\"foo\", hello)}}").unwrap();
-        let error_msg = compile(expr, &vec![]).unwrap_err().to_string();
+        let compiler = RibCompiler::default();
+        let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 1, column 29
@@ -804,7 +806,8 @@ mod unresolved_types_tests {
     #[test]
     fn test_unresolved_type_result_ok() {
         let expr = Expr::from_text("ok(hello)").unwrap();
-        let error_msg = compile(expr, &vec![]).unwrap_err().to_string();
+        let compiler = RibCompiler::default();
+        let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 1, column 4
@@ -824,7 +827,8 @@ mod unresolved_types_tests {
     fn test_unresolved_type_result_err() {
         let expr = Expr::from_text("err(hello)").unwrap();
 
-        let error_msg = compile(expr, &vec![]).unwrap_err().to_string();
+        let compiler = RibCompiler::default();
+        let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 1, column 5

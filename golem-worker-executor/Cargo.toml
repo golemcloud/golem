@@ -2,10 +2,12 @@
 name = "golem-worker-executor"
 version = "0.0.0"
 edition = "2021"
-license = "Apache-2.0"
+
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Golem worker executor service"
+
+license-file = "../LICENSE"
 
 [lib]
 harness = false

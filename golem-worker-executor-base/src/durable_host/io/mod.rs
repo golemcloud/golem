@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,8 +18,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use wasmtime_wasi::{
-    HostInputStream, HostOutputStream, Stderr, StdinStream, Stdout, StdoutStream, StreamError,
-    StreamResult, Subscribe,
+    DynInputStream, DynOutputStream, InputStream, OutputStream, Pollable, Stderr, StdinStream,
+    Stdout, StdoutStream, StreamError, StreamResult,
 };
 
 pub mod error;
@@ -36,7 +36,7 @@ impl ManagedStdIn {
 }
 
 impl StdinStream for ManagedStdIn {
-    fn stream(&self) -> Box<dyn HostInputStream> {
+    fn stream(&self) -> DynInputStream {
         Box::new(self.clone())
     }
 
@@ -46,12 +46,12 @@ impl StdinStream for ManagedStdIn {
 }
 
 #[async_trait]
-impl Subscribe for ManagedStdIn {
+impl Pollable for ManagedStdIn {
     async fn ready(&mut self) {}
 }
 
 #[async_trait]
-impl HostInputStream for ManagedStdIn {
+impl InputStream for ManagedStdIn {
     fn read(&mut self, _size: usize) -> StreamResult<Bytes> {
         Err(StreamError::trap("standard input is disabled"))
     }
@@ -79,7 +79,7 @@ impl ManagedStdOut {
 }
 
 impl StdoutStream for ManagedStdOut {
-    fn stream(&self) -> Box<dyn HostOutputStream> {
+    fn stream(&self) -> DynOutputStream {
         Box::new(self.clone())
     }
 
@@ -89,14 +89,14 @@ impl StdoutStream for ManagedStdOut {
 }
 
 #[async_trait]
-impl Subscribe for ManagedStdOut {
+impl Pollable for ManagedStdOut {
     async fn ready(&mut self) {
         self.state.stdout.stream().ready().await
     }
 }
 
 #[async_trait]
-impl HostOutputStream for ManagedStdOut {
+impl OutputStream for ManagedStdOut {
     fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
         self.state.stdout.stream().write(bytes.clone())
     }
@@ -132,7 +132,7 @@ impl ManagedStdErr {
 }
 
 impl StdoutStream for ManagedStdErr {
-    fn stream(&self) -> Box<dyn HostOutputStream> {
+    fn stream(&self) -> DynOutputStream {
         Box::new(self.clone())
     }
 
@@ -142,14 +142,14 @@ impl StdoutStream for ManagedStdErr {
 }
 
 #[async_trait]
-impl Subscribe for ManagedStdErr {
+impl Pollable for ManagedStdErr {
     async fn ready(&mut self) {
         self.state.stderr.stream().ready().await
     }
 }
 
 #[async_trait]
-impl HostOutputStream for ManagedStdErr {
+impl OutputStream for ManagedStdErr {
     fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
         self.state.stderr.stream().write(bytes.clone())
     }

@@ -1,0 +1,366 @@
+## Generated from default config
+custom_request_port = 9006
+environment = "local"
+port = 9005
+worker_grpc_port = 9007
+
+[api_definition]
+component_by_id_cache_size = 1024
+component_by_name_cache_size = 1024
+
+[blob_storage]
+type = "LocalFileSystem"
+
+[blob_storage.config]
+root = "../data/blob_storage"
+
+[component_service]
+access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+host = "localhost"
+port = 9090
+
+[component_service.connect_timeout]
+nanos = 0
+secs = 10
+
+[component_service.retries]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
+[db]
+type = "Sqlite"
+
+[db.config]
+database = "../data/golem_worker.sqlite"
+max_connections = 10
+
+[gateway_session_storage]
+type = "Redis"
+
+[gateway_session_storage.config]
+database = 0
+host = "localhost"
+key_prefix = ""
+pool_size = 8
+port = 6380
+tracing = false
+
+[gateway_session_storage.config.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[routing_table]
+connect_timeout = "10s"
+host = "localhost"
+invalidation_min_delay = "500ms"
+port = 9002
+
+[routing_table.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[tracing]
+console = false
+dtor_friendly = false
+file_name = "worker-service.log"
+file_truncate = true
+
+[tracing.file]
+ansi = false
+compact = false
+enabled = false
+json = true
+json_flatten = true
+json_flatten_span = true
+pretty = false
+span_events_active = false
+span_events_full = false
+without_time = false
+
+[tracing.stdout]
+ansi = true
+compact = false
+enabled = true
+json = false
+json_flatten = true
+json_flatten_span = true
+pretty = false
+span_events_active = false
+span_events_full = false
+without_time = false
+
+[worker_executor_retries]
+max_attempts = 5
+max_delay = "3s"
+max_jitter_factor = 0.15
+min_delay = "10ms"
+multiplier = 10.0
+
+
+## Generated from example config: with postgres
+# custom_request_port = 9006
+# environment = "local"
+# port = 9005
+# worker_grpc_port = 9007
+# 
+# [api_definition]
+# component_by_id_cache_size = 1024
+# component_by_name_cache_size = 1024
+# 
+# [blob_storage]
+# type = "LocalFileSystem"
+# 
+# [blob_storage.config]
+# root = "../data/blob_storage"
+# 
+# [component_service]
+# access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+# host = "localhost"
+# port = 9090
+# 
+# [component_service.connect_timeout]
+# nanos = 0
+# secs = 10
+# 
+# [component_service.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
+# [db]
+# type = "Postgres"
+# 
+# [db.config]
+# database = "postgres"
+# host = "localhost"
+# max_connections = 10
+# password = "postgres"
+# port = 5432
+# username = "postgres"
+# 
+# [gateway_session_storage]
+# type = "Redis"
+# 
+# [gateway_session_storage.config]
+# database = 0
+# host = "localhost"
+# key_prefix = ""
+# pool_size = 8
+# port = 6380
+# tracing = false
+# 
+# [gateway_session_storage.config.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [routing_table]
+# connect_timeout = "10s"
+# host = "localhost"
+# invalidation_min_delay = "500ms"
+# port = 9002
+# 
+# [routing_table.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [tracing]
+# console = false
+# dtor_friendly = false
+# file_name = "worker-service.log"
+# file_truncate = true
+# 
+# [tracing.file]
+# ansi = false
+# compact = false
+# enabled = false
+# json = true
+# json_flatten = true
+# json_flatten_span = true
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false
+# 
+# [tracing.stdout]
+# ansi = true
+# compact = false
+# enabled = true
+# json = false
+# json_flatten = true
+# json_flatten_span = true
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false
+# 
+# [worker_executor_retries]
+# max_attempts = 5
+# max_delay = "3s"
+# max_jitter_factor = 0.15
+# min_delay = "10ms"
+# multiplier = 10.0
+
+## Generated from example config: with postgres and s3
+# custom_request_port = 9006
+# environment = "local"
+# port = 9005
+# worker_grpc_port = 9007
+# 
+# [api_definition]
+# component_by_id_cache_size = 1024
+# component_by_name_cache_size = 1024
+# 
+# [blob_storage]
+# type = "S3"
+# 
+# [blob_storage.config]
+# compilation_cache_bucket = "golem-compiled-components"
+# components_bucket = "component-store"
+# compressed_oplog_buckets = ["oplog-archive-1"]
+# custom_data_bucket = "custom-data"
+# initial_component_files_bucket = "golem-initial-component-files"
+# object_prefix = ""
+# oplog_payload_bucket = "oplog-payload"
+# plugin_wasm_files_bucket = "golem-plugin-wasm-files"
+# region = "us-east-1"
+# use_minio_credentials = false
+# 
+# [blob_storage.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
+# [component_service]
+# access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+# host = "localhost"
+# port = 9090
+# 
+# [component_service.connect_timeout]
+# nanos = 0
+# secs = 10
+# 
+# [component_service.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
+# [db]
+# type = "Postgres"
+# 
+# [db.config]
+# database = "postgres"
+# host = "localhost"
+# max_connections = 10
+# password = "postgres"
+# port = 5432
+# username = "postgres"
+# 
+# [gateway_session_storage]
+# type = "Redis"
+# 
+# [gateway_session_storage.config]
+# database = 0
+# host = "localhost"
+# key_prefix = ""
+# pool_size = 8
+# port = 6380
+# tracing = false
+# 
+# [gateway_session_storage.config.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [routing_table]
+# connect_timeout = "10s"
+# host = "localhost"
+# invalidation_min_delay = "500ms"
+# port = 9002
+# 
+# [routing_table.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [tracing]
+# console = false
+# dtor_friendly = false
+# file_name = "worker-service.log"
+# file_truncate = true
+# 
+# [tracing.file]
+# ansi = false
+# compact = false
+# enabled = false
+# json = true
+# json_flatten = true
+# json_flatten_span = true
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false
+# 
+# [tracing.stdout]
+# ansi = true
+# compact = false
+# enabled = true
+# json = false
+# json_flatten = true
+# json_flatten_span = true
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false
+# 
+# [worker_executor_retries]
+# max_attempts = 5
+# max_delay = "3s"
+# max_jitter_factor = 0.15
+# min_delay = "10ms"
+# multiplier = 10.0
+## Generated from default config
+cors_origin_regex = "https://*.golem.cloud"
+workspace = "release"
+
+[cloud_service]
+access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+host = "localhost"
+port = 8080
+
+[cloud_service.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[domain_records]
+domain_allow_list = []
+register_domain_black_list = ["dev-api.golem.cloud", "api.golem.cloud"]
+subdomain_black_list = ["api-gateway", "release", "grafana"]
+

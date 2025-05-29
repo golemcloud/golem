@@ -2,10 +2,12 @@
 name = "golem-client"
 version = "0.0.0"
 edition = "2021"
-license = "Apache-2.0"
+
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Client for Golem Cloud's REST API"
+
+license-file = "../LICENSE"
 
 include = ["src/**/*", "Cargo.toml", "build.rs", "openapi/**/*"]
 
@@ -13,8 +15,12 @@ include = ["src/**/*", "Cargo.toml", "build.rs", "openapi/**/*"]
 harness = false
 
 [dependencies]
-golem-common = { path = "../golem-common", version = "=0.0.0", default-features = false, features = ["model"] }
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = ["analysis"] }
+golem-common = { path = "../golem-common", version = "=0.0.0", default-features = false, features = [
+    "model",
+] }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = [
+    "analysis",
+] }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false }
 
 async-trait = { workspace = true }
@@ -33,4 +39,4 @@ uuid = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]
-golem-openapi-client-generator = "=0.0.15"
+golem-openapi-client-generator = "=0.0.16"

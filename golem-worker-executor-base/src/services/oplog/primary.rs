@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -159,7 +159,7 @@ impl OplogService for PrimaryOplogService {
         initial_entry: OplogEntry,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    ) -> Arc<dyn Oplog> {
         record_oplog_call("create");
 
         let key = Self::oplog_key(&owned_worker_id.worker_id);
@@ -201,7 +201,7 @@ impl OplogService for PrimaryOplogService {
         last_oplog_index: OplogIndex,
         _initial_worker_metadata: WorkerMetadata,
         _execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    ) -> Arc<dyn Oplog> {
         record_oplog_call("open");
 
         let key = Self::oplog_key(&owned_worker_id.worker_id);
@@ -391,10 +391,7 @@ impl CreateOplogConstructor {
 
 #[async_trait]
 impl OplogConstructor for CreateOplogConstructor {
-    async fn create_oplog(
-        self,
-        close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
         Arc::new(PrimaryOplog::new(
             self.indexed_storage,
             self.blob_storage,

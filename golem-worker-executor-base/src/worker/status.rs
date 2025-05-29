@@ -1366,7 +1366,7 @@ mod test {
     }
 
     impl HasOplogService for TestCase {
-        fn oplog_service(&self) -> Arc<dyn OplogService + Send + Sync> {
+        fn oplog_service(&self) -> Arc<dyn OplogService> {
             Arc::new(self.clone())
         }
     }
@@ -1379,7 +1379,7 @@ mod test {
             _initial_entry: OplogEntry,
             _initial_worker_metadata: WorkerMetadata,
             _execution_status: Arc<RwLock<ExecutionStatus>>,
-        ) -> Arc<dyn Oplog + Send + Sync + 'static> {
+        ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
         }
 
@@ -1389,7 +1389,7 @@ mod test {
             _last_oplog_index: OplogIndex,
             _initial_worker_metadata: WorkerMetadata,
             _execution_status: Arc<RwLock<ExecutionStatus>>,
-        ) -> Arc<dyn Oplog + Send + Sync + 'static> {
+        ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
         }
 

@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::benchmarks::data::Data;
+use crate::benchmarks::{
+    benchmark_invocations, delete_workers, run_benchmark, setup_iteration, warmup_workers,
+    RustServiceClient,
+};
 use async_trait::async_trait;
 use golem_common::model::WorkerId;
 use golem_test_framework::config::{
@@ -19,11 +24,6 @@ use golem_test_framework::config::{
 };
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_wasm_rpc::IntoValueAndType;
-use integration_tests::benchmarks::data::Data;
-use integration_tests::benchmarks::{
-    benchmark_invocations, delete_workers, run_benchmark, setup_iteration, warmup_workers,
-    RustServiceClient,
-};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use tokio::task::JoinSet;
@@ -165,7 +165,6 @@ impl Benchmark for ThroughputLargeInput {
     }
 }
 
-#[tokio::main]
-async fn main() {
+pub async fn run() {
     run_benchmark::<ThroughputLargeInput>().await;
 }

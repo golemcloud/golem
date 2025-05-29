@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::components::docker::{get_docker_container_name, ContainerHandle, NETWORK};
+use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use async_trait::async_trait;
@@ -37,6 +37,7 @@ impl DockerShardManager {
     const GRPC_PORT: ContainerPort = ContainerPort::Tcp(9020);
 
     pub async fn new(
+        unique_network_id: &str,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         number_of_shards_override: Option<usize>,
         verbosity: Level,
@@ -53,7 +54,7 @@ impl DockerShardManager {
         .await;
 
         let mut image = ShardManagerImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars.clone())
-            .with_network(NETWORK);
+            .with_network(network(unique_network_id));
 
         if let Some(number_of_shards) = number_of_shards_override {
             image = image.with_env_var("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string())
@@ -64,7 +65,7 @@ impl DockerShardManager {
             .await
             .expect("Failed to start golem-shard-manager container");
 
-        let private_host = get_docker_container_name(container.id()).await;
+        let private_host = get_docker_container_name(unique_network_id, container.id()).await;
 
         let public_http_port = container
             .get_host_port_ipv4(Self::HTTP_PORT)

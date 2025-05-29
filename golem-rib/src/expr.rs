@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,7 +14,7 @@
 
 use crate::call_type::{CallType, InstanceCreationType};
 use crate::generic_type_parameter::GenericTypeParameter;
-use crate::inferred_type::TypeOrigin;
+use crate::inferred_type::{DefaultType, TypeOrigin};
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
@@ -349,8 +349,9 @@ impl Expr {
             .map_err(|err| format!("{}", err))
     }
 
-    pub fn lookup(&mut self, source_span: &SourceSpan) -> Option<Expr> {
-        find_expr(self, source_span)
+    pub fn lookup(&self, source_span: &SourceSpan) -> Option<Expr> {
+        let mut expr = self.clone();
+        find_expr(&mut expr, source_span)
     }
 
     pub fn is_literal(&self) -> bool {
@@ -863,9 +864,11 @@ impl Expr {
     }
 
     pub fn literal(value: impl AsRef<str>) -> Self {
+        let default_type = DefaultType::String;
+
         Expr::Literal {
             value: value.as_ref().to_string(),
-            inferred_type: InferredType::string().override_origin(TypeOrigin::Default),
+            inferred_type: InferredType::from(&default_type),
             source_span: SourceSpan::default(),
             type_annotation: None,
         }
@@ -1093,6 +1096,7 @@ impl Expr {
         function_type_registry: &FunctionTypeRegistry,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibTypeError> {
+        self.set_origin();
         self.identify_instance_creation(function_type_registry)?;
         self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
@@ -1110,6 +1114,18 @@ impl Expr {
         self.bind_instance_types();
         self.infer_worker_function_invokes()?;
         Ok(())
+    }
+
+    pub fn set_origin(&mut self) {
+        let mut visitor = ExprVisitor::bottom_up(self);
+
+        while let Some(expr) = visitor.pop_front() {
+            let source_location = expr.source_span();
+            let origin = TypeOrigin::OriginatedAt(source_location.clone());
+            let inferred_type = expr.inferred_type();
+            let origin = inferred_type.add_origin(origin);
+            expr.with_inferred_type_mut(origin);
+        }
     }
 
     // An inference is a single cycle of to-and-fro scanning of Rib expression, that it takes part in fix point of inference.
@@ -1656,9 +1672,7 @@ impl Expr {
             | Expr::Range { inferred_type, .. }
             | Expr::Length { inferred_type, .. }
             | Expr::Call { inferred_type, .. } => {
-                if !new_inferred_type.is_unknown() {
-                    *inferred_type = new_inferred_type;
-                }
+                *inferred_type = new_inferred_type;
             }
         }
     }
@@ -1689,7 +1703,8 @@ impl Expr {
     }
 
     pub fn number(big_decimal: BigDecimal) -> Expr {
-        let inferred_type = InferredType::from(&big_decimal).as_default();
+        let default_type = DefaultType::from(&big_decimal);
+        let inferred_type = InferredType::from(&default_type);
 
         Expr::number_inferred(big_decimal, None, inferred_type)
     }
@@ -3039,7 +3054,7 @@ fn find_expr(expr: &mut Expr, source_span: &SourceSpan) -> Option<Expr> {
     while let Some(current) = visitor.pop_back() {
         let span = current.source_span();
 
-        if source_span.is_equal(&span) {
+        if source_span.eq(&span) {
             return Some(current.clone());
         }
     }

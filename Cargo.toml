@@ -2,8 +2,18 @@
 resolver = "2"
 
 members = [
+    "cloud-api-grpc",
+    "cloud-common",
+    "cloud-component-compilation-service",
+    "cloud-component-service",
+    "cloud-debugging-service",
+    "cloud-service",
+    "cloud-shard-manager",
+    "cloud-worker-executor",
+    "cloud-worker-service",
     "golem-api-grpc",
     "golem-client",
+    "golem-cloud-client",
     "golem-common",
     "golem-service-base",
     "golem-component-compilation-service",
@@ -19,7 +29,8 @@ members = [
     "golem-worker-service",
     "integration-tests",
     "wasm-ast",
-    "wasm-rpc"
+    "wasm-rpc",
+    "wasm-rpc-derive",
 ]
 
 exclude = [
@@ -67,24 +78,36 @@ exclude = [
     "test-components/wasi-http-incoming-request-handler-state",
     "test-components/write-stderr",
     "test-components/write-stdout",
-    "test-components/rdbms-service"
+    "test-components/rdbms-service",
 ]
+
+[workspace.metadata]
+license-file = "LICENSE"
 
 [workspace.dependencies]
 anyhow = "1.0.97"
+applying = "1.0.1"
 assert2 = "0.3.15"
+async-dropper = { version = "0.3.1", features = ["simple", "tokio"] }
+async-dropper-simple = { version = "0.2.6", features = [
+    "no-default-bound",
+    "tokio",
+] }
 async-fs = "2.1.2"
 async-hash = "0.5.4"
+async-lock = "3.4.0"
 async-recursion = "1.1.1"
 async-trait = "0.1.87"
 async_zip = "0.0.17"
 aws-config = "=1.5.10" # Pinned because newer versions were failing with localstack
 aws-sdk-s3 = "=1.65.0" # Pinned because newer versions were failing with localstack
 axum = { version = "0.7.9", features = ["multipart"] }
+axum-jrpc = "0.7.1"
 base64 = "0.22.1"
 bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bincode = { version = "=2.0.0-rc.3", features = ["serde"] }
 bincode_derive = { version = "=2.0.0-rc.3" }
+bit-vec = { version = "0.6.3", features = ["serde"] }
 bytes = "1.10.1"
 cap-std = "3.4.2" # keep in sync with wasmtime
 chrono = { version = "0.4.40", features = ["serde"] }
@@ -99,6 +122,7 @@ colored = "3.0.0"
 combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
 console-subscriber = "0.4.1"
+darling = "=0.20.10"
 dashmap = "6.1.0"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 dirs = "4.0.0"
@@ -112,7 +136,9 @@ fred = { version = "=9.4.0", features = [
 futures = "0.3"
 futures-core = "0.3.31"
 futures-util = "0.3.31"
+gethostname = "0.5.0"
 git-version = "0.3.9"
+headers = "0.4.0"
 hex = "0.4.3"
 http = "1.3.1"
 http-body = "1.0.1"
@@ -132,26 +158,30 @@ nom = "7.1.3"
 nonempty-collections = "0.3.0"
 num-traits = "0.2.19"
 once_cell = "1.21.0"
-openapiv3 = "2.0.0"
+openapiv3 = "=2.0.0"
 openidconnect = "3.5.0"
 opentelemetry = "0.28.0"
 opentelemetry-prometheus = "0.28.0"
 opentelemetry_sdk = "0.28.0"
-poem-openapi = { version = "=5.1.5", features = [# pinned temporarily because 5.1.8 generats invalid OpenAPI yaml
-    "swagger-ui",
-    "chrono",
-    "time",
-    "humantime",
-    "uuid",
-    "url",
-    "websocket",
-] }
-poem = { version = "=3.1.6", features = [
-    "prometheus",
+poem = { version = "=3.1.10", features = [
+    "cookie",
+    "multipart",
     "opentelemetry",
+    "prometheus",
     "test",
 ] }
-poem-openapi-derive = "=5.1.4"
+poem-derive = { version = "=3.1.10"}
+poem-openapi = { version = "=5.1.14", features = [
+    "chrono",
+    "cookie",
+    "humantime",
+    "swagger-ui",
+    "time",
+    "url",
+    "uuid",
+    "websocket",
+    ] }
+poem-openapi-derive = "=5.1.14"
 postgres = "0.19.10"
 prometheus = { version = "0.13.4", features = ["process"] }
 proptest = "=1.5.0"
@@ -202,6 +232,7 @@ testcontainers-modules = { version = "0.11.6", features = [
 ] }
 test-r = { version = "2.1.0", default-features = true }
 thiserror = "2.0.12"
+time = { version = "0.3.41", features = ["default", "macros"] }
 tokio = { version = "1.44", features = [
     "macros",
     "rt-multi-thread",
@@ -229,20 +260,22 @@ tracing-subscriber = { version = "0.3.19", features = [
     "json",
 ] }
 tracing-test = "0.2.5"
+tryhard = "0.5.1"
 typed-path = "0.10.0"
 url = { version = "2.5.4", features = ["serde"] }
 urlencoding = "2.1.3"
 uuid = { version = "1.15.1", features = ["serde", "v4", "v5"] }
 wac-graph = "=0.6.1"
-wasm-wave = "0.227.1"
-wasmtime = { version = "=27.0.0", features = ["component-model"] }
-wasmtime-wasi = { version = "=27.0.0" }
-wasmtime-wasi-http = { version = "=27.0.0" }
-wit-component = "0.227.1"
-wit-parser = "0.227.1"
+wasm-wave = "0.228"
+wasmtime = { version = "=32.0.0", features = ["component-model"] }
+wasmtime-wasi = { version = "=32.0.0" }
+wasmtime-wasi-http = { version = "=32.0.0" }
+webpki-roots = { version = "0.26.7" }
+wit-component = "0.228"
+wit-parser = "0.228"
 
 [patch.crates-io]
 redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }
-wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
-wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
-wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v27.0.0" }
+wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v32.0.0" }
+wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v32.0.0" }
+wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v32.0.0" }

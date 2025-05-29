@@ -2,10 +2,12 @@
 name = "golem-service-base"
 version = "0.0.0"
 edition = "2021"
-license = "Apache-2.0"
+
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Shared code between Golem services"
+
+license-file = "../LICENSE"
 
 autotests = false
 
@@ -19,6 +21,7 @@ golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = [
     "host",
 ] }
+golem-wasm-rpc-derive = { path = "../wasm-rpc-derive", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 async-fs = { workspace = true }
@@ -73,6 +76,7 @@ tempfile = { workspace = true }
 test-r = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+tryhard = { workspace = true }
 uuid = { workspace = true }
 
 [[test]]

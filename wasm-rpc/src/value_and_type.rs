@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,7 +20,7 @@ use golem_wasm_ast::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameTypePair, TypeEnum,
     TypeFlags,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Bound;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -275,6 +275,16 @@ impl<S: IntoValue> IntoValue for Result<S, ()> {
     }
 }
 
+impl<T: IntoValue> IntoValue for Box<T> {
+    fn into_value(self) -> Value {
+        (*self).into_value()
+    }
+
+    fn get_type() -> AnalysedType {
+        T::get_type()
+    }
+}
+
 impl<T: IntoValue> IntoValue for Option<T> {
     fn into_value(self) -> Value {
         match self {
@@ -360,6 +370,30 @@ impl<K: IntoValue, V: IntoValue> IntoValue for HashMap<K, V> {
 
     fn get_type() -> AnalysedType {
         list(tuple(vec![K::get_type(), V::get_type()]))
+    }
+}
+
+impl<K: IntoValue, V: IntoValue> IntoValue for BTreeMap<K, V> {
+    fn into_value(self) -> Value {
+        Value::List(
+            self.into_iter()
+                .map(|(k, v)| Value::Tuple(vec![k.into_value(), v.into_value()]))
+                .collect(),
+        )
+    }
+
+    fn get_type() -> AnalysedType {
+        list(tuple(vec![K::get_type(), V::get_type()]))
+    }
+}
+
+impl<T: IntoValue> IntoValue for BTreeSet<T> {
+    fn into_value(self) -> Value {
+        Value::List(self.into_iter().map(IntoValue::into_value).collect())
+    }
+
+    fn get_type() -> AnalysedType {
+        list(T::get_type())
     }
 }
 
@@ -843,6 +877,119 @@ impl From<ValueAndType> for crate::golem_rpc_0_2_x::types::ValueAndType {
         Self {
             value: value.value.into(),
             typ: value.typ.into(),
+        }
+    }
+}
+
+#[cfg(feature = "extra-bindings")]
+mod extra_bindings {
+    use crate::{IntoValue, IntoValueAndType, Value};
+    use bigdecimal::BigDecimal;
+    use bit_vec::BitVec;
+    use chrono::{Datelike, Offset, Timelike};
+    use golem_wasm_ast::analysis::analysed_type::{bool, list, str};
+    use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
+    use url::Url;
+
+    impl IntoValue for BigDecimal {
+        fn into_value(self) -> Value {
+            self.to_string().into_value()
+        }
+
+        fn get_type() -> AnalysedType {
+            str()
+        }
+    }
+
+    impl IntoValue for chrono::NaiveDate {
+        fn into_value(self) -> Value {
+            let year = self.year();
+            let month = self.month() as u8;
+            let day = self.day() as u8;
+            Value::Record(vec![Value::S32(year), Value::U8(month), Value::U8(day)])
+        }
+
+        fn get_type() -> AnalysedType {
+            analysed_type::record(vec![
+                analysed_type::field("year", analysed_type::s32()),
+                analysed_type::field("month", analysed_type::u8()),
+                analysed_type::field("day", analysed_type::u8()),
+            ])
+        }
+    }
+
+    impl IntoValue for chrono::NaiveTime {
+        fn into_value(self) -> Value {
+            let hour = self.hour() as u8;
+            let minute = self.minute() as u8;
+            let second = self.second() as u8;
+            let nanosecond = self.nanosecond();
+
+            Value::Record(vec![
+                Value::U8(hour),
+                Value::U8(minute),
+                Value::U8(second),
+                Value::U32(nanosecond),
+            ])
+        }
+
+        fn get_type() -> AnalysedType {
+            analysed_type::record(vec![
+                analysed_type::field("hours", analysed_type::u8()),
+                analysed_type::field("minutes", analysed_type::u8()),
+                analysed_type::field("seconds", analysed_type::u8()),
+                analysed_type::field("nanoseconds", analysed_type::u32()),
+            ])
+        }
+    }
+
+    impl IntoValue for chrono::NaiveDateTime {
+        fn into_value(self) -> Value {
+            let date = self.date().into_value_and_type();
+            let time = self.time().into_value_and_type();
+            Value::Record(vec![date.value, time.value])
+        }
+
+        fn get_type() -> AnalysedType {
+            analysed_type::record(vec![
+                analysed_type::field("date", chrono::NaiveDate::get_type()),
+                analysed_type::field("time", chrono::NaiveTime::get_type()),
+            ])
+        }
+    }
+
+    impl IntoValue for chrono::DateTime<chrono::Utc> {
+        fn into_value(self) -> Value {
+            let timestamp = self.naive_utc().into_value_and_type();
+            let offset = self.offset().fix().local_minus_utc();
+            Value::Record(vec![timestamp.value, Value::S32(offset)])
+        }
+
+        fn get_type() -> AnalysedType {
+            analysed_type::record(vec![
+                analysed_type::field("timestamp", chrono::NaiveDateTime::get_type()),
+                analysed_type::field("offset", analysed_type::s32()),
+            ])
+        }
+    }
+
+    impl IntoValue for BitVec {
+        fn into_value(self) -> Value {
+            self.into_iter().collect::<Vec<_>>().into_value()
+        }
+
+        fn get_type() -> AnalysedType {
+            list(bool())
+        }
+    }
+
+    impl IntoValue for Url {
+        fn into_value(self) -> Value {
+            Value::String(self.to_string())
+        }
+
+        fn get_type() -> AnalysedType {
+            str()
         }
     }
 }

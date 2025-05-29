@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,6 +20,7 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use crate::durable_host::serialized::SerializableError;
+use golem_wasm_rpc_derive::IntoValue;
 use wasmtime_wasi_http::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, Method, TlsAlertReceivedPayload,
 };
@@ -71,7 +72,7 @@ impl From<SerializedHttpVersion> for Version {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
 pub enum SerializableResponse {
     Pending,
     HeadersReceived(SerializableResponseHeaders),
@@ -79,7 +80,7 @@ pub enum SerializableResponse {
     InternalError(Option<SerializableError>),
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
 pub struct SerializableResponseHeaders {
     pub status: u16,
     pub headers: HashMap<String, Vec<u8>>,
@@ -120,7 +121,7 @@ impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
 pub struct SerializableTlsAlertReceivedPayload {
     pub alert_id: Option<u8>,
     pub alert_message: Option<String>,
@@ -144,7 +145,7 @@ impl From<SerializableTlsAlertReceivedPayload> for TlsAlertReceivedPayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
 pub struct SerializableDnsErrorPayload {
     pub rcode: Option<String>,
     pub info_code: Option<u16>,
@@ -168,7 +169,7 @@ impl From<SerializableDnsErrorPayload> for DnsErrorPayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
 pub struct SerializableFieldSizePayload {
     pub field_name: Option<String>,
     pub field_size: Option<u32>,
@@ -192,7 +193,7 @@ impl From<SerializableFieldSizePayload> for FieldSizePayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
 pub enum SerializableErrorCode {
     DnsTimeout,
     DnsError(SerializableDnsErrorPayload),
@@ -391,7 +392,7 @@ impl From<SerializableErrorCode> for ErrorCode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
 pub enum SerializableHttpMethod {
     Get,
     Post,
@@ -439,7 +440,7 @@ impl Display for SerializableHttpMethod {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
 pub struct SerializableHttpRequest {
     pub uri: String,
     pub method: SerializableHttpMethod,

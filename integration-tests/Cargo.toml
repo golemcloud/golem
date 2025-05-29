@@ -2,10 +2,12 @@
 name = "integration-tests"
 version = "0.0.0"
 edition = "2021"
-license = "Apache-2.0"
+
 homepage = "https://golem.cloud/"
 repository = "https://github.com/golemcloud/golem"
 description = "Integration tests for Golem"
+
+license-file = "../LICENSE"
 
 autotests = false
 
@@ -18,6 +20,7 @@ golem-rib-repl = { path = "../golem-rib-repl", version = "=0.0.0" }
 golem-test-framework = { path = "../golem-test-framework", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0", default-features = false, features = ["host"] }
+golem-wasm-rpc-derive= { path = "../wasm-rpc-derive", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 assert2 = { workspace = true }
@@ -62,109 +65,7 @@ harness = false
 test = false
 
 [[bin]]
-name = "benchmark_simple_worker_echo"
-path = "src/benchmarks/simple_worker_echo.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_suspend_worker"
-path = "src/benchmarks/suspend_worker.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_cold_start_small"
-path = "src/benchmarks/cold_start_small.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_cold_start_medium"
-path = "src/benchmarks/cold_start_medium.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_cold_start_large"
-path = "src/benchmarks/cold_start_large.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_latency_small"
-path = "src/benchmarks/latency_small.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_latency_medium"
-path = "src/benchmarks/latency_medium.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_latency_large"
-path = "src/benchmarks/latency_large.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_durability_overhead"
-path = "src/benchmarks/durability_overhead.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_throughput"
-path = "src/benchmarks/throughput.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_throughput_cpu_intensive"
-path = "src/benchmarks/throughput_cpu_intensive.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_throughput_large_input"
-path = "src/benchmarks/throughput_large_input.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_rpc"
-path = "src/benchmarks/rpc.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_rpc_cpu_intensive"
-path = "src/benchmarks/rpc_cpu_intensive.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_rpc_large_input"
-path = "src/benchmarks/rpc_large_input.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_large_initial_memory"
-path = "src/benchmarks/large_initial_memory.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_large_dynamic_memory"
-path = "src/benchmarks/large_dynamic_memory.rs"
-harness = false
-test = false
-
-[[bin]]
-name = "benchmark_report"
-path = "src/benchmarks/report/benchmark_report.rs"
+name = "benchmarks"
+path = "src/benchmarks/all.rs"
 harness = false
 test = false

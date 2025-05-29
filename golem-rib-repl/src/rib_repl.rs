@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -168,20 +168,15 @@ impl RibRepl {
                     // Before evaluation
                     let result = eval(compilation.rib_byte_code, &mut self.repl_state).await;
                     match result {
-                        Ok(result) => {
-                            self.printer.print_rib_result(&result);
-                            Ok(Some(result))
-                        }
+                        Ok(result) => Ok(Some(result)),
                         Err(err) => {
                             self.remove_rib_text_in_session();
-                            self.printer.print_rib_runtime_error(&err);
                             Err(RibExecutionError::RibRuntimeError(err))
                         }
                     }
                 }
                 Err(err) => {
                     self.remove_rib_text_in_session();
-                    self.printer.print_rib_compilation_error(&err);
                     Err(RibExecutionError::RibCompilationError(err))
                 }
             }
@@ -211,7 +206,24 @@ impl RibRepl {
             let readline = self.read_line();
             match readline {
                 Ok(rib) => {
-                    let _ = self.execute_rib(&rib).await;
+                    let result = self.execute_rib(&rib).await;
+
+                    match result {
+                        Ok(Some(result)) => {
+                            self.printer.print_rib_result(&result);
+                        }
+
+                        Ok(None) => {}
+
+                        Err(err) => match err {
+                            RibExecutionError::RibRuntimeError(runtime_error) => {
+                                self.printer.print_rib_runtime_error(&runtime_error);
+                            }
+                            RibExecutionError::RibCompilationError(runtime_error) => {
+                                self.printer.print_rib_compilation_error(&runtime_error);
+                            }
+                        },
+                    }
                 }
                 Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => break,
                 Err(_) => continue,

@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -259,7 +259,7 @@ mod internal {
     use crate::type_refinement::TypeRefinement;
     use crate::{
         ActualType, AmbiguousTypeError, ArmPattern, ExpectedType, Expr, InferredType,
-        InvalidPatternMatchError, TypeInternal, TypeMismatchError, VariableId,
+        InvalidPatternMatchError, Path, TypeInternal, TypeMismatchError, VariableId,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::collections::VecDeque;
@@ -547,26 +547,17 @@ mod internal {
         expressions: &'a mut Vec<Expr>,
         inferred_type: &'a mut InferredType,
     ) {
-        match call_type {
-            // For CallType::Enum, there are no argument expressions
-            // For CallType::Function, there is no type available to push down to arguments, as it is invalid
-            // to push down the return type of function to its arguments.
-            // For variant constructor, the type of the arguments are present in the return type of the call
-            // and should be pushed down to arguments
-            CallType::VariantConstructor(name) => {
-                if let TypeInternal::Variant(variant) = inferred_type.inner.deref() {
-                    let identified_variant = variant
-                        .iter()
-                        .find(|(variant_name, _)| variant_name == name);
-                    if let Some((_name, Some(inner_type))) = identified_variant {
-                        for expr in expressions {
-                            expr.add_infer_type_mut(inner_type.clone());
-                        }
+        if let CallType::VariantConstructor(name) = call_type {
+            if let TypeInternal::Variant(variant) = inferred_type.inner.deref() {
+                let identified_variant = variant
+                    .iter()
+                    .find(|(variant_name, _)| variant_name == name);
+                if let Some((_name, Some(inner_type))) = identified_variant {
+                    for expr in expressions {
+                        expr.add_infer_type_mut(inner_type.clone());
                     }
                 }
             }
-
-            _ => {}
         }
     }
 
@@ -768,8 +759,16 @@ mod internal {
         // If so, we trust this as this may handle majority of the cases
         // in compiler's best effort to create precise error message
         match AnalysedType::try_from(actual_inferred_type) {
-            Ok(wit_tpe) => {
-                TypeMismatchError::with_actual_type_kind(expr, None, wit_tpe, push_down_kind).into()
+            Ok(analysed_type) => {
+                let type_mismatch_error = TypeMismatchError {
+                    expr_with_wrong_type: expr.clone(),
+                    parent_expr: None,
+                    expected_type: ExpectedType::AnalysedType(analysed_type),
+                    actual_type: ActualType::Hint(push_down_kind.clone()),
+                    field_path: Path::default(),
+                    additional_error_detail: Vec::new(),
+                };
+                type_mismatch_error.into()
             }
 
             Err(_) => {
@@ -801,7 +800,7 @@ mod type_push_down_tests {
     use test_r::test;
 
     use crate::type_inference::type_push_down::type_push_down_tests::internal::strip_spaces;
-    use crate::{compile, Expr, InferredType};
+    use crate::{Expr, InferredType, RibCompiler};
 
     #[test]
     fn test_push_down_for_record() {
@@ -809,26 +808,20 @@ mod type_push_down_tests {
             "titles".to_string(),
             Expr::identifier_global("x", None),
         )])
-        .with_inferred_type(
-            InferredType::all_of(vec![
-                InferredType::record(vec![("titles".to_string(), InferredType::unknown())]),
-                InferredType::record(vec![("titles".to_string(), InferredType::u64())]),
-            ])
-            .unwrap(),
-        );
+        .with_inferred_type(InferredType::all_of(vec![
+            InferredType::record(vec![("titles".to_string(), InferredType::unknown())]),
+            InferredType::record(vec![("titles".to_string(), InferredType::u64())]),
+        ]));
 
         expr.push_types_down().unwrap();
         let expected = Expr::record(vec![(
             "titles".to_string(),
             Expr::identifier_global("x", None).with_inferred_type(InferredType::u64()),
         )])
-        .with_inferred_type(
-            InferredType::all_of(vec![
-                InferredType::record(vec![("titles".to_string(), InferredType::unknown())]),
-                InferredType::record(vec![("titles".to_string(), InferredType::u64())]),
-            ])
-            .unwrap(),
-        );
+        .with_inferred_type(InferredType::all_of(vec![
+            InferredType::record(vec![("titles".to_string(), InferredType::unknown())]),
+            InferredType::record(vec![("titles".to_string(), InferredType::u64())]),
+        ]));
         assert_eq!(expr, expected);
     }
 
@@ -841,33 +834,28 @@ mod type_push_down_tests {
             ],
             None,
         )
-        .with_inferred_type(
-            InferredType::all_of(vec![
-                InferredType::list(InferredType::u32()),
-                InferredType::list(InferredType::u64()),
-            ])
-            .unwrap(),
-        );
+        .with_inferred_type(InferredType::all_of(vec![
+            InferredType::list(InferredType::u32()),
+            InferredType::list(InferredType::u64()),
+        ]));
 
         expr.push_types_down().unwrap();
-        let expected = Expr::sequence(
-            vec![
-                Expr::identifier_global("x", None).with_inferred_type(
-                    InferredType::all_of(vec![InferredType::u32(), InferredType::u64()]).unwrap(),
-                ),
-                Expr::identifier_global("y", None).with_inferred_type(
-                    InferredType::all_of(vec![InferredType::u32(), InferredType::u64()]).unwrap(),
-                ),
-            ],
-            None,
-        )
-        .with_inferred_type(
-            InferredType::all_of(vec![
+        let expected =
+            Expr::sequence(
+                vec![
+                    Expr::identifier_global("x", None).with_inferred_type(InferredType::all_of(
+                        vec![InferredType::u32(), InferredType::u64()],
+                    )),
+                    Expr::identifier_global("y", None).with_inferred_type(InferredType::all_of(
+                        vec![InferredType::u32(), InferredType::u64()],
+                    )),
+                ],
+                None,
+            )
+            .with_inferred_type(InferredType::all_of(vec![
                 InferredType::list(InferredType::u32()),
                 InferredType::list(InferredType::u64()),
-            ])
-            .unwrap(),
-        );
+            ]));
         assert_eq!(expr, expected);
     }
 
@@ -880,7 +868,9 @@ mod type_push_down_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let error_message = compile(expr, &vec![]).unwrap_err().to_string();
+        let compiler = RibCompiler::default();
+
+        let error_message = compiler.compile(expr).unwrap_err().to_string();
 
         let expected = r#"
         error in the following rib found at line 2, column 36

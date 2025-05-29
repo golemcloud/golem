@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -98,8 +98,8 @@ use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::{
-    FsResult, I32Exit, ResourceTable, ResourceTableError, Stderr, Stdout, WasiCtx, WasiImpl,
-    WasiView,
+    FsResult, I32Exit, IoCtx, IoImpl, IoView, ResourceTable, ResourceTableError, Stderr, Stdout,
+    WasiCtx, WasiImpl, WasiView,
 };
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
@@ -130,6 +130,7 @@ mod replay_state;
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: Arc<Mutex<ResourceTable>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
     wasi: Arc<Mutex<WasiCtx>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
+    io_ctx: Arc<Mutex<IoCtx>>,
     wasi_http: WasiHttpCtx,
     pub owned_worker_id: OwnedWorkerId,
     pub public_state: PublicDurableWorkerState<Ctx>,
@@ -145,28 +146,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn create(
         owned_worker_id: OwnedWorkerId,
         component_metadata: ComponentMetadata<Ctx::Types>,
-        promise_service: Arc<dyn PromiseService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
-        worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
-        >,
-        key_value_service: Arc<dyn KeyValueService + Send + Sync>,
-        blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        rdbms_service: Arc<dyn crate::services::rdbms::RdbmsService + Send + Sync>,
+        promise_service: Arc<dyn PromiseService>,
+        worker_service: Arc<dyn WorkerService>,
+        worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
+        key_value_service: Arc<dyn KeyValueService>,
+        blob_store_service: Arc<dyn BlobStoreService>,
+        rdbms_service: Arc<dyn crate::services::rdbms::RdbmsService>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        oplog: Arc<dyn Oplog + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
+        oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Ctx>>,
-        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        rpc: Arc<dyn Rpc + Send + Sync>,
-        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        scheduler_service: Arc<dyn SchedulerService>,
+        rpc: Arc<dyn Rpc>,
+        worker_proxy: Arc<dyn WorkerProxy>,
         component_service: Arc<dyn ComponentService<Ctx::Types>>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<Ctx::Types>>,
-        worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
+        worker_fork: Arc<dyn WorkerForkService>,
     ) -> Result<Self, GolemError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -195,7 +194,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let last_oplog_index = oplog.current_oplog_index().await;
 
-        let (wasi, table) = wasi_host::create_context(
+        let (wasi, io_ctx, table) = wasi_host::create_context(
             &worker_config.args,
             &worker_config.env,
             temp_dir.path().to_path_buf(),
@@ -210,6 +209,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
             wasi: Arc::new(Mutex::new(wasi)),
+            io_ctx: Arc::new(Mutex::new(io_ctx)),
             wasi_http,
             owned_worker_id: owned_worker_id.clone(),
             public_state: PublicDurableWorkerState {
@@ -289,6 +289,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .expect("WasiCtx mutex must never fail")
     }
 
+    fn io_ctx(&mut self) -> &mut IoCtx {
+        Arc::get_mut(&mut self.io_ctx)
+            .expect("WasiCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("WasiCtx mutex must never fail")
+    }
+
     pub fn worker_id(&self) -> &WorkerId {
         &self.owned_worker_id.worker_id
     }
@@ -309,11 +316,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn as_wasi_view(&mut self) -> WasiImpl<DurableWorkerCtxWasiView<Ctx>> {
-        WasiImpl(DurableWorkerCtxWasiView(self))
+        WasiImpl(IoImpl(DurableWorkerCtxWasiView(self)))
     }
 
     pub fn as_wasi_http_view(&mut self) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<Ctx>> {
-        WasiHttpImpl(DurableWorkerCtxWasiHttpView(self))
+        WasiHttpImpl(IoImpl(DurableWorkerCtxWasiHttpView(self)))
     }
 
     pub fn get_worker_status_record(&self) -> WorkerStatusRecord {
@@ -348,11 +355,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state.worker().update_status(status).await;
     }
 
-    pub fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
+    pub fn rpc(&self) -> Arc<dyn Rpc> {
         self.state.rpc.clone()
     }
 
-    pub fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
+    pub fn worker_proxy(&self) -> Arc<dyn WorkerProxy> {
         self.state.worker_proxy.clone()
     }
 
@@ -360,11 +367,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.component_service.clone()
     }
 
-    pub fn worker_fork(&self) -> Arc<dyn WorkerForkService + Send + Sync> {
+    pub fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.state.worker_fork.clone()
     }
 
-    pub fn scheduler_service(&self) -> Arc<dyn SchedulerService + Send + Sync> {
+    pub fn scheduler_service(&self) -> Arc<dyn SchedulerService> {
         self.state.scheduler_service.clone()
     }
 
@@ -1604,7 +1611,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                             "Interrupted via the Golem API",
                                                         ));
                                                     } else {
-                                                        break Err(GolemError::runtime("The worker could not finish replaying a function {function_name}"));
+                                                        break Err(GolemError::runtime(format!("The worker could not finish replaying a function {function_name}")));
                                                     }
                                                 }
                                                 TrapType::Exit => {
@@ -2041,22 +2048,22 @@ struct HttpRequestState {
 }
 
 struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
-    oplog: Arc<dyn Oplog + Send + Sync>,
-    promise_service: Arc<dyn PromiseService + Send + Sync>,
-    scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-    worker_service: Arc<dyn WorkerService + Send + Sync>,
-    worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
-    key_value_service: Arc<dyn KeyValueService + Send + Sync>,
-    blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-    rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
-    component_service: Arc<dyn ComponentService<Ctx::Types> + Send + Sync>,
+    oplog_service: Arc<dyn OplogService>,
+    oplog: Arc<dyn Oplog>,
+    promise_service: Arc<dyn PromiseService>,
+    scheduler_service: Arc<dyn SchedulerService>,
+    worker_service: Arc<dyn WorkerService>,
+    worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
+    key_value_service: Arc<dyn KeyValueService>,
+    blob_store_service: Arc<dyn BlobStoreService>,
+    rdbms_service: Arc<dyn RdbmsService>,
+    component_service: Arc<dyn ComponentService<Ctx::Types>>,
     plugins: Arc<dyn Plugins<Ctx::Types>>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     current_idempotency_key: Option<IdempotencyKey>,
-    rpc: Arc<dyn Rpc + Send + Sync>,
-    worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+    rpc: Arc<dyn Rpc>,
+    worker_proxy: Arc<dyn WorkerProxy>,
     resources: HashMap<WorkerResourceId, ResourceAny>,
     last_resource_id: WorkerResourceId,
     replay_state: ReplayState,
@@ -2079,33 +2086,31 @@ struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     current_span_id: SpanId,
     forward_trace_context_headers: bool,
 
-    worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
+    worker_fork: Arc<dyn WorkerForkService>,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
     pub async fn new(
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
-        oplog: Arc<dyn Oplog + Send + Sync>,
-        promise_service: Arc<dyn PromiseService + Send + Sync>,
-        scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
-        worker_enumeration_service: Arc<
-            dyn worker_enumeration::WorkerEnumerationService + Send + Sync,
-        >,
-        key_value_service: Arc<dyn KeyValueService + Send + Sync>,
-        blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
-        rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
-        component_service: Arc<dyn ComponentService<Ctx::Types> + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
+        oplog: Arc<dyn Oplog>,
+        promise_service: Arc<dyn PromiseService>,
+        scheduler_service: Arc<dyn SchedulerService>,
+        worker_service: Arc<dyn WorkerService>,
+        worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
+        key_value_service: Arc<dyn KeyValueService>,
+        blob_store_service: Arc<dyn BlobStoreService>,
+        rdbms_service: Arc<dyn RdbmsService>,
+        component_service: Arc<dyn ComponentService<Ctx::Types>>,
         plugins: Arc<dyn Plugins<Ctx::Types>>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
-        rpc: Arc<dyn Rpc + Send + Sync>,
-        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        rpc: Arc<dyn Rpc>,
+        worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
         component_metadata: ComponentMetadata<Ctx::Types>,
         total_linear_memory_size: u64,
-        worker_fork: Arc<dyn WorkerForkService + Send + Sync>,
+        worker_fork: Arc<dyn WorkerForkService>,
     ) -> Self {
         let replay_state = ReplayState::new(
             owned_worker_id.clone(),
@@ -2357,13 +2362,13 @@ impl<Ctx: WorkerCtx> ResourceStore for PrivateDurableWorkerState<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasOplogService for PrivateDurableWorkerState<Ctx> {
-    fn oplog_service(&self) -> Arc<dyn OplogService + Send + Sync> {
+    fn oplog_service(&self) -> Arc<dyn OplogService> {
         self.oplog_service.clone()
     }
 }
 
 impl<Ctx: WorkerCtx> HasOplog for PrivateDurableWorkerState<Ctx> {
-    fn oplog(&self) -> Arc<dyn Oplog + Send + Sync> {
+    fn oplog(&self) -> Arc<dyn Oplog> {
         self.oplog.clone()
     }
 }
@@ -2381,10 +2386,10 @@ impl<Ctx: WorkerCtx> HasPlugins<Ctx::Types> for PrivateDurableWorkerState<Ctx> {
 }
 
 pub struct PublicDurableWorkerState<Ctx: WorkerCtx> {
-    promise_service: Arc<dyn PromiseService + Send + Sync>,
+    promise_service: Arc<dyn PromiseService>,
     event_service: Arc<dyn WorkerEventService + Send + Sync>,
     invocation_queue: Weak<Worker<Ctx>>,
-    oplog: Arc<dyn Oplog + Send + Sync>,
+    oplog: Arc<dyn Oplog>,
 }
 
 impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
@@ -2417,7 +2422,7 @@ impl<Ctx: WorkerCtx> HasWorker<Ctx> for PublicDurableWorkerState<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasOplog for PublicDurableWorkerState<Ctx> {
-    fn oplog(&self) -> Arc<dyn Oplog + Send + Sync> {
+    fn oplog(&self) -> Arc<dyn Oplog> {
         self.oplog.clone()
     }
 }
@@ -2437,27 +2442,42 @@ impl Display for SuspendForSleep {
 
 impl Error for SuspendForSleep {}
 
-// This wrapper forces the compiler to choose the wasmtime_wasi implementations for T: WasiView
-impl<Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'_, Ctx> {
+impl<Ctx: WorkerCtx> IoView for DurableWorkerCtxWasiView<'_, Ctx> {
     fn table(&mut self) -> &mut ResourceTable {
         self.0.table()
     }
 
+    fn io_ctx(&mut self) -> &mut IoCtx {
+        self.0.io_ctx()
+    }
+}
+
+// This wrapper forces the compiler to choose the wasmtime_wasi implementations for T: WasiView
+impl<Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'_, Ctx> {
     fn ctx(&mut self) -> &mut WasiCtx {
         self.0.ctx()
+    }
+}
+
+impl<Ctx: WorkerCtx> IoView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
+    fn table(&mut self) -> &mut ResourceTable {
+        Arc::get_mut(&mut self.0.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail")
+    }
+
+    fn io_ctx(&mut self) -> &mut IoCtx {
+        Arc::get_mut(&mut self.0.io_ctx)
+            .expect("IoCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("IoCtx mutex must never fail")
     }
 }
 
 impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
     fn ctx(&mut self) -> &mut WasiHttpCtx {
         &mut self.0.wasi_http
-    }
-
-    fn table(&mut self) -> &mut ResourceTable {
-        Arc::get_mut(&mut self.0.table)
-            .expect("ResourceTable is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("ResourceTable mutex must never fail")
     }
 
     fn send_request(

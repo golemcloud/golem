@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package golem.cloud.component;
+
+import "golem/common/account_id.proto";
+import "golem/component/plugin_definition.proto";
+import public "golem/cloud/component/plugin_scope.proto";
+
+message PluginDefinitionCreation {
+  string name = 1;
+  string version = 2;
+  string description = 3;
+  bytes icon = 4;
+  string homepage = 5;
+  golem.component.PluginTypeSpecificDefinition specs = 6;
+  golem.cloud.component.CloudPluginScope scope = 7;
+}
+
+message PluginDefinition {
+  golem.component.PluginId id = 1;
+  string name = 2;
+  string version = 3;
+  string description = 4;
+  bytes icon = 5;
+  string homepage = 6;
+  golem.component.PluginTypeSpecificDefinition specs = 7;
+  golem.cloud.component.CloudPluginScope scope = 8;
+  golem.common.AccountId account_id = 9;
+  bool deleted = 10;
+}

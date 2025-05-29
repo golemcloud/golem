@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use anyhow::anyhow;
-use async_trait::async_trait;
 use wasmtime::component::Resource;
 use wasmtime_wasi::StreamError;
 
@@ -31,7 +30,6 @@ use wasmtime_wasi::bindings::io::streams::{
 };
 use wasmtime_wasi_http::body::{FailingStream, HostIncomingBodyStream};
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     async fn read(
         &mut self,
@@ -52,7 +50,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
             let result = if durability.is_live() {
                 let request = get_http_stream_request(self, handle)?;
-                let result = HostInputStream::read(&mut self.as_wasi_view(), self_, len).await;
+                let result = HostInputStream::read(&mut self.as_wasi_view().0, self_, len).await;
                 durability.persist(self, request, result).await
             } else {
                 durability.replay(self).await
@@ -62,7 +60,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             result
         } else {
             self.observe_function_call("io::streams::input_stream", "read");
-            HostInputStream::read(&mut self.as_wasi_view(), self_, len).await
+            HostInputStream::read(&mut self.as_wasi_view().0, self_, len).await
         }
     }
 
@@ -85,7 +83,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let result = if durability.is_live() {
                 let request = get_http_stream_request(self, handle)?;
                 let result =
-                    HostInputStream::blocking_read(&mut self.as_wasi_view(), self_, len).await;
+                    HostInputStream::blocking_read(&mut self.as_wasi_view().0, self_, len).await;
                 durability.persist(self, request, result).await
             } else {
                 durability.replay(self).await
@@ -95,7 +93,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             result
         } else {
             self.observe_function_call("io::streams::input_stream", "blocking_read");
-            HostInputStream::blocking_read(&mut self.as_wasi_view(), self_, len).await
+            HostInputStream::blocking_read(&mut self.as_wasi_view().0, self_, len).await
         }
     }
 
@@ -113,7 +111,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             .await?;
             let result = if durability.is_live() {
                 let request = get_http_stream_request(self, handle)?;
-                let result = HostInputStream::skip(&mut self.as_wasi_view(), self_, len).await;
+                let result = HostInputStream::skip(&mut self.as_wasi_view().0, self_, len).await;
                 durability.persist(self, request, result).await
             } else {
                 durability.replay(self).await
@@ -123,7 +121,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             result
         } else {
             self.observe_function_call("io::streams::input_stream", "skip");
-            HostInputStream::skip(&mut self.as_wasi_view(), self_, len).await
+            HostInputStream::skip(&mut self.as_wasi_view().0, self_, len).await
         }
     }
 
@@ -147,7 +145,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let result = if durability.is_live() {
                 let request = get_http_stream_request(self, handle)?;
                 let result =
-                    HostInputStream::blocking_skip(&mut self.as_wasi_view(), self_, len).await;
+                    HostInputStream::blocking_skip(&mut self.as_wasi_view().0, self_, len).await;
                 durability.persist(self, request, result).await
             } else {
                 durability.replay(self).await
@@ -156,13 +154,13 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             result
         } else {
             self.observe_function_call("io::streams::input_stream", "blocking_skip");
-            HostInputStream::blocking_skip(&mut self.as_wasi_view(), self_, len).await
+            HostInputStream::blocking_skip(&mut self.as_wasi_view().0, self_, len).await
         }
     }
 
     fn subscribe(&mut self, self_: Resource<InputStream>) -> anyhow::Result<Resource<Pollable>> {
         self.observe_function_call("io::streams::input_stream", "subscribe");
-        HostInputStream::subscribe(&mut self.as_wasi_view(), self_)
+        HostInputStream::subscribe(&mut self.as_wasi_view().0, self_)
     }
 
     async fn drop(&mut self, rep: Resource<InputStream>) -> anyhow::Result<()> {
@@ -177,15 +175,14 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             }
         }
 
-        HostInputStream::drop(&mut self.as_wasi_view(), rep).await
+        HostInputStream::drop(&mut self.as_wasi_view().0, rep).await
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
     fn check_write(&mut self, self_: Resource<OutputStream>) -> Result<u64, StreamError> {
         self.observe_function_call("io::streams::output_stream", "check_write");
-        HostOutputStream::check_write(&mut self.as_wasi_view(), self_)
+        HostOutputStream::check_write(&mut self.as_wasi_view().0, self_)
     }
 
     async fn write(
@@ -209,7 +206,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             Ok::<(), StreamError>(())
         } else {
             // Non-stdout writes are non-persistent and always executed
-            HostOutputStream::write(&mut self.as_wasi_view(), self_, contents).await
+            HostOutputStream::write(&mut self.as_wasi_view().0, self_, contents).await
         }
     }
 
@@ -226,17 +223,17 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
     async fn flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
         self.observe_function_call("io::streams::output_stream", "flush");
-        HostOutputStream::flush(&mut self.as_wasi_view(), self_).await
+        HostOutputStream::flush(&mut self.as_wasi_view().0, self_).await
     }
 
     async fn blocking_flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
         self.observe_function_call("io::streams::output_stream", "blocking_flush");
-        HostOutputStream::blocking_flush(&mut self.as_wasi_view(), self_).await
+        HostOutputStream::blocking_flush(&mut self.as_wasi_view().0, self_).await
     }
 
     fn subscribe(&mut self, self_: Resource<OutputStream>) -> anyhow::Result<Resource<Pollable>> {
         self.observe_function_call("io::streams::output_stream", "subscribe");
-        HostOutputStream::subscribe(&mut self.as_wasi_view(), self_)
+        HostOutputStream::subscribe(&mut self.as_wasi_view().0, self_)
     }
 
     async fn write_zeroes(
@@ -245,7 +242,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         len: u64,
     ) -> Result<(), StreamError> {
         self.observe_function_call("io::streams::output_stream", "write_zeroeas");
-        HostOutputStream::write_zeroes(&mut self.as_wasi_view(), self_, len).await
+        HostOutputStream::write_zeroes(&mut self.as_wasi_view().0, self_, len).await
     }
 
     async fn blocking_write_zeroes_and_flush(
@@ -257,7 +254,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             "io::streams::output_stream",
             "blocking_write_zeroes_and_flush",
         );
-        HostOutputStream::blocking_write_zeroes_and_flush(&mut self.as_wasi_view(), self_, len)
+        HostOutputStream::blocking_write_zeroes_and_flush(&mut self.as_wasi_view().0, self_, len)
             .await
     }
 
@@ -268,7 +265,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         len: u64,
     ) -> Result<u64, StreamError> {
         self.observe_function_call("io::streams::output_stream", "splice");
-        HostOutputStream::splice(&mut self.as_wasi_view(), self_, src, len).await
+        HostOutputStream::splice(&mut self.as_wasi_view().0, self_, src, len).await
     }
 
     async fn blocking_splice(
@@ -278,22 +275,21 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         len: u64,
     ) -> Result<u64, StreamError> {
         self.observe_function_call("io::streams::output_stream", "blocking_splice");
-        HostOutputStream::blocking_splice(&mut self.as_wasi_view(), self_, src, len).await
+        HostOutputStream::blocking_splice(&mut self.as_wasi_view().0, self_, src, len).await
     }
 
     async fn drop(&mut self, rep: Resource<OutputStream>) -> anyhow::Result<()> {
         self.observe_function_call("io::streams::output_stream", "drop");
-        HostOutputStream::drop(&mut self.as_wasi_view(), rep).await
+        HostOutputStream::drop(&mut self.as_wasi_view().0, rep).await
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn convert_stream_error(
         &mut self,
         err: StreamError,
     ) -> anyhow::Result<wasmtime_wasi::bindings::io::streams::StreamError> {
-        Host::convert_stream_error(&mut self.as_wasi_view(), err)
+        Host::convert_stream_error(&mut self.as_wasi_view().0, err)
     }
 }
 

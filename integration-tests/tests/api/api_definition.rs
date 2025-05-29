@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,8 +20,8 @@ use golem_api_grpc::proto::golem::apidefinition::v1::{
     GetApiDefinitionRequest, GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
 };
 use golem_api_grpc::proto::golem::apidefinition::{
-    api_definition, ApiDefinition, ApiDefinitionId, GatewayBinding, GatewayBindingType,
-    HttpApiDefinition, HttpMethod, HttpRoute,
+    api_definition, static_binding, ApiDefinition, ApiDefinitionId, GatewayBinding,
+    GatewayBindingType, HttpApiDefinition, HttpMethod, HttpRoute,
 };
 use golem_api_grpc::proto::golem::component::VersionedComponentId;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
@@ -477,4 +477,274 @@ fn check_equal_api_definition_request_and_response(
         request.definition.as_ref().unwrap();
     let api_definition::Definition::Http(response_api_def) = response.definition.as_ref().unwrap();
     check!(request_api_def == response_api_def);
+}
+
+// Create API definition from OpenAPI YAML
+#[test]
+#[tracing::instrument]
+async fn create_openapi_yaml_definition(deps: &EnvBasedTestDependencies) {
+    let (_component_id, component_name) = deps
+        .component("shopping-cart")
+        .unique()
+        .store_and_get_name()
+        .await;
+
+    let unique_component_name = component_name.0;
+
+    let openapi_yaml = format!(
+        r#"
+openapi: 3.0.0
+info:
+  title: {unique_component_name}
+  version: 0.0.1
+paths:
+  /v0.0.1/{{user}}/add-item:
+    post:
+      parameters:
+      - in: path
+        name: user
+        description: 'Path parameter: user'
+        required: true
+        schema:
+          type: string
+        explode: false
+        style: simple
+      responses:
+        '200':
+          description: Success
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: {unique_component_name}
+        component-version: 0
+        response: |-
+          let worker = instance("{unique_component_name}");
+          let result = worker.get-cart-contents();
+          let status: u64 = 200;
+          {{
+            headers: {{
+              ContentType: "json",
+              userid: "foo"
+            }},
+            body: "Item added",
+            status: status
+          }}
+    options:
+      responses:
+        '200':
+          description: Success
+      x-golem-api-gateway-binding:
+        binding-type: cors-preflight
+        response: |-
+          {{
+            Access-Control-Allow-Headers: "Content-Type, Authorization",
+            Access-Control-Allow-Methods: "GET, POST, PUT, DELETE, OPTIONS",
+            Access-Control-Allow-Origin: "*"
+          }}
+x-golem-api-definition-id: shopping-cart
+x-golem-api-definition-version: 0.0.1
+"#,
+        unique_component_name = unique_component_name
+    );
+
+    let result = deps
+        .worker_service()
+        .create_api_definition(CreateApiDefinitionRequest {
+            api_definition: Some(create_api_definition_request::ApiDefinition::Openapi(
+                openapi_yaml,
+            )),
+        })
+        .await;
+
+    let response = result.unwrap();
+
+    // Verify top-level fields
+    assert_eq!(response.id.as_ref().unwrap().value, "shopping-cart");
+    assert_eq!(response.version, "0.0.1");
+    assert!(response.draft);
+
+    let definition = response.definition.unwrap();
+
+    match definition {
+        api_definition::Definition::Http(http) => {
+            assert_eq!(http.routes.len(), 2);
+
+            let post_route = &http.routes[0];
+            assert_eq!(post_route.method, 2); // 2 = POST
+            assert_eq!(post_route.path, "/v0.0.1/{user}/add-item");
+
+            let post_binding = post_route.binding.as_ref().unwrap();
+            assert_eq!(post_binding.binding_type, Some(0)); // 0 = Default
+
+            let component = post_binding.component.as_ref().unwrap();
+            assert_eq!(component.version, 0);
+            assert!(component.component_id.is_some());
+
+            let response_binding = post_binding.response.as_ref().unwrap();
+            assert!(response_binding.expr.is_some());
+
+            let options_route = &http.routes[1];
+            assert_eq!(options_route.method, 6); // 6 = OPTIONS
+            assert_eq!(options_route.path, "/v0.0.1/{user}/add-item");
+
+            let options_binding = options_route.binding.as_ref().unwrap();
+            assert_eq!(options_binding.binding_type, Some(2)); // 2 = CorsPreflight
+
+            let static_binding_wrapper = options_binding.static_binding.as_ref().unwrap();
+            let static_binding_value = static_binding_wrapper.static_binding.as_ref().unwrap();
+
+            assert!(matches!(
+                static_binding_value,
+                static_binding::StaticBinding::HttpCorsPreflight(_)
+            ));
+
+            if let static_binding::StaticBinding::HttpCorsPreflight(cors) = static_binding_value {
+                assert_eq!(cors.allow_origin.as_deref(), Some("*"));
+                assert_eq!(
+                    cors.allow_methods.as_deref(),
+                    Some("GET, POST, PUT, DELETE, OPTIONS")
+                );
+                assert_eq!(
+                    cors.allow_headers.as_deref(),
+                    Some("Content-Type, Authorization")
+                );
+            }
+        }
+    }
+}
+
+// Create API definition from OpenAPI JSON
+#[test]
+#[tracing::instrument]
+async fn create_openapi_json_definition(deps: &EnvBasedTestDependencies) {
+    let (_component_id, component_name) = deps
+        .component("shopping-cart")
+        .unique()
+        .store_and_get_name()
+        .await;
+
+    let unique_component_name = component_name.0;
+
+    let openapi_json = format!(
+        r#"
+{{
+  "openapi": "3.0.0",
+  "info": {{
+    "title": "{unique_component_name}",
+    "version": "0.0.1"
+  }},
+  "paths": {{
+    "/v0.0.1/{{user}}/add-item": {{
+      "post": {{
+        "parameters": [
+          {{
+            "in": "path",
+            "name": "user",
+            "description": "Path parameter: user",
+            "required": true,
+            "schema": {{
+              "type": "string"
+            }},
+            "explode": false,
+            "style": "simple"
+          }}
+        ],
+        "responses": {{
+          "200": {{
+            "description": "Success"
+          }}
+        }},
+        "x-golem-api-gateway-binding": {{
+          "binding-type": "default",
+          "component-name": "{unique_component_name}",
+          "component-version": 0,
+          "response": "let worker = instance(\"{unique_component_name}\");\nlet result = worker.get-cart-contents();\nlet status: u64 = 200;\n{{\n  headers: {{\n    ContentType: \"json\",\n    userid: \"foo\"\n  }},\n  body: \"Item added\",\n  status: status\n}}"
+        }}
+      }},
+      "options": {{
+        "responses": {{
+          "200": {{
+            "description": "Success"
+          }}
+        }},
+        "x-golem-api-gateway-binding": {{
+          "binding-type": "cors-preflight",
+          "response": "{{\n  Access-Control-Allow-Headers: \"Content-Type, Authorization\",\n  Access-Control-Allow-Methods: \"GET, POST, PUT, DELETE, OPTIONS\",\n  Access-Control-Allow-Origin: \"*\"\n}}"
+        }}
+      }}
+    }}
+  }},
+  "x-golem-api-definition-id": "shopping-cart-openapi-json",
+  "x-golem-api-definition-version": "0.0.1"
+}}
+"#,
+        unique_component_name = unique_component_name
+    );
+
+    let result = deps
+        .worker_service()
+        .create_api_definition(CreateApiDefinitionRequest {
+            api_definition: Some(create_api_definition_request::ApiDefinition::Openapi(
+                openapi_json,
+            )),
+        })
+        .await;
+
+    let response = result.unwrap();
+
+    // Verify top-level fields
+    assert_eq!(
+        response.id.as_ref().unwrap().value,
+        "shopping-cart-openapi-json"
+    );
+    assert_eq!(response.version, "0.0.1");
+    assert!(response.draft);
+
+    let definition = response.definition.unwrap();
+
+    match definition {
+        api_definition::Definition::Http(http) => {
+            assert_eq!(http.routes.len(), 2);
+
+            let post_route = &http.routes[0];
+            assert_eq!(post_route.method, 2); // 2 = POST
+            assert_eq!(post_route.path, "/v0.0.1/{user}/add-item");
+
+            let post_binding = post_route.binding.as_ref().unwrap();
+            assert_eq!(post_binding.binding_type, Some(0)); // 0 = Default
+
+            let component = post_binding.component.as_ref().unwrap();
+            assert_eq!(component.version, 0);
+            assert!(component.component_id.is_some());
+
+            let response_binding = post_binding.response.as_ref().unwrap();
+            assert!(response_binding.expr.is_some());
+
+            let options_route = &http.routes[1];
+            assert_eq!(options_route.method, 6); // 6 = OPTIONS
+            assert_eq!(options_route.path, "/v0.0.1/{user}/add-item");
+
+            let options_binding = options_route.binding.as_ref().unwrap();
+            assert_eq!(options_binding.binding_type, Some(2)); // 2 = CorsPreflight
+
+            let static_binding_wrapper = options_binding.static_binding.as_ref().unwrap();
+            let static_binding_value = static_binding_wrapper.static_binding.as_ref().unwrap();
+
+            assert!(matches!(
+                static_binding_value,
+                static_binding::StaticBinding::HttpCorsPreflight(_)
+            ));
+
+            if let static_binding::StaticBinding::HttpCorsPreflight(cors) = static_binding_value {
+                assert_eq!(cors.allow_origin.as_deref(), Some("*"));
+                assert_eq!(
+                    cors.allow_methods.as_deref(),
+                    Some("GET, POST, PUT, DELETE, OPTIONS")
+                );
+                assert_eq!(
+                    cors.allow_headers.as_deref(),
+                    Some("Content-Type, Authorization")
+                );
+            }
+        }
+    }
 }

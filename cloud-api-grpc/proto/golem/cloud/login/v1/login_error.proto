@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package golem.cloud.login.v1;
+
+import "golem/common/error_body.proto";
+
+message LoginError {
+  oneof error {
+    golem.common.ErrorsBody bad_request = 1;
+    golem.common.ErrorBody external = 2;
+    golem.common.ErrorBody internal = 3;
+  }
+}

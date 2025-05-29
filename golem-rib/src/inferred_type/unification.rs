@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -145,8 +145,8 @@ pub fn try_unify_type(
 // An internal error that has partial information of the errors
 pub enum UnificationFailureInternal {
     TypeMisMatch {
-        expected: InferredType,
-        found: InferredType,
+        left: InferredType,
+        right: InferredType,
     },
 
     ConflictingTypes {
@@ -160,7 +160,10 @@ pub enum UnificationFailureInternal {
 impl Display for UnificationFailureInternal {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            UnificationFailureInternal::TypeMisMatch { expected, found } => {
+            UnificationFailureInternal::TypeMisMatch {
+                left: expected,
+                right: found,
+            } => {
                 write!(
                     f,
                     "type mismatch: expected {}, found {}",
@@ -196,7 +199,10 @@ impl Display for UnificationFailureInternal {
 
 impl UnificationFailureInternal {
     pub fn type_mismatch(expected: InferredType, found: InferredType) -> Self {
-        UnificationFailureInternal::TypeMisMatch { expected, found }
+        UnificationFailureInternal::TypeMisMatch {
+            left: expected,
+            right: found,
+        }
     }
 
     pub fn conflicting_types(

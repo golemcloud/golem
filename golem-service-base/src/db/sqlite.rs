@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -78,11 +78,11 @@ impl super::Pool for SqlitePool {
     type Args<'a> = SqliteArguments<'a>;
 
     fn with_ro(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi {
-        self.with_ro(svc_name, api_name)
+        SqlitePool::with_ro(self, svc_name, api_name)
     }
 
     fn with_rw(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi {
-        self.with_rw(svc_name, api_name)
+        SqlitePool::with_rw(self, svc_name, api_name)
     }
 }
 
@@ -151,7 +151,7 @@ impl super::PoolApi for SqliteLabelledTransaction {
         &mut self,
         query: Query<'a, Self::Db, SqliteArguments<'a>>,
     ) -> Result<SqliteQueryResult, RepoError> {
-        self.execute(query).await
+        SqliteLabelledTransaction::execute(self, query).await
     }
 
     async fn fetch_optional<'a, A>(
@@ -161,7 +161,7 @@ impl super::PoolApi for SqliteLabelledTransaction {
     where
         A: 'a + IntoArguments<'a, Self::Db>,
     {
-        self.fetch_optional(query).await
+        SqliteLabelledTransaction::fetch_optional(self, query).await
     }
 
     async fn fetch_optional_as<'a, O, A>(
@@ -172,7 +172,7 @@ impl super::PoolApi for SqliteLabelledTransaction {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        self.fetch_optional_as(query_as).await
+        SqliteLabelledTransaction::fetch_optional_as(self, query_as).await
     }
 
     async fn fetch_all<'a, O, A>(
@@ -183,7 +183,7 @@ impl super::PoolApi for SqliteLabelledTransaction {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        self.fetch_all(query_as).await
+        SqliteLabelledTransaction::fetch_all(self, query_as).await
     }
 }
 
@@ -298,7 +298,7 @@ impl super::PoolApi for SqliteLabelledApi {
         &mut self,
         query: Query<'a, Self::Db, Self::Args<'a>>,
     ) -> Result<Self::QueryResult, RepoError> {
-        self.execute(query).await
+        SqliteLabelledApi::execute(self, query).await
     }
 
     async fn fetch_optional<'a, A>(
@@ -308,7 +308,7 @@ impl super::PoolApi for SqliteLabelledApi {
     where
         A: 'a + IntoArguments<'a, Self::Db>,
     {
-        self.fetch_optional(query).await
+        SqliteLabelledApi::fetch_optional(self, query).await
     }
 
     async fn fetch_optional_as<'a, O, A>(
@@ -319,7 +319,7 @@ impl super::PoolApi for SqliteLabelledApi {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        self.fetch_optional_as(query_as).await
+        SqliteLabelledApi::fetch_optional_as(self, query_as).await
     }
 
     async fn fetch_all<'a, O, A>(
@@ -330,7 +330,7 @@ impl super::PoolApi for SqliteLabelledApi {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        self.fetch_all(query_as).await
+        SqliteLabelledApi::fetch_all(self, query_as).await
     }
 }
 
@@ -339,15 +339,15 @@ impl super::LabelledPoolApi for SqliteLabelledApi {
     type LabelledTransaction = SqliteLabelledTransaction;
 
     async fn begin(&self) -> Result<Self::LabelledTransaction, RepoError> {
-        self.begin().await
+        SqliteLabelledApi::begin(self).await
     }
 
     async fn commit(&self, tx: Self::LabelledTransaction) -> Result<(), RepoError> {
-        self.commit(tx).await
+        SqliteLabelledApi::commit(self, tx).await
     }
 
     async fn rollback(&self, tx: Self::LabelledTransaction) -> Result<(), RepoError> {
-        self.rollback(tx).await
+        SqliteLabelledApi::rollback(self, tx).await
     }
 }
 

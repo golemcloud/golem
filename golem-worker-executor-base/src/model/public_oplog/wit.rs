@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -278,9 +278,9 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 linked_context: linked_context.map(|id| id.to_string()),
                 attributes: attributes
                     .into_iter()
-                    .map(|(k, v)| oplog::Attribute {
-                        key: k,
-                        value: v.into(),
+                    .map(|attr| oplog::Attribute {
+                        key: attr.key,
+                        value: attr.value.into(),
                     })
                     .collect(),
             }),
@@ -416,9 +416,9 @@ impl From<PublicSpanData> for oplog::SpanData {
                 attributes: local_span
                     .attributes
                     .into_iter()
-                    .map(|(k, v)| oplog::Attribute {
-                        key: k,
-                        value: v.into(),
+                    .map(|attr| oplog::Attribute {
+                        key: attr.key,
+                        value: attr.value.into(),
                     })
                     .collect(),
                 inherited: local_span.inherited,

@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -65,21 +65,21 @@ pub mod tests;
 ///    other. Old entries are moved down the stack based on configurable conditions.
 ///
 #[async_trait]
-pub trait OplogService: Debug {
+pub trait OplogService: Debug + Send + Sync {
     async fn create(
         &self,
         owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + Send + Sync + 'static>;
+    ) -> Arc<dyn Oplog + 'static>;
     async fn open(
         &self,
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + Send + Sync + 'static>;
+    ) -> Arc<dyn Oplog + 'static>;
 
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
 
@@ -165,7 +165,7 @@ pub enum CommitLevel {
 
 /// An open oplog providing write access
 #[async_trait]
-pub trait Oplog: Any + Debug {
+pub trait Oplog: Any + Debug + Send + Sync {
     /// Adds a single entry to the oplog (possibly buffered)
     async fn add(&self, entry: OplogEntry);
 
@@ -206,9 +206,9 @@ pub trait Oplog: Any + Debug {
     async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String>;
 }
 
-pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog + Send + Sync>) -> Option<Arc<T>> {
+pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>> {
     if oplog.deref().type_id() == TypeId::of::<T>() {
-        let raw: *const (dyn Oplog + Send + Sync) = Arc::into_raw(oplog.clone());
+        let raw: *const (dyn Oplog) = Arc::into_raw(oplog.clone());
         let raw: *const T = raw.cast();
         Some(unsafe { Arc::from_raw(raw) })
     } else {
@@ -356,12 +356,12 @@ impl<O: Oplog + ?Sized> OplogOps for O {}
 
 #[derive(Clone)]
 struct OpenOplogEntry {
-    pub oplog: Weak<dyn Oplog + Send + Sync>,
+    pub oplog: Weak<dyn Oplog>,
     pub initial: Arc<AtomicBool>,
 }
 
 impl OpenOplogEntry {
-    pub fn new(oplog: Arc<dyn Oplog + Send + Sync>) -> Self {
+    pub fn new(oplog: Arc<dyn Oplog>) -> Self {
         Self {
             oplog: Arc::downgrade(&oplog),
             initial: Arc::new(AtomicBool::new(true)),
@@ -390,7 +390,7 @@ impl OpenOplogs {
         &self,
         worker_id: &WorkerId,
         constructor: impl OplogConstructor + 'static,
-    ) -> Arc<dyn Oplog + Send + Sync> {
+    ) -> Arc<dyn Oplog> {
         loop {
             let constructor_clone = constructor.clone();
             let close = Box::new(self.oplogs.create_weak_remover(worker_id.clone()));
@@ -445,8 +445,5 @@ impl Debug for OpenOplogs {
 
 #[async_trait]
 pub trait OplogConstructor: Clone + Send {
-    async fn create_oplog(
-        self,
-        close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog + Send + Sync>;
+    async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog>;
 }

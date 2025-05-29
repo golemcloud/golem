@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -33,7 +33,7 @@ use tracing::{debug, warn};
 
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
-pub trait WorkerService {
+pub trait WorkerService: Send + Sync {
     async fn add(
         &self,
         worker_metadata: &WorkerMetadata,
@@ -59,15 +59,15 @@ pub trait WorkerService {
 #[derive(Clone)]
 pub struct DefaultWorkerService {
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
-    shard_service: Arc<dyn ShardService + Send + Sync>,
-    oplog_service: Arc<dyn OplogService + Send + Sync>,
+    shard_service: Arc<dyn ShardService>,
+    oplog_service: Arc<dyn OplogService>,
 }
 
 impl DefaultWorkerService {
     pub fn new(
         key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
-        shard_service: Arc<dyn ShardService + Send + Sync>,
-        oplog_service: Arc<dyn OplogService + Send + Sync>,
+        shard_service: Arc<dyn ShardService>,
+        oplog_service: Arc<dyn OplogService>,
     ) -> Self {
         Self {
             key_value_storage,

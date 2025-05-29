@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use anyhow::anyhow;
-use async_trait::async_trait;
 use http::{HeaderName, HeaderValue};
 use wasmtime::component::Resource;
 use wasmtime_wasi_http::bindings::wasi::http::types::{
@@ -245,7 +244,6 @@ impl<Ctx: WorkerCtx> HostOutgoingRequest for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostRequestOptions for DurableWorkerCtx<Ctx> {
     fn new(&mut self) -> anyhow::Result<Resource<RequestOptions>> {
         self.observe_function_call("http::types::request_options", "new");
@@ -312,7 +310,6 @@ impl<Ctx: WorkerCtx> HostRequestOptions for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostResponseOutparam for DurableWorkerCtx<Ctx> {
     fn set(
         &mut self,
@@ -329,7 +326,6 @@ impl<Ctx: WorkerCtx> HostResponseOutparam for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostIncomingResponse for DurableWorkerCtx<Ctx> {
     fn status(&mut self, self_: Resource<IncomingResponse>) -> anyhow::Result<StatusCode> {
         self.observe_function_call("http::types::incoming_response", "status");
@@ -376,7 +372,6 @@ impl<Ctx: WorkerCtx> HostIncomingResponse for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
     fn stream(
         &mut self,
@@ -430,7 +425,6 @@ impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
     fn subscribe(&mut self, self_: Resource<FutureTrailers>) -> anyhow::Result<Resource<Pollable>> {
         self.observe_function_call("http::types::future_trailers", "subscribe");
@@ -523,7 +517,6 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostOutgoingResponse for DurableWorkerCtx<Ctx> {
     fn new(&mut self, headers: Resource<Headers>) -> anyhow::Result<Resource<OutgoingResponse>> {
         self.observe_function_call("http::types::outgoing_response", "new");
@@ -563,7 +556,6 @@ impl<Ctx: WorkerCtx> HostOutgoingResponse for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
     fn write(
         &mut self,
@@ -588,7 +580,6 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
     fn subscribe(
         &mut self,

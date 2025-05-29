@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -105,7 +105,7 @@ pub struct WorkerExecutorPerTestDependencies {
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
     worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
-    worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+    worker_service: Arc<dyn WorkerService + 'static>,
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
@@ -146,7 +146,7 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
         panic!("Not supported")
     }
 
-    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {
+    fn worker_service(&self) -> Arc<dyn WorkerService + 'static> {
         self.worker_service.clone()
     }
 
@@ -248,7 +248,7 @@ impl WorkerExecutorTestDependencies {
             ProvidedWorkerExecutor::new("localhost".to_string(), http_port, grpc_port, true),
         );
         // Fake worker service forwarding all requests to the worker executor directly
-        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
             ForwardingWorkerService::new(worker_executor.clone(), self.component_service()),
         );
         WorkerExecutorPerTestDependencies {
@@ -298,7 +298,7 @@ impl TestDependencies for WorkerExecutorTestDependencies {
         panic!("Not supported")
     }
 
-    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {
+    fn worker_service(&self) -> Arc<dyn WorkerService + 'static> {
         panic!("Not supported")
     }
 

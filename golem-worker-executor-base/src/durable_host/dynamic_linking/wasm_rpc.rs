@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -30,7 +30,7 @@ use uuid::Uuid;
 use wasmtime::component::types::{ComponentInstance, ComponentItem};
 use wasmtime::component::{LinkerInstance, Resource, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, Engine, StoreContextMut};
-use wasmtime_wasi::WasiView;
+use wasmtime_wasi::IoView;
 
 pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
     name: &str,
@@ -49,7 +49,7 @@ pub fn dynamic_wasm_rpc_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResu
 
         match inner_item {
             ComponentItem::ComponentFunc(fun) => {
-                let param_types: Vec<Type> = fun.params().collect();
+                let param_types: Vec<Type> = fun.params().map(|(_, t)| t).collect();
                 let result_types: Vec<Type> = fun.results().collect();
 
                 let function_name = ParsedFunctionName::parse(format!(

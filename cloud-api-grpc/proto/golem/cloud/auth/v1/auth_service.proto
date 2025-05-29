@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package golem.cloud.auth.v1;
+
+import public "golem/common/account_id.proto";
+import public "golem/common/empty.proto";
+import public "golem/cloud/project/project.proto";
+import public "golem/cloud/project/v1/project_error.proto";
+import public "golem/common/project_id.proto";
+import public "golem/cloud/projectpolicy/project_action.proto";
+import public "golem/cloud/auth/v1/auth_error.proto";
+
+service CloudAuthService {
+  rpc GetAccount (GetAccountRequest) returns (GetAccountResponse);
+  rpc AuthorizeProjectAction (AuthorizeProjectActionRequest) returns (AuthorizeProjectActionResponse);
+}
+
+message GetAccountRequest {
+
+}
+
+message GetAccountResponse {
+  oneof result {
+      GetAccountSuccessResponse success = 1;
+      golem.cloud.auth.v1.AuthError error = 2;
+  }
+}
+
+message GetAccountSuccessResponse {
+    golem.common.AccountId accountId = 1;
+}
+
+message AuthorizeProjectActionRequest {
+  golem.common.ProjectId projectId = 1;
+  golem.cloud.projectpolicy.ProjectAction action = 2;
+}
+
+message AuthorizeProjectActionResponse {
+  oneof result {
+      AuthorizeProjectActionSuccessResponse success = 1;
+      golem.cloud.auth.v1.AuthError error = 2;
+  }
+}
+
+message AuthorizeProjectActionSuccessResponse {
+    golem.common.AccountId own_accountId = 1;
+    golem.common.AccountId project_owner_accountId = 2;
+}

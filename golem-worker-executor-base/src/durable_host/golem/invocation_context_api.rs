@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,13 +19,11 @@ use crate::preview2::golem_api_1_x::context::{
 };
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use anyhow::anyhow;
-use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextSpan;
 use golem_service_base::headers::TraceContextHeaders;
 use std::sync::Arc;
 use wasmtime::component::Resource;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostSpan for DurableWorkerCtx<Ctx> {
     async fn started_at(&mut self, self_: Resource<SpanEntry>) -> anyhow::Result<Datetime> {
         self.observe_function_call("golem::api::context::span", "started-at");
@@ -102,7 +100,6 @@ impl<Ctx: WorkerCtx> HostSpan for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostInvocationContext for DurableWorkerCtx<Ctx> {
     async fn trace_id(
         &mut self,
@@ -264,7 +261,6 @@ impl<Ctx: WorkerCtx> HostInvocationContext for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn start_span(&mut self, name: String) -> anyhow::Result<Resource<SpanEntry>> {
         self.observe_function_call("golem::api::context", "start");

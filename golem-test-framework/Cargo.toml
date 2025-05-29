@@ -2,10 +2,12 @@
 name = "golem-test-framework"
 version = "0.0.0"
 edition = "2021"
-license = "Apache-2.0"
+
 homepage = "https://golem.cloud"
 description = "Test framework for integration tests and benchmarks"
 repository = "https://github.com/golemcloud/golem"
+
+license-file = "../LICENSE"
 
 [lib]
 harness = false
@@ -48,6 +50,7 @@ tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true, features = ["native-tls"] }
 tonic = { workspace = true }
 tracing = { workspace = true }
+tryhard = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-metadata = { version = "0.227.1" }

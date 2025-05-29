@@ -1,10 +1,8 @@
-use crate::type_checker::{
-    ExhaustivePatternMatchError, InvalidMathExprError, InvalidProgramReturn,
-};
+use crate::type_checker::{ExhaustivePatternMatchError, InvalidProgramReturn};
 use crate::{
     ActualType, AmbiguousTypeError, CustomError, ExpectedType, Expr, FunctionCallError,
-    InvalidPatternMatchError, InvalidWorkerName, MultipleUnResolvedTypesError, TypeMismatchError,
-    TypeName, TypeUnificationError, UnResolvedTypesError,
+    InvalidPatternMatchError, InvalidWorkerName, TypeMismatchError, TypeName, TypeUnificationError,
+    UnResolvedTypesError,
 };
 use std::fmt;
 use std::fmt::{Debug, Display};
@@ -185,7 +183,7 @@ impl From<FunctionCallError> for RibTypeError {
 
                 RibTypeError {
                     cause: format!(
-                        "invalid argument to the function `{}`:  missing field(s) in record `{}`",
+                        "invalid argument to the function `{}`.  missing field(s) in record: `{}`",
                         call_type, missing_fields
                     ),
                     expr: argument,
@@ -270,24 +268,6 @@ impl From<InvalidWorkerName> for RibTypeError {
         RibTypeError {
             cause: value.message,
             expr: value.worker_name_expr,
-            immediate_parent: None,
-            additional_error_details: vec![],
-            help_messages: vec![],
-        }
-    }
-}
-
-impl From<InvalidMathExprError> for RibTypeError {
-    fn from(value: InvalidMathExprError) -> Self {
-        let expr = match value {
-            InvalidMathExprError::Both { math_expr, .. }
-            | InvalidMathExprError::Left { math_expr, .. }
-            | InvalidMathExprError::Right { math_expr, .. } => math_expr,
-        };
-
-        RibTypeError {
-            cause: "invalid math expression".to_string(),
-            expr,
             immediate_parent: None,
             additional_error_details: vec![],
             help_messages: vec![],
@@ -400,26 +380,6 @@ impl From<InvalidPatternMatchError> for RibTypeError {
             immediate_parent: immediate_parent.cloned(),
             additional_error_details: vec![],
             help_messages: vec![],
-        }
-    }
-}
-
-impl From<MultipleUnResolvedTypesError> for RibTypeError {
-    fn from(value: MultipleUnResolvedTypesError) -> Self {
-        let mut errors: Vec<UnResolvedTypesError> = value.0;
-
-        let mut first_error = errors.remove(0);
-
-        if errors.is_empty() {
-            RibTypeError::from(first_error.clone())
-        } else {
-            for error in errors {
-                first_error
-                    .additional_messages
-                    .push(RibTypeError::from(error.clone()).to_string());
-            }
-
-            first_error.clone().into()
         }
     }
 }

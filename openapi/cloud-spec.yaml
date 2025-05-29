@@ -1,0 +1,2881 @@
+openapi: 3.0.0
+info:
+  title: Golem API
+  version: '1.0'
+servers: []
+tags:
+- name: Account
+  description: The account API allows users to query and manipulate their own account data.
+- name: AccountSummary
+- name: Grant
+- name: HealthCheck
+- name: Limits
+  description: The limits API allows users to query their current resource limits.
+- name: Login
+  description: The login endpoints are implementing an OAuth2 flow.
+- name: Project
+  description: |-
+    Projects are groups of components and their workers, providing both a separate namespace for these entities and allows sharing between accounts.
+
+    Every account has a default project which is assumed when no specific project ID is passed in some component and worker related APIs.
+- name: ProjectGrant
+  description: |-
+    Projects can have grants providing access to other accounts than the project's owner.
+
+    The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by policies, covered by the Project policy API.
+- name: ProjectPolicy
+  description: |-
+    Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
+
+    The following actions can be used in the projectActions fields of this API:
+    - `ViewComponent` grants read access to a component
+    - `CreateComponent` allows creating new components in a project
+    - `UpdateComponent` allows uploading new versions for existing components in a project
+    - `DeleteComponent` allows deleting components from a project
+    - `ViewWorker` allows querying existing workers of a component belonging to the project
+    - `CreateWorker` allows launching new workers of a component in the project
+    - `UpdateWorker` allows manipulating existing workers of a component belonging to the project
+    - `DeleteWorker` allows deleting workers of a component belonging to the project
+    - `ViewProjectGrants` allows listing the existing grants of the project
+    - `CreateProjectGrants` allows creating new grants for the project
+    - `DeleteProjectGrants` allows deleting existing grants of the project
+- name: Token
+  description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
+paths:
+  /v1/accounts:
+    get:
+      tags:
+      - Account
+      summary: Find accounts
+      description: Find matching accounts. Only your own account or accounts you have at least one grant from will be returned
+      parameters:
+      - name: email
+        schema:
+          type: string
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/FindAccountsResponse'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: find_accounts
+    post:
+      tags:
+      - Account
+      summary: Create account
+      description: Create a new account. The response is the created account data.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/AccountData'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_account
+  /v1/accounts/{account_id}:
+    get:
+      tags:
+      - Account
+      summary: Get account
+      description: Retrieve an account for a given Account ID
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_account
+    put:
+      tags:
+      - Account
+      summary: Update account
+      description: |-
+        Allows the user to change the account details such as name and email.
+
+        Changing the planId is not allowed and the request will be rejected.
+        The response is the updated account data.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/AccountData'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: update_account
+    delete:
+      tags:
+      - Account
+      summary: Delete account
+      description: Delete an account.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeleteAccountResponse'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_account
+  /v1/accounts/{account_id}/plan:
+    get:
+      tags:
+      - Account
+      summary: Get account's plan
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_account_plan
+  /v1/admin/accounts:
+    get:
+      tags:
+      - AccountSummary
+      parameters:
+      - name: skip
+        schema:
+          type: integer
+          format: int32
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      - name: limit
+        schema:
+          type: integer
+          format: int32
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccountSummary'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_account_summary
+  /v1/admin/accounts/count:
+    get:
+      tags:
+      - AccountSummary
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: integer
+                format: int64
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_account_count
+  /v1/accounts/{account_id}/grants:
+    get:
+      tags:
+      - Grant
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Role'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_account_grants
+  /v1/accounts/{account_id}/grants/{role}:
+    get:
+      tags:
+      - Grant
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: role
+        schema:
+          $ref: '#/components/schemas/Role'
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Role'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_account_grant
+    put:
+      tags:
+      - Grant
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: role
+        schema:
+          $ref: '#/components/schemas/Role'
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Role'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_account_grant
+    delete:
+      tags:
+      - Grant
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: role
+        schema:
+          $ref: '#/components/schemas/Role'
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeleteGrantResponse'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_account_grant
+  /v1/resource-limits:
+    get:
+      tags:
+      - Limits
+      summary: Get resource limits for a given account.
+      parameters:
+      - name: account-id
+        schema:
+          type: string
+        in: query
+        description: The Account ID to check resource limits for.
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ResourceLimits'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_resource_limits
+    post:
+      tags:
+      - Limits
+      summary: Update resource limits for a given account.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/BatchUpdateResourceLimits'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/UpdateResourceLimitsResponse'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: update_resource_limits
+  /v1/oauth2:
+    post:
+      tags:
+      - Login
+      summary: Acquire token with OAuth2 authorization
+      description: |
+        Gets a token by authorizing with an external OAuth2 provider. Currently only github is supported.
+
+        In the response:
+        - `id` is the identifier of the token itself
+        - `accountId` is the account's identifier, can be used on the account API
+        - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
+      parameters:
+      - name: provider
+        schema:
+          type: string
+        in: query
+        description: Currently only `github` is supported.
+        required: true
+        deprecated: false
+        explode: true
+      - name: access-token
+        schema:
+          type: string
+        in: query
+        description: OAuth2 access token
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/UnsafeToken'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Failed to login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: External service call failed during login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: login_oauth2
+  /v1/login/token:
+    get:
+      tags:
+      - Login
+      summary: Get information about a token
+      description: |-
+        Gets information about a token that is selected by the secret key passed in the Authorization header.
+        The JSON is the same as the data object in the oauth2 endpoint's response.
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Token'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Failed to login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: External service call failed during login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: current_login_token
+  /login/oauth2/device/start:
+    post:
+      tags:
+      - Login
+      summary: Start GitHub OAuth2 interactive flow
+      description: |-
+        Starts an interactive authorization flow.
+        The user must open the returned url and enter the userCode in a form before the expires deadline.
+        Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/OAuth2Data'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Failed to login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: External service call failed during login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: start_login_oauth2
+  /login/oauth2/device/complete:
+    post:
+      tags:
+      - Login
+      summary: Finish GitHub OAuth2 interactive flow
+      description: |-
+        Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
+        Returns a JSON string containing the encodedSession from the start endpoint's response.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              type: string
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/UnsafeToken'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Failed to login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: External service call failed during login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: complete_login_oauth2
+  /v1/login/oauth2/web/authorize:
+    get:
+      tags:
+      - Login
+      summary: Initiate OAuth2 Web Flow
+      description: Starts the OAuth2 web flow authorization process by returning the authorization URL for the given provider.
+      parameters:
+      - name: provider
+        schema:
+          type: string
+        in: query
+        description: Currently only `github` is supported.
+        required: true
+        deprecated: false
+        explode: true
+      - name: redirect
+        schema:
+          type: string
+        in: query
+        description: The redirect URL to redirect to after the user has authorized the application
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WebFlowAuthorizeUrlResponse'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Failed to login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: External service call failed during login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: oauth2_web_flow_start
+  /v1/login/oauth2/web/callback/github:
+    get:
+      tags:
+      - Login
+      summary: GitHub OAuth2 Web Flow callback
+      description: |-
+        This endpoint handles the callback from GitHub after the user has authorized the application.
+        It exchanges the code for an access token and then uses that to log the user in.
+      parameters:
+      - name: code
+        schema:
+          type: string
+        in: query
+        description: The authorization code returned by GitHub
+        required: true
+        deprecated: false
+        explode: true
+      - name: state
+        schema:
+          type: string
+        in: query
+        description: The state parameter for CSRF protection
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '302':
+          description: Redirect to the given URL specified in the web flow start
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WebFlowCallbackSuccessResponse'
+          headers:
+            LOCATION:
+              required: true
+              deprecated: false
+              schema:
+                type: string
+        '200':
+          description: OAuth flow has completed
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WebFlowCallbackSuccessResponse'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Failed to login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: External service call failed during login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: oauth2_web_flow_callback_github
+  /v1/login/oauth2/web/poll:
+    get:
+      tags:
+      - Login
+      summary: Poll for OAuth2 Web Flow token
+      description: This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
+      parameters:
+      - name: state
+        schema:
+          type: string
+        in: query
+        description: The state parameter for identifying the session
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: OAuth flow has completed
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/UnsafeToken'
+        '202':
+          description: OAuth flow is pending
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PendingFlowCompletionResponse'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Failed to login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: External service call failed during login
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: oauth2_web_flow_poll
+  /healthcheck:
+    get:
+      tags:
+      - HealthCheck
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HealthcheckResponse'
+      operationId: healthcheck
+  /version:
+    get:
+      tags:
+      - HealthCheck
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/VersionInfo'
+      operationId: version
+  /v1/projects/default:
+    get:
+      tags:
+      - Project
+      summary: Get the default project
+      description: |-
+        - name of the project can be used for lookup the project if the ID is now known
+        - defaultEnvironmentId is currently always default
+        - projectType is either Default
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_default_project
+  /v1/projects:
+    get:
+      tags:
+      - Project
+      summary: List all projects
+      description: |-
+        Returns all projects of the account if no project-name is specified.
+        Otherwise, returns all projects of the account that has the given name.
+        As unique names are not enforced on the API level, the response may contain multiple entries.
+      parameters:
+      - name: project-name
+        schema:
+          type: string
+        in: query
+        description: Filter by project name
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_projects
+    post:
+      tags:
+      - Project
+      summary: Create project
+      description: Creates a new project. The ownerAccountId must be the caller's account ID.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ProjectDataRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_project
+  /v1/projects/{project_id}:
+    get:
+      tags:
+      - Project
+      summary: Get project by ID
+      description: Gets a project by its identifier. Response is the same as for the default project.
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_project
+    delete:
+      tags:
+      - Project
+      summary: Delete project
+      description: Deletes a project given by its identifier.
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeleteProjectResponse'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_project
+  /v1/projects/{project_id}/actions:
+    get:
+      tags:
+      - Project
+      summary: Get project actions
+      description: Returns a list of actions that can be performed on the project.
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectPermisison'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_project_actions
+  /v1/projects/{project_id}/plugins/installs:
+    get:
+      tags:
+      - Project
+      summary: Gets the list of plugins installed for the given project
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PluginInstallation'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_installed_plugins_of_project
+    post:
+      tags:
+      - Project
+      summary: Installs a new plugin for this project
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/PluginInstallationCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PluginInstallation'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: install_plugin_to_project
+  /v1/projects/{project_id}/plugins/installs/{installation_id}:
+    put:
+      tags:
+      - Project
+      summary: Updates the priority or parameters of a plugin installation
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: installation_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/PluginInstallationUpdate'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: update_installed_plugin_in_project
+  /v1/projects/{project_id}/latest/plugins/installs/{installation_id}:
+    delete:
+      tags:
+      - Project
+      summary: Uninstalls a plugin from this project
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: installation_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: uninstall_plugin_from_project
+  /v1/projects/{project_id}/latest/plugins/installs/batch:
+    post:
+      tags:
+      - Project
+      summary: Applies a batch of changes to the installed plugins of a component
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/BatchPluginInstallationUpdates'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: bath_update_installed_plugins_of_project
+  /v1/projects/{project_id}/grants:
+    get:
+      tags:
+      - ProjectGrant
+      summary: Get a project's grants
+      description: |-
+        Returns all projects grants associated with the given project.
+
+        For each grant:
+        - `id`` is the identifier of the grant itself
+        - `granteeAccountId` the account that gets access for the project
+        - `grantorProjectId` the project ID
+        - `projectPolicyId` the associated policy - see the project policy API below
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectGrant'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_project_grants
+    post:
+      tags:
+      - ProjectGrant
+      summary: Create a project grant
+      description: |-
+        Creates a new project grant from the following information:
+        - `granteeAccountId` the account that gets access for the project
+        - `projectPolicyId` the associated policy - see the project policy API below
+
+        The response describes the new project grant including its id that can be used to query specifically this grant in the future.
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ProjectGrantDataRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ProjectGrant'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_project_grant
+  /v1/projects/{project_id}/grants/{grant_id}:
+    get:
+      tags:
+      - ProjectGrant
+      summary: Get a specific grant of a project
+      description: Returns a specific grant of a specific project. The returned object is the same as the elements of the grants endpoint's response described above.
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: grant_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ProjectGrant'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_project_grant
+    delete:
+      tags:
+      - ProjectGrant
+      summary: Delete a project grant
+      description: Deletes an existing grant of a specific project.
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: grant_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeleteProjectGrantResponse'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of projects exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Project not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Project already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_project_grant
+  /v1/project-policies/{project_policy_id}:
+    get:
+      tags:
+      - ProjectPolicy
+      summary: Get a project policy
+      description: Returns a given project policy by it's ID. Project policy identifiers are used in project grants.
+      parameters:
+      - name: project_policy_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ProjectPolicy'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_project_policies
+  /v1/project-policies:
+    post:
+      tags:
+      - ProjectPolicy
+      summary: Create a project policy
+      description: Creates a new project policy and returns the object describing it, including the newly created policy's id.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ProjectPolicyData'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ProjectPolicy'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_project_policy
+  /v1/accounts/{account_id}/tokens:
+    get:
+      tags:
+      - Token
+      summary: Get all tokens
+      description: |-
+        Gets all created tokens of an account.
+        The format of each element is the same as the data object in the oauth2 endpoint's response.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Token'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_tokens
+    post:
+      tags:
+      - Token
+      summary: Create new token
+      description: |
+        Creates a new token with a given expiration date.
+        The response not only contains the token data but also the secret which can be passed as a bearer token to the Authorization header to the Golem Cloud REST API.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/CreateTokenDTO'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/UnsafeToken'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_token
+  /v1/accounts/{account_id}/tokens/{token_id}:
+    get:
+      tags:
+      - Token
+      summary: Get a specific token
+      description: |-
+        Gets information about a token given by its identifier.
+        The JSON is the same as the data object in the oauth2 endpoint's response.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: token_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Token'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_token
+    delete:
+      tags:
+      - Token
+      summary: Delete a token
+      description: Deletes a previously created token given by its identifier.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: token_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeleteTokenResponse'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Account not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_token
+components:
+  schemas:
+    Account:
+      type: object
+      title: Account
+      required:
+      - id
+      - name
+      - email
+      - planId
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        planId:
+          type: string
+          format: uuid
+    AccountData:
+      type: object
+      title: AccountData
+      required:
+      - name
+      - email
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+    AccountSummary:
+      type: object
+      title: AccountSummary
+      required:
+      - id
+      - name
+      - email
+      - componentCount
+      - workerCount
+      - createdAt
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        componentCount:
+          type: integer
+          format: int64
+        workerCount:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+    BatchPluginInstallationUpdates:
+      type: object
+      title: BatchPluginInstallationUpdates
+      required:
+      - actions
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationAction'
+    BatchUpdateResourceLimits:
+      type: object
+      title: BatchUpdateResourceLimits
+      required:
+      - updates
+      properties:
+        updates:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+    CreateTokenDTO:
+      type: object
+      title: CreateTokenDTO
+      required:
+      - expiresAt
+      properties:
+        expiresAt:
+          type: string
+          format: date-time
+    DeleteAccountResponse:
+      type: object
+      title: DeleteAccountResponse
+    DeleteGrantResponse:
+      type: object
+      title: DeleteGrantResponse
+    DeleteProjectGrantResponse:
+      type: object
+      title: DeleteProjectGrantResponse
+    DeleteProjectResponse:
+      type: object
+      title: DeleteProjectResponse
+    DeleteTokenResponse:
+      type: object
+      title: DeleteTokenResponse
+    Empty:
+      type: object
+      title: Empty
+    ErrorBody:
+      type: object
+      title: ErrorBody
+      required:
+      - error
+      properties:
+        error:
+          type: string
+    ErrorsBody:
+      type: object
+      title: ErrorsBody
+      required:
+      - errors
+      properties:
+        errors:
+          type: array
+          items:
+            type: string
+    FindAccountsResponse:
+      type: object
+      title: FindAccountsResponse
+      required:
+      - values
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/Account'
+    HealthcheckResponse:
+      type: object
+      title: HealthcheckResponse
+    OAuth2Data:
+      type: object
+      title: OAuth2Data
+      required:
+      - url
+      - userCode
+      - expires
+      - encodedSession
+      properties:
+        url:
+          type: string
+        userCode:
+          type: string
+        expires:
+          type: string
+          format: date-time
+        encodedSession:
+          type: string
+    PendingFlowCompletionResponse:
+      type: object
+      title: PendingFlowCompletionResponse
+    Plan:
+      type: object
+      title: Plan
+      required:
+      - planId
+      - planData
+      properties:
+        planId:
+          type: string
+          format: uuid
+        planData:
+          $ref: '#/components/schemas/PlanData'
+    PlanData:
+      type: object
+      title: PlanData
+      required:
+      - projectLimit
+      - componentLimit
+      - workerLimit
+      - storageLimit
+      - monthlyGasLimit
+      - monthlyUploadLimit
+      properties:
+        projectLimit:
+          type: integer
+          format: int32
+        componentLimit:
+          type: integer
+          format: int32
+        workerLimit:
+          type: integer
+          format: int32
+        storageLimit:
+          type: integer
+          format: int32
+        monthlyGasLimit:
+          type: integer
+          format: int64
+        monthlyUploadLimit:
+          type: integer
+          format: int32
+    PluginInstallation:
+      type: object
+      title: PluginInstallation
+      required:
+      - id
+      - pluginName
+      - pluginVersion
+      - pluginRegistered
+      - priority
+      - parameters
+      properties:
+        id:
+          type: string
+          format: uuid
+        pluginName:
+          type: string
+        pluginVersion:
+          type: string
+        pluginRegistered:
+          type: boolean
+          description: Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
+        priority:
+          type: integer
+          format: int32
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+    PluginInstallationAction:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationCreation'
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdateWithId'
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginUninstallation'
+      discriminator:
+        propertyName: type
+        mapping:
+          Install: '#/components/schemas/PluginInstallationAction_PluginInstallationCreation'
+          Update: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdateWithId'
+          Uninstall: '#/components/schemas/PluginInstallationAction_PluginUninstallation'
+    PluginInstallationAction_PluginInstallationCreation:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Install
+            example: Install
+      - $ref: '#/components/schemas/PluginInstallationCreation'
+    PluginInstallationAction_PluginInstallationUpdateWithId:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Update
+            example: Update
+      - $ref: '#/components/schemas/PluginInstallationUpdateWithId'
+    PluginInstallationAction_PluginUninstallation:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Uninstall
+            example: Uninstall
+      - $ref: '#/components/schemas/PluginUninstallation'
+    PluginInstallationCreation:
+      type: object
+      title: PluginInstallationCreation
+      required:
+      - name
+      - version
+      - priority
+      - parameters
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        priority:
+          type: integer
+          format: int32
+          description: Plugins will be applied in order of increasing priority
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+    PluginInstallationUpdate:
+      type: object
+      title: PluginInstallationUpdate
+      required:
+      - priority
+      - parameters
+      properties:
+        priority:
+          type: integer
+          format: int32
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+    PluginInstallationUpdateWithId:
+      type: object
+      title: PluginInstallationUpdateWithId
+      required:
+      - installationId
+      - priority
+      - parameters
+      properties:
+        installationId:
+          type: string
+          format: uuid
+        priority:
+          type: integer
+          format: int32
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+    PluginUninstallation:
+      type: object
+      title: PluginUninstallation
+      required:
+      - installationId
+      properties:
+        installationId:
+          type: string
+          format: uuid
+    Project:
+      type: object
+      title: Project
+      required:
+      - projectId
+      - projectData
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        projectData:
+          $ref: '#/components/schemas/ProjectData'
+    ProjectActions:
+      type: object
+      title: ProjectActions
+      required:
+      - actions
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectPermisison'
+    ProjectData:
+      type: object
+      title: ProjectData
+      required:
+      - name
+      - ownerAccountId
+      - description
+      - defaultEnvironmentId
+      - projectType
+      properties:
+        name:
+          type: string
+        ownerAccountId:
+          type: string
+        description:
+          type: string
+        defaultEnvironmentId:
+          type: string
+        projectType:
+          $ref: '#/components/schemas/ProjectType'
+    ProjectDataRequest:
+      type: object
+      title: ProjectDataRequest
+      required:
+      - name
+      - ownerAccountId
+      - description
+      properties:
+        name:
+          type: string
+        ownerAccountId:
+          type: string
+        description:
+          type: string
+    ProjectGrant:
+      type: object
+      title: ProjectGrant
+      required:
+      - id
+      - data
+      properties:
+        id:
+          type: string
+          format: uuid
+        data:
+          $ref: '#/components/schemas/ProjectGrantData'
+    ProjectGrantData:
+      type: object
+      title: ProjectGrantData
+      required:
+      - granteeAccountId
+      - grantorProjectId
+      - projectPolicyId
+      properties:
+        granteeAccountId:
+          type: string
+        grantorProjectId:
+          type: string
+          format: uuid
+        projectPolicyId:
+          type: string
+          format: uuid
+    ProjectGrantDataRequest:
+      type: object
+      title: ProjectGrantDataRequest
+      required:
+      - projectActions
+      properties:
+        granteeAccountId:
+          type: string
+        granteeEmail:
+          type: string
+        projectPolicyId:
+          type: string
+          format: uuid
+        projectActions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectPermisison'
+        projectPolicyName:
+          type: string
+    ProjectPermisison:
+      type: string
+      enum:
+      - ViewComponent
+      - CreateComponent
+      - UpdateComponent
+      - DeleteComponent
+      - ViewWorker
+      - CreateWorker
+      - UpdateWorker
+      - DeleteWorker
+      - ViewProjectGrants
+      - CreateProjectGrants
+      - DeleteProjectGrants
+      - ViewApiDefinition
+      - CreateApiDefinition
+      - UpdateApiDefinition
+      - DeleteApiDefinition
+      - DeleteProject
+      - ViewPluginInstallations
+      - CreatePluginInstallation
+      - UpdatePluginInstallation
+      - DeletePluginInstallation
+      - UpsertApiDeployment
+      - ViewApiDeployment
+      - DeleteApiDeployment
+      - UpsertApiDomain
+      - ViewApiDomain
+      - DeleteApiDomain
+    ProjectPolicy:
+      type: object
+      title: ProjectPolicy
+      required:
+      - id
+      - name
+      - projectActions
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        projectActions:
+          $ref: '#/components/schemas/ProjectActions'
+    ProjectPolicyData:
+      type: object
+      title: ProjectPolicyData
+      required:
+      - name
+      - projectActions
+      properties:
+        name:
+          type: string
+        projectActions:
+          $ref: '#/components/schemas/ProjectActions'
+    ProjectType:
+      type: string
+      enum:
+      - Default
+      - NonDefault
+    ResourceLimits:
+      type: object
+      title: ResourceLimits
+      required:
+      - availableFuel
+      - maxMemoryPerWorker
+      properties:
+        availableFuel:
+          type: integer
+          format: int64
+        maxMemoryPerWorker:
+          type: integer
+          format: int64
+    Role:
+      type: string
+      enum:
+      - Admin
+      - MarketingAdmin
+    Token:
+      type: object
+      title: Token
+      required:
+      - id
+      - accountId
+      - createdAt
+      - expiresAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+    TokenSecret:
+      type: object
+      title: TokenSecret
+      required:
+      - value
+      properties:
+        value:
+          type: string
+          format: uuid
+    UnsafeToken:
+      type: object
+      title: UnsafeToken
+      required:
+      - data
+      - secret
+      properties:
+        data:
+          $ref: '#/components/schemas/Token'
+        secret:
+          $ref: '#/components/schemas/TokenSecret'
+    UpdateResourceLimitsResponse:
+      type: object
+      title: UpdateResourceLimitsResponse
+    VersionInfo:
+      type: object
+      title: VersionInfo
+      required:
+      - version
+      properties:
+        version:
+          type: string
+    WebFlowAuthorizeUrlResponse:
+      type: object
+      title: WebFlowAuthorizeUrlResponse
+      required:
+      - url
+      - state
+      properties:
+        url:
+          type: string
+        state:
+          type: string
+    WebFlowCallbackSuccessResponse:
+      type: object
+      title: WebFlowCallbackSuccessResponse
+  securitySchemes:
+    Cookie:
+      type: apiKey
+      name: GOLEM_SESSION
+      in: cookie
+    Token:
+      type: http
+      scheme: bearer
+

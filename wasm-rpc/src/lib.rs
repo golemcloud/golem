@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -83,7 +83,7 @@ pub use bindings::wasi;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc0_2_0 as golem_rpc_0_2_x;
+pub use bindings::golem::rpc0_2_1 as golem_rpc_0_2_x;
 
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
@@ -97,7 +97,7 @@ pub use golem_rpc_0_2_x::types::{
 pub use bindings::wasi::io::poll::Pollable;
 
 #[cfg(feature = "host-bindings")]
-pub use wasmtime_wasi::Pollable;
+pub use wasmtime_wasi::DynPollable;
 
 #[cfg(feature = "host-bindings")]
 mod generated {
@@ -112,7 +112,7 @@ mod generated {
             "golem:rpc/types/wasm-rpc": super::WasmRpcEntry,
             "golem:rpc/types/future-invoke-result": super::FutureInvokeResultEntry,
             "golem:rpc/types/cancellation-token": super::CancellationTokenEntry,
-            "wasi:io/poll/pollable": super::Pollable,
+            "wasi:io/poll/pollable": super::DynPollable,
         },
         wasmtime_crate: ::wasmtime,
     });
@@ -122,7 +122,7 @@ mod generated {
 pub use generated::wasi;
 
 #[cfg(feature = "host-bindings")]
-pub use generated::golem::rpc0_2_0 as golem_rpc_0_2_x;
+pub use generated::golem::rpc0_2_1 as golem_rpc_0_2_x;
 
 #[cfg(feature = "host-bindings")]
 pub use golem_rpc_0_2_x::types::{
@@ -177,7 +177,7 @@ pub struct FutureInvokeResultEntry {
 
 #[cfg(feature = "host-bindings")]
 #[async_trait::async_trait]
-impl wasmtime_wasi::Subscribe for FutureInvokeResultEntry {
+impl wasmtime_wasi::Pollable for FutureInvokeResultEntry {
     async fn ready(&mut self) {
         self.payload.ready().await
     }

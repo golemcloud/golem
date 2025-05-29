@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -121,14 +121,16 @@ pub struct TypeMismatchError {
 #[derive(Clone, Debug)]
 pub enum ExpectedType {
     AnalysedType(AnalysedType),
+    // If the expected type is not fully known yet but only a hint is available.
+    // Example: when compiler cannot proceed unless it is a `record`, or `list` etc
     Hint(TypeHint),
     InferredType(InferredType),
 }
 
-// If the actual type is not fully known but only a hint through TypeKind
 #[derive(Clone, Debug)]
 pub enum ActualType {
     Inferred(InferredType),
+    // If the actual type is not fully known yet but only a hint is available
     Hint(TypeHint),
 }
 
@@ -152,44 +154,11 @@ impl TypeMismatchError {
             .push_front(PathElem::Field(field_name));
         mismatch_error
     }
-
-    pub fn with_actual_inferred_type(
-        expr: &Expr,
-        parent_expr: Option<&Expr>,
-        expected_type: AnalysedType,
-        actual_type: InferredType,
-    ) -> Self {
-        TypeMismatchError {
-            expr_with_wrong_type: expr.clone(),
-            parent_expr: parent_expr.cloned(),
-            expected_type: ExpectedType::AnalysedType(expected_type),
-            actual_type: ActualType::Inferred(actual_type),
-            field_path: Path::default(),
-            additional_error_detail: Vec::new(),
-        }
-    }
-
-    pub fn with_actual_type_kind(
-        expr: &Expr,
-        parent_expr: Option<&Expr>,
-        expected_type: AnalysedType,
-        actual_type: &TypeHint,
-    ) -> Self {
-        TypeMismatchError {
-            expr_with_wrong_type: expr.clone(),
-            parent_expr: parent_expr.cloned(),
-            expected_type: ExpectedType::AnalysedType(expected_type),
-            actual_type: ActualType::Hint(actual_type.clone()),
-            field_path: Path::default(),
-            additional_error_detail: Vec::new(),
-        }
-    }
 }
 
 // A type unification can fail either due to a type mismatch or due to unresolved types
 pub enum TypeUnificationError {
     TypeMismatchError { error: TypeMismatchError },
-
     UnresolvedTypesError { error: UnResolvedTypesError },
 }
 
@@ -205,7 +174,7 @@ impl TypeUnificationError {
                 parent_expr,
                 additional_messages,
                 help_messages: vec![],
-                path: Default::default(),
+                path: Path::default(),
             },
         }
     }
@@ -228,8 +197,6 @@ impl TypeUnificationError {
         }
     }
 }
-
-pub struct MultipleUnResolvedTypesError(pub Vec<UnResolvedTypesError>);
 
 #[derive(Debug, Clone)]
 pub struct UnResolvedTypesError {

@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,6 +25,10 @@ pub struct GlobalVariableTypeSpec {
 }
 
 impl GlobalVariableTypeSpec {
+    pub fn variable(&self) -> String {
+        self.variable_id.name()
+    }
+
     // Constructs a new `GlobalVariableTypeSpec`, which associates a specific inferred type
     // with a global variable and its nested path.
     //
@@ -114,7 +118,7 @@ fn override_type(expr: &mut Expr, type_spec: &GlobalVariableTypeSpec) {
                 ..
             } => {
                 if let Some(prev_ptr) = previous_expr_ptr {
-                    if (inner_expr.as_ref() as *const _) == prev_ptr {
+                    if std::ptr::eq(inner_expr.as_ref(), prev_ptr) {
                         if current_path.is_empty() {
                             *inferred_type = type_spec.inferred_type.clone();
                             previous_expr_ptr = None;

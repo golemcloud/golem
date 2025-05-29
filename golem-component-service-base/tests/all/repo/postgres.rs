@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,6 +17,7 @@ use golem_common::config::DbPostgresConfig;
 use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
+use std::time::Duration;
 use test_r::{inherit_test_dep, sequential};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
@@ -161,9 +162,10 @@ impl PostgresDb {
     }
 
     async fn start_docker_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) {
-        let container = Postgres::default()
-            .with_tag("14.7-alpine")
-            .start()
+        let container = tryhard::retry_fn(|| Postgres::default().with_tag("14.7-alpine").start())
+            .retries(5)
+            .exponential_backoff(Duration::from_millis(10))
+            .max_delay(Duration::from_secs(10))
             .await
             .expect("Failed to start postgres container");
 

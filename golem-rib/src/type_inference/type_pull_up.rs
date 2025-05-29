@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::inferred_type::TypeOrigin;
 use crate::rib_type_error::RibTypeError;
 use crate::type_inference::type_hint::TypeHint;
 use crate::type_refinement::precise_types::{ListType, RecordType};
@@ -331,17 +330,13 @@ pub fn handle_pattern_match(current_match_arms: &[MatchArm], inferred_type: &mut
     let mut arm_resolution_inferred_types = vec![];
 
     for arm in current_match_arms {
-        let source_span = arm.arm_resolution_expr.source_span();
         let arm_inferred_type = arm.arm_resolution_expr.inferred_type();
-        arm_resolution_inferred_types
-            .push(arm_inferred_type.add_origin(TypeOrigin::PatternMatch(source_span)));
+        arm_resolution_inferred_types.push(arm_inferred_type);
     }
 
     let new_inferred_type = InferredType::all_of(arm_resolution_inferred_types);
 
-    if let Some(new_inferred_type) = new_inferred_type {
-        *inferred_type = inferred_type.merge(new_inferred_type)
-    }
+    *inferred_type = inferred_type.merge(new_inferred_type)
 }
 
 fn handle_multiple(expr_block: &[Expr], inferred_type: &mut InferredType) {
@@ -410,6 +405,7 @@ fn get_inferred_type_of_selected_field(
     field: &str,
 ) -> Result<InferredType, RibTypeError> {
     let select_from_inferred_type = select_from.inferred_type();
+
     let refined_record = RecordType::refine(&select_from_inferred_type).ok_or({
         TypeMismatchError {
             expr_with_wrong_type: select_from.clone(),
@@ -558,19 +554,16 @@ mod type_pull_up_tests {
 
         assert_eq!(
             expr,
-            Expr::record(elems).with_inferred_type(
-                InferredType::all_of(vec![
-                    InferredType::record(vec![
-                        ("foo".to_string(), InferredType::u64()),
-                        ("bar".to_string(), InferredType::u32())
-                    ]),
-                    InferredType::record(vec![
-                        ("foo".to_string(), InferredType::unknown()),
-                        ("bar".to_string(), InferredType::unknown())
-                    ])
+            Expr::record(elems).with_inferred_type(InferredType::all_of(vec![
+                InferredType::record(vec![
+                    ("foo".to_string(), InferredType::u64()),
+                    ("bar".to_string(), InferredType::u32())
+                ]),
+                InferredType::record(vec![
+                    ("foo".to_string(), InferredType::unknown()),
+                    ("bar".to_string(), InferredType::unknown())
                 ])
-                .unwrap()
-            )
+            ]))
         );
     }
 
@@ -924,6 +917,7 @@ mod type_pull_up_tests {
         expr.pull_types_up().unwrap();
 
         let expected = internal::expected_pattern_match();
+
         assert_eq!(expr, expected);
     }
 

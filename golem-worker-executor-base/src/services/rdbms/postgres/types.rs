@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,6 +20,7 @@ use bincode::{Decode, Encode};
 use bit_vec::BitVec;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
+use golem_wasm_rpc_derive::IntoValue;
 use itertools::Itertools;
 use mac_address::MacAddress;
 use serde::{Deserialize, Serialize};
@@ -32,7 +33,7 @@ pub trait NamedType {
     fn name(&self) -> String;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue)]
 pub struct EnumerationType {
     pub name: String,
 }
@@ -52,16 +53,6 @@ impl NamedType for EnumerationType {
 impl Display for EnumerationType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
-    }
-}
-
-impl IntoValue for EnumerationType {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.name.into_value()])
-    }
-
-    fn get_type() -> AnalysedType {
-        analysed_type::record(vec![analysed_type::field("name", analysed_type::str())])
     }
 }
 
@@ -427,7 +418,7 @@ impl<T: IntoValue> IntoValue for ValuesRange<T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, IntoValue)]
 pub struct Interval {
     pub months: i32,
     pub days: i32,
@@ -450,25 +441,7 @@ impl Display for Interval {
     }
 }
 
-impl IntoValue for Interval {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.months.into_value(),
-            self.days.into_value(),
-            self.microseconds.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("months", analysed_type::s32()),
-            analysed_type::field("days", analysed_type::s32()),
-            analysed_type::field("microseconds", analysed_type::s64()),
-        ])
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue)]
 pub struct TimeTz {
     #[bincode(with_serde)]
     pub time: chrono::NaiveTime,
@@ -490,23 +463,7 @@ impl Display for TimeTz {
     }
 }
 
-impl IntoValue for TimeTz {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.time.into_value_and_type().value,
-            self.offset.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("time", chrono::NaiveTime::get_base_type()),
-            analysed_type::field("offset", analysed_type::s32()),
-        ])
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, IntoValue)]
 pub struct Enumeration {
     pub name: String,
     pub value: String,
@@ -527,19 +484,6 @@ impl NamedType for Enumeration {
 impl Display for Enumeration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}({})", self.name, self.value)
-    }
-}
-
-impl IntoValue for Enumeration {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.name.into_value(), self.value.into_value()])
-    }
-
-    fn get_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("value", analysed_type::str()),
-        ])
     }
 }
 
@@ -1383,13 +1327,10 @@ impl DbValue {
             analysed_type::case("text", analysed_type::str()),
             analysed_type::case("varchar", analysed_type::str()),
             analysed_type::case("bpchar", analysed_type::str()),
-            analysed_type::case("timestamp", chrono::NaiveDateTime::get_base_type()),
-            analysed_type::case(
-                "timestamptz",
-                chrono::DateTime::<chrono::Utc>::get_base_type(),
-            ),
-            analysed_type::case("date", chrono::NaiveDate::get_base_type()),
-            analysed_type::case("time", chrono::NaiveTime::get_base_type()),
+            analysed_type::case("timestamp", chrono::NaiveDateTime::get_type()),
+            analysed_type::case("timestamptz", chrono::DateTime::<chrono::Utc>::get_type()),
+            analysed_type::case("date", chrono::NaiveDate::get_type()),
+            analysed_type::case("time", chrono::NaiveTime::get_type()),
             analysed_type::case("timetz", TimeTz::get_type()),
             analysed_type::case("interval", Interval::get_type()),
             analysed_type::case("bytea", analysed_type::list(analysed_type::u8())),
@@ -1450,10 +1391,10 @@ impl RdbmsIntoValueAndType for DbValue {
             DbValue::Text(v) => get_variant(8, Some(v.into_value())),
             DbValue::Varchar(v) => get_variant(9, Some(v.into_value())),
             DbValue::Bpchar(v) => get_variant(10, Some(v.into_value())),
-            DbValue::Timestamp(v) => get_variant(11, Some(v.into_value_and_type().value)),
-            DbValue::Timestamptz(v) => get_variant(12, Some(v.into_value_and_type().value)),
-            DbValue::Date(v) => get_variant(13, Some(v.into_value_and_type().value)),
-            DbValue::Time(v) => get_variant(14, Some(v.into_value_and_type().value)),
+            DbValue::Timestamp(v) => get_variant(11, Some(v.into_value())),
+            DbValue::Timestamptz(v) => get_variant(12, Some(v.into_value())),
+            DbValue::Date(v) => get_variant(13, Some(v.into_value())),
+            DbValue::Time(v) => get_variant(14, Some(v.into_value())),
             DbValue::Timetz(v) => get_variant(15, Some(v.into_value())),
             DbValue::Interval(v) => get_variant(16, Some(v.into_value())),
             DbValue::Bytea(v) => get_variant(17, Some(v.into_value())),

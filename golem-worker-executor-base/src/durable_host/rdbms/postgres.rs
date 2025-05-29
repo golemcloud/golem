@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -32,20 +32,17 @@ use crate::preview2::golem::rdbms::types::Timetz;
 use crate::services::rdbms::postgres::types as postgres_types;
 use crate::services::rdbms::postgres::PostgresType;
 use crate::workerctx::WorkerCtx;
-use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use std::ops::Bound;
 use std::str::FromStr;
 use wasmtime::component::{Resource, ResourceTable};
-use wasmtime_wasi::WasiView;
+use wasmtime_wasi::IoView;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
 pub type PostgresDbConnection = RdbmsConnection<PostgresType>;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     async fn open(
         &mut self,
@@ -95,7 +92,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
 pub type DbResultStreamEntry = RdbmsResultStreamEntry<PostgresType>;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
     async fn get_columns(
         &mut self,
@@ -118,7 +114,6 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
 
 pub type DbTransactionEntry = RdbmsTransactionEntry<PostgresType>;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostDbTransaction for DurableWorkerCtx<Ctx> {
     async fn query(
         &mut self,
@@ -176,7 +171,6 @@ impl LazyDbColumnTypeEntry {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostLazyDbColumnType for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
@@ -235,7 +229,6 @@ impl LazyDbValueEntry {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostLazyDbValue for DurableWorkerCtx<Ctx> {
     async fn new(&mut self, value: DbValue) -> anyhow::Result<Resource<LazyDbValueEntry>> {
         self.observe_function_call("rdbms::postgres::lazy-db-value", "new");

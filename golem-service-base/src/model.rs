@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,11 +25,9 @@ use golem_common::model::{
     ComponentType, ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter,
     WorkerId, WorkerStatus,
 };
-use golem_wasm_ast::analysis::analysed_type::{case, field, record, variant};
-use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm_rpc_derive::IntoValue;
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -644,7 +642,7 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, Serialize, Deserialize, Union)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, Serialize, Deserialize, Union, IntoValue)]
 #[serde(rename_all = "camelCase")]
 #[oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")]
 pub enum RevertWorkerTarget {
@@ -683,28 +681,6 @@ impl From<RevertWorkerTarget> for golem_api_grpc::proto::golem::common::RevertWo
     }
 }
 
-impl IntoValue for RevertWorkerTarget {
-    fn into_value(self) -> Value {
-        match self {
-            RevertWorkerTarget::RevertToOplogIndex(target) => Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(target.into_value())),
-            },
-            RevertWorkerTarget::RevertLastInvocations(target) => Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(target.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        variant(vec![
-            case("revert-to-oplog-index", RevertToOplogIndex::get_type()),
-            case("revert-last-invocations", RevertLastInvocations::get_type()),
-        ])
-    }
-}
-
 #[derive(
     Debug,
     Clone,
@@ -718,6 +694,7 @@ impl IntoValue for RevertWorkerTarget {
     Serialize,
     Deserialize,
     Object,
+    IntoValue,
 )]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
@@ -741,16 +718,6 @@ impl From<RevertToOplogIndex> for golem_api_grpc::proto::golem::common::RevertTo
     }
 }
 
-impl IntoValue for RevertToOplogIndex {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.last_oplog_index.into_value()])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![field("last-oplog-index", OplogIndex::get_type())])
-    }
-}
-
 #[derive(
     Debug,
     Clone,
@@ -764,6 +731,7 @@ impl IntoValue for RevertToOplogIndex {
     Serialize,
     Deserialize,
     Object,
+    IntoValue,
 )]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
@@ -784,15 +752,5 @@ impl From<RevertLastInvocations> for golem_api_grpc::proto::golem::common::Rever
         Self {
             number_of_invocations: value.number_of_invocations as i64,
         }
-    }
-}
-
-impl IntoValue for RevertLastInvocations {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.number_of_invocations.into_value()])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![field("number-of-invocations", u64::get_type())])
     }
 }

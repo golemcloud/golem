@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -55,7 +55,7 @@ pub trait TestDependencies {
     fn component_compilation_service(
         &self,
     ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static>;
-    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static>;
+    fn worker_service(&self) -> Arc<dyn WorkerService + 'static>;
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>;
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService>;

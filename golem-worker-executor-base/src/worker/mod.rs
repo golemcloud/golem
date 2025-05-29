@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -84,7 +84,7 @@ use wasmtime::{Store, UpdateDeadline};
 pub struct Worker<Ctx: WorkerCtx> {
     owned_worker_id: OwnedWorkerId,
 
-    oplog: Arc<dyn Oplog + Send + Sync>,
+    oplog: Arc<dyn Oplog>,
     worker_event_service: Arc<dyn WorkerEventService + Send + Sync>,
 
     deps: All<Ctx>,
@@ -103,7 +103,7 @@ pub struct Worker<Ctx: WorkerCtx> {
 }
 
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
-    fn oplog(&self) -> Arc<dyn Oplog + Send + Sync> {
+    fn oplog(&self) -> Arc<dyn Oplog> {
         self.oplog.clone()
     }
 }
@@ -1427,7 +1427,7 @@ struct RunningWorker {
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
 
-    oplog: Arc<dyn Oplog + Send + Sync>,
+    oplog: Arc<dyn Oplog>,
 
     permit: OwnedSemaphorePermit,
     waiting_for_command: Arc<AtomicBool>,
@@ -1438,7 +1438,7 @@ impl RunningWorker {
         owned_worker_id: OwnedWorkerId,
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
-        oplog: Arc<dyn Oplog + Send + Sync>,
+        oplog: Arc<dyn Oplog>,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         permit: OwnedSemaphorePermit,
         oom_retry_count: u64,

@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -67,10 +67,9 @@ impl HeterogeneousCollectionType {
                 TypeInternal::AllOf(types) => {
                     let mut all_ofs = types.clone();
                     all_ofs.push(b.clone());
-                    InferredType::all_of(all_ofs).unwrap_or(InferredType::unknown())
+                    InferredType::all_of(all_ofs)
                 }
-                _ => InferredType::all_of(vec![a.clone(), b.clone()])
-                    .unwrap_or(InferredType::unknown()),
+                _ => InferredType::all_of(vec![a.clone(), b.clone()]),
             })
             .collect::<Vec<_>>();
 
@@ -97,7 +96,7 @@ impl<A> RefinedType<A> {
                     required_types.push(v.inner_type());
                 });
 
-                InferredType::all_of(required_types).unwrap_or(InferredType::unknown())
+                InferredType::all_of(required_types)
             }
             RefinedType::Value(value) => {
                 // Directly convert the list of values to the `InferredType`
@@ -132,11 +131,9 @@ impl<A> RefinedType<A> {
                     .map(|v| v.inner_type_by_name(field_name))
                     .collect::<Vec<_>>();
 
-                InferredType::all_of(collected_types).unwrap_or(InferredType::unknown())
+                InferredType::all_of(collected_types)
             }
-            RefinedType::Value(value) => {
-                InferredType::all_of(value.get(field_name)).unwrap_or(InferredType::unknown())
-            }
+            RefinedType::Value(value) => InferredType::all_of(value.get(field_name)),
         }
     }
 }
@@ -156,7 +153,7 @@ mod internal {
         pack: F,
     ) -> HeterogeneousCollectionType
     where
-        F: Fn(Vec<InferredType>) -> Option<InferredType>,
+        F: Fn(Vec<InferredType>) -> InferredType,
     {
         let mut transposed = vec![];
 
@@ -169,12 +166,10 @@ mod internal {
                         grouped.push(inferred.clone());
                     }
                 }
-                if let Some(inferred) = pack(grouped) {
-                    transposed.push(inferred);
-                }
+                transposed.push(pack(grouped));
             }
         }
 
-        HeterogeneousCollectionType(transposed) // This is now correct
+        HeterogeneousCollectionType(transposed)
     }
 }

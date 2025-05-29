@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,9 +16,7 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::golem::durability::durability;
-use crate::preview2::golem::durability::durability::{
-    PersistedTypedDurableFunctionInvocation, Pollable,
-};
+use crate::preview2::golem::durability::durability::PersistedTypedDurableFunctionInvocation;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -32,7 +30,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use tracing::error;
 use wasmtime::component::Resource;
-use wasmtime_wasi::{dynamic_subscribe, DynamicSubscribe, Subscribe};
+use wasmtime_wasi::{dynamic_subscribe, DynPollable, DynamicPollable, Pollable};
 
 #[derive(Debug)]
 pub struct DurableExecutionState {
@@ -66,7 +64,7 @@ pub trait DurabilityHost {
     /// Marks the beginning of a durable function.
     ///
     /// There must be a corresponding call to `end_durable_function` after the function has
-    /// performed its work (it can be ended in a different context, for example after an async
+    /// performed its work (it can be ended in a different context, for example, after an async
     /// pollable operation has been completed)
     async fn begin_durable_function(
         &mut self,
@@ -167,7 +165,6 @@ impl From<PersistedDurableFunctionInvocation> for durability::PersistedDurableFu
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCtx<Ctx> {
     async fn new(&mut self) -> anyhow::Result<Resource<LazyInitializedPollableEntry>> {
         DurabilityHost::observe_function_call(self, "durability::lazy_initialized_pollable", "new");
@@ -178,7 +175,7 @@ impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCt
     async fn set(
         &mut self,
         self_: Resource<LazyInitializedPollableEntry>,
-        pollable: Resource<Pollable>,
+        pollable: Resource<DynPollable>,
     ) -> anyhow::Result<()> {
         DurabilityHost::observe_function_call(self, "durability::lazy_initialized_pollable", "set");
         let entry = self.table().get_mut(&self_)?;
@@ -189,7 +186,7 @@ impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCt
     async fn subscribe(
         &mut self,
         self_: Resource<LazyInitializedPollableEntry>,
-    ) -> anyhow::Result<Resource<Pollable>> {
+    ) -> anyhow::Result<Resource<DynPollable>> {
         DurabilityHost::observe_function_call(
             self,
             "durability::lazy_initialized_pollable",
@@ -215,7 +212,6 @@ impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCt
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
     async fn observe_function_call(
         &mut self,
@@ -667,11 +663,11 @@ impl<SOk, SErr> Durability<SOk, SErr> {
 
 pub enum LazyInitializedPollableEntry {
     Empty,
-    Subscribed { pollable: Resource<Pollable> },
+    Subscribed { pollable: Resource<DynPollable> },
 }
 
 #[async_trait]
-impl Subscribe for LazyInitializedPollableEntry {
+impl Pollable for LazyInitializedPollableEntry {
     async fn ready(&mut self) {
         match self {
             LazyInitializedPollableEntry::Empty => {
@@ -684,8 +680,7 @@ impl Subscribe for LazyInitializedPollableEntry {
     }
 }
 
-#[async_trait]
-impl DynamicSubscribe for LazyInitializedPollableEntry {
+impl DynamicPollable for LazyInitializedPollableEntry {
     fn override_index(&self) -> Option<u32> {
         match self {
             LazyInitializedPollableEntry::Empty => None,

@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,508 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::inferred_type::{TypeOrigin, UnificationFailureInternal};
+use crate::inferred_type::UnificationFailureInternal;
+use crate::rib_source_span::SourceSpan;
 use crate::{Expr, ExprVisitor, InferredType, TypeUnificationError};
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
-    let mut original_expr = expr.clone();
-
+    let original_expr = expr.clone();
     let mut visitor = ExprVisitor::bottom_up(expr);
 
-    while let Some(expr) = visitor.pop_front() {
-        match expr {
-            Expr::Number {
-                inferred_type,
-                number,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::number(number.value.clone()).with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::Record {
-                inferred_type,
-                exprs,
-                source_span,
-                ..
-            } => {
-                let exprs = exprs
-                    .iter()
-                    .map(|(a, b)| (a.clone(), b.as_ref().clone()))
-                    .collect();
-
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::record(exprs).with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-            Expr::Tuple {
-                inferred_type,
-                exprs,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::tuple(exprs.clone()).with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::Range {
-                inferred_type,
-                range,
-                source_span,
-                type_annotation,
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::Range {
-                        range: range.clone(),
-                        source_span: source_span.clone(),
-                        type_annotation: type_annotation.clone(),
-                        inferred_type: inferred_type.clone(),
-                    },
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::Sequence {
-                exprs,
-                inferred_type,
-                type_annotation,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::sequence(exprs.clone(), type_annotation.clone())
-                        .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-            Expr::Option {
-                inferred_type,
-                expr,
-                source_span,
-                type_annotation,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::option(expr.as_deref().cloned())
-                        .with_type_annotation_opt(type_annotation.clone())
-                        .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::Result {
-                expr: Ok(expr),
-                inferred_type,
-                type_annotation,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::ok(expr.as_ref().clone(), type_annotation.clone())
-                        .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::Result {
-                expr: Err(expr),
-                inferred_type,
-                type_annotation,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::err(expr.as_ref().clone(), type_annotation.clone())
-                        .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::Cond {
-                inferred_type,
-                cond,
-                lhs,
-                rhs,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::cond(
-                        cond.as_ref().clone(),
-                        lhs.as_ref().clone(),
-                        rhs.as_ref().clone(),
-                    ),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::Length {
-                inferred_type,
-                expr,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::length(expr.as_ref().clone()).with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::ListComprehension {
-                iterated_variable,
-                iterable_expr,
-                yield_expr,
-                inferred_type,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::list_comprehension(
-                        iterated_variable.clone(),
-                        iterable_expr.as_ref().clone(),
-                        yield_expr.as_ref().clone(),
-                    )
-                    .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::ListReduce {
-                inferred_type,
-                reduce_variable,
-                iterated_variable,
-                iterable_expr,
-                yield_expr,
-                init_value_expr,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::list_reduce(
-                        reduce_variable.clone(),
-                        iterated_variable.clone(),
-                        iterable_expr.as_ref().clone(),
-                        yield_expr.as_ref().clone(),
-                        init_value_expr.as_ref().clone(),
-                    )
-                    .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::PatternMatch {
-                inferred_type,
-                predicate,
-                match_arms,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::pattern_match(predicate.as_ref().clone(), match_arms.clone())
-                        .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-            Expr::Call {
-                call_type,
-                args,
-                inferred_type,
-                source_span,
-                type_annotation,
-                generic_type_parameter,
-            } => {
-                let expr = Expr::Call {
-                    call_type: call_type.clone(),
-                    args: args.clone(),
-                    inferred_type: InferredType::unknown(),
-                    source_span: source_span.clone(),
-                    generic_type_parameter: generic_type_parameter.clone(),
-                    type_annotation: type_annotation.clone(),
-                };
-
-                let unified_type = unify_inferred_type(&mut original_expr, expr, inferred_type)?;
-
-                *inferred_type = unified_type;
-            }
-            Expr::SelectField {
-                inferred_type,
-                expr,
-                field,
-                source_span,
-                type_annotation,
-            } => {
-                let expr =
-                    Expr::select_field(expr.as_ref().clone(), field, type_annotation.clone())
-                        .with_source_span(source_span.clone());
-
-                let unified_type = unify_inferred_type(&mut original_expr, expr, inferred_type)?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::SelectIndex {
-                inferred_type,
-                expr,
-                index,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::select_index(expr.as_ref().clone(), index.as_ref().clone())
-                        .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
+    // Pop front to get the innermost expression first that may have caused the type mismatch.
+    while let Some(sub_expr) = visitor.pop_front() {
+        match sub_expr {
             Expr::Let { .. } => {}
-            Expr::Literal {
-                inferred_type,
-                value,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::literal(value.clone()).with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-            Expr::Flags {
-                inferred_type,
-                flags,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::flags(flags.clone()).with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-            Expr::Identifier {
-                inferred_type,
-                variable_id,
-                source_span,
-                type_annotation,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::identifier_with_variable_id(variable_id.clone(), type_annotation.clone())
-                        .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
             Expr::Boolean { .. } => {}
             Expr::Concat { .. } => {}
-            Expr::ExprBlock {
-                inferred_type,
-                source_span,
-                ..
-            } => {
-                let unified_inferred_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::expr_block(vec![]).with_source_span(source_span.clone()),
-                    inferred_type,
-                );
-
-                if let Ok(unified_type) = unified_inferred_type {
-                    *inferred_type = unified_type
-                }
-            }
-
-            Expr::Not {
-                inferred_type,
-                expr,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::not(expr.as_ref().clone())
-                        .with_source_span(source_span.clone())
-                        .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-            Expr::Unwrap {
-                inferred_type,
-                expr,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    expr.unwrap().with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::Throw {
-                inferred_type,
-                message,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::throw(message).with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::GetTag {
-                inferred_type,
-                expr,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::get_tag(expr.as_ref().clone()).with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
             Expr::GreaterThan { .. } => {}
-
-            Expr::Plus {
-                inferred_type,
-                lhs,
-                rhs,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::plus(lhs.as_ref().clone(), rhs.as_ref().clone())
-                        .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::Minus {
-                inferred_type,
-                lhs,
-                rhs,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::minus(lhs.as_ref().clone(), rhs.as_ref().clone())
-                        .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::Divide {
-                inferred_type,
-                lhs,
-                rhs,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::minus(lhs.as_ref().clone(), rhs.as_ref().clone())
-                        .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
-            Expr::Multiply {
-                inferred_type,
-                lhs,
-                rhs,
-                source_span,
-                ..
-            } => {
-                let unified_type = unify_inferred_type(
-                    &mut original_expr,
-                    Expr::multiply(lhs.as_ref().clone(), rhs.as_ref().clone())
-                        .with_source_span(source_span.clone()),
-                    inferred_type,
-                )?;
-
-                *inferred_type = unified_type;
-            }
-
             Expr::And { .. } => {}
             Expr::Or { .. } => {}
-
             Expr::GreaterThanOrEqualTo { .. } => {}
             Expr::LessThanOrEqualTo { .. } => {}
             Expr::EqualTo { .. } => {}
             Expr::LessThan { .. } => {}
             Expr::InvokeMethodLazy { .. } => {}
+            sub_expr => {
+                unify_inferred_type(&original_expr, sub_expr)?;
+            }
         }
     }
 
@@ -521,70 +44,21 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
 }
 
 fn unify_inferred_type(
-    original_expr: &mut Expr,
-    expr: Expr,
-    inferred_type: &InferredType,
+    original_expr: &Expr,
+    sub_expr: &mut Expr,
 ) -> Result<InferredType, TypeUnificationError> {
-    let unification_result = inferred_type.unify();
+    let unification_result = sub_expr.inferred_type().unify();
 
     match unification_result {
-        Ok(unified_type) => Ok(unified_type),
+        Ok(unified_type) => {
+            sub_expr.with_inferred_type_mut(unified_type.clone());
+            Ok(unified_type)
+        }
         Err(e) => match e {
-            UnificationFailureInternal::TypeMisMatch { expected, found } => {
-                let found_origin = found.critical_origin();
-                let found_source_span = found_origin.source_span();
-                let found_expr = found_source_span
-                    .as_ref()
-                    .and_then(|span| original_expr.lookup(span));
+            UnificationFailureInternal::TypeMisMatch { left, right } => Err(
+                get_type_unification_error_from_mismatch(original_expr, sub_expr, left, right),
+            ),
 
-                let expected_origin = expected.critical_origin();
-
-                let additional_message = match expected_origin {
-                    TypeOrigin::PatternMatch(span) => {
-                        format!(
-                            "expected {} based on pattern match branch at line {} column {}",
-                            expected.printable(),
-                            span.start_line(),
-                            span.start_column()
-                        )
-                    }
-                    TypeOrigin::Default => "".to_string(),
-                    TypeOrigin::NoOrigin => "".to_string(),
-                    TypeOrigin::Declared(source_span) => {
-                        format!(
-                            "{} declared at line {} column {}",
-                            expected.printable(),
-                            source_span.start_line(),
-                            source_span.start_column()
-                        )
-                    }
-                    TypeOrigin::OriginatedAt(_) => "".to_string(),
-                    TypeOrigin::Multiple(_) => "".to_string(),
-                };
-
-                match found_expr {
-                    Some(found_expr) => Err(TypeUnificationError::type_mismatch_error(
-                        found_expr,
-                        None,
-                        expected,
-                        found,
-                        vec![additional_message],
-                    )),
-
-                    None => {
-                        let ambiguity_message = format!(
-                            "conflicting types {}, {}",
-                            found.printable(),
-                            expected.printable()
-                        );
-                        Err(TypeUnificationError::unresolved_types_error(
-                            expr,
-                            None,
-                            vec![ambiguity_message],
-                        ))
-                    }
-                }
-            }
             UnificationFailureInternal::ConflictingTypes {
                 conflicting_types,
                 additional_error_detail,
@@ -601,18 +75,140 @@ fn unify_inferred_type(
                 additional_messages.extend(additional_error_detail);
 
                 Err(TypeUnificationError::unresolved_types_error(
-                    expr,
+                    sub_expr.clone(),
                     None,
                     additional_messages,
                 ))
             }
+
             UnificationFailureInternal::UnknownType => {
                 Err(TypeUnificationError::unresolved_types_error(
-                    expr,
+                    sub_expr.clone(),
                     None,
                     vec!["cannot determine the type".to_string()],
                 ))
             }
         },
     }
+}
+
+fn get_type_unification_error_from_mismatch(
+    rib: &Expr,
+    expr_unified: &Expr,
+    left: InferredType,
+    right: InferredType,
+) -> TypeUnificationError {
+    let left_default = left.origin.is_default();
+    let right_default = right.origin.is_default();
+
+    let left_declared = left.origin.is_declared();
+    let right_declared = right.origin.is_declared();
+
+    let left_expr = left
+        .source_span()
+        .and_then(|span| rib.lookup(&span).map(|expr| (span, expr)));
+
+    let right_expr = right
+        .source_span()
+        .and_then(|span| rib.lookup(&span).map(|expr| (span, expr)));
+
+    match (left_expr, right_expr) {
+        (Some((_, left_expr)), Some((right_span, right_expr))) => {
+            let mut additional_error_detail = vec![format!(
+                "expected type {} based on expression `{}` found at line {} column {}",
+                right.printable(),
+                right_expr,
+                right_span.start_line(),
+                right_span.start_column()
+            )];
+
+            additional_error_detail.extend(get_error_detail(
+                &right_expr,
+                &right,
+                right_declared,
+                right_default,
+            ));
+            additional_error_detail.extend(get_error_detail(
+                &left_expr,
+                &left,
+                left_declared,
+                left_default,
+            ));
+
+            TypeUnificationError::type_mismatch_error(
+                left_expr.clone(),
+                None,
+                right,
+                left,
+                additional_error_detail,
+            )
+        }
+
+        (Some((_, left_expr)), None) => {
+            let additional_error_detail =
+                get_error_detail(&left_expr, &left, left_declared, left_default);
+
+            TypeUnificationError::type_mismatch_error(
+                left_expr.clone(),
+                None,
+                right,
+                left,
+                additional_error_detail,
+            )
+        }
+
+        (None, Some((_, right_expr))) => {
+            let additional_error_detail =
+                get_error_detail(&right_expr, &right, right_declared, right_default);
+
+            TypeUnificationError::type_mismatch_error(
+                right_expr.clone(),
+                None,
+                left,
+                right,
+                additional_error_detail,
+            )
+        }
+
+        (None, None) => {
+            let additional_messages = vec![format!(
+                "conflicting types: {}, {}",
+                left.printable(),
+                right.printable()
+            )];
+
+            TypeUnificationError::unresolved_types_error(
+                expr_unified.clone(),
+                None,
+                additional_messages,
+            )
+        }
+    }
+}
+
+fn get_error_detail(
+    expr: &Expr,
+    inferred_type: &InferredType,
+    declared: Option<&SourceSpan>,
+    is_default: bool,
+) -> Vec<String> {
+    let mut details = vec![];
+
+    if let Some(span) = declared {
+        details.push(format!(
+            "the type of `{}` is declared as `{}` at line {} column {}",
+            expr,
+            inferred_type.printable(),
+            span.start_line(),
+            span.start_column()
+        ));
+    } else if is_default {
+        details.push(format!(
+            "the expression `{}` is inferred as `{}` by default",
+            expr,
+            inferred_type.printable()
+        ));
+    }
+
+    details
 }

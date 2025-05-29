@@ -48,7 +48,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci build
-        timeout-minutes: 30
+        timeout-minutes: 45
 
   unit-tests-and-checks:
     env:
@@ -196,7 +196,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 30
+        timeout-minutes: 45
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
         if: always()
@@ -220,7 +220,7 @@ jobs:
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - name: Install cargo-component
-        run: cargo install --force --locked cargo-component@0.20.0
+        run: cargo install --force --locked cargo-component@0.21.1
       - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: v2-rust

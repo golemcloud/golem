@@ -2,10 +2,12 @@
 name = "golem-rib"
 version = "0.0.0"
 edition = "2021"
-license = "Apache-2.0"
+
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Parser for Golem's Rib language"
+
+license-file = "../LICENSE"
 
 [features]
 default = ["json_in_errors", "protobuf", "poem"]
@@ -50,4 +52,10 @@ test-r = { workspace = true }
 [lib]
 name = "rib"
 path = "src/lib.rs"
+harness = false
+
+
+[[test]]
+name = "rib_regression"
+path = "regression_tests/lib.rs"
 harness = false

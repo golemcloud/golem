@@ -1,0 +1,56 @@
+[package]
+name = "cloud-common"
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+harness = false
+
+[features]
+default = ["poem", "protobuf", "model"]
+poem = []
+protobuf = []
+model = []
+
+[dependencies]
+cloud-api-grpc = { path = "../cloud-api-grpc", version = "=0.0.0" }
+golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
+golem-common = { path = "../golem-common", version = "=0.0.0" }
+golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
+golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
+
+async-trait = { workspace = true }
+axum = { workspace = true }
+bincode = { workspace = true }
+darling = { workspace = true }
+derive_more = { workspace = true }
+figment = { workspace = true }
+headers = { workspace = true }
+http = { workspace = true }
+num-traits = { workspace = true }
+poem = { workspace = true, features = ["test"] }
+poem-derive = { workspace = true }
+poem-openapi = { workspace = true }
+poem-openapi-derive = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "sqlite",
+    "postgres",
+    "uuid",
+    "migrate",
+    "chrono",
+] }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }

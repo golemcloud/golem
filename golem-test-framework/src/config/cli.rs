@@ -1,31 +1,16 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-use async_trait::async_trait;
-use clap::{Parser, Subcommand};
-use golem_common::tracing::{init_tracing, TracingConfig};
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
-use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
-use golem_service_base::storage::blob::BlobStorage;
-use itertools::Itertools;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
-use tempfile::TempDir;
-use tracing::{Instrument, Level};
 
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::k8s::K8sComponentCompilationService;
@@ -68,6 +53,21 @@ use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
 use crate::config::{GolemClientProtocol, TestDependencies, TestService};
 use crate::dsl::benchmark::{BenchmarkConfig, RunConfig};
+use async_trait::async_trait;
+use clap::{Parser, Subcommand};
+use golem_common::tracing::{init_tracing, TracingConfig};
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
+use golem_service_base::storage::blob::BlobStorage;
+use itertools::Itertools;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+use tempfile::TempDir;
+use tracing::{Instrument, Level};
+use uuid::Uuid;
 
 /// Test dependencies created from command line arguments
 ///
@@ -82,7 +82,7 @@ pub struct CliTestDependencies {
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync + 'static>,
-    worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+    worker_service: Arc<dyn WorkerService + 'static>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
@@ -347,6 +347,7 @@ impl CliTestDependencies {
         compilation_service_disabled: bool,
     ) -> Self {
         let params_clone = params.clone();
+        let unique_network_id = Uuid::new_v4().to_string();
 
         let blob_storage = Arc::new(
             FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
@@ -362,11 +363,12 @@ impl CliTestDependencies {
         let rdb_and_component_service_join = {
             let component_directory = PathBuf::from(&params.component_directory);
             let plugin_wasm_files_service = plugin_wasm_files_service.clone();
+            let unique_network_id = unique_network_id.clone();
 
             tokio::spawn(
                 async move {
                     let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                        Arc::new(DockerPostgresRdb::new().await);
+                        Arc::new(DockerPostgresRdb::new(&unique_network_id).await);
 
                     let component_compilation_service = if !compilation_service_disabled {
                         Some((
@@ -380,6 +382,7 @@ impl CliTestDependencies {
                     let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
                         Arc::new(
                             DockerComponentService::new(
+                                &unique_network_id,
                                 component_directory,
                                 component_compilation_service,
                                 rdb.clone(),
@@ -394,6 +397,7 @@ impl CliTestDependencies {
                         dyn ComponentCompilationService + Send + Sync + 'static,
                     > = Arc::new(
                         DockerComponentCompilationService::new(
+                            &unique_network_id,
                             component_service.clone(),
                             params_clone.service_verbosity(),
                         )
@@ -407,12 +411,18 @@ impl CliTestDependencies {
         };
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> =
-            Arc::new(DockerRedis::new(redis_prefix.to_string()).await);
+            Arc::new(DockerRedis::new(&unique_network_id, redis_prefix.to_string()).await);
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
             SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
         );
         let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
-            DockerShardManager::new(redis.clone(), None, params.service_verbosity()).await,
+            DockerShardManager::new(
+                &unique_network_id,
+                redis.clone(),
+                None,
+                params.service_verbosity(),
+            )
+            .await,
         );
 
         let (rdb, component_service, component_compilation_service) =
@@ -420,8 +430,9 @@ impl CliTestDependencies {
                 .await
                 .expect("Failed to join");
 
-        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
             DockerWorkerService::new(
+                &unique_network_id,
                 component_service.clone(),
                 shard_manager.clone(),
                 rdb.clone(),
@@ -434,6 +445,7 @@ impl CliTestDependencies {
             Arc::new(
                 DockerWorkerExecutorCluster::new(
                     cluster_size,
+                    &unique_network_id,
                     redis.clone(),
                     component_service.clone(),
                     shard_manager.clone(),
@@ -509,8 +521,9 @@ impl CliTestDependencies {
 
             tokio::spawn(
                 async move {
+                    let unique_network_id = Uuid::new_v4().to_string();
                     let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                        Arc::new(DockerPostgresRdb::new().await);
+                        Arc::new(DockerPostgresRdb::new(&unique_network_id).await);
 
                     let component_compilation_service_port = if !compilation_service_disabled {
                         Some(component_compilation_service_grpc_port)
@@ -586,7 +599,7 @@ impl CliTestDependencies {
                 .await
                 .expect("Failed to join.");
 
-        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
             SpawnedWorkerService::new(
                 &build_root.join("golem-worker-service"),
                 &workspace_root.join("golem-worker-service"),
@@ -742,7 +755,7 @@ impl CliTestDependencies {
                 .await
                 .expect("Failed to join.");
 
-        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
             K8sWorkerService::new(
                 &namespace,
                 &routing_type,
@@ -906,7 +919,7 @@ impl CliTestDependencies {
                 .await
                 .expect("Failed to join.");
 
-        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
             K8sWorkerService::new(
                 &namespace,
                 &routing_type,
@@ -1025,7 +1038,7 @@ impl CliTestDependencies {
                     *component_compilation_service_http_port,
                     *component_compilation_service_grpc_port,
                 ));
-                let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
+                let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
                     ProvidedWorkerService::new(
                         worker_service_host.clone(),
                         *worker_service_http_port,
@@ -1187,7 +1200,7 @@ impl TestDependencies for CliTestDependencies {
         self.component_compilation_service.clone()
     }
 
-    fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static> {
+    fn worker_service(&self) -> Arc<dyn WorkerService + 'static> {
         self.worker_service.clone()
     }
 
