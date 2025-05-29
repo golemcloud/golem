@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_definition::http::oas_api_definition::OpenApiHttpApiDefinition;
 use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern;
-use crate::gateway_api_definition::http::{HttpApiDefinitionRequest, RouteRequest};
+use crate::gateway_api_definition::http::{
+    HttpApiDefinitionRequest, OpenApiHttpApiDefinition, RouteRequest,
+};
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
 use crate::gateway_api_definition_transformer::transform_http_api_definition;
 use crate::gateway_binding::SwaggerUiBinding;
@@ -30,6 +31,7 @@ use crate::gateway_security::SecuritySchemeReference;
 use crate::service::gateway::api_definition::ApiDefinitionError;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
 use crate::service::gateway::security_scheme::SecuritySchemeService;
+use crate::service::gateway::BoxConversionContext;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_api_grpc::proto::golem::apidefinition::HttpRoute;
@@ -291,6 +293,7 @@ impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
         http_api_definition: &HttpApiDefinition,
         metadata_dictionary: &ComponentMetadataDictionary,
         namespace: &Namespace,
+        conversion_context: &BoxConversionContext<'_>,
     ) -> Result<Self, RouteCompilationErrors> {
         let mut compiled_routes = vec![];
 
@@ -309,35 +312,38 @@ impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
         };
 
         // Update SwaggerUI routes with actual OpenAPI spec
-        result.update_swagger_ui_openapi_specs();
-
+        result.update_swagger_ui_openapi_specs(conversion_context);
         Ok(result)
     }
 
     /// Updates SwaggerUI routes with the actual OpenAPI specification
-    pub fn update_swagger_ui_openapi_specs(&mut self) {
+    pub fn update_swagger_ui_openapi_specs(
+        &mut self,
+        conversion_context: &BoxConversionContext<'_>,
+    ) {
         // Generate the OpenAPI spec from this compiled definition
-        let openapi_spec_json = match self.generate_openapi_spec_json() {
-            Ok(spec) => spec,
-            Err(_) => {
-                // If we can't generate the spec, keep the boilerplate
-                return;
-            }
-        };
+        let openapi_spec_json = self.generate_openapi_spec_json(conversion_context).ok();
 
         // Update all SwaggerUI routes with the actual OpenAPI spec
         for route in &mut self.routes {
             if let crate::gateway_binding::GatewayBindingCompiled::SwaggerUi(swagger_binding) =
                 &mut route.binding
             {
-                swagger_binding.openapi_spec_json = Some(openapi_spec_json.clone());
+                swagger_binding.openapi_spec_json = openapi_spec_json.clone();
             }
         }
     }
 
     /// Generates the OpenAPI specification JSON for this compiled API definition
-    fn generate_openapi_spec_json(&self) -> Result<String, String> {
-        let openapi = OpenApiHttpApiDefinition::from_compiled_http_api_definition(self)?;
+    fn generate_openapi_spec_json(
+        &self,
+        conversion_context: &BoxConversionContext<'_>,
+    ) -> Result<String, String> {
+        //from_compiled_http_api_definition is an async function, because we need to use ConversionContext
+        //to get component-name from component-id
+        let openapi = futures::executor::block_on(
+            OpenApiHttpApiDefinition::from_compiled_http_api_definition(self, conversion_context),
+        )?;
         serde_json::to_string_pretty(&openapi.0)
             .map_err(|e| format!("Failed to serialize OpenAPI to JSON: {}", e))
     }
@@ -797,21 +803,6 @@ impl ComponentMetadataDictionary {
     }
 }
 
-/// Creates a basic OpenAPI 3.0.0 boilerplate specification
-fn create_boilerplate_openapi_spec() -> String {
-    serde_json::json!({
-        "openapi": "3.0.0",
-        "info": {
-            "title": "API",
-            "version": "1.0.0",
-            "description": "Basic OpenAPI specification"
-        },
-        "paths": {},
-        "components": {}
-    })
-    .to_string()
-}
-
 impl CompiledRoute {
     pub fn get_security_middleware(&self) -> Option<HttpAuthenticationMiddleware> {
         match &self.middlewares {
@@ -933,15 +924,11 @@ impl CompiledRoute {
             }),
 
             GatewayBinding::SwaggerUi => {
-                // Create a basic OpenAPI 3.0.0 boilerplate spec for SwaggerUI
-                let boilerplate_spec = create_boilerplate_openapi_spec();
-
+                // SwaggerUI binding starts with None - will be populated after full compilation
                 Ok(CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
-                    binding: GatewayBindingCompiled::SwaggerUi(
-                        SwaggerUiBinding::update_openapi_spec(boilerplate_spec),
-                    ),
+                    binding: GatewayBindingCompiled::SwaggerUi(SwaggerUiBinding::new()),
                     middlewares: route.middlewares.clone(),
                 })
             }

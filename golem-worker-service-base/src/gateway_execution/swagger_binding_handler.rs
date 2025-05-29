@@ -156,40 +156,42 @@ impl SwaggerBindingHandler for DefaultSwaggerBindingHandler {
         }
 
         // Convert back to JSON
-        let modified_spec_json = serde_json::to_string_pretty(&spec).map_err(|e| {
+        let modified_spec_json = serde_json::to_string(&spec).map_err(|e| {
             SwaggerBindingError::InternalError(format!("Failed to serialize OpenAPI spec: {}", e))
         })?;
 
         // Generate Swagger UI HTML
         let html = format!(
-            r#"
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <title>Swagger UI</title>
-                <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
-                <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-            </head>
-            <body>
-                <div id="swagger-ui"></div>
-                <script>
-                    window.onload = () => {{
-                        const spec = {};
-                        window.ui = SwaggerUIBundle({{
-                            spec: spec,
-                            dom_id: '#swagger-ui',
-                            deepLinking: true,
-                            presets: [
-                                SwaggerUIBundle.presets.apis,
-                                SwaggerUIBundle.SwaggerUIStandalonePreset
-                            ],
-                        }});
-                    }};
-                </script>
-            </body>
-            </html>
-        "#,
+            r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Swagger UI</title>
+    <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script>
+        const spec = {};
+        window.onload = () => {{
+            window.ui = SwaggerUIBundle({{
+                spec: spec,
+                dom_id: '#swagger-ui',
+                deepLinking: true,
+                presets: [
+                    SwaggerUIBundle.presets.apis,
+                    SwaggerUIStandalonePreset
+                ],
+                plugins: [
+                    SwaggerUIBundle.plugins.DownloadUrl
+                ]
+            }});
+        }};
+    </script>
+</body>
+</html>"#,
             modified_spec_json
         );
 

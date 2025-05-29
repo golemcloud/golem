@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use async_trait::async_trait;
 use chrono::Utc;
+use golem_common::model::ComponentId;
 use golem_service_base::auth::DefaultNamespace;
+use golem_service_base::model::ComponentName;
 use golem_worker_service_base::gateway_api_definition::http::api_oas_convert::OpenApiHttpApiDefinitionResponse;
 use golem_worker_service_base::gateway_api_definition::http::{
     AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern,
@@ -23,7 +26,80 @@ use golem_worker_service_base::gateway_binding::{
     gateway_binding_compiled::GatewayBindingCompiled, StaticBinding, SwaggerUiBinding,
 };
 use golem_worker_service_base::gateway_middleware::HttpCors;
+use golem_worker_service_base::service::gateway::{ComponentView, ConversionContext};
 use std::str::FromStr;
+
+// Dummy conversion context for tests
+struct DummyConversionContext;
+
+#[async_trait]
+impl ConversionContext for DummyConversionContext {
+    async fn component_by_name(&self, _name: &ComponentName) -> Result<ComponentView, String> {
+        unimplemented!()
+    }
+
+    async fn component_by_id(&self, component_id: &ComponentId) -> Result<ComponentView, String> {
+        // Return component views based on the component IDs used in tests
+        match component_id.to_string().as_str() {
+            "550e8400-e29b-41d4-a716-446655440000" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("shopping-cart".to_string()),
+                latest_version: 0,
+            }),
+            "550e8400-e29b-41d4-a716-446655440001" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("api-with-cors".to_string()),
+                latest_version: 1,
+            }),
+            "550e8400-e29b-41d4-a716-446655440002" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("swagger-api".to_string()),
+                latest_version: 1,
+            }),
+            "550e8400-e29b-41d4-a716-446655440003" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("test-worker-api".to_string()),
+                latest_version: 1,
+            }),
+            "550e8400-e29b-41d4-a716-446655440004" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("empty-api".to_string()),
+                latest_version: 1,
+            }),
+            "550e8400-e29b-41d4-a716-446655440005" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("simple-echo".to_string()),
+                latest_version: 1,
+            }),
+            "550e8400-e29b-41d4-a716-446655440006" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("todo-list".to_string()),
+                latest_version: 1,
+            }),
+            "550e8400-e29b-41d4-a716-446655440007" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("delay-echo".to_string()),
+                latest_version: 1,
+            }),
+            "550e8400-e29b-41d4-a716-446655440008" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("secure-api".to_string()),
+                latest_version: 1,
+            }),
+            "550e8400-e29b-41d4-a716-446655440009" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("parameter-test-api".to_string()),
+                latest_version: 1,
+            }),
+            "550e8400-e29b-41d4-a716-446655440010" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("comprehensive-types-api".to_string()),
+                latest_version: 1,
+            }),
+            _ => Err(format!("Component not found: {}", component_id)),
+        }
+    }
+}
 
 // Helper function to assert basic OpenAPI properties
 fn assert_basic_openapi_properties(yaml: &serde_yaml::Value, id: &str, version: &str) {
@@ -34,8 +110,8 @@ fn assert_basic_openapi_properties(yaml: &serde_yaml::Value, id: &str, version: 
     assert_eq!(yaml["x-golem-api-definition-version"], version);
 }
 
-#[test]
-fn test_simple_conversion() {
+#[tokio::test]
+async fn test_simple_conversion() {
     // Create a simple CompiledHttpApiDefinition with no routes
     let compiled_api_definition = CompiledHttpApiDefinition {
         id: ApiDefinitionId("shopping-cart".to_string()),
@@ -46,10 +122,15 @@ fn test_simple_conversion() {
         namespace: DefaultNamespace(),
     };
 
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
     // Convert to OpenAPI
     let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
         &compiled_api_definition,
+        &conversion_ctx,
     )
+    .await
     .unwrap();
 
     // Parse the YAML to verify the structure
@@ -66,8 +147,8 @@ fn test_simple_conversion() {
 
 // Test that the conversion works for a CORS preflight route
 // Test cors-preflight is converted to rib valid response string
-#[test]
-fn test_cors_preflight_response_formatting() {
+#[tokio::test]
+async fn test_cors_preflight_response_formatting() {
     // Create a CORS configuration using the constructor
     let cors = HttpCors::new(
         "*",
@@ -96,10 +177,15 @@ fn test_cors_preflight_response_formatting() {
         namespace: DefaultNamespace(),
     };
 
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
     // Convert to OpenAPI
     let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
         &compiled_api_definition,
+        &conversion_ctx,
     )
+    .await
     .unwrap();
 
     // Parse the YAML to verify the structure
@@ -114,14 +200,7 @@ fn test_cors_preflight_response_formatting() {
     // Verify the entire CORS response string
     // The response is properly within path/binding,
     // and converts the cors-preflight data to a string
-    let expected_response = r#"{
-  Access-Control-Allow-Headers: "Content-Type, Authorization",
-  Access-Control-Allow-Methods: "GET, POST, PUT, DELETE, OPTIONS",
-  Access-Control-Allow-Origin: "*",
-  Access-Control-Expose-Headers: "X-Request-ID",
-  Access-Control-Allow-Credentials: true,
-  Access-Control-Max-Age: 8400u64
-}"#;
+    let expected_response = r#"{access-control-allow-origin: "*", access-control-allow-methods: "GET, POST, PUT, DELETE, OPTIONS", access-control-allow-headers: "Content-Type, Authorization", access-control-allow-credentials: "true", access-control-expose-headers: "X-Request-ID", access-control-max-age: 8400: u64}"#;
     assert_eq!(
         cors_binding["response"].as_str().unwrap(),
         expected_response
@@ -141,8 +220,8 @@ fn test_cors_preflight_response_formatting() {
 }
 
 // Test that the conversion works for a swagger-ui binding type
-#[test]
-fn test_swagger_ui_binding() {
+#[tokio::test]
+async fn test_swagger_ui_binding() {
     // Create a compiled route with SwaggerUI binding
     let route = CompiledRoute {
         method: MethodPattern::Get,
@@ -161,10 +240,15 @@ fn test_swagger_ui_binding() {
         namespace: DefaultNamespace(),
     };
 
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
     // Convert to OpenAPI
     let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
         &compiled_api_definition,
+        &conversion_ctx,
     )
+    .await
     .unwrap();
 
     // Parse the YAML to verify the structure
@@ -193,8 +277,8 @@ fn test_swagger_ui_binding() {
 }
 
 // Test basic worker binding with path parameters
-#[test]
-fn test_basic_worker_binding_with_path_parameters() {
+#[tokio::test]
+async fn test_basic_worker_binding_with_path_parameters() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
@@ -277,10 +361,15 @@ fn test_basic_worker_binding_with_path_parameters() {
         namespace: DefaultNamespace(),
     };
 
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
     // Convert to OpenAPI
     let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
         &compiled_api_definition,
+        &conversion_ctx,
     )
+    .await
     .unwrap();
 
     // Parse the YAML to verify the structure
@@ -308,18 +397,15 @@ fn test_basic_worker_binding_with_path_parameters() {
     // Verify binding information
     let binding = &post_op["x-golem-api-gateway-binding"];
     assert_eq!(binding["binding-type"], "default");
-    assert_eq!(
-        binding["component-name"],
-        "550e8400-e29b-41d4-a716-446655440000"
-    );
+    assert_eq!(binding["component-name"], "shopping-cart");
     assert_eq!(binding["component-version"], 0);
     assert_eq!(binding["worker-name"], "\"worker-test\"");
     assert_eq!(binding["response"], "\"{status: 200, body: \"success\"}\"");
 }
 
 // Test for empty routes but with verification of all basic OpenAPI structure
-#[test]
-fn test_empty_api_with_complete_structure_verification() {
+#[tokio::test]
+async fn test_empty_api_with_complete_structure_verification() {
     // Create a simple CompiledHttpApiDefinition with no routes
     let compiled_api_definition = CompiledHttpApiDefinition {
         id: ApiDefinitionId("empty-api".to_string()),
@@ -330,10 +416,15 @@ fn test_empty_api_with_complete_structure_verification() {
         namespace: DefaultNamespace(),
     };
 
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
     // Convert to OpenAPI
     let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
         &compiled_api_definition,
+        &conversion_ctx,
     )
+    .await
     .unwrap();
 
     // Parse the YAML to verify the structure
@@ -375,8 +466,8 @@ fn test_empty_api_with_complete_structure_verification() {
 }
 
 // Test 6: Basic types and record conversion
-#[test]
-fn test_basic_types_and_record_conversion() {
+#[tokio::test]
+async fn test_basic_types_and_record_conversion() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
     use golem_wasm_ast::analysis::{
@@ -597,10 +688,15 @@ fn test_basic_types_and_record_conversion() {
         namespace: DefaultNamespace(),
     };
 
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
     // Convert to OpenAPI
     let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
         &compiled_api_definition,
+        &conversion_ctx,
     )
+    .await
     .unwrap();
 
     // Parse the YAML to verify the structure
@@ -664,8 +760,8 @@ fn test_basic_types_and_record_conversion() {
 }
 
 // Test 7: Complete todo structure with optional and oneOf
-#[test]
-fn test_complete_todo_structure_with_optional_and_oneof() {
+#[tokio::test]
+async fn test_complete_todo_structure_with_optional_and_oneof() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
     use golem_wasm_ast::analysis::{
@@ -846,10 +942,15 @@ fn test_complete_todo_structure_with_optional_and_oneof() {
         namespace: DefaultNamespace(),
     };
 
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
     // Convert to OpenAPI
     let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
         &compiled_api_definition,
+        &conversion_ctx,
     )
+    .await
     .unwrap();
 
     // Parse the YAML to verify the structure
@@ -898,8 +999,8 @@ fn test_complete_todo_structure_with_optional_and_oneof() {
 }
 
 // Test 8: Multiple path parameters (user and time)
-#[test]
-fn test_user_time_conversion() {
+#[tokio::test]
+async fn test_user_time_conversion() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32};
@@ -979,10 +1080,15 @@ fn test_user_time_conversion() {
         namespace: DefaultNamespace(),
     };
 
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
     // Convert to OpenAPI
     let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
         &compiled_api_definition,
+        &conversion_ctx,
     )
+    .await
     .unwrap();
 
     // Parse the YAML to verify the structure
@@ -1017,17 +1123,14 @@ fn test_user_time_conversion() {
     // Verify binding information
     let binding = &post_op["x-golem-api-gateway-binding"];
     assert_eq!(binding["binding-type"], "default");
-    assert_eq!(
-        binding["component-name"],
-        "550e8400-e29b-41d4-a716-446655440000"
-    );
+    assert_eq!(binding["component-name"], "shopping-cart");
     assert_eq!(binding["component-version"], 0);
     assert_eq!(binding["worker-name"], "\"worker-delay\"");
 }
 
 // Test 9: Query parameter conversion
-#[test]
-fn test_query_parameter_conversion() {
+#[tokio::test]
+async fn test_query_parameter_conversion() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32};
@@ -1117,10 +1220,15 @@ fn test_query_parameter_conversion() {
         namespace: DefaultNamespace(),
     };
 
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
     // Convert to OpenAPI
     let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
         &compiled_api_definition,
+        &conversion_ctx,
     )
+    .await
     .unwrap();
 
     // Parse the YAML to verify the structure
@@ -1156,8 +1264,8 @@ fn test_query_parameter_conversion() {
 }
 
 // Test 10: Security conversion
-#[test]
-fn test_security_conversion() {
+#[tokio::test]
+async fn test_security_conversion() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
     use golem_worker_service_base::gateway_binding::{
@@ -1286,10 +1394,15 @@ fn test_security_conversion() {
         namespace: DefaultNamespace(),
     };
 
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
     // Convert to OpenAPI
     let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
         &compiled_api_definition,
+        &conversion_ctx,
     )
+    .await
     .unwrap();
 
     // Parse the YAML to verify the structure
@@ -1336,8 +1449,8 @@ fn test_security_conversion() {
 }
 
 // Test 11: Variant output structure
-#[test]
-fn test_variant_output_structure() {
+#[tokio::test]
+async fn test_variant_output_structure() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
     use golem_wasm_ast::analysis::{
@@ -1440,10 +1553,15 @@ fn test_variant_output_structure() {
         namespace: DefaultNamespace(),
     };
 
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
     // Convert to OpenAPI
     let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
         &compiled_api_definition,
+        &conversion_ctx,
     )
+    .await
     .unwrap();
 
     // Parse the YAML to verify the structure
@@ -1491,8 +1609,8 @@ fn test_variant_output_structure() {
 }
 
 // Test 12: Complete integration test with full YAML comparison
-#[test]
-fn test_oas_conversion_full_structure_shopping_cart() {
+#[tokio::test]
+async fn test_oas_conversion_full_structure_shopping_cart() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
     use golem_wasm_ast::analysis::{
@@ -1636,10 +1754,15 @@ fn test_oas_conversion_full_structure_shopping_cart() {
         namespace: DefaultNamespace(),
     };
 
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
     // Convert to OpenAPI
     let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
         &compiled_api_definition,
+        &conversion_ctx,
     )
+    .await
     .unwrap();
 
     // Expected complete YAML structure (updated to match actual implementation)
@@ -1722,7 +1845,7 @@ paths:
                   - quantity
       x-golem-api-gateway-binding:
         binding-type: default
-        component-name: 550e8400-e29b-41d4-a716-446655440000
+        component-name: shopping-cart
         component-version: 0
         response: "\"let result = golem:shoppingcart/api.{get-cart-contents}();\n{status: 200: u64, body: result}\""
         worker-name: "\"worker-${user}\""
@@ -1735,14 +1858,1553 @@ paths:
       x-golem-api-gateway-binding:
         binding-type: cors-preflight
         response: |-
-          {
-            Access-Control-Allow-Headers: "Content-Type, Authorization",
-            Access-Control-Allow-Methods: "GET, POST, PUT, DELETE, OPTIONS",
-            Access-Control-Allow-Origin: "*"
-          }
+          {access-control-allow-origin: "*", access-control-allow-methods: "GET, POST, PUT, DELETE, OPTIONS", access-control-allow-headers: "Content-Type, Authorization"}
 components: {}
 x-golem-api-definition-id: shopping-cart
 x-golem-api-definition-version: 0.0.1
+"#;
+
+    // Parse both YAMLs for comparison
+    let actual_yaml: serde_yaml::Value = serde_yaml::from_str(&openapi_response.openapi_yaml)
+        .expect("Failed to parse actual OpenAPI YAML");
+    let expected_yaml: serde_yaml::Value =
+        serde_yaml::from_str(expected_yaml).expect("Failed to parse expected OpenAPI YAML");
+
+    // Single assert comparing the complete structure
+    assert_eq!(actual_yaml, expected_yaml);
+}
+
+// Test 13: Path and Query Parameter Combinations Test
+#[tokio::test]
+async fn test_path_query_parameter_combinations() {
+    use golem_common::base_model::ComponentId;
+    use golem_common::model::component::VersionedComponentId;
+    use golem_wasm_ast::analysis::{
+        AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32, TypeU64,
+    };
+    use golem_worker_service_base::gateway_binding::{
+        ResponseMappingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
+    };
+    use rib::{Expr, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo};
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
+    let mut routes = Vec::new();
+
+    // Helper function to create path input
+    let create_path_input = |path_fields: Vec<(&str, AnalysedType)>| -> RibInputTypeInfo {
+        let mut types = HashMap::new();
+        let path_record = AnalysedType::Record(TypeRecord {
+            fields: path_fields
+                .into_iter()
+                .map(|(name, typ)| NameTypePair {
+                    name: name.to_string(),
+                    typ,
+                })
+                .collect(),
+        });
+        let request_record = AnalysedType::Record(TypeRecord {
+            fields: vec![NameTypePair {
+                name: "path".to_string(),
+                typ: path_record,
+            }],
+        });
+        types.insert("request".to_string(), request_record);
+        RibInputTypeInfo { types }
+    };
+
+    // Helper function to create query input
+    let create_query_input = |query_fields: Vec<(&str, AnalysedType)>| -> RibInputTypeInfo {
+        let mut types = HashMap::new();
+        let query_record = AnalysedType::Record(TypeRecord {
+            fields: query_fields
+                .into_iter()
+                .map(|(name, typ)| NameTypePair {
+                    name: name.to_string(),
+                    typ,
+                })
+                .collect(),
+        });
+        let request_record = AnalysedType::Record(TypeRecord {
+            fields: vec![NameTypePair {
+                name: "query".to_string(),
+                typ: query_record,
+            }],
+        });
+        types.insert("request".to_string(), request_record);
+        RibInputTypeInfo { types }
+    };
+
+    // Route 1: Path parameters only (user in worker name, user_id in response)
+    let path_input_worker = create_path_input(vec![("user", AnalysedType::Str(TypeStr))]);
+    let path_input_response = create_path_input(vec![("user_id", AnalysedType::U32(TypeU32))]);
+
+    let route1 = CompiledRoute {
+        method: MethodPattern::Get,
+        path: AllPathPatterns::from_str("/api/v1/{user}/profile/{user_id}").unwrap(),
+        binding: GatewayBindingCompiled::Worker(WorkerBindingCompiled {
+            component_id: VersionedComponentId {
+                component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440001")
+                    .unwrap(),
+                version: 1,
+            },
+            worker_name_compiled: Some(WorkerNameCompiled {
+                worker_name: Expr::literal("worker-${user}"),
+                compiled_worker_name: RibByteCode::default(),
+                rib_input_type_info: path_input_worker,
+            }),
+            idempotency_key_compiled: None,
+            response_compiled: ResponseMappingCompiled {
+                response_mapping_expr: Expr::literal(
+                    "{status: 200, body: \"User profile for ${user_id}\"}",
+                ),
+                response_mapping_compiled: RibByteCode::default(),
+                rib_input: path_input_response,
+                worker_calls: None,
+                rib_output: Some(RibOutputTypeInfo {
+                    analysed_type: AnalysedType::Record(TypeRecord {
+                        fields: vec![
+                            NameTypePair {
+                                name: "status".to_string(),
+                                typ: AnalysedType::U64(TypeU64),
+                            },
+                            NameTypePair {
+                                name: "body".to_string(),
+                                typ: AnalysedType::Str(TypeStr),
+                            },
+                        ],
+                    }),
+                }),
+            },
+            invocation_context_compiled: None,
+        }),
+        middlewares: None,
+    };
+    routes.push(route1);
+
+    // Route 2: Query parameters only (limit and offset)
+    let query_input = create_query_input(vec![
+        ("limit", AnalysedType::U32(TypeU32)),
+        ("offset", AnalysedType::U32(TypeU32)),
+    ]);
+
+    let route2 = CompiledRoute {
+        method: MethodPattern::Get,
+        path: AllPathPatterns::from_str("/api/v1/items").unwrap(),
+        binding: GatewayBindingCompiled::Worker(WorkerBindingCompiled {
+            component_id: VersionedComponentId {
+                component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440002")
+                    .unwrap(),
+                version: 1,
+            },
+            worker_name_compiled: Some(WorkerNameCompiled {
+                worker_name: Expr::literal("item-worker"),
+                compiled_worker_name: RibByteCode::default(),
+                rib_input_type_info: RibInputTypeInfo {
+                    types: HashMap::new(),
+                },
+            }),
+            idempotency_key_compiled: None,
+            response_compiled: ResponseMappingCompiled {
+                response_mapping_expr: Expr::literal(
+                    "{status: 200, body: items.slice(${offset}, ${offset} + ${limit})}",
+                ),
+                response_mapping_compiled: RibByteCode::default(),
+                rib_input: query_input,
+                worker_calls: None,
+                rib_output: Some(RibOutputTypeInfo {
+                    analysed_type: AnalysedType::Record(TypeRecord {
+                        fields: vec![
+                            NameTypePair {
+                                name: "status".to_string(),
+                                typ: AnalysedType::U64(TypeU64),
+                            },
+                            NameTypePair {
+                                name: "body".to_string(),
+                                typ: AnalysedType::Str(TypeStr),
+                            },
+                        ],
+                    }),
+                }),
+            },
+            invocation_context_compiled: None,
+        }),
+        middlewares: None,
+    };
+    routes.push(route2);
+
+    // Route 3: Both path and query parameters
+    let combined_input_response = create_query_input(vec![
+        ("search", AnalysedType::Str(TypeStr)),
+        ("category", AnalysedType::Str(TypeStr)),
+    ]);
+
+    let route3 = CompiledRoute {
+        method: MethodPattern::Get,
+        path: AllPathPatterns::from_str("/api/v1/{user}/search").unwrap(),
+        binding: GatewayBindingCompiled::Worker(WorkerBindingCompiled {
+            component_id: VersionedComponentId {
+                component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440003")
+                    .unwrap(),
+                version: 1,
+            },
+            worker_name_compiled: Some(WorkerNameCompiled {
+                worker_name: Expr::literal("search-worker-${user}"),
+                compiled_worker_name: RibByteCode::default(),
+                rib_input_type_info: create_path_input(vec![("user", AnalysedType::Str(TypeStr))]),
+            }),
+            idempotency_key_compiled: None,
+            response_compiled: ResponseMappingCompiled {
+                response_mapping_expr: Expr::literal(
+                    "{status: 200, body: search(${search}, ${category})}",
+                ),
+                response_mapping_compiled: RibByteCode::default(),
+                rib_input: combined_input_response,
+                worker_calls: None,
+                rib_output: Some(RibOutputTypeInfo {
+                    analysed_type: AnalysedType::Record(TypeRecord {
+                        fields: vec![
+                            NameTypePair {
+                                name: "status".to_string(),
+                                typ: AnalysedType::U64(TypeU64),
+                            },
+                            NameTypePair {
+                                name: "body".to_string(),
+                                typ: AnalysedType::Str(TypeStr),
+                            },
+                        ],
+                    }),
+                }),
+            },
+            invocation_context_compiled: None,
+        }),
+        middlewares: None,
+    };
+    routes.push(route3);
+
+    // Route 4: No parameters (for completeness)
+    let route4 = CompiledRoute {
+        method: MethodPattern::Get,
+        path: AllPathPatterns::from_str("/api/v1/health").unwrap(),
+        binding: GatewayBindingCompiled::Worker(WorkerBindingCompiled {
+            component_id: VersionedComponentId {
+                component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440004")
+                    .unwrap(),
+                version: 1,
+            },
+            worker_name_compiled: Some(WorkerNameCompiled {
+                worker_name: Expr::literal("health-worker"),
+                compiled_worker_name: RibByteCode::default(),
+                rib_input_type_info: RibInputTypeInfo {
+                    types: HashMap::new(),
+                },
+            }),
+            idempotency_key_compiled: None,
+            response_compiled: ResponseMappingCompiled {
+                response_mapping_expr: Expr::literal("{status: 200, body: \"OK\"}"),
+                response_mapping_compiled: RibByteCode::default(),
+                rib_input: RibInputTypeInfo {
+                    types: HashMap::new(),
+                },
+                worker_calls: None,
+                rib_output: Some(RibOutputTypeInfo {
+                    analysed_type: AnalysedType::Record(TypeRecord {
+                        fields: vec![
+                            NameTypePair {
+                                name: "status".to_string(),
+                                typ: AnalysedType::U64(TypeU64),
+                            },
+                            NameTypePair {
+                                name: "body".to_string(),
+                                typ: AnalysedType::Str(TypeStr),
+                            },
+                        ],
+                    }),
+                }),
+            },
+            invocation_context_compiled: None,
+        }),
+        middlewares: None,
+    };
+    routes.push(route4);
+
+    // Create API definition
+    let compiled_api_definition = CompiledHttpApiDefinition {
+        id: ApiDefinitionId("parameter-test-api".to_string()),
+        version: ApiVersion("1.0.0".to_string()),
+        routes,
+        draft: false,
+        created_at: Utc::now(),
+        namespace: DefaultNamespace(),
+    };
+
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
+    // Convert to OpenAPI
+    let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
+        &compiled_api_definition,
+        &conversion_ctx,
+    )
+    .await
+    .unwrap();
+
+    let expected_yaml = r#"
+    openapi: 3.0.0
+    info:
+      title: parameter-test-api
+      version: 1.0.0
+    paths:
+      /api/v1/health:
+        get:
+          responses:
+            default:
+              description: OK
+              content:
+                application/json:
+                  schema:
+                    type: string
+            '200':
+              description: OK
+              content:
+                application/json:
+                  schema:
+                    type: string
+          x-golem-api-gateway-binding:
+            binding-type: default
+            component-name: empty-api
+            component-version: 1
+            response: '"{status: 200, body: "OK"}"'
+            worker-name: '"health-worker"'
+      /api/v1/items:
+        get:
+          parameters:
+          - in: query
+            name: limit
+            description: 'Query parameter: limit'
+            required: true
+            schema:
+              type: integer
+              format: int32
+              minimum: 0
+            explode: false
+            style: form
+            allowEmptyValue: false
+          - in: query
+            name: offset
+            description: 'Query parameter: offset'
+            required: true
+            schema:
+              type: integer
+              format: int32
+              minimum: 0
+            explode: false
+            style: form
+            allowEmptyValue: false
+          responses:
+            default:
+              description: OK
+              content:
+                application/json:
+                  schema:
+                    type: string
+            '200':
+              description: OK
+              content:
+                application/json:
+                  schema:
+                    type: string
+          x-golem-api-gateway-binding:
+            binding-type: default
+            component-name: swagger-api
+            component-version: 1
+            response: '"{status: 200, body: items.slice(${offset}, ${offset} + ${limit})}"'
+            worker-name: '"item-worker"'
+      /api/v1/{user}/profile/{user_id}:
+        get:
+          parameters:
+          - in: path
+            name: user
+            description: 'Path parameter: user'
+            required: true
+            schema:
+              type: string
+            explode: false
+            style: simple
+          - in: path
+            name: user_id
+            description: 'Path parameter: user_id'
+            required: true
+            schema:
+              type: integer
+              format: int32
+              minimum: 0
+            explode: false
+            style: simple
+          responses:
+            default:
+              description: OK
+              content:
+                application/json:
+                  schema:
+                    type: string
+            '200':
+              description: OK
+              content:
+                application/json:
+                  schema:
+                    type: string
+          x-golem-api-gateway-binding:
+            binding-type: default
+            component-name: api-with-cors
+            component-version: 1
+            response: '"{status: 200, body: "User profile for ${user_id}"}"'
+            worker-name: '"worker-${user}"'
+      /api/v1/{user}/search:
+        get:
+          parameters:
+          - in: path
+            name: user
+            description: 'Path parameter: user'
+            required: true
+            schema:
+              type: string
+            explode: false
+            style: simple
+          - in: query
+            name: search
+            description: 'Query parameter: search'
+            required: true
+            schema:
+              type: string
+            explode: false
+            style: form
+            allowEmptyValue: false
+          - in: query
+            name: category
+            description: 'Query parameter: category'
+            required: true
+            schema:
+              type: string
+            explode: false
+            style: form
+            allowEmptyValue: false
+          responses:
+            default:
+              description: OK
+              content:
+                application/json:
+                  schema:
+                    type: string
+            '200':
+              description: OK
+              content:
+                application/json:
+                  schema:
+                    type: string
+          x-golem-api-gateway-binding:
+            binding-type: default
+            component-name: test-worker-api
+            component-version: 1
+            response: '"{status: 200, body: search(${search}, ${category})}"'
+            worker-name: '"search-worker-${user}"'
+    components: {}
+    x-golem-api-definition-id: parameter-test-api
+    x-golem-api-definition-version: 1.0.0
+    "#;
+
+    // Parse both YAMLs for comparison
+    let actual_yaml: serde_yaml::Value = serde_yaml::from_str(&openapi_response.openapi_yaml)
+        .expect("Failed to parse actual OpenAPI YAML");
+    let expected_yaml: serde_yaml::Value =
+        serde_yaml::from_str(expected_yaml).expect("Failed to parse expected OpenAPI YAML");
+
+    // Single assert comparing the complete structure
+    assert_eq!(actual_yaml, expected_yaml);
+}
+
+// Test 14: Comprehensive AnalysedType Coverage Test (10 Routes)
+#[tokio::test]
+async fn test_comprehensive_analysed_type_coverage() {
+    use golem_common::base_model::ComponentId;
+    use golem_common::model::component::VersionedComponentId;
+    use golem_wasm_ast::analysis::{
+        AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF32,
+        TypeF64, TypeFlags, TypeList, TypeOption, TypeRecord, TypeResult, TypeS32, TypeS64,
+        TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
+    };
+    use golem_worker_service_base::gateway_binding::{
+        ResponseMappingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
+    };
+    use rib::{Expr, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo};
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
+    let mut routes = Vec::new();
+
+    // Helper function to create a worker binding with given types
+    let create_worker_binding = |component_id: &str,
+                                 version: u64,
+                                 request_type: Option<AnalysedType>,
+                                 response_type: AnalysedType|
+     -> WorkerBindingCompiled {
+        let request_input = if let Some(req_type) = request_type {
+            let mut types = HashMap::new();
+            let body_record = AnalysedType::Record(TypeRecord {
+                fields: vec![NameTypePair {
+                    name: "input".to_string(),
+                    typ: req_type,
+                }],
+            });
+            let request_record = AnalysedType::Record(TypeRecord {
+                fields: vec![NameTypePair {
+                    name: "body".to_string(),
+                    typ: body_record,
+                }],
+            });
+            types.insert("request".to_string(), request_record);
+            RibInputTypeInfo { types }
+        } else {
+            RibInputTypeInfo {
+                types: HashMap::new(),
+            }
+        };
+
+        WorkerBindingCompiled {
+            component_id: VersionedComponentId {
+                component_id: ComponentId::from_str(component_id).unwrap(),
+                version,
+            },
+            worker_name_compiled: Some(WorkerNameCompiled {
+                worker_name: Expr::literal("type-test-worker"),
+                compiled_worker_name: RibByteCode::default(),
+                rib_input_type_info: RibInputTypeInfo {
+                    types: HashMap::new(),
+                },
+            }),
+            idempotency_key_compiled: None,
+            response_compiled: ResponseMappingCompiled {
+                response_mapping_expr: Expr::literal("{status: 201, body: result}"),
+                response_mapping_compiled: RibByteCode::default(),
+                rib_input: request_input,
+                worker_calls: None,
+                rib_output: Some(RibOutputTypeInfo {
+                    analysed_type: AnalysedType::Record(TypeRecord {
+                        fields: vec![
+                            NameTypePair {
+                                name: "status".to_string(),
+                                typ: AnalysedType::U64(TypeU64),
+                            },
+                            NameTypePair {
+                                name: "body".to_string(),
+                                typ: response_type,
+                            },
+                        ],
+                    }),
+                }),
+            },
+            invocation_context_compiled: None,
+        }
+    };
+
+    // Route 1: Primitive types (boolean, integers, floats, string, char)
+    routes.push(CompiledRoute {
+        method: MethodPattern::Post,
+        path: AllPathPatterns::from_str("/types/primitives").unwrap(),
+        binding: GatewayBindingCompiled::Worker(create_worker_binding(
+            "550e8400-e29b-41d4-a716-446655440001",
+            1,
+            Some(AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "boolean_val".to_string(),
+                        typ: AnalysedType::Bool(TypeBool),
+                    },
+                    NameTypePair {
+                        name: "u32_val".to_string(),
+                        typ: AnalysedType::U32(TypeU32),
+                    },
+                    NameTypePair {
+                        name: "s64_val".to_string(),
+                        typ: AnalysedType::S64(TypeS64),
+                    },
+                    NameTypePair {
+                        name: "f64_val".to_string(),
+                        typ: AnalysedType::F64(TypeF64),
+                    },
+                    NameTypePair {
+                        name: "string_val".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                    NameTypePair {
+                        name: "char_val".to_string(),
+                        typ: AnalysedType::Chr(TypeChr),
+                    },
+                ],
+            })),
+            AnalysedType::Bool(TypeBool),
+        )),
+        middlewares: None,
+    });
+
+    // Route 2: Collections (list, tuple, option)
+    routes.push(CompiledRoute {
+        method: MethodPattern::Post,
+        path: AllPathPatterns::from_str("/types/collections").unwrap(),
+        binding: GatewayBindingCompiled::Worker(create_worker_binding(
+            "550e8400-e29b-41d4-a716-446655440002",
+            1,
+            Some(AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "list_val".to_string(),
+                        typ: AnalysedType::List(TypeList {
+                            inner: Box::new(AnalysedType::Str(TypeStr)),
+                        }),
+                    },
+                    NameTypePair {
+                        name: "tuple_val".to_string(),
+                        typ: AnalysedType::Tuple(TypeTuple {
+                            items: vec![AnalysedType::Str(TypeStr), AnalysedType::U32(TypeU32)],
+                        }),
+                    },
+                    NameTypePair {
+                        name: "optional_val".to_string(),
+                        typ: AnalysedType::Option(TypeOption {
+                            inner: Box::new(AnalysedType::Str(TypeStr)),
+                        }),
+                    },
+                ],
+            })),
+            AnalysedType::List(TypeList {
+                inner: Box::new(AnalysedType::U32(TypeU32)),
+            }),
+        )),
+        middlewares: None,
+    });
+
+    // Route 3: Record type
+    routes.push(CompiledRoute {
+        method: MethodPattern::Post,
+        path: AllPathPatterns::from_str("/types/record").unwrap(),
+        binding: GatewayBindingCompiled::Worker(create_worker_binding(
+            "550e8400-e29b-41d4-a716-446655440003",
+            1,
+            Some(AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "id".to_string(),
+                        typ: AnalysedType::U32(TypeU32),
+                    },
+                    NameTypePair {
+                        name: "name".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                    NameTypePair {
+                        name: "active".to_string(),
+                        typ: AnalysedType::Bool(TypeBool),
+                    },
+                ],
+            })),
+            AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "result_id".to_string(),
+                        typ: AnalysedType::U64(TypeU64),
+                    },
+                    NameTypePair {
+                        name: "message".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                ],
+            }),
+        )),
+        middlewares: None,
+    });
+
+    // Route 4: Enum and Flags types
+    routes.push(CompiledRoute {
+        method: MethodPattern::Post,
+        path: AllPathPatterns::from_str("/types/enum-flags").unwrap(),
+        binding: GatewayBindingCompiled::Worker(create_worker_binding(
+            "550e8400-e29b-41d4-a716-446655440004",
+            1,
+            Some(AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "color".to_string(),
+                        typ: AnalysedType::Enum(TypeEnum {
+                            cases: vec!["red".to_string(), "green".to_string(), "blue".to_string()],
+                        }),
+                    },
+                    NameTypePair {
+                        name: "permissions".to_string(),
+                        typ: AnalysedType::Flags(TypeFlags {
+                            names: vec![
+                                "read".to_string(),
+                                "write".to_string(),
+                                "execute".to_string(),
+                            ],
+                        }),
+                    },
+                ],
+            })),
+            AnalysedType::Enum(TypeEnum {
+                cases: vec![
+                    "success".to_string(),
+                    "warning".to_string(),
+                    "error".to_string(),
+                ],
+            }),
+        )),
+        middlewares: None,
+    });
+
+    // Route 5: Result type
+    routes.push(CompiledRoute {
+        method: MethodPattern::Post,
+        path: AllPathPatterns::from_str("/types/result").unwrap(),
+        binding: GatewayBindingCompiled::Worker(create_worker_binding(
+            "550e8400-e29b-41d4-a716-446655440005",
+            1,
+            Some(AnalysedType::Result(TypeResult {
+                ok: Some(Box::new(AnalysedType::Str(TypeStr))),
+                err: Some(Box::new(AnalysedType::Str(TypeStr))),
+            })),
+            AnalysedType::Result(TypeResult {
+                ok: Some(Box::new(AnalysedType::U64(TypeU64))),
+                err: Some(Box::new(AnalysedType::Str(TypeStr))),
+            }),
+        )),
+        middlewares: None,
+    });
+
+    // Route 6: Variant type
+    routes.push(CompiledRoute {
+        method: MethodPattern::Post,
+        path: AllPathPatterns::from_str("/types/variant").unwrap(),
+        binding: GatewayBindingCompiled::Worker(create_worker_binding(
+            "550e8400-e29b-41d4-a716-446655440006",
+            1,
+            Some(AnalysedType::Variant(TypeVariant {
+                cases: vec![
+                    NameOptionTypePair {
+                        name: "text".to_string(),
+                        typ: Some(AnalysedType::Str(TypeStr)),
+                    },
+                    NameOptionTypePair {
+                        name: "number".to_string(),
+                        typ: Some(AnalysedType::U32(TypeU32)),
+                    },
+                    NameOptionTypePair {
+                        name: "flag".to_string(),
+                        typ: None,
+                    },
+                ],
+            })),
+            AnalysedType::Variant(TypeVariant {
+                cases: vec![
+                    NameOptionTypePair {
+                        name: "success".to_string(),
+                        typ: Some(AnalysedType::Str(TypeStr)),
+                    },
+                    NameOptionTypePair {
+                        name: "error".to_string(),
+                        typ: Some(AnalysedType::Str(TypeStr)),
+                    },
+                ],
+            }),
+        )),
+        middlewares: None,
+    });
+
+    // Route 7: Complex nested type
+    routes.push(CompiledRoute {
+        method: MethodPattern::Post,
+        path: AllPathPatterns::from_str("/types/complex").unwrap(),
+        binding: GatewayBindingCompiled::Worker(create_worker_binding(
+            "550e8400-e29b-41d4-a716-446655440007",
+            1,
+            Some(AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "optional_list".to_string(),
+                        typ: AnalysedType::Option(TypeOption {
+                            inner: Box::new(AnalysedType::List(TypeList {
+                                inner: Box::new(AnalysedType::Str(TypeStr)),
+                            })),
+                        }),
+                    },
+                    NameTypePair {
+                        name: "result_record".to_string(),
+                        typ: AnalysedType::Result(TypeResult {
+                            ok: Some(Box::new(AnalysedType::Record(TypeRecord {
+                                fields: vec![NameTypePair {
+                                    name: "value".to_string(),
+                                    typ: AnalysedType::U32(TypeU32),
+                                }],
+                            }))),
+                            err: Some(Box::new(AnalysedType::Str(TypeStr))),
+                        }),
+                    },
+                ],
+            })),
+            AnalysedType::List(TypeList {
+                inner: Box::new(AnalysedType::Record(TypeRecord {
+                    fields: vec![
+                        NameTypePair {
+                            name: "id".to_string(),
+                            typ: AnalysedType::U64(TypeU64),
+                        },
+                        NameTypePair {
+                            name: "status".to_string(),
+                            typ: AnalysedType::Enum(TypeEnum {
+                                cases: vec!["pending".to_string(), "completed".to_string()],
+                            }),
+                        },
+                    ],
+                })),
+            }),
+        )),
+        middlewares: None,
+    });
+
+    // Route 8: Different number formats
+    routes.push(CompiledRoute {
+        method: MethodPattern::Post,
+        path: AllPathPatterns::from_str("/types/numbers").unwrap(),
+        binding: GatewayBindingCompiled::Worker(create_worker_binding(
+            "550e8400-e29b-41d4-a716-446655440008",
+            1,
+            Some(AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "s32_val".to_string(),
+                        typ: AnalysedType::S32(TypeS32),
+                    },
+                    NameTypePair {
+                        name: "f32_val".to_string(),
+                        typ: AnalysedType::F32(TypeF32),
+                    },
+                ],
+            })),
+            AnalysedType::F32(TypeF32),
+        )),
+        middlewares: None,
+    });
+
+    // Route 9: Array response
+    routes.push(CompiledRoute {
+        method: MethodPattern::Post,
+        path: AllPathPatterns::from_str("/types/array-response").unwrap(),
+        binding: GatewayBindingCompiled::Worker(create_worker_binding(
+            "550e8400-e29b-41d4-a716-446655440009",
+            1,
+            Some(AnalysedType::Str(TypeStr)),
+            AnalysedType::List(TypeList {
+                inner: Box::new(AnalysedType::Record(TypeRecord {
+                    fields: vec![
+                        NameTypePair {
+                            name: "name".to_string(),
+                            typ: AnalysedType::Str(TypeStr),
+                        },
+                        NameTypePair {
+                            name: "count".to_string(),
+                            typ: AnalysedType::U32(TypeU32),
+                        },
+                    ],
+                })),
+            }),
+        )),
+        middlewares: None,
+    });
+
+    // Route 10: GET without request body
+    routes.push(CompiledRoute {
+        method: MethodPattern::Get,
+        path: AllPathPatterns::from_str("/types/info").unwrap(),
+        binding: GatewayBindingCompiled::Worker(create_worker_binding(
+            "550e8400-e29b-41d4-a716-446655440010",
+            1,
+            None, // No request body
+            AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "api_version".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                    NameTypePair {
+                        name: "supported_types".to_string(),
+                        typ: AnalysedType::List(TypeList {
+                            inner: Box::new(AnalysedType::Str(TypeStr)),
+                        }),
+                    },
+                ],
+            }),
+        )),
+        middlewares: None,
+    });
+
+    // Create API definition
+    let compiled_api_definition = CompiledHttpApiDefinition {
+        id: ApiDefinitionId("comprehensive-types-api".to_string()),
+        version: ApiVersion("2.0.0".to_string()),
+        routes,
+        draft: false,
+        created_at: Utc::now(),
+        namespace: DefaultNamespace(),
+    };
+
+    // Create dummy conversion context
+    let conversion_ctx = DummyConversionContext.boxed();
+
+    // Convert to OpenAPI
+    let openapi_response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
+        &compiled_api_definition,
+        &conversion_ctx,
+    )
+    .await
+    .unwrap();
+
+    // Expected complete YAML structure
+    let expected_yaml = r#"
+openapi: 3.0.0
+info:
+  title: comprehensive-types-api
+  version: 2.0.0
+paths:
+  /types/array-response:
+    post:
+      requestBody:
+        description: Request payload
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: string
+              required:
+              - input
+        required: true
+      responses:
+        default:
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    count:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                  required:
+                  - name
+                  - count
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    count:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                  required:
+                  - name
+                  - count
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: parameter-test-api
+        component-version: 1
+        response: '"{status: 201, body: result}"'
+        worker-name: '"type-test-worker"'
+  /types/collections:
+    post:
+      requestBody:
+        description: Request payload
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+                  properties:
+                    list_val:
+                      type: array
+                      items:
+                        type: string
+                    tuple_val:
+                      type: array
+                      description: Tuple type
+                      items:
+                        type: object
+                      minItems: 2
+                      maxItems: 2
+                    optional_val:
+                      type: string
+                      nullable: true
+                  required:
+                  - list_val
+                  - tuple_val
+              required:
+              - input
+        required: true
+      responses:
+        default:
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: integer
+                  format: int32
+                  minimum: 0
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: integer
+                  format: int32
+                  minimum: 0
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: swagger-api
+        component-version: 1
+        response: '"{status: 201, body: result}"'
+        worker-name: '"type-test-worker"'
+  /types/complex:
+    post:
+      requestBody:
+        description: Request payload
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+                  properties:
+                    optional_list:
+                      type: array
+                      nullable: true
+                      items:
+                        type: string
+                    result_record:
+                      oneOf:
+                      - type: object
+                        properties:
+                          ok:
+                            type: object
+                            properties:
+                              value:
+                                type: integer
+                                format: int32
+                                minimum: 0
+                            required:
+                            - value
+                        required:
+                        - ok
+                      - type: object
+                        properties:
+                          err:
+                            type: string
+                        required:
+                        - err
+                  required:
+                  - result_record
+              required:
+              - input
+        required: true
+      responses:
+        default:
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                    status:
+                      type: string
+                      enum:
+                      - pending
+                      - completed
+                  required:
+                  - id
+                  - status
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                    status:
+                      type: string
+                      enum:
+                      - pending
+                      - completed
+                  required:
+                  - id
+                  - status
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: delay-echo
+        component-version: 1
+        response: '"{status: 201, body: result}"'
+        worker-name: '"type-test-worker"'
+  /types/enum-flags:
+    post:
+      requestBody:
+        description: Request payload
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+                  properties:
+                    color:
+                      type: string
+                      enum:
+                      - red
+                      - green
+                      - blue
+                    permissions:
+                      description: Flags type - array of flag names
+                      type: array
+                      items:
+                        type: string
+                        enum:
+                        - read
+                        - write
+                        - execute
+                      minItems: 0
+                      maxItems: 3
+                      uniqueItems: true
+                  required:
+                  - color
+                  - permissions
+              required:
+              - input
+        required: true
+      responses:
+        default:
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: string
+                enum:
+                - success
+                - warning
+                - error
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: string
+                enum:
+                - success
+                - warning
+                - error
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: empty-api
+        component-version: 1
+        response: '"{status: 201, body: result}"'
+        worker-name: '"type-test-worker"'
+  /types/info:
+    get:
+      responses:
+        default:
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  api_version:
+                    type: string
+                  supported_types:
+                    type: array
+                    items:
+                      type: string
+                required:
+                - api_version
+                - supported_types
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  api_version:
+                    type: string
+                  supported_types:
+                    type: array
+                    items:
+                      type: string
+                required:
+                - api_version
+                - supported_types
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: comprehensive-types-api
+        component-version: 1
+        response: '"{status: 201, body: result}"'
+        worker-name: '"type-test-worker"'
+  /types/numbers:
+    post:
+      requestBody:
+        description: Request payload
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+                  properties:
+                    s32_val:
+                      type: integer
+                      format: int32
+                    f32_val:
+                      type: number
+                      format: float
+                  required:
+                  - s32_val
+                  - f32_val
+              required:
+              - input
+        required: true
+      responses:
+        default:
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: number
+                format: float
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: number
+                format: float
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: secure-api
+        component-version: 1
+        response: '"{status: 201, body: result}"'
+        worker-name: '"type-test-worker"'
+  /types/primitives:
+    post:
+      requestBody:
+        description: Request payload
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+                  properties:
+                    boolean_val:
+                      type: boolean
+                    u32_val:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                    s64_val:
+                      type: integer
+                      format: int64
+                    f64_val:
+                      type: number
+                      format: double
+                    string_val:
+                      type: string
+                    char_val:
+                      description: Unicode character
+                      type: string
+                      pattern: ^.{1}$
+                      minLength: 1
+                      maxLength: 1
+                  required:
+                  - boolean_val
+                  - u32_val
+                  - s64_val
+                  - f64_val
+                  - string_val
+                  - char_val
+              required:
+              - input
+        required: true
+      responses:
+        default:
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: boolean
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: boolean
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: api-with-cors
+        component-version: 1
+        response: '"{status: 201, body: result}"'
+        worker-name: '"type-test-worker"'
+  /types/record:
+    post:
+      requestBody:
+        description: Request payload
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                    name:
+                      type: string
+                    active:
+                      type: boolean
+                  required:
+                  - id
+                  - name
+                  - active
+              required:
+              - input
+        required: true
+      responses:
+        default:
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result_id:
+                    type: integer
+                    format: int64
+                    minimum: 0
+                  message:
+                    type: string
+                required:
+                - result_id
+                - message
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result_id:
+                    type: integer
+                    format: int64
+                    minimum: 0
+                  message:
+                    type: string
+                required:
+                - result_id
+                - message
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: test-worker-api
+        component-version: 1
+        response: '"{status: 201, body: result}"'
+        worker-name: '"type-test-worker"'
+  /types/result:
+    post:
+      requestBody:
+        description: Request payload
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  oneOf:
+                  - type: object
+                    properties:
+                      ok:
+                        type: string
+                    required:
+                    - ok
+                  - type: object
+                    properties:
+                      err:
+                        type: string
+                    required:
+                    - err
+              required:
+              - input
+        required: true
+      responses:
+        default:
+          description: Created
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - type: object
+                  properties:
+                    ok:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                  required:
+                  - ok
+                - type: object
+                  properties:
+                    err:
+                      type: string
+                  required:
+                  - err
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - type: object
+                  properties:
+                    ok:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                  required:
+                  - ok
+                - type: object
+                  properties:
+                    err:
+                      type: string
+                  required:
+                  - err
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: simple-echo
+        component-version: 1
+        response: '"{status: 201, body: result}"'
+        worker-name: '"type-test-worker"'
+  /types/variant:
+    post:
+      requestBody:
+        description: Request payload
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  oneOf:
+                  - type: object
+                    properties:
+                      text:
+                        type: string
+                    required:
+                    - text
+                  - type: object
+                    properties:
+                      number:
+                        type: integer
+                        format: int32
+                        minimum: 0
+                    required:
+                    - number
+                  - type: string
+              required:
+              - input
+        required: true
+      responses:
+        default:
+          description: Created
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - type: object
+                  properties:
+                    success:
+                      type: string
+                  required:
+                  - success
+                - type: object
+                  properties:
+                    error:
+                      type: string
+                  required:
+                  - error
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - type: object
+                  properties:
+                    success:
+                      type: string
+                  required:
+                  - success
+                - type: object
+                  properties:
+                    error:
+                      type: string
+                  required:
+                  - error
+      x-golem-api-gateway-binding:
+        binding-type: default
+        component-name: todo-list
+        component-version: 1
+        response: '"{status: 201, body: result}"'
+        worker-name: '"type-test-worker"'
+components: {}
+x-golem-api-definition-id: comprehensive-types-api
+x-golem-api-definition-version: 2.0.0
 "#;
 
     // Parse both YAMLs for comparison

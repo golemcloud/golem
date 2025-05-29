@@ -417,13 +417,15 @@ impl RegisterApiDefinitionApi {
         api_definition_id: ApiDefinitionId,
         api_version: ApiVersion,
     ) -> Result<Json<OpenApiHttpApiDefinitionResponse>, ApiEndpointError> {
+        let auth_ctx = EmptyAuthCtx::default();
+
         let data = self
             .definition_service
             .get(
                 &api_definition_id,
                 &api_version,
                 &DefaultNamespace::default(),
-                &EmptyAuthCtx::default(),
+                &auth_ctx,
             )
             .await?;
 
@@ -431,9 +433,15 @@ impl RegisterApiDefinitionApi {
             "Can't find api definition with id {api_definition_id}, and version {api_version}"
         ))))?;
 
+        let conversion_context = self
+            .definition_service
+            .conversion_context(&DefaultNamespace(), &auth_ctx);
+
         let response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
             &compiled_definition,
+            &conversion_context,
         )
+        .await
         .map_err(|e| {
             error!("Failed to convert to OpenAPI: {}", e);
             ApiEndpointError::internal(safe(e.to_string()))
