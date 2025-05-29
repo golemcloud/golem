@@ -15,14 +15,14 @@
 use async_trait::async_trait;
 use golem_wasm_rpc::IntoValueAndType;
 
+use crate::benchmarks::{
+    benchmark_invocations, delete_workers, generate_worker_ids, run_benchmark, setup_benchmark,
+    start_workers, warmup_workers, SimpleBenchmarkContext,
+};
 use golem_common::model::WorkerId;
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
-use integration_tests::benchmarks::{
-    benchmark_invocations, delete_workers, generate_worker_ids, run_benchmark, setup_benchmark,
-    start_workers, warmup_workers, SimpleBenchmarkContext,
-};
 
 struct DurabilityOverhead {
     config: RunConfig,
@@ -201,7 +201,6 @@ impl Benchmark for DurabilityOverhead {
     }
 }
 
-#[tokio::main]
-async fn main() {
+pub async fn run() {
     run_benchmark::<DurabilityOverhead>().await;
 }
