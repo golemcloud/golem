@@ -68,6 +68,10 @@ impl RibByteCode {
         self.instructions.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.instructions.is_empty()
+    }
+
     // Convert expression to bytecode instructions
     pub fn from_expr(
         inferred_expr: &InferredExpr,
