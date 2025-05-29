@@ -2,7 +2,6 @@
 name = "golem-cloud-client"
 version = "0.0.0"
 edition = "2021"
-license = "Apache-2.0"
 description = "Client for Golem Cloud's REST API"
 
 license-file = "../LICENSE"
