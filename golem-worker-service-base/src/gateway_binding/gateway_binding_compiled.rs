@@ -163,10 +163,11 @@ impl TryFrom<GatewayBindingCompiled>
                         invocation_context: None,
                         compiled_invocation_context_expr: None,
                         invocation_context_rib_input: None,
+                        openapi_spec_json: None,
                     },
                 )
             }
-            GatewayBindingCompiled::SwaggerUi(_) => Ok(
+            GatewayBindingCompiled::SwaggerUi(swagger_binding) => Ok(
                 golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
                     component: None,
                     worker_name: None,
@@ -185,6 +186,7 @@ impl TryFrom<GatewayBindingCompiled>
                     invocation_context: None,
                     compiled_invocation_context_expr: None,
                     invocation_context_rib_input: None,
+                    openapi_spec_json: swagger_binding.openapi_spec_json.clone(),
                 },
             ),
         }
@@ -370,7 +372,9 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                 Ok(GatewayBindingCompiled::Static(static_binding.try_into()?))
             }
             ProtoGatewayBindingType::SwaggerUi => {
-                Ok(GatewayBindingCompiled::SwaggerUi(SwaggerUiBinding::new()))
+                Ok(GatewayBindingCompiled::SwaggerUi(SwaggerUiBinding {
+                    openapi_spec_json: value.openapi_spec_json,
+                }))
             }
         }
     }
@@ -468,6 +472,7 @@ mod internal {
                 invocation_context,
                 compiled_invocation_context_expr,
                 invocation_context_rib_input,
+                openapi_spec_json: None,
             },
         )
     }
@@ -525,6 +530,7 @@ mod internal {
                 invocation_context: None,
                 compiled_invocation_context_expr: None,
                 invocation_context_rib_input: None,
+                openapi_spec_json: None,
             },
         )
     }

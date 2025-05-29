@@ -18,8 +18,10 @@ use crate::gateway_api_definition::http::{
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
-use crate::gateway_middleware::HttpCors;
+use crate::gateway_middleware::CorsPreflightExpr;
+use crate::service::gateway::BoxConversionContext;
 use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::NameTypePair;
 use http::StatusCode;
 use rib::RibInputTypeInfo;
 use serde::{Deserialize, Serialize};
@@ -42,11 +44,15 @@ pub struct OpenApiHttpApiDefinitionResponse {
 
 // OpenApiHttpApiDefinitionResponse implementation
 impl OpenApiHttpApiDefinitionResponse {
-    pub fn from_compiled_http_api_definition<N: Clone>(
+    pub async fn from_compiled_http_api_definition<N: Clone>(
         compiled_api_definition: &CompiledHttpApiDefinition<N>,
+        conversion_ctx: &BoxConversionContext<'_>,
     ) -> Result<Self, String> {
-        let openapi =
-            OpenApiHttpApiDefinition::from_compiled_http_api_definition(compiled_api_definition)?;
+        let openapi = OpenApiHttpApiDefinition::from_compiled_http_api_definition(
+            compiled_api_definition,
+            conversion_ctx,
+        )
+        .await?;
         let openapi_yaml = serde_yaml::to_string(&openapi)
             .map_err(|e| format!("Failed to serialize OpenAPI to YAML: {}", e))?;
 
@@ -60,8 +66,9 @@ impl OpenApiHttpApiDefinitionResponse {
 
 // Convert CompiledHttpApiDefinition to OpenHttpApiDefinition
 impl OpenApiHttpApiDefinition {
-    pub fn from_compiled_http_api_definition<N: Clone>(
+    pub async fn from_compiled_http_api_definition<N: Clone>(
         compiled_api_definition: &CompiledHttpApiDefinition<N>,
+        conversion_ctx: &BoxConversionContext<'_>,
     ) -> Result<Self, String> {
         let mut open_api = create_base_openapi(compiled_api_definition);
         let mut paths = std::collections::BTreeMap::new();
@@ -71,7 +78,7 @@ impl OpenApiHttpApiDefinition {
         for route in &compiled_api_definition.routes {
             // Skip auth callback routes, they shouldn't be exposed in OpenAPI
             if route.as_auth_callback_route().is_none() {
-                process_route(route, &mut paths, &mut security_schemes)?;
+                process_route(route, &mut paths, &mut security_schemes, conversion_ctx).await?;
             }
         }
 
@@ -122,18 +129,19 @@ fn create_base_openapi<N: Clone>(
 }
 
 // Helper function: Handles each route in the CompiledHttpApiDefinition
-fn process_route(
+async fn process_route(
     route: &CompiledRoute,
     paths: &mut std::collections::BTreeMap<String, openapiv3::PathItem>,
     security_schemes: &mut indexmap::IndexMap<
         String,
         openapiv3::ReferenceOr<openapiv3::SecurityScheme>,
     >,
+    conversion_ctx: &BoxConversionContext<'_>,
 ) -> Result<(), String> {
     let path_str = route.path.to_string(); // AllPathPatterns to String
     let path_item = paths.entry(path_str.clone()).or_default();
 
-    let operation = create_operation(route, security_schemes)?;
+    let operation = create_operation(route, security_schemes, conversion_ctx).await?;
 
     // Add operation to path item based on method
     add_operation_to_path_item(path_item, &route.method, operation)?;
@@ -163,12 +171,13 @@ fn add_parameters(operation: &mut openapiv3::Operation, route: &CompiledRoute) {
 }
 
 // Helper function: Creates an operation for a route
-fn create_operation(
+async fn create_operation(
     route: &CompiledRoute,
     security_schemes: &mut indexmap::IndexMap<
         String,
         openapiv3::ReferenceOr<openapiv3::SecurityScheme>,
     >,
+    conversion_ctx: &BoxConversionContext<'_>,
 ) -> Result<openapiv3::Operation, String> {
     let mut operation = openapiv3::Operation::default();
 
@@ -182,7 +191,7 @@ fn create_operation(
     add_responses(&mut operation, route);
 
     // Add binding info
-    add_binding_info(&mut operation, route);
+    add_binding_info(&mut operation, route, conversion_ctx).await?;
 
     // Add security
     add_security(&mut operation, route, security_schemes);
@@ -376,12 +385,17 @@ fn add_responses(operation: &mut openapiv3::Operation, route: &CompiledRoute) {
 }
 
 // Helper function: Adds binding info to the operation
-fn add_binding_info(operation: &mut openapiv3::Operation, route: &CompiledRoute) {
-    let binding_info = create_binding_info(route);
+async fn add_binding_info(
+    operation: &mut openapiv3::Operation,
+    route: &CompiledRoute,
+    conversion_ctx: &BoxConversionContext<'_>,
+) -> Result<(), String> {
+    let binding_info = create_binding_info(route, conversion_ctx).await?;
     operation.extensions.insert(
         GOLEM_API_GATEWAY_BINDING.to_string(),
         serde_json::Value::Object(binding_info),
     );
+    Ok(())
 }
 
 // Helper function: Adds security to the operation
@@ -453,6 +467,9 @@ fn create_request_body(
         };
 
         let mut content = indexmap::IndexMap::new();
+        // Request body is always JSON
+        // Other response types are possible, but not part of the RibInputTypeInfo
+        // They can be string scanned in ribscript response/workername mapping
         content.insert("application/json".to_string(), media_type);
 
         Some(openapiv3::RequestBody {
@@ -478,7 +495,6 @@ fn determine_request_body_schema(
             return Some(create_schema_from_analysed_type(&body_field.typ));
         }
     }
-
     // No body field found, return None to indicate no request body
     None
 }
@@ -513,6 +529,7 @@ fn create_response(status_code: u16, route: &CompiledRoute) -> openapiv3::Respon
                 schema: Some(openapiv3::ReferenceOr::Item(response_schema)),
                 ..Default::default()
             };
+            // Todo: It is possible to have application/text or application/json, Figure how to pass these
             content.insert("application/json".to_string(), media);
             response.content = content;
         }
@@ -530,41 +547,121 @@ fn get_status_description(status_code: u16) -> String {
         .unwrap_or_else(|_| "Unknown".to_string())
 }
 
-// Helper function: Determines response schema
+// New helper functions for extracting response components
+fn extract_header_type(
+    record_name_type_pairs: &[NameTypePair],
+) -> Option<Vec<(String, AnalysedType)>> {
+    for field in record_name_type_pairs {
+        if field.name == "headers" {
+            if let AnalysedType::Record(header_record) = &field.typ {
+                return Some(
+                    header_record
+                        .fields
+                        .iter()
+                        .map(|f| (f.name.clone(), f.typ.clone()))
+                        .collect(),
+                );
+            }
+        }
+    }
+    None
+}
+
+fn extract_body_type(record_name_type_pairs: &[NameTypePair]) -> Option<AnalysedType> {
+    for field in record_name_type_pairs {
+        if field.name == "body" {
+            return Some(field.typ.clone());
+        }
+    }
+    None
+}
+
+fn extract_status_type(record_name_type_pairs: &[NameTypePair]) -> Option<AnalysedType> {
+    for field in record_name_type_pairs {
+        if field.name == "status" {
+            return Some(field.typ.clone());
+        }
+    }
+    None
+}
+
+// Todo: Extract content type from headers
+/*
+fn extract_response_content_type(headers: &[(String, AnalysedType)]) -> Option<String> {
+    for (header_name, _header_type) in headers {
+        if header_name.to_lowercase() == "contenttype" ||
+           header_name.to_lowercase() == "content-type" {
+            return Some("application/json".to_string());
+        }
+    }
+    None
+}
+*/
+
+fn create_default_object_schema() -> openapiv3::Schema {
+    openapiv3::Schema {
+        schema_data: openapiv3::SchemaData {
+            description: Some("Default object response".to_string()),
+            ..Default::default()
+        },
+        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(openapiv3::ObjectType {
+            properties: indexmap::IndexMap::new(),
+            required: Vec::new(),
+            additional_properties: Some(openapiv3::AdditionalProperties::Any(true)),
+            min_properties: None,
+            max_properties: None,
+        })),
+    }
+}
+
+// Refactored determine_response_schema function
 fn determine_response_schema(route: &CompiledRoute) -> Option<openapiv3::Schema> {
-    // We check if it has both status and body fields, then use the body field
     match &route.binding {
         GatewayBindingCompiled::Worker(worker_binding)
         | GatewayBindingCompiled::FileServer(worker_binding) => {
             if let Some(output_info) = &worker_binding.response_compiled.rib_output {
                 if let AnalysedType::Record(record) = &output_info.analysed_type {
-                    let has_status = record.fields.iter().any(|f| f.name == "status");
-                    let has_body = record.fields.iter().any(|f| f.name == "body");
+                    // Extract individual components
+                    let headers_opt = extract_header_type(&record.fields);
+                    let body_opt = extract_body_type(&record.fields);
+                    let status_opt = extract_status_type(&record.fields);
 
-                    return match (has_status, has_body) {
-                        (true, true) => record
-                            .fields
-                            .iter()
-                            .find(|f| f.name == "body")
-                            .map(|body_field| create_schema_from_analysed_type(&body_field.typ)),
-                        (true, false) => None, // Status only, no body
-                        _ => Some(create_schema_from_analysed_type(&output_info.analysed_type)),
-                    };
+                    // If any structured response fields are present
+                    if headers_opt.is_some() || body_opt.is_some() || status_opt.is_some() {
+                        // Extract content type if headers are present
+                        /* Todo: Figure how to pass application/json or application/text
+                        let _content_type_opt = headers_opt
+                            .as_ref()
+                            .and_then(|headers| extract_response_content_type(headers));
+                        */
+
+                        // Use body if available, otherwise default schema
+                        return Some(
+                            body_opt
+                                .map(|body| create_schema_from_analysed_type(&body))
+                                .unwrap_or_else(create_default_object_schema),
+                        );
+                    } else {
+                        // No structured response fields, use entire record
+                        return Some(create_schema_from_analysed_type(&output_info.analysed_type));
+                    }
                 }
+                // Not a record, use type as-is
                 return Some(create_schema_from_analysed_type(&output_info.analysed_type));
             }
         }
         _ => {}
     }
-
-    // No response schema found
     None
 }
 
 // Helper function: Creates binding info
 // fileserver, default, http-handler and swagger-ui binding info are handled by common binding info
 // cors-preflight binding info is handled by cors-preflight binding info
-fn create_binding_info(route: &CompiledRoute) -> serde_json::Map<String, serde_json::Value> {
+async fn create_binding_info(
+    route: &CompiledRoute,
+    conversion_ctx: &BoxConversionContext<'_>,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     let mut binding_info = serde_json::Map::new();
 
     match &route.binding {
@@ -573,21 +670,21 @@ fn create_binding_info(route: &CompiledRoute) -> serde_json::Map<String, serde_j
                 "binding-type".to_string(),
                 serde_json::Value::String("default".to_string()),
             );
-            add_common_binding_info(&mut binding_info, route);
+            add_common_binding_info(&mut binding_info, route, conversion_ctx).await?;
         }
         GatewayBindingCompiled::HttpHandler(_) => {
             binding_info.insert(
                 "binding-type".to_string(),
                 serde_json::Value::String("http-handler".to_string()),
             );
-            add_common_binding_info(&mut binding_info, route);
+            add_common_binding_info(&mut binding_info, route, conversion_ctx).await?;
         }
         GatewayBindingCompiled::FileServer(_) => {
             binding_info.insert(
                 "binding-type".to_string(),
                 serde_json::Value::String("file-server".to_string()),
             );
-            add_common_binding_info(&mut binding_info, route);
+            add_common_binding_info(&mut binding_info, route, conversion_ctx).await?;
         }
         GatewayBindingCompiled::Static(static_binding) => match static_binding {
             StaticBinding::HttpCorsPreflight(_) => {
@@ -608,14 +705,15 @@ fn create_binding_info(route: &CompiledRoute) -> serde_json::Map<String, serde_j
         }
     }
 
-    binding_info
+    Ok(binding_info)
 }
 
 // Helper function: Adds common binding info
-fn add_common_binding_info(
+async fn add_common_binding_info(
     binding_info: &mut serde_json::Map<String, serde_json::Value>,
     route: &CompiledRoute,
-) {
+    conversion_ctx: &BoxConversionContext<'_>,
+) -> Result<(), String> {
     match &route.binding {
         GatewayBindingCompiled::Worker(worker_binding)
         | GatewayBindingCompiled::FileServer(worker_binding) => {
@@ -627,10 +725,15 @@ fn add_common_binding_info(
                 );
             }
 
-            // Add component info
+            // Get component name from conversion context
+            let component_view = conversion_ctx
+                .component_by_id(&worker_binding.component_id.component_id)
+                .await?;
+
+            // Add component info with actual name
             binding_info.insert(
                 "component-name".to_string(),
-                serde_json::Value::String(worker_binding.component_id.component_id.0.to_string()),
+                serde_json::Value::String(component_view.name.0),
             );
             binding_info.insert(
                 "component-version".to_string(),
@@ -667,12 +770,15 @@ fn add_common_binding_info(
                 );
             }
 
-            // Add component info
+            // Get component name from conversion context
+            let component_view = conversion_ctx
+                .component_by_id(&http_handler_binding.component_id.component_id)
+                .await?;
+
+            // Add component info with actual name
             binding_info.insert(
                 "component-name".to_string(),
-                serde_json::Value::String(
-                    http_handler_binding.component_id.component_id.0.to_string(),
-                ),
+                serde_json::Value::String(component_view.name.0),
             );
             binding_info.insert(
                 "component-version".to_string(),
@@ -691,10 +797,10 @@ fn add_common_binding_info(
         }
         _ => {}
     }
+    Ok(())
 }
 
 // Helper function: Adds cors-preflight binding info
-// Converts the cors-preflight binding info to a response string
 fn add_cors_preflight_binding_info(
     binding_info: &mut serde_json::Map<String, serde_json::Value>,
     route: &CompiledRoute,
@@ -705,10 +811,11 @@ fn add_cors_preflight_binding_info(
     );
 
     if let GatewayBindingCompiled::Static(StaticBinding::HttpCorsPreflight(cors)) = &route.binding {
-        let formatted_response = create_cors_response(cors);
+        // Use the compiled response expression to recreate the response
+        let cors_expr = CorsPreflightExpr::from_cors(cors);
         binding_info.insert(
             "response".to_string(),
-            serde_json::Value::String(formatted_response),
+            serde_json::Value::String(cors_expr.0.to_string()),
         );
     } else {
         binding_info.insert(
@@ -716,50 +823,6 @@ fn add_cors_preflight_binding_info(
             serde_json::Value::String("{\n}".to_string()),
         );
     }
-}
-
-// Helper function: Creates a CORS response
-fn create_cors_response(cors: &HttpCors) -> String {
-    let mut headers = vec![
-        format!(
-            "Access-Control-Allow-Headers: \"{}\"",
-            cors.get_allow_headers()
-        ),
-        format!(
-            "Access-Control-Allow-Methods: \"{}\"",
-            cors.get_allow_methods()
-        ),
-        format!(
-            "Access-Control-Allow-Origin: \"{}\"",
-            cors.get_allow_origin()
-        ),
-    ];
-
-    if let Some(expose_headers) = cors.get_expose_headers() {
-        headers.push(format!(
-            "Access-Control-Expose-Headers: \"{}\"",
-            expose_headers
-        ));
-    }
-
-    if let Some(allow_credentials) = cors.get_allow_credentials() {
-        headers.push(format!(
-            "Access-Control-Allow-Credentials: {}",
-            allow_credentials
-        ));
-    }
-    if let Some(max_age) = cors.get_max_age() {
-        headers.push(format!("Access-Control-Max-Age: {}u64", max_age));
-    }
-
-    let mut response_lines = vec!["{".to_string()];
-    for (i, header) in headers.iter().enumerate() {
-        let comma = if i < headers.len() - 1 { "," } else { "" };
-        response_lines.push(format!("  {}{}", header, comma));
-    }
-    response_lines.push("}".to_string());
-
-    response_lines.join("\n")
 }
 
 // Helper function: Creates a security scheme

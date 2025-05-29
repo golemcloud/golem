@@ -501,6 +501,7 @@ impl GrpcApiDefinitionService {
     ) -> Result<OpenApiHttpApiDefinitionResponse, ApiDefinitionError> {
         let api_definition_id = get_api_definition_id(request.api_definition_id)?;
         let version = ApiVersion(request.version);
+        let auth_ctx = EmptyAuthCtx::default();
 
         let definition = self
             .definition_service
@@ -508,7 +509,7 @@ impl GrpcApiDefinitionService {
                 &api_definition_id,
                 &version,
                 &DefaultNamespace::default(),
-                &EmptyAuthCtx::default(),
+                &auth_ctx,
             )
             .await?
             .ok_or_else(|| {
@@ -518,11 +519,16 @@ impl GrpcApiDefinitionService {
                 ))
             })?;
 
+        let conversion_context = self
+            .definition_service
+            .conversion_context(&DefaultNamespace(), &auth_ctx);
+
         let internal_response =
             golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
                 &definition,
+                &conversion_context,
             )
-            .map_err(|e| internal_error(format!("Failed to create OpenAPI response: {}", e)))?;
+            .await.map_err(|e| internal_error(format!("Failed to create OpenAPI response: {}", e)))?;
 
         Ok(OpenApiHttpApiDefinitionResponse {
             id: Some(

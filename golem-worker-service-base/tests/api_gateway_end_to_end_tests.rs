@@ -71,6 +71,7 @@ async fn execute(
         api_specification,
         &internal::get_component_metadata(),
         &DefaultNamespace::default(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .expect("Failed to compile API definition");
 
@@ -104,8 +105,15 @@ impl ConversionContext for TestConversionContext {
             Err("component not found".to_string())
         }
     }
-    async fn component_by_id(&self, _component_id: &ComponentId) -> Result<ComponentView, String> {
-        unimplemented!()
+    async fn component_by_id(&self, component_id: &ComponentId) -> Result<ComponentView, String> {
+        match component_id.to_string().as_str() {
+            "0b6d9cd8-f373-4e29-8a5a-548e61b868a5" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("test-component".to_string()),
+                latest_version: 0,
+            }),
+            _ => Err("component not found".to_string()),
+        }
     }
 }
 
@@ -424,6 +432,7 @@ async fn test_api_def_with_invalid_path_lookup() {
         &api_specification,
         &internal::get_component_metadata(),
         &DefaultNamespace::default(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .unwrap_err();
 
@@ -454,6 +463,7 @@ async fn test_api_def_with_invalid_query_and_path_lookup() {
         &api_specification1,
         &internal::get_component_metadata(),
         &DefaultNamespace::default(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .unwrap_err();
 
@@ -476,6 +486,7 @@ async fn test_api_def_with_invalid_query_and_path_lookup() {
         &api_specification2,
         &internal::get_component_metadata(),
         &DefaultNamespace::default(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .unwrap_err();
 
@@ -546,6 +557,7 @@ async fn test_api_def_with_invalid_query_lookup() {
         &api_specification,
         &internal::get_component_metadata(),
         &DefaultNamespace::default(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .unwrap_err();
 
