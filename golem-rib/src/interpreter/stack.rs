@@ -53,15 +53,11 @@ impl InterpreterStack {
         self.stack.pop()
     }
 
-
-
     pub fn try_pop(&mut self) -> RibInterpreterResult<RibInterpreterStackValue> {
         self.pop().ok_or(empty_stack())
     }
 
     pub fn pop_sink(&mut self) -> Option<(Vec<ValueAndType>, AnalysedType)> {
-
-
         while let Some(value) = self.pop() {
             match value {
                 RibInterpreterStackValue::Sink(vec, analysed_type) => {
@@ -156,10 +152,8 @@ impl InterpreterStack {
     }
 
     pub fn create_sink(&mut self, analysed_type: AnalysedType) {
-        self.stack.push(RibInterpreterStackValue::Sink(
-            vec![],
-            analysed_type,
-        ))
+        self.stack
+            .push(RibInterpreterStackValue::Sink(vec![], analysed_type))
     }
 
     pub fn push_val(&mut self, element: ValueAndType) {
@@ -167,9 +161,9 @@ impl InterpreterStack {
     }
 
     pub fn push_to_sink(&mut self, value_and_type: ValueAndType) -> RibInterpreterResult<()> {
-        let (mut list, analysed_type) = self.pop_sink().ok_or(
-            internal_corrupted_state!("failed to pop a sink from the interpreter stack")
-        )?;
+        let (mut list, analysed_type) = self.pop_sink().ok_or(internal_corrupted_state!(
+            "failed to pop a sink from the interpreter stack"
+        ))?;
 
         list.push(value_and_type);
         self.push(RibInterpreterStackValue::Sink(list, analysed_type));

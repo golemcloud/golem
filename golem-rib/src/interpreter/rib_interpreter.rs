@@ -19,7 +19,10 @@ use crate::interpreter::rib_runtime_error::{
     arithmetic_error, no_result, throw_error, RibRuntimeError,
 };
 use crate::interpreter::stack::InterpreterStack;
-use crate::{internal_corrupted_state, InstructionId, RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
+use crate::{
+    internal_corrupted_state, InstructionId, RibByteCode, RibFunctionInvoke, RibIR, RibInput,
+    RibResult,
+};
 use std::sync::Arc;
 
 pub struct Interpreter {
@@ -31,7 +34,7 @@ impl Default for Interpreter {
     fn default() -> Self {
         Interpreter {
             input: RibInput::default(),
-            invoke: Arc::new(internal::NoopRibFunctionInvoke)
+            invoke: Arc::new(internal::NoopRibFunctionInvoke),
         }
     }
 }
@@ -39,21 +42,16 @@ impl Default for Interpreter {
 pub type RibInterpreterResult<T> = Result<T, RibRuntimeError>;
 
 impl Interpreter {
-    pub fn new(
-        input: RibInput,
-        invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
-    ) -> Self {
+    pub fn new(input: RibInput, invoke: Arc<dyn RibFunctionInvoke + Sync + Send>) -> Self {
         Interpreter {
             input: input.clone(),
-            invoke
+            invoke,
         }
     }
 
     // Interpreter that's not expected to call a side-effecting function call.
     // All it needs is environment with the required variables to evaluate the Rib script
-    pub fn pure(
-        input: RibInput,
-    ) -> Self {
+    pub fn pure(input: RibInput) -> Self {
         Interpreter {
             input,
             invoke: Arc::new(internal::NoopRibFunctionInvoke),
@@ -159,11 +157,19 @@ impl Interpreter {
                 }
 
                 RibIR::AssignVar(variable_id) => {
-                    internal::run_assign_var_instruction(variable_id, &mut stack, &mut interpreter_env)?;
+                    internal::run_assign_var_instruction(
+                        variable_id,
+                        &mut stack,
+                        &mut interpreter_env,
+                    )?;
                 }
 
                 RibIR::LoadVar(variable_id) => {
-                    internal::run_load_var_instruction(variable_id, &mut stack, &mut interpreter_env)?;
+                    internal::run_load_var_instruction(
+                        variable_id,
+                        &mut stack,
+                        &mut interpreter_env,
+                    )?;
                 }
 
                 RibIR::IsEmpty => {
@@ -191,12 +197,22 @@ impl Interpreter {
                 }
 
                 RibIR::CreateFunctionName(site, function_type) => {
-                    internal::run_create_function_name_instruction(site, function_type, &mut stack)?;
+                    internal::run_create_function_name_instruction(
+                        site,
+                        function_type,
+                        &mut stack,
+                    )?;
                 }
 
                 RibIR::InvokeFunction(worker_type, arg_size, _) => {
-                    internal::run_call_instruction(&byte_code_cursor.position(), arg_size, worker_type, &mut stack, &mut interpreter_env)
-                        .await?;
+                    internal::run_call_instruction(
+                        &byte_code_cursor.position(),
+                        arg_size,
+                        worker_type,
+                        &mut stack,
+                        &mut interpreter_env,
+                    )
+                    .await?;
                 }
 
                 RibIR::PushVariant(variant_name, analysed_type) => {
@@ -299,7 +315,6 @@ impl Interpreter {
                 Ok(rib_result)
             }
         }
-
     }
 }
 
@@ -553,9 +568,7 @@ mod internal {
     pub(crate) fn run_advance_iterator_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {
-        let mut stack_value = interpreter_stack
-            .pop()
-            .ok_or_else(|| empty_stack())?;
+        let mut stack_value = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
 
         match &mut stack_value {
             RibInterpreterStackValue::Sink(_, _) => {
@@ -1251,7 +1264,12 @@ mod internal {
             .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
         let result = interpreter_env
-            .invoke_worker_function_async(instruction_id, worker_name, function_name_cloned, parameter_values)
+            .invoke_worker_function_async(
+                instruction_id,
+                worker_name,
+                function_name_cloned,
+                parameter_values,
+            )
             .await
             .map_err(|err| function_invoke_fail(function_name.as_str(), err))?;
 
@@ -3978,7 +3996,10 @@ mod tests {
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(result.get_val().unwrap().value, Value::List(vec![Value::S32(1), Value::S32(2), Value::S32(3)]));
+        assert_eq!(
+            result.get_val().unwrap().value,
+            Value::List(vec![Value::S32(1), Value::S32(2), Value::S32(3)])
+        );
     }
 
     #[test]
@@ -4653,7 +4674,10 @@ mod tests {
 
     mod test_utils {
         use crate::interpreter::rib_interpreter::Interpreter;
-        use crate::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue, InstructionId, RibFunctionInvoke, RibFunctionInvokeResult, RibInput};
+        use crate::{
+            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue, InstructionId,
+            RibFunctionInvoke, RibFunctionInvokeResult, RibInput,
+        };
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, handle, list, option, r#enum, record, result, s32, str, tuple, u32,
@@ -5019,7 +5043,7 @@ mod tests {
 
             Interpreter {
                 input: input.unwrap_or_default(),
-                invoke
+                invoke,
             }
         }
 
@@ -5045,7 +5069,7 @@ mod tests {
 
             Interpreter {
                 input: input.unwrap_or_default(),
-                invoke
+                invoke,
             }
         }
 

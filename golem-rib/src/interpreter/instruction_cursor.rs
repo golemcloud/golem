@@ -21,7 +21,7 @@ pub struct RibByteCodeCursor {
 
 impl RibByteCodeCursor {
     pub fn position(&self) -> InstructionId {
-       InstructionId {
+        InstructionId {
             index: self.position,
         }
     }
@@ -32,7 +32,9 @@ impl RibByteCodeCursor {
 
     pub fn last(&self) -> Option<&RibIR> {
         if self.byte_code.instructions.len() > 0 {
-            self.byte_code.instructions.get(self.byte_code.instructions.len() - 1)
+            self.byte_code
+                .instructions
+                .get(self.byte_code.instructions.len() - 1)
         } else {
             None
         }

@@ -13,7 +13,10 @@
 // limitations under the License.
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
-use crate::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibFunctionInvoke, RibInput, VariableId};
+use crate::{
+    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibFunctionInvoke,
+    RibInput, VariableId,
+};
 use golem_wasm_rpc::ValueAndType;
 use std::collections::HashMap;
 use std::fmt::Debug;

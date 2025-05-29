@@ -2030,9 +2030,9 @@ mod mock_interpreter {
     use golem_wasm_ast::analysis::analysed_type::tuple;
     use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
     use golem_wasm_rpc::{Value, ValueAndType};
+    use rib::InstructionId;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use rib::InstructionId;
 
     pub(crate) fn interpreter() -> Interpreter {
         let functions_and_results: Vec<(&str, Option<ValueAndType>)> = vec![
@@ -2224,10 +2224,7 @@ mod mock_interpreter {
             functions_and_result,
         });
 
-        Interpreter::new(
-            RibInput::new(interpreter_env_input),
-            dynamic_worker_invoke,
-        )
+        Interpreter::new(RibInput::new(interpreter_env_input), dynamic_worker_invoke)
     }
 
     struct DynamicRibFunctionInvoke {

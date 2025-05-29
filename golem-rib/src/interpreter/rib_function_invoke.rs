@@ -1,6 +1,6 @@
+use crate::InstructionId;
 use async_trait::async_trait;
 use golem_wasm_rpc::ValueAndType;
-use crate::InstructionId;
 
 #[async_trait]
 pub trait RibFunctionInvoke {
