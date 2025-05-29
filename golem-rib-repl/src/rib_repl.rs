@@ -272,7 +272,7 @@ async fn eval(
 
     let result = interpreter(repl_state).run(rib_byte_code).await?;
 
-    repl_state.update_instruction(last_instruction);
+    repl_state.update_last_executed_instruction(last_instruction);
 
     Ok(result)
 }

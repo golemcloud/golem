@@ -52,7 +52,7 @@ impl ReplState {
             .unwrap_or(InstructionId { index: 0 })
     }
 
-    pub fn update_instruction(&self, instruction_id: InstructionId) {
+    pub fn update_last_executed_instruction(&self, instruction_id: InstructionId) {
         *self.last_executed_instruction.write().unwrap() = Some(instruction_id);
     }
 
