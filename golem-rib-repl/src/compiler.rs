@@ -37,10 +37,11 @@ pub fn compile_rib_script(
     let identifiers = get_identifiers(&inferred_expr);
 
     let variants = function_registry.get_variants();
+
     let enums = function_registry.get_enums();
 
     let byte_code = RibByteCode::from_expr(&inferred_expr)
-        .map_err(|e| RibCompilationError::RibStaticAnalysisError(e.to_string()))?;
+        .map_err(RibCompilationError::ByteCodeGenerationFail)?;
 
     Ok(CompilerOutput {
         rib_byte_code: byte_code,

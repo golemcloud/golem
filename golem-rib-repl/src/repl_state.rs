@@ -21,7 +21,7 @@ use std::sync::{Arc, RwLock};
 
 pub struct ReplState {
     dependency: RibComponentMetadata,
-    raw_rib_script: RwLock<Vec<String>>,
+    rib_script: RwLock<RawRibScript>,
     worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
     invocation_results: InvocationResultCache,
     last_executed_instruction: RwLock<Option<InstructionId>>,
@@ -57,11 +57,11 @@ impl ReplState {
     }
 
     pub fn current_rib_program(&self) -> String {
-        self.raw_rib_script.read().unwrap().join(";\n")
+        self.rib_script.read().unwrap().as_text()
     }
 
     pub fn update_rib(&self, rib: &str) {
-        self.raw_rib_script.write().unwrap().push(rib.to_string());
+        self.rib_script.write().unwrap().push(rib);
     }
 
     pub fn update_dependency(&mut self, dependency: RibComponentMetadata) {
@@ -69,7 +69,7 @@ impl ReplState {
     }
 
     pub fn pop_rib_text(&self) {
-        self.raw_rib_script.write().unwrap().pop();
+        self.rib_script.write().unwrap().pop();
     }
 
     pub fn dependency(&self) -> &RibComponentMetadata {
@@ -82,7 +82,7 @@ impl ReplState {
     ) -> Self {
         Self {
             dependency: dependency.clone(),
-            raw_rib_script: RwLock::new(Vec::new()),
+            rib_script: RwLock::new(RawRibScript::default()),
             worker_function_invoke,
             invocation_results: InvocationResultCache {
                 results: RwLock::new(HashMap::new()),
@@ -100,5 +100,24 @@ pub struct InvocationResultCache {
 impl InvocationResultCache {
     pub fn get(&self, script_id: &InstructionId) -> Option<ValueAndType> {
         self.results.read().unwrap().get(script_id).cloned()
+    }
+}
+
+#[derive(Default)]
+pub struct RawRibScript {
+    value: Vec<String>,
+}
+
+impl RawRibScript {
+    pub fn push(&mut self, rib: &str) {
+        self.value.push(rib.to_string());
+    }
+
+    pub fn pop(&mut self) {
+        self.value.pop();
+    }
+
+    pub fn as_text(&self) -> String {
+        self.value.join(";\n")
     }
 }

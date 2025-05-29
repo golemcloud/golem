@@ -145,7 +145,10 @@ impl RibRepl {
     /// This function is exposed for users who want to implement custom REPL loops
     /// or integrate Rib execution into other workflows.
     /// For a built-in REPL loop, see [`Self::run`].
-    pub async fn execute_rib(&mut self, rib: &str) -> Result<Option<RibResult>, RibExecutionError> {
+    pub async fn execute_rib<'a>(
+        &mut self,
+        rib: &'a str,
+    ) -> Result<Option<RibResult>, RibExecutionError> {
         if !rib.is_empty() {
             let rib = rib.strip_suffix(";").unwrap_or(rib);
 
@@ -194,7 +197,7 @@ impl RibRepl {
             let readline = self.read_line();
             match readline {
                 Ok(rib) => {
-                    let result = self.execute_rib(&rib).await;
+                    let result = self.execute_rib(rib.as_str()).await;
 
                     match result {
                         Ok(Some(result)) => {
@@ -219,7 +222,7 @@ impl RibRepl {
         }
     }
 
-    fn update_rib(&mut self, rib_text: &str) {
+    fn update_rib<'a>(&mut self, rib_text: &'a str) {
         self.repl_state.update_rib(rib_text);
     }
 
