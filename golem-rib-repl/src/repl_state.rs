@@ -24,6 +24,7 @@ pub struct ReplState {
     raw_rib_script: RwLock<Vec<String>>,
     worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
     invocation_results: InvocationResultCache,
+    last_instruction: RwLock<Option<InstructionId>>,
 }
 
 impl ReplState {
@@ -41,6 +42,14 @@ impl ReplState {
             .write()
             .unwrap()
             .insert(instruction_id.clone(), result);
+    }
+
+    pub fn last_instruction(&self) -> InstructionId {
+        self.last_instruction.read().unwrap().clone().unwrap_or(InstructionId { index: 0 })
+    }
+
+    pub fn update_instruction(&self, instruction_id: InstructionId) {
+        *self.last_instruction.write().unwrap() = Some(instruction_id);
     }
 
     pub fn current_rib_program(&self) -> String {
@@ -74,6 +83,7 @@ impl ReplState {
             invocation_results: InvocationResultCache {
                 results: RwLock::new(HashMap::new()),
             },
+            last_instruction: RwLock::new(None),
         }
     }
 }

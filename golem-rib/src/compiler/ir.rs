@@ -159,7 +159,7 @@ pub struct InstructionId {
 }
 
 impl InstructionId {
-    pub fn from(index: usize) -> Self {
+    pub fn new(index: usize) -> Self {
         InstructionId { index }
     }
 
@@ -405,13 +405,13 @@ mod protobuf {
                 Instruction::And(_) => Ok(RibIR::And),
                 Instruction::IsEmpty(_) => Ok(RibIR::IsEmpty),
                 Instruction::Or(_) => Ok(RibIR::Or),
-                Instruction::JumpIfFalse(value) => Ok(RibIR::JumpIfFalse(InstructionId::from(
+                Instruction::JumpIfFalse(value) => Ok(RibIR::JumpIfFalse(InstructionId::new(
                     value.instruction_id as usize,
                 ))),
-                Instruction::Jump(value) => Ok(RibIR::Jump(InstructionId::from(
+                Instruction::Jump(value) => Ok(RibIR::Jump(InstructionId::new(
                     value.instruction_id as usize,
                 ))),
-                Instruction::Label(value) => Ok(RibIR::Label(InstructionId::from(
+                Instruction::Label(value) => Ok(RibIR::Label(InstructionId::new(
                     value.instruction_id as usize,
                 ))),
                 Instruction::Deconstruct(_) => Ok(RibIR::Deconstruct),

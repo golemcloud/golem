@@ -164,7 +164,9 @@ impl RibRepl {
                     helper.update_progression(&compilation);
 
                     // Before evaluation
-                    let result = eval(compilation.rib_byte_code, &self.repl_state).await;
+                    let result =
+                        eval(compilation.rib_byte_code, &self.repl_state).await;
+
                     match result {
                         Ok(result) => Ok(Some(result)),
                         Err(err) => {
@@ -264,7 +266,16 @@ async fn eval(
     rib_byte_code: RibByteCode,
     repl_state: &Arc<ReplState>,
 ) -> Result<RibResult, RibRuntimeError> {
-    interpreter(repl_state).run(rib_byte_code).await
+    let instruction_id = InstructionId {
+        index: rib_byte_code.len()
+    };
+
+    let result =
+        interpreter(repl_state).run(rib_byte_code).await;
+
+    repl_state.update_instruction(instruction_id);
+
+    result
 }
 
 pub fn interpreter(repl_state: &Arc<ReplState>) -> Interpreter {
@@ -349,7 +360,11 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
         let component_id = self.repl_state.dependency().component_id;
         let component_name = &self.repl_state.dependency().component_name;
 
-        let result = self.repl_state.invocation_results().get(instruction_id);
+        let result = if self.repl_state.last_instruction().index < instruction_id.index {
+            None 
+        } else {
+            self.repl_state.invocation_results().get(instruction_id)
+        };
 
         match result {
             None => {

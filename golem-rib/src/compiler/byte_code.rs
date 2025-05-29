@@ -64,6 +64,10 @@ impl Display for RibByteCodeGenerationError {
 }
 
 impl RibByteCode {
+    pub fn len(&self) -> usize {
+        self.instructions.len()
+    }
+
     // Convert expression to bytecode instructions
     pub fn from_expr(
         inferred_expr: &InferredExpr,
