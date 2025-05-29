@@ -15,13 +15,12 @@ path = "src/server.rs"
 [dependencies]
 cloud-api-grpc = { path = "../cloud-api-grpc", version = "=0.0.0" }
 cloud-common = { path = "../cloud-common", version = "=0.0.0" }
-cloud-worker-executor = { path = "../cloud-worker-executor", version = "=0.0.0" }
+golem-worker-executor = { path = "../golem-worker-executor", version = "=0.0.0" }
 golem-common = { path = "../golem-common", version = "=0.0.0" }
 golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
 golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
-golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

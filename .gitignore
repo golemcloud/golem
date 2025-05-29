@@ -4,8 +4,8 @@ target/
 **/*.rs.bk
 *.pdb
 golem-worker-executor/data/
-golem-worker-executor-base/data/
-golem-worker-executor-base/golem-wit/
+golem-worker-executor/data/
+golem-worker-executor/golem-wit/
 zig-cache/
 dump.rdb
 test-components/*.wat
