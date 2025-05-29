@@ -4,14 +4,12 @@ use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_test_framework::components::cloud_service::CloudService;
 use golem_worker_executor::cloud::CloudGolemTypes;
 use std::collections::HashSet;
-
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
 use golem_worker_executor::services::file_loader::FileLoader;
 use prometheus::Registry;
-
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::model::{
@@ -60,13 +58,9 @@ use golem_worker_executor::workerctx::{
     UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails};
-
 use tokio::runtime::Handle;
-
 use tokio::task::JoinSet;
-
 use golem_common::config::RedisConfig;
-
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     get_running_workers_metadata_response, get_workers_metadata_response,
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
@@ -106,6 +100,7 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
+use golem_common::model::oplog::UpdateDescription;
 
 pub struct TestWorkerExecutor {
     _join_set: Option<JoinSet<anyhow::Result<()>>>,
@@ -634,12 +629,12 @@ impl UpdateManagement for TestWorkerCtx {
 
     async fn on_worker_update_succeeded(
         &self,
-        target_version: ComponentVersion,
+        update: &UpdateDescription,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(target_version, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(update, new_component_size, new_active_plugins)
             .await
     }
 }
@@ -653,7 +648,6 @@ impl WorkerCtx for TestWorkerCtx {
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
-        component_metadata: ComponentMetadata<CloudGolemTypes>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -680,7 +674,6 @@ impl WorkerCtx for TestWorkerCtx {
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
-            component_metadata,
             promise_service,
             worker_service,
             worker_enumeration_service,

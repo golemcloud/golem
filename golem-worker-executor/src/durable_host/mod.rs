@@ -81,6 +81,7 @@ use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value, ValueAndType};
+use replay_state::ReplayAction;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -90,6 +91,7 @@ use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
 use tempfile::TempDir;
+use tokio::sync::RwLock as TRwLock;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, Resource, ResourceAny};
@@ -131,9 +133,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub owned_worker_id: OwnedWorkerId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState<Ctx>,
-    _temp_dir: Arc<TempDir>,
-    _used_files: Vec<FileUseToken>,
-    read_only_paths: Arc<RwLock<HashSet<PathBuf>>>,
+    temp_dir: Arc<TempDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
 }
 
@@ -141,7 +141,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_worker_id: OwnedWorkerId,
-        component_metadata: ComponentMetadata<Ctx::Types>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -176,8 +175,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             owned_worker_id.worker_id, worker_config.deleted_regions
         );
 
-        let (file_use_tokens, read_only_paths) = prepare_filesystem(
-            file_loader,
+        debug!(
+            "Worker {} starting replay from component version {}",
+            owned_worker_id.worker_id, worker_config.component_version_for_replay
+        );
+
+        let component_metadata = component_service
+            .get_metadata(
+                &owned_worker_id.account_id,
+                &owned_worker_id.component_id(),
+                Some(worker_config.component_version_for_replay),
+            )
+            .await?;
+
+        let files = prepare_filesystem(
+            &file_loader,
             &owned_worker_id.account_id,
             temp_dir.path(),
             &component_metadata.files,
@@ -235,11 +247,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 component_metadata,
                 worker_config.total_linear_memory_size,
                 worker_fork,
+                RwLock::new(compute_read_only_paths(&files)),
+                TRwLock::new(files),
+                file_loader,
             )
             .await,
-            _temp_dir: temp_dir,
-            _used_files: file_use_tokens,
-            read_only_paths: Arc::new(RwLock::new(read_only_paths)),
+            temp_dir,
             execution_status,
         })
     }
@@ -259,11 +272,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         match table.get(fd)? {
             Descriptor::File(f) => {
-                let read_only = self
-                    .read_only_paths
-                    .read()
-                    .expect("There should be no writers to read_only_paths")
-                    .contains(&f.path);
+                let read_only = self.state.read_only_paths.read().unwrap().contains(&f.path);
+
                 Ok(read_only)
             }
             Descriptor::Dir(_) => Ok(false),
@@ -549,6 +559,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             Some(pending_update) => match result {
                 Ok(RetryDecision::None) => {
                     if let UpdateDescription::SnapshotBased { .. } = &pending_update.description {
+                        // snapshot based updates will already start replaying at the most recent version,
+                        // so no need to apply the update here.
+
                         let target_version = *pending_update.description.target_version();
 
                         match store
@@ -651,7 +664,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                         .as_context_mut()
                                         .data_mut()
                                         .on_worker_update_succeeded(
-                                            target_version,
+                                            &pending_update.description,
                                             component_metadata.size,
                                             HashSet::from_iter(
                                                 component_metadata
@@ -685,15 +698,33 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             }
                         }
                     } else {
-                        // Automatic update succeeded
                         let target_version = *pending_update.description.target_version();
+
+                        // apply side effects that are part of the update
+                        if let Err(error) =
+                            update_state_to_new_component_version(store, target_version).await
+                        {
+                            let stringified_error =
+                                format!("Applying worker update failed: {error}");
+
+                            store
+                                .as_context_mut()
+                                .data_mut()
+                                .on_worker_update_failed(target_version, Some(stringified_error))
+                                .await;
+
+                            return RetryDecision::Immediate;
+                        };
+
+                        // Automatic update succeeded
                         let component_metadata =
                             store.as_context().data().component_metadata().clone();
+
                         store
                             .as_context_mut()
                             .data_mut()
                             .on_worker_update_succeeded(
-                                target_version,
+                                &pending_update.description,
                                 component_metadata.size,
                                 HashSet::from_iter(
                                     component_metadata
@@ -785,9 +816,9 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     fn check_interrupt(&self) -> Option<InterruptKind> {
-        let execution_status = self.execution_status.read().unwrap().clone();
-        match execution_status {
-            ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(interrupt_kind),
+        let execution_status = self.execution_status.read().unwrap();
+        match &*execution_status {
+            ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(interrupt_kind.clone()),
             _ => None,
         }
     }
@@ -1170,10 +1201,11 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 
     async fn on_worker_update_succeeded(
         &self,
-        target_version: ComponentVersion,
+        update: &UpdateDescription,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     ) {
+        let target_version = *update.target_version();
         info!("Worker update to {} finished successfully", target_version);
 
         let entry = OplogEntry::successful_update(
@@ -1189,7 +1221,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 timestamp,
                 target_version,
             });
-            *status.active_plugins_mut() = new_active_plugins;
+            status.active_plugins = new_active_plugins;
 
             // As part of performing a manual update, after the executor called the save-snapshot function
             // it marks the whole history of the worker as "skipped" and reloads the worker with the new
@@ -1198,6 +1230,12 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
             // "final" by merging it into the set of skipped regions.
             if status.skipped_regions.is_overridden() {
                 status.skipped_regions.merge_override()
+            }
+
+            // After a manual update we need to start replays with the new version
+            // (as the previous updates that would go from 0 -> target_version are now in deleted regions)
+            if let UpdateDescription::SnapshotBased { .. } = update {
+                status.component_version_for_replay = target_version
             }
         })
         .await;
@@ -1466,17 +1504,24 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .durable_ctx_mut()
                     .state
                     .replay_state
-                    .get_oplog_entry_exported_function_invoked()
+                    .get_next_replay_action()
                     .await;
                 match oplog_entry {
                     Err(error) => break Err(error),
-                    Ok(None) => break Ok(RetryDecision::None),
-                    Ok(Some((
+                    Ok(ReplayAction::Done) => break Ok(RetryDecision::None),
+                    Ok(ReplayAction::UpdateSucceeded { new_version }) => {
+                        debug!(
+                            "Replaying side effects of update to version {}",
+                            new_version
+                        );
+                        update_state_to_new_component_version(store, new_version).await?;
+                    }
+                    Ok(ReplayAction::ExportedFunctionInvoked {
                         function_name,
                         function_input,
                         idempotency_key,
                         invocation_context,
-                    ))) => {
+                    }) => {
                         debug!("Replaying function {function_name}");
                         let span = span!(Level::INFO, "replaying", function = function_name);
                         store
@@ -1783,7 +1828,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
         &self,
         path: &ComponentFilePath,
     ) -> Result<ListDirectoryResult, GolemError> {
-        let root = self._temp_dir.path();
+        let root = self.temp_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
@@ -1838,9 +1883,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
                 let is_readonly_by_host = metadata.permissions().readonly();
                 // additionally consider permissions we maintain ourselves
                 let is_readonly_by_us = self
+                    .state
                     .read_only_paths
                     .read()
-                    .expect("There should be no writers to read_only_paths")
+                    .unwrap()
                     .contains(&entry.path());
 
                 let permissions = if is_readonly_by_host || is_readonly_by_us {
@@ -1869,7 +1915,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
     }
 
     async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError> {
-        let root = self._temp_dir.path();
+        let root = self.temp_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
@@ -1912,6 +1958,47 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
     }
 }
 
+async fn update_state_to_new_component_version<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>>(
+    store: &mut (impl AsContextMut<Data = Ctx> + Send),
+    new_version: ComponentVersion,
+) -> Result<(), GolemError> {
+    let mut store_ctx = store.as_context_mut();
+    let store_data = store_ctx.data_mut();
+    let durable_ctx = store_data.durable_ctx_mut();
+
+    let current_metadata = &durable_ctx.state.component_metadata;
+
+    if new_version <= current_metadata.version {
+        debug!("Update {new_version} was already applied, skipping");
+        return Ok(());
+    };
+
+    let new_metadata = durable_ctx
+        .component_service()
+        .get_metadata(
+            &durable_ctx.owned_worker_id.account_id,
+            &durable_ctx.owned_worker_id.component_id(),
+            Some(new_version),
+        )
+        .await?;
+
+    let mut current_files = durable_ctx.state.files.write().await;
+    update_filesystem(
+        &mut current_files,
+        &durable_ctx.state.file_loader,
+        &durable_ctx.owned_worker_id.account_id,
+        durable_ctx.temp_dir.path(),
+        &new_metadata.files,
+    )
+    .await?;
+
+    (*durable_ctx.state.read_only_paths.write().unwrap()) = compute_read_only_paths(&current_files);
+
+    durable_ctx.state.component_metadata = new_metadata;
+
+    Ok(())
+}
+
 async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
     this: &T,
     owned_worker_id: &OwnedWorkerId,
@@ -1926,7 +2013,7 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
         let mut last_error_index = idx;
         loop {
             if latest_worker_status
-                .deleted_regions()
+                .deleted_regions
                 .is_in_deleted_region(idx)
             {
                 if idx > OplogIndex::INITIAL {
@@ -2084,9 +2171,14 @@ struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     set_outgoing_http_idempotency_key: bool,
 
     worker_fork: Arc<dyn WorkerForkService>,
+
+    read_only_paths: RwLock<HashSet<PathBuf>>,
+    files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
+    file_loader: Arc<FileLoader>,
 }
 
 impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
@@ -2108,6 +2200,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         component_metadata: ComponentMetadata<Ctx::Types>,
         total_linear_memory_size: u64,
         worker_fork: Arc<dyn WorkerForkService>,
+        read_only_paths: RwLock<HashSet<PathBuf>>,
+        files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
+        file_loader: Arc<FileLoader>,
     ) -> Self {
         let replay_state = ReplayState::new(
             owned_worker_id.clone(),
@@ -2153,6 +2248,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             forward_trace_context_headers: true,
             set_outgoing_http_idempotency_key: true,
             worker_fork,
+            read_only_paths,
+            files,
+            file_loader,
         }
     }
 
@@ -2498,15 +2596,27 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
     }
 }
 
+/// File that was provisioned due to metadata. There might be additional files that the
+/// worker created itself.
+/// Ro files are symlinked to the proper location and might be garbage collected when the token is dropped.
+/// Rw files are directly copied to the target location.
+enum IFSWorkerFile {
+    Ro {
+        file: InitialComponentFile,
+        _token: FileUseToken,
+    },
+    Rw,
+}
+
 async fn prepare_filesystem(
-    file_loader: Arc<FileLoader>,
+    file_loader: &Arc<FileLoader>,
     account_id: &AccountId,
     root: &Path,
     files: &[InitialComponentFile],
-) -> Result<(Vec<FileUseToken>, HashSet<PathBuf>), GolemError> {
+) -> Result<HashMap<PathBuf, IFSWorkerFile>, GolemError> {
     let futures = files.iter().map(|file| {
         let path = root.join(PathBuf::from(file.path.to_rel_string()));
-        let key = file.key.clone();
+        let file = file.clone();
         let permissions = file.permissions;
         let file_loader = file_loader.clone();
         async move {
@@ -2514,31 +2624,199 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadOnly => {
                     debug!("Loading read-only file {}", path.display());
                     let token = file_loader
-                        .get_read_only_to(account_id, &key, &path)
+                        .get_read_only_to(account_id, &file.key, &path)
                         .await?;
-                    Ok::<_, GolemError>(Some((token, path)))
+                    Ok::<_, GolemError>((
+                        path,
+                        IFSWorkerFile::Ro {
+                            file,
+                            _token: token,
+                        },
+                    ))
                 }
                 ComponentFilePermissions::ReadWrite => {
                     debug!("Loading read-write file {}", path.display());
                     file_loader
-                        .get_read_write_to(account_id, &key, &path)
+                        .get_read_write_to(account_id, &file.key, &path)
                         .await?;
-                    Ok(None)
+                    Ok((path, IFSWorkerFile::Rw))
                 }
             }
         }
     });
+    Ok(HashMap::from_iter(try_join_all(futures).await?))
+}
 
-    let results = try_join_all(futures).await?;
-
-    let mut read_only_files = HashSet::with_capacity(files.len());
-    let mut file_use_tokens = Vec::new();
-
-    for (token, path) in results.into_iter().flatten() {
-        read_only_files.insert(path);
-        file_use_tokens.push(token);
+async fn update_filesystem(
+    current_state: &mut HashMap<PathBuf, IFSWorkerFile>,
+    file_loader: &Arc<FileLoader>,
+    account_id: &AccountId,
+    root: &Path,
+    files: &[InitialComponentFile],
+) -> Result<(), GolemError> {
+    enum UpdateFileSystemResult {
+        NoChanges,
+        Remove(PathBuf),
+        Replace { path: PathBuf, value: IFSWorkerFile },
     }
-    Ok((file_use_tokens, read_only_files))
+
+    let desired_paths: HashSet<PathBuf> = HashSet::from_iter(
+        files
+            .iter()
+            .map(|f| root.join(PathBuf::from(f.path.to_rel_string()))),
+    );
+
+    // We do this in two phases to make errors less likely. First delete all files that are no longer needed and then create
+    // new ones.
+    let futures_phase_1 = current_state.iter().map(|(path, file)| {
+        let path = path.clone();
+        let should_keep = desired_paths.contains(&path);
+        async move {
+            match file {
+                IFSWorkerFile::Ro { file, .. } if !should_keep => {
+                    tokio::fs::remove_dir(&path).await.map_err(|e| {
+                        GolemError::FileSystemError {
+                            path: file.path.to_rel_string(),
+                            reason: format!("Failed deleting file during update: {e}"),
+                        }
+                    })?;
+                    Ok::<_, GolemError>(UpdateFileSystemResult::Remove(path))
+                }
+                _ => Ok(UpdateFileSystemResult::NoChanges),
+            }
+        }
+    });
+
+    let futures_phase_2 = files.iter().map(|file| {
+        let path = root.join(PathBuf::from(file.path.to_rel_string()));
+        let file = file.clone();
+        let permissions = file.permissions;
+        let file_loader = file_loader.clone();
+
+        let existing = current_state.get(&path);
+
+        async move {
+            match (permissions, existing) {
+                (ComponentFilePermissions::ReadOnly, None) => {
+                    debug!("Loading read-only file {}", path.display());
+
+                    let exists = tokio::fs::try_exists(&path).map_err(|e| GolemError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
+
+                    if exists {
+                        // Try removing it if it's an empty directory, this will fail otherwise and we can report the error.
+                        tokio::fs::remove_dir(&path).await.map_err(|e|
+                            GolemError::FileSystemError {
+                                path: file.path.to_rel_string(),
+                                reason: format!("Tried replacing an existing non-empty path with ro file during update: {e}")
+                            }
+                        )?;
+                    };
+
+                    let token = file_loader
+                        .get_read_only_to(account_id, &file.key, &path)
+                        .await?;
+
+                    Ok::<_, GolemError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
+                },
+                (ComponentFilePermissions::ReadOnly, Some(IFSWorkerFile::Ro { file: existing_file, .. })) => {
+                    if existing_file.key == file.key {
+                        Ok(UpdateFileSystemResult::NoChanges)
+                    } else {
+                        debug!("updating ro file {}", path.display());
+                        tokio::fs::remove_file(&path).await.map_err(|e|
+                            GolemError::FileSystemError {
+                                path: file.path.to_rel_string(),
+                                reason: format!("Failed deleting file during update: {e}")
+                            }
+                        )?;
+                        let token = file_loader
+                            .get_read_only_to(account_id, &file.key, &path)
+                            .await?;
+                        Ok::<_, GolemError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
+                    }
+                }
+                (ComponentFilePermissions::ReadOnly, Some(IFSWorkerFile::Rw)) => {
+                    Err(GolemError::FileSystemError {
+                        path: file.path.to_rel_string(),
+                        reason: "Tried updating rw file to ro during update".to_string()
+                    })
+                }
+                (ComponentFilePermissions::ReadWrite, None) => {
+                    debug!("Loading rw file {}", path.display());
+
+                    let exists = tokio::fs::try_exists(&path).map_err(|e| GolemError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
+
+                    if exists {
+                        let metadata = tokio::fs::metadata(&path).await.map_err(|e|
+                            GolemError::FileSystemError {
+                                path: file.path.to_rel_string(),
+                                reason: format!("Failed getting metadata of path: {e}")
+                            }
+                        )?;
+
+                        if metadata.is_file() {
+                            return Ok(UpdateFileSystemResult::NoChanges)
+                        }
+
+                        // Try removing it if it's an empty directory, this will fail otherwise and we can report the error.
+                        tokio::fs::remove_dir(&path).await.map_err(|e|
+                            GolemError::FileSystemError {
+                                path: file.path.to_rel_string(),
+                                reason: format!("Tried replacing an existing non-empty path with rw file during update: {e}")
+                            }
+                        )?;
+                    }
+
+                    file_loader
+                        .get_read_write_to(account_id, &file.key, &path)
+                        .await?;
+                    Ok::<_, GolemError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw})
+                },
+                (ComponentFilePermissions::ReadWrite, Some(IFSWorkerFile::Ro { .. })) => {
+                    debug!("Updating ro file to rw {}", path.display());
+                    tokio::fs::remove_file(&path).await.map_err(|e|
+                        GolemError::FileSystemError {
+                            path: file.path.to_rel_string(),
+                            reason: format!("Failed deleting file during update: {e}")
+                        }
+                    )?;
+                    file_loader
+                        .get_read_write_to(account_id, &file.key, &path)
+                        .await?;
+                    Ok::<_, GolemError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw})
+                },
+                (ComponentFilePermissions::ReadWrite, Some(IFSWorkerFile::Rw)) => {
+                    debug!("Updating rw file {}", path.display());
+                    Ok(UpdateFileSystemResult::NoChanges)
+                },
+            }
+        }
+    });
+
+    let mut results = try_join_all(futures_phase_1).await?;
+    results.extend(try_join_all(futures_phase_2).await?);
+
+    for result in results {
+        match result {
+            UpdateFileSystemResult::NoChanges => {}
+            UpdateFileSystemResult::Remove(path) => {
+                current_state.remove(&path);
+            }
+            UpdateFileSystemResult::Replace { path, value } => {
+                current_state.insert(path, value);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<PathBuf> {
+    let ro_paths = files.iter().filter_map(|(p, f)| match f {
+        IFSWorkerFile::Ro { .. } => Some(p.clone()),
+        _ => None,
+    });
+    HashSet::from_iter(ro_paths)
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
