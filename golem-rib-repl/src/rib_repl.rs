@@ -265,15 +265,14 @@ async fn eval(
     rib_byte_code: RibByteCode,
     repl_state: &Arc<ReplState>,
 ) -> Result<RibResult, RibRuntimeError> {
-    let instruction_id = InstructionId {
-        index: rib_byte_code.len(),
-    };
+    let last_instruction =
+        InstructionId::new(rib_byte_code.len());
 
-    let result = interpreter(repl_state).run(rib_byte_code).await;
+    let result = interpreter(repl_state).run(rib_byte_code).await?;
 
-    repl_state.update_instruction(instruction_id);
+    repl_state.update_instruction(last_instruction);
 
-    result
+    Ok(result)
 }
 
 pub fn interpreter(repl_state: &Arc<ReplState>) -> Interpreter {
