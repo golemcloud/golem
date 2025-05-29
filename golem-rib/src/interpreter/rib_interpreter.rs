@@ -268,7 +268,7 @@ impl Interpreter {
                     internal::run_to_iterator(&mut stack)?;
                 }
                 RibIR::CreateSink(analysed_type) => {
-                    internal::run_create_sink_instruction(&mut stack, &analysed_type)?
+                    internal::run_create_sink_instruction(&mut stack, analysed_type)?
                 }
                 RibIR::AdvanceIterator => {
                     internal::run_advance_iterator_instruction(&mut stack)?;
@@ -540,24 +540,24 @@ mod internal {
 
     pub(crate) fn run_create_sink_instruction(
         interpreter_stack: &mut InterpreterStack,
-        analysed_type: &AnalysedType,
+        analysed_type: AnalysedType,
     ) -> RibInterpreterResult<()> {
         let analysed_type = match analysed_type {
-            AnalysedType::List(type_list) => type_list.clone().inner,
+            AnalysedType::List(type_list) => *type_list.inner,
             _ => bail_corrupted_state!("expecting a list type to create sink"),
         };
-        interpreter_stack.create_sink(analysed_type.deref());
+        interpreter_stack.create_sink(analysed_type);
         Ok(())
     }
 
     pub(crate) fn run_advance_iterator_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {
-        let mut rib_result = interpreter_stack
+        let mut stack_value = interpreter_stack
             .pop()
-            .ok_or_else(|| internal_corrupted_state!("failed to advance the iterator"))?;
+            .ok_or_else(|| empty_stack())?;
 
-        match &mut rib_result {
+        match &mut stack_value {
             RibInterpreterStackValue::Sink(_, _) => {
                 let mut existing_iterator = interpreter_stack
                     .pop()
@@ -566,8 +566,8 @@ mod internal {
                 match &mut existing_iterator {
                     RibInterpreterStackValue::Iterator(iter) => {
                         if let Some(value_and_type) = iter.next() {
-                            interpreter_stack.push(existing_iterator);
-                            interpreter_stack.push(rib_result);
+                            interpreter_stack.push(existing_iterator); // push the iterator back
+                            interpreter_stack.push(stack_value); // push the sink back
                             interpreter_stack.push(RibInterpreterStackValue::Val(value_and_type));
                             Ok(())
                         } else {
@@ -583,7 +583,7 @@ mod internal {
 
             RibInterpreterStackValue::Iterator(iter) => {
                 if let Some(value_and_type) = iter.next() {
-                    interpreter_stack.push(rib_result);
+                    interpreter_stack.push(stack_value);
                     interpreter_stack.push(RibInterpreterStackValue::Val(value_and_type));
                     Ok(())
                 } else {
@@ -3955,6 +3955,30 @@ mod tests {
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+    }
+
+    #[test]
+    async fn test_interpreter_durable_worker_12() {
+        let expr = r#"
+                let worker = instance("my-worker");
+                for i in [1, 2, 3] {
+                   worker.foo("${i}");
+                   yield i;
+                }
+            "#;
+        let expr = Expr::from_text(expr).unwrap();
+        let component_metadata = test_utils::get_metadata();
+
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler = RibCompiler::new(compiler_config);
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_interpreter =
+            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
+
+        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(result.get_val().unwrap().value, Value::List(vec![Value::S32(1), Value::S32(2), Value::S32(3)]));
     }
 
     #[test]
