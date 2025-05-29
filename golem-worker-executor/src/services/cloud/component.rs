@@ -21,8 +21,13 @@ use crate::cloud::CloudGolemTypes;
 use crate::error::GolemError;
 use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
 use crate::metrics::component::record_compilation_time;
+use crate::services::compiled_component;
 use crate::services::compiled_component::CompiledComponentService;
 use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::golem_config::{
+    CompiledComponentServiceConfig, ComponentCacheConfig, ComponentServiceConfig,
+    ProjectServiceConfig,
+};
 use crate::services::plugins::PluginsObservations;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::project::v1::cloud_project_service_client::CloudProjectServiceClient;
@@ -40,16 +45,52 @@ use golem_common::metrics::external_calls::record_external_call_response_size_by
 use golem_common::model::{AccountId, ComponentId, ComponentVersion};
 use golem_common::model::{ProjectId, RetryConfig};
 use golem_common::retries::with_retries;
+use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
 use prost::Message;
 use tokio::task::spawn_blocking;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
+
+pub fn configured(
+    config: &ComponentServiceConfig,
+    project_service_config: &ProjectServiceConfig,
+    cache_config: &ComponentCacheConfig,
+    compiled_config: &CompiledComponentServiceConfig,
+    blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+    plugin_observations: Arc<dyn PluginsObservations + Send + Sync>,
+) -> Arc<dyn ComponentService<CloudGolemTypes> + Send + Sync> {
+    let compiled_component_service = compiled_component::configured(compiled_config, blob_storage);
+    match (config, project_service_config) {
+        (ComponentServiceConfig::Grpc(config), ProjectServiceConfig::Grpc(project_config)) => {
+            info!("Using component API at {}", config.url());
+            Arc::new(ComponentServiceCloudGrpc::new(
+                config.uri(),
+                project_config.uri(),
+                config
+                    .access_token
+                    .parse::<Uuid>()
+                    .expect("Access token must be an UUID"),
+                cache_config.max_capacity,
+                cache_config.max_metadata_capacity,
+                cache_config.max_resolved_component_capacity,
+                cache_config.max_resolved_project_capacity,
+                cache_config.time_to_idle,
+                config.retries.clone(),
+                config.connect_timeout,
+                compiled_component_service,
+                config.max_component_size,
+                plugin_observations,
+            ))
+        }
+        _ => panic!("Unsupported cloud component and project service configuration. Currently only gRPC is supported for both")
+    }
+}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ComponentKey {
@@ -82,6 +123,7 @@ impl ComponentServiceCloudGrpc {
         max_resolved_project_capacity: usize,
         time_to_idle: Duration,
         retry_config: RetryConfig,
+        connect_timeout: Duration,
         compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
         max_component_size: usize,
         plugin_observations: Arc<dyn PluginsObservations>,
@@ -110,7 +152,7 @@ impl ComponentServiceCloudGrpc {
                 component_endpoint,
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
-                    ..Default::default() // TODO
+                    connect_timeout,
                 },
             ),
             project_client: GrpcClient::new(
@@ -124,7 +166,7 @@ impl ComponentServiceCloudGrpc {
                 project_endpoint,
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
-                    ..Default::default() // TODO
+                    connect_timeout,
                 },
             ),
             resolved_project_cache: create_resolved_project_cache(

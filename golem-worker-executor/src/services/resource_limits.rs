@@ -17,8 +17,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::error::GolemError;
+use crate::grpc::{is_grpc_retriable, GrpcError};
 use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
-use crate::services::cloud::config::ResourceLimitsConfig;
+use crate::model::CurrentResourceLimits;
+use crate::services::golem_config::ResourceLimitsConfig;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
 use cloud_api_grpc::proto::golem::cloud::limit::v1::{
@@ -30,9 +33,6 @@ use golem_common::metrics::external_calls::record_external_call_response_size_by
 use golem_common::model::AccountId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
-use crate::error::GolemError;
-use crate::grpc::{is_grpc_retriable, GrpcError};
-use crate::model::CurrentResourceLimits;
 use http::Uri;
 use prost::Message;
 use tokio::task::JoinHandle;
@@ -42,8 +42,8 @@ use tracing::error;
 use uuid::Uuid;
 
 #[async_trait]
-pub trait ResourceLimits {
-    /// Tries to borrow fuel for an worker for the given account. Returns the maximum amount of
+pub trait ResourceLimits: Send + Sync {
+    /// Tries to borrow fuel for a worker for the given account. Returns the maximum amount of
     /// fuel the worker can consume at once.
     /// If the worker runs out of fuel, it can try borrowing more fuel with the same function.
     /// If the worker finishes running it can give back the remaining fuel with `return_fuel`.

@@ -22,8 +22,6 @@ use crate::model::{
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
-use crate::services::cloud::resource_limits::ResourceLimits;
-use crate::services::cloud::{AdditionalDeps, HasResourceLimits};
 use crate::services::component::{ComponentMetadata, ComponentService};
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
@@ -32,13 +30,14 @@ use crate::services::oplog::{Oplog, OplogService};
 use crate::services::plugins::Plugins;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
+use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplogService};
+use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplogService, NoAdditionalDeps};
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
@@ -76,7 +75,7 @@ pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
     config: Arc<GolemConfig>,
     account_id: AccountId,
-    resource_limits: Arc<dyn ResourceLimits + Send + Sync>,
+    resource_limits: Arc<dyn ResourceLimits>,
     last_fuel_level: i64,
     min_fuel_level: i64,
 }
@@ -289,7 +288,7 @@ impl ResourceLimiterAsync for Context {
 
 #[async_trait]
 impl ExternalOperations<Context> for Context {
-    type ExtraDeps = AdditionalDeps;
+    type ExtraDeps = NoAdditionalDeps;
 
     async fn get_last_error_and_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
@@ -332,8 +331,7 @@ impl ExternalOperations<Context> for Context {
         account_id: &AccountId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), GolemError> {
-        this.extra_deps()
-            .resource_limits()
+        this.resource_limits()
             .update_last_known_limits(account_id, last_known_limits)
             .await
     }
@@ -619,13 +617,14 @@ impl WorkerCtx for Context {
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
-        extra_deps: Self::ExtraDeps,
+        _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<CloudGolemTypes>>,
         worker_fork: Arc<dyn WorkerForkService>,
+        resource_limits: Arc<dyn ResourceLimits>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id.clone(),
@@ -656,7 +655,7 @@ impl WorkerCtx for Context {
             golem_ctx,
             config,
             owned_worker_id.account_id,
-            extra_deps.resource_limits(),
+            resource_limits,
         ))
     }
 

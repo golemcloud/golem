@@ -10,14 +10,14 @@ use cloud_common::model::ProjectAction;
 use gethostname::gethostname;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId, WorkerMetadata};
-use golem_worker_executor_base::model::InterruptKind;
-use golem_worker_executor_base::services::oplog::Oplog;
-use golem_worker_executor_base::services::{
+use golem_worker_executor::model::InterruptKind;
+use golem_worker_executor::services::oplog::Oplog;
+use golem_worker_executor::services::{
     All, HasConfig, HasExtraDeps, HasOplog, HasShardManagerService, HasShardService,
     HasWorkerForkService, HasWorkerService,
 };
-use golem_worker_executor_base::worker::Worker;
-use golem_worker_executor_base::GolemTypes;
+use golem_worker_executor::worker::Worker;
+use golem_worker_executor::GolemTypes;
 use serde_json::Value;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -713,7 +713,7 @@ impl<T: GolemTypes> DebugService for DebugServiceDefault<T> {
 #[cfg(test)]
 mod tests {
     use axum::body::Bytes;
-    use golem_worker_executor_base::DefaultGolemTypes;
+    use golem_worker_executor::DefaultGolemTypes;
     use std::fmt::{Debug, Formatter};
     use std::time::Duration;
     use test_r::test;
@@ -722,7 +722,7 @@ mod tests {
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::oplog::{OplogEntry, OplogPayload};
     use golem_common::model::Timestamp;
-    use golem_worker_executor_base::services::oplog::CommitLevel;
+    use golem_worker_executor::services::oplog::CommitLevel;
 
     #[test]
     async fn test_get_target_oplog_index_at_invocation_boundary_1() {

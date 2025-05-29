@@ -33,6 +33,7 @@ use crate::services::oplog::{Oplog, OplogService};
 use crate::services::plugins::Plugins;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
+use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
@@ -141,6 +142,7 @@ pub trait WorkerCtx:
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<Self::Types>>,
         worker_fork: Arc<dyn WorkerForkService>,
+        resource_limits: Arc<dyn ResourceLimits>,
     ) -> Result<Self, GolemError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;

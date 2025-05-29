@@ -16,9 +16,6 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::preview2::{golem_api_1_x, golem_durability};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
-use crate::services::cloud::component::ComponentServiceCloudGrpc;
-use crate::services::cloud::config::AdditionalGolemConfig;
-use crate::services::cloud::{resource_limits, AdditionalDeps};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::file_loader::FileLoader;
@@ -39,10 +36,10 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_fork::DefaultWorkerFork;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{compiled_component, rdbms, All};
+use crate::services::{rdbms, resource_limits, All, NoAdditionalDeps};
 use crate::wasi_host::create_linker;
 use crate::workerctx::cloud::Context;
-use crate::{Bootstrap, GolemTypes};
+use crate::{Bootstrap, GolemTypes, RunDetails};
 use async_trait::async_trait;
 use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, CloudPluginScope};
 use golem_service_base::storage::blob::BlobStorage;
@@ -51,7 +48,6 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::info;
-use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
@@ -66,9 +62,7 @@ impl GolemTypes for CloudGolemTypes {
     type PluginScope = CloudPluginScope;
 }
 
-struct ServerBootstrap {
-    additional_golem_config: Arc<AdditionalGolemConfig>,
-}
+struct ServerBootstrap {}
 
 #[async_trait]
 impl Bootstrap<Context> for ServerBootstrap {
@@ -94,38 +88,14 @@ impl Bootstrap<Context> for ServerBootstrap {
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         plugin_observations: Arc<dyn PluginsObservations>,
     ) -> Arc<dyn ComponentService<CloudGolemTypes>> {
-        let compiled_component_service =
-            compiled_component::configured(&golem_config.compiled_component_service, blob_storage);
-        let component_service_config = &self.additional_golem_config.component_service;
-        let component_cache_config = &self.additional_golem_config.component_cache;
-
-        let access_token = component_service_config
-            .access_token
-            .parse::<Uuid>()
-            .expect("Access token must be an UUID");
-
-        info!(
-            "Creating component service with config: {{ host: {}, port: {}, project_host: {}, project_port: {} }}",
-            component_service_config.host,
-            component_service_config.port,
-            component_service_config.project_host,
-            component_service_config.project_port
-        );
-
-        Arc::new(ComponentServiceCloudGrpc::new(
-            component_service_config.component_uri(),
-            component_service_config.project_uri(),
-            access_token,
-            component_cache_config.max_capacity,
-            component_cache_config.max_metadata_capacity,
-            component_cache_config.max_resolved_component_capacity,
-            component_cache_config.max_resolved_project_capacity,
-            component_cache_config.time_to_idle,
-            golem_config.retry.clone(),
-            compiled_component_service,
-            component_service_config.max_component_size,
+        crate::services::cloud::component::configured(
+            &golem_config.component_service,
+            &golem_config.project_service,
+            &golem_config.component_cache,
+            &golem_config.compiled_component_service,
+            blob_storage,
             plugin_observations,
-        ))
+        )
     }
 
     async fn create_services(
@@ -154,11 +124,9 @@ impl Bootstrap<Context> for ServerBootstrap {
         plugins: Arc<dyn Plugins<CloudGolemTypes>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<Context>> {
-        let additional_golem_config = self.additional_golem_config.clone();
-        let resource_limits =
-            resource_limits::configured(&self.additional_golem_config.resource_limits);
+        let resource_limits = resource_limits::configured(&golem_config.resource_limits);
 
-        let additional_deps = AdditionalDeps::new(additional_golem_config, resource_limits);
+        let additional_deps = NoAdditionalDeps {};
 
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
@@ -188,6 +156,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
+            resource_limits.clone(),
             additional_deps.clone(),
         ));
 
@@ -219,6 +188,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
+            resource_limits.clone(),
             additional_deps.clone(),
         ));
 
@@ -248,6 +218,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
+            resource_limits,
             additional_deps,
         ))
     }
@@ -272,20 +243,12 @@ fn get_durable_ctx(ctx: &mut Context) -> &mut DurableWorkerCtx<Context> {
 
 pub async fn run(
     golem_config: GolemConfig,
-    additional_golem_config: Arc<AdditionalGolemConfig>,
     prometheus_registry: Registry,
     runtime: Handle,
-) -> Result<(), Box<dyn std::error::Error>> {
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<RunDetails, anyhow::Error> {
     info!("Golem Worker Executor starting up...");
-    let mut join_set = JoinSet::new();
-    ServerBootstrap {
-        additional_golem_config,
-    }
-    .run(golem_config, prometheus_registry, runtime, &mut join_set)
-    .await?;
-
-    while let Some(res) = join_set.join_next().await {
-        res??
-    }
-    Ok(())
+    ServerBootstrap {}
+        .run(golem_config, prometheus_registry, runtime, join_set)
+        .await
 }

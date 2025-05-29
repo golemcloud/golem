@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::auth::{AuthServiceError, BaseAuthService, CloudAuthService};
 use cloud_common::model::ProjectAction;
-use cloud_worker_executor::services::config::CloudComponentServiceConfig;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
     get_component_metadata_response, GetLatestComponentRequest,
@@ -11,6 +10,7 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, 
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_common::retries::with_retries;
+use golem_worker_executor::services::golem_config::ComponentServiceGrpcConfig;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -78,7 +78,7 @@ impl From<golem_api_grpc::proto::golem::component::v1::ComponentError>
 
 pub struct AuthServiceDefault {
     common_auth: CloudAuthService,
-    component_service_grpc_config: CloudComponentServiceConfig,
+    component_service_grpc_config: ComponentServiceGrpcConfig,
     component_service_client: GrpcClient<ComponentServiceClient<Channel>>,
     component_project_cache: Cache<ComponentId, (), ProjectId, String>,
 }
@@ -86,7 +86,7 @@ pub struct AuthServiceDefault {
 impl AuthServiceDefault {
     pub fn new(
         common_auth: CloudAuthService,
-        component_service_grpc_config: CloudComponentServiceConfig,
+        component_service_grpc_config: ComponentServiceGrpcConfig,
     ) -> Self {
         let component_service_client = GrpcClient::new(
             "auth_service",
@@ -95,7 +95,7 @@ impl AuthServiceDefault {
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
             },
-            component_service_grpc_config.component_uri(),
+            component_service_grpc_config.uri(),
             GrpcClientConfig {
                 retries_on_unavailable: component_service_grpc_config.retries.clone(),
                 ..Default::default() // TODO

@@ -25,17 +25,17 @@ use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
-use crate::services::oss::AdditionalDeps;
 use crate::services::plugins::Plugins;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
+use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplogService};
+use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplogService, NoAdditionalDeps};
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
@@ -100,7 +100,7 @@ impl FuelManagement for Context {
 
 #[async_trait]
 impl ExternalOperations<Context> for Context {
-    type ExtraDeps = AdditionalDeps;
+    type ExtraDeps = NoAdditionalDeps;
 
     async fn get_last_error_and_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
@@ -346,6 +346,7 @@ impl WorkerCtx for Context {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
         worker_fork: Arc<dyn WorkerForkService>,
+        _resource_limits: Arc<dyn ResourceLimits>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,

@@ -24,6 +24,7 @@ use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::plugins::Plugins;
+use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::WorkerProxy;
@@ -32,9 +33,9 @@ use crate::services::{
     shard, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
     HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
     HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins, HasPromiseService,
-    HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
-    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
-    HasWorkerProxy, HasWorkerService,
+    HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator,
+    HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
 };
 use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
 use crate::worker::Worker;
@@ -90,6 +91,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub file_loader: Arc<FileLoader>,
     pub plugins: Arc<dyn Plugins<Ctx::Types>>,
     pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+    pub resource_limits: Arc<dyn ResourceLimits>,
     pub extra_deps: Ctx::ExtraDeps,
 }
 
@@ -247,6 +249,12 @@ impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for DefaultWorkerFork<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasResourceLimits for DefaultWorkerFork<Ctx> {
+    fn resource_limits(&self) -> Arc<dyn ResourceLimits> {
+        self.resource_limits.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
     fn clone(&self) -> Self {
         Self {
@@ -274,6 +282,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             file_loader: self.file_loader.clone(),
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
+            resource_limits: self.resource_limits.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -308,6 +317,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<Ctx::Types>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        resource_limits: Arc<dyn ResourceLimits>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -335,6 +345,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             file_loader,
             plugins,
             oplog_processor_plugin,
+            resource_limits,
             extra_deps,
         }
     }

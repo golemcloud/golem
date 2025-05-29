@@ -21,6 +21,7 @@ use crate::error::GolemError;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::plugins::Plugins;
+use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
@@ -28,10 +29,10 @@ use crate::services::{
     scheduler, shard, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
     HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
     HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins,
-    HasPromiseService, HasRdbmsService, HasRpc, HasRunningWorkerEnumerationService,
-    HasSchedulerService, HasShardManagerService, HasShardService, HasWasmtimeEngine,
-    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
-    HasWorkerService,
+    HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
+    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
+    HasWorkerForkService, HasWorkerProxy, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -298,6 +299,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     file_loader: Arc<FileLoader>,
     plugins: Arc<dyn Plugins<Ctx::Types>>,
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+    resource_limits: Arc<dyn ResourceLimits>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -328,6 +330,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             file_loader: self.file_loader.clone(),
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
+            resource_limits: self.resource_limits.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -487,6 +490,12 @@ impl<Ctx: WorkerCtx> HasRdbmsService for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasResourceLimits for DirectWorkerInvocationRpc<Ctx> {
+    fn resource_limits(&self) -> Arc<dyn ResourceLimits> {
+        self.resource_limits.clone()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
@@ -517,6 +526,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<Ctx::Types>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        resource_limits: Arc<dyn ResourceLimits>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -544,6 +554,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             file_loader,
             plugins,
             oplog_processor_plugin,
+            resource_limits,
             extra_deps,
         }
     }

@@ -18,14 +18,12 @@ use bit_vec::BitVec;
 use golem_common::model::{ComponentId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
-use golem_worker_executor_base::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
-use golem_worker_executor_base::services::rdbms::mysql::{types as mysql_types, MysqlType};
-use golem_worker_executor_base::services::rdbms::postgres::{
-    types as postgres_types, PostgresType,
-};
-use golem_worker_executor_base::services::rdbms::{DbResult, DbRow, Error};
-use golem_worker_executor_base::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
-use golem_worker_executor_base::services::rdbms::{RdbmsPoolKey, RdbmsService};
+use golem_worker_executor::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
+use golem_worker_executor::services::rdbms::mysql::{types as mysql_types, MysqlType};
+use golem_worker_executor::services::rdbms::postgres::{types as postgres_types, PostgresType};
+use golem_worker_executor::services::rdbms::{DbResult, DbRow, Error};
+use golem_worker_executor::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
+use golem_worker_executor::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use mac_address::MacAddress;
 use serde_json::json;
 use std::collections::{Bound, HashMap};

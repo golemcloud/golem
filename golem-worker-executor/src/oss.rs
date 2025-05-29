@@ -18,7 +18,6 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::preview2::golem::durability;
 use crate::preview2::golem_api_1_x;
 use crate::services::active_workers::ActiveWorkers;
-use crate::services::additional_config::DefaultAdditionalGolemConfig;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
@@ -27,7 +26,6 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::OplogService;
-use crate::services::oss::AdditionalDeps;
 use crate::services::plugins::{Plugins, PluginsObservations};
 use crate::services::promise::PromiseService;
 use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
@@ -41,7 +39,7 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_fork::DefaultWorkerFork;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{component, plugins, rdbms, All};
+use crate::services::{component, plugins, rdbms, resource_limits, All, NoAdditionalDeps};
 use crate::wasi_host::create_linker;
 use crate::workerctx::oss::Context;
 use crate::{Bootstrap, DefaultGolemTypes, RunDetails};
@@ -57,9 +55,7 @@ use wasmtime::Engine;
 #[cfg(test)]
 test_r::enable!();
 
-struct ServerBootstrap {
-    additional_config: DefaultAdditionalGolemConfig,
-}
+struct ServerBootstrap {}
 
 #[async_trait]
 impl Bootstrap<Context> for ServerBootstrap {
@@ -84,8 +80,8 @@ impl Bootstrap<Context> for ServerBootstrap {
         plugin_observations: Arc<dyn PluginsObservations>,
     ) -> Arc<dyn ComponentService<DefaultGolemTypes>> {
         component::configured(
-            &self.additional_config.component_service,
-            &self.additional_config.component_cache,
+            &golem_config.component_service,
+            &golem_config.component_cache,
             &golem_config.compiled_component_service,
             blob_storage,
             plugin_observations,
@@ -118,7 +114,8 @@ impl Bootstrap<Context> for ServerBootstrap {
         plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<Context>> {
-        let additional_deps = AdditionalDeps {};
+        let additional_deps = NoAdditionalDeps {};
+        let resource_limits = resource_limits::configured(&golem_config.resource_limits);
 
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
@@ -148,6 +145,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
+            resource_limits.clone(),
             additional_deps.clone(),
         ));
 
@@ -179,6 +177,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
+            resource_limits.clone(),
             additional_deps.clone(),
         ));
 
@@ -208,6 +207,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin,
+            resource_limits,
             additional_deps,
         ))
     }
@@ -232,13 +232,12 @@ fn get_durable_ctx(ctx: &mut Context) -> &mut DurableWorkerCtx<Context> {
 
 pub async fn run(
     golem_config: GolemConfig,
-    additional_config: DefaultAdditionalGolemConfig,
     prometheus_registry: Registry,
     runtime: Handle,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<RunDetails, anyhow::Error> {
     info!("Golem Worker Executor starting up...");
-    ServerBootstrap { additional_config }
+    ServerBootstrap {}
         .run(golem_config, prometheus_registry, runtime, join_set)
         .await
 }

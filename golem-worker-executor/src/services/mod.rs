@@ -22,7 +22,6 @@ use file_loader::FileLoader;
 use tokio::runtime::Handle;
 
 pub mod active_workers;
-pub mod additional_config;
 pub mod blob_store;
 pub mod cloud;
 pub mod compiled_component;
@@ -32,10 +31,10 @@ pub mod file_loader;
 pub mod golem_config;
 pub mod key_value;
 pub mod oplog;
-pub mod oss;
 pub mod plugins;
 pub mod promise;
 pub mod rdbms;
+pub mod resource_limits;
 pub mod rpc;
 pub mod scheduler;
 pub mod shard;
@@ -46,8 +45,23 @@ pub mod worker_enumeration;
 pub mod worker_event;
 pub mod worker_fork;
 pub mod worker_proxy;
-// HasXXX traits for fine-grained control of which dependencies a function needs
 
+#[derive(Clone)]
+pub struct NoAdditionalDeps {}
+
+impl Default for NoAdditionalDeps {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NoAdditionalDeps {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+// HasXXX traits for fine-grained control of which dependencies a function needs
 pub trait HasActiveWorkers<Ctx: WorkerCtx> {
     fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>>;
 }
@@ -156,6 +170,10 @@ pub trait HasRdbmsService {
     fn rdbms_service(&self) -> Arc<dyn rdbms::RdbmsService>;
 }
 
+pub trait HasResourceLimits {
+    fn resource_limits(&self) -> Arc<dyn resource_limits::ResourceLimits>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -181,6 +199,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasFileLoader
     + HasPlugins<Ctx::Types>
     + HasOplogProcessorPlugin
+    + HasResourceLimits
     + HasExtraDeps<Ctx>
     + Clone
     + Sync
@@ -212,6 +231,7 @@ impl<
             + HasFileLoader
             + HasPlugins<Ctx::Types>
             + HasOplogProcessorPlugin
+            + HasResourceLimits
             + HasExtraDeps<Ctx>
             + Clone
             + Sync,
@@ -248,6 +268,7 @@ pub struct All<Ctx: WorkerCtx> {
     file_loader: Arc<FileLoader>,
     plugins: Arc<dyn Plugins<Ctx::Types>>,
     oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
+    resource_limits: Arc<dyn resource_limits::ResourceLimits>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -279,6 +300,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             file_loader: self.file_loader.clone(),
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
+            resource_limits: self.resource_limits.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -314,6 +336,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<Ctx::Types>>,
         oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
+        resource_limits: Arc<dyn resource_limits::ResourceLimits>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -342,6 +365,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             file_loader,
             plugins,
             oplog_processor_plugin,
+            resource_limits,
             extra_deps,
         }
     }
@@ -373,6 +397,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.file_loader(),
             this.plugins(),
             this.oplog_processor_plugin(),
+            this.resource_limits(),
             this.extra_deps(),
         )
     }
@@ -537,6 +562,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasPlugins<Ctx::Types> for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasOplogProcessorPlugin for T {
     fn oplog_processor_plugin(&self) -> Arc<dyn oplog::plugin::OplogProcessorPlugin> {
         self.all().oplog_processor_plugin.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasResourceLimits for T {
+    fn resource_limits(&self) -> Arc<dyn resource_limits::ResourceLimits> {
+        self.all().resource_limits.clone()
     }
 }
 
