@@ -41,11 +41,10 @@ time_to_idle = "12h"
 
 [component_service]
 access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+connect_timeout = "30s"
 host = "localhost"
 max_component_size = 52428800
 port = 9090
-project_host = "localhost"
-project_port = 9091
 
 [component_service.retries]
 max_attempts = 3
@@ -125,6 +124,8 @@ max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
+[project_service.Disabled]
+
 [public_worker_api]
 access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 connect_timeout = "10s"
@@ -145,6 +146,22 @@ max_connections = 20
 
 [rdbms.query]
 query_batch = 50
+
+[resource_limits]
+type = "Grpc"
+
+[resource_limits.config]
+access_token = "00000000-0000-0000-0000-000000000000"
+batch_update_interval = "1m"
+host = "localhost"
+port = 8080
+
+[resource_limits.config.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
 
 [retry]
 max_attempts = 3
@@ -233,11 +250,10 @@ without_time = false
 # 
 # [component_service]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# connect_timeout = "30s"
 # host = "localhost"
 # max_component_size = 52428800
 # port = 9090
-# project_host = "localhost"
-# project_port = 9091
 # 
 # [component_service.retries]
 # max_attempts = 3
@@ -317,6 +333,8 @@ without_time = false
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
+# [project_service.Disabled]
+# 
 # [public_worker_api]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # connect_timeout = "10s"
@@ -337,6 +355,22 @@ without_time = false
 # 
 # [rdbms.query]
 # query_batch = 50
+# 
+# [resource_limits]
+# type = "Grpc"
+# 
+# [resource_limits.config]
+# access_token = "00000000-0000-0000-0000-000000000000"
+# batch_update_interval = "1m"
+# host = "localhost"
+# port = 8080
+# 
+# [resource_limits.config.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
 # 
 # [retry]
 # max_attempts = 3
