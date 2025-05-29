@@ -12,22 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(test)]
-mod tests {
-    use test_r::test;
+// Golem OSS specific services (to be merged with the `cloud` module once everything else is merged).
 
-    use golem_worker_executor_base::services::golem_config::{
-        make_config_loader, ShardManagerServiceConfig,
-    };
+#[derive(Clone)]
+pub struct AdditionalDeps {}
 
-    #[test]
-    pub fn config_is_loadable() {
-        let golem_config = make_config_loader().load().expect("Failed to load config");
+impl Default for AdditionalDeps {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-        let shard_manager_grpc_port = match &golem_config.shard_manager_service {
-            ShardManagerServiceConfig::Grpc(config) => config.port,
-            _ => panic!("Expected shard manager service to be grpc"),
-        };
-        assert_eq!(shard_manager_grpc_port, 9002);
+impl AdditionalDeps {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    #[cfg(test)]
+    #[allow(unused)]
+    pub async fn mocked() -> Self {
+        Self {}
     }
 }

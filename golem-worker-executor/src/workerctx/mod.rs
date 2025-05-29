@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod cloud;
+pub mod oss;
+
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 

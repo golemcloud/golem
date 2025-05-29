@@ -59,7 +59,7 @@ Tests are using the [test-r library](https://test-r.vigoo.dev).
 During development you can run the involved tests in the usual ways: from the IDE, or using `cargo test` command selecting a specific crate and test module, for example:
 
 ```shell
-cargo test -p golem-worker-executor-base api::promise -- --report-time
+cargo test -p golem-worker-executor api::promise -- --report-time
 ```
 
 #### Running all unit tests

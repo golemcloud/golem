@@ -1,10 +1,24 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::services::golem_config::{make_config_loader, GolemConfig};
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::model::RetryConfig;
 use golem_service_base::config::MergedConfigLoaderOrDumper;
-use golem_worker_executor_base::services::golem_config::{make_config_loader, GolemConfig};
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -165,9 +179,9 @@ fn build_uri(name: &str, host: &str, port: u16) -> Uri {
 mod tests {
     use test_r::test;
 
-    use golem_worker_executor_base::services::golem_config::make_config_loader;
+    use crate::services::golem_config::make_config_loader;
 
-    use crate::services::config::{load_or_dump_config, make_additional_config_loader};
+    use crate::services::cloud::config::{load_or_dump_config, make_additional_config_loader};
 
     #[test]
     pub fn base_config_is_loadable() {

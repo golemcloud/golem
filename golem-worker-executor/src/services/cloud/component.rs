@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,7 +17,13 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::CloudGolemTypes;
+use crate::cloud::CloudGolemTypes;
+use crate::error::GolemError;
+use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
+use crate::metrics::component::record_compilation_time;
+use crate::services::compiled_component::CompiledComponentService;
+use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::plugins::PluginsObservations;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use cloud_common::model::CloudComponentOwner;
@@ -35,12 +41,6 @@ use golem_common::model::{AccountId, ComponentId, ComponentVersion};
 use golem_common::model::{ProjectId, RetryConfig};
 use golem_common::retries::with_retries;
 use golem_wasm_ast::analysis::AnalysedExport;
-use golem_worker_executor_base::error::GolemError;
-use golem_worker_executor_base::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
-use golem_worker_executor_base::metrics::component::record_compilation_time;
-use golem_worker_executor_base::services::compiled_component::CompiledComponentService;
-use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
-use golem_worker_executor_base::services::plugins::PluginsObservations;
 use http::Uri;
 use prost::Message;
 use tokio::task::spawn_blocking;

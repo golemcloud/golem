@@ -1,6 +1,50 @@
-use crate::services::resource_limits::ResourceLimits;
-use crate::services::{AdditionalDeps, HasResourceLimits};
-use crate::CloudGolemTypes;
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::cloud::CloudGolemTypes;
+use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
+use crate::error::GolemError;
+use crate::metrics::wasm::record_allocated_memory;
+use crate::model::{
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
+    ReadFileResult, TrapType, WorkerConfig,
+};
+use crate::services::active_workers::ActiveWorkers;
+use crate::services::blob_store::BlobStoreService;
+use crate::services::cloud::resource_limits::ResourceLimits;
+use crate::services::cloud::{AdditionalDeps, HasResourceLimits};
+use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::file_loader::FileLoader;
+use crate::services::golem_config::GolemConfig;
+use crate::services::key_value::KeyValueService;
+use crate::services::oplog::{Oplog, OplogService};
+use crate::services::plugins::Plugins;
+use crate::services::promise::PromiseService;
+use crate::services::rdbms::RdbmsService;
+use crate::services::rpc::Rpc;
+use crate::services::scheduler::SchedulerService;
+use crate::services::worker::WorkerService;
+use crate::services::worker_event::WorkerEventService;
+use crate::services::worker_fork::WorkerForkService;
+use crate::services::worker_proxy::WorkerProxy;
+use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplogService};
+use crate::worker::{RetryDecision, Worker};
+use crate::workerctx::{
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
+    UpdateManagement, WorkerCtx,
+};
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::{
@@ -19,40 +63,6 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{
     CancellationTokenEntry, ComponentId, HostWasmRpc, RpcError, Uri, Value, WitValue,
-};
-use golem_worker_executor_base::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
-};
-use golem_worker_executor_base::error::GolemError;
-use golem_worker_executor_base::metrics::wasm::record_allocated_memory;
-use golem_worker_executor_base::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
-    ReadFileResult, TrapType, WorkerConfig,
-};
-use golem_worker_executor_base::services::active_workers::ActiveWorkers;
-use golem_worker_executor_base::services::blob_store::BlobStoreService;
-use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
-use golem_worker_executor_base::services::file_loader::FileLoader;
-use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::key_value::KeyValueService;
-use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
-use golem_worker_executor_base::services::plugins::Plugins;
-use golem_worker_executor_base::services::promise::PromiseService;
-use golem_worker_executor_base::services::rdbms::RdbmsService;
-use golem_worker_executor_base::services::rpc::Rpc;
-use golem_worker_executor_base::services::scheduler::SchedulerService;
-use golem_worker_executor_base::services::worker::WorkerService;
-use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::worker_fork::WorkerForkService;
-use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{
-    worker_enumeration, HasAll, HasConfig, HasOplogService,
-};
-use golem_worker_executor_base::worker::{RetryDecision, Worker};
-use golem_worker_executor_base::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
-    UpdateManagement, WorkerCtx,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
@@ -562,15 +572,15 @@ impl InvocationContextManagement for Context {
             .await
     }
 
+    fn remove_span(&mut self, span_id: &invocation_context::SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.remove_span(span_id)
+    }
+
     async fn finish_span(
         &mut self,
         span_id: &invocation_context::SpanId,
     ) -> Result<(), GolemError> {
         self.durable_ctx.finish_span(span_id).await
-    }
-
-    fn remove_span(&mut self, span_id: &invocation_context::SpanId) -> Result<(), GolemError> {
-        self.durable_ctx.remove_span(span_id)
     }
 
     async fn set_span_attribute(

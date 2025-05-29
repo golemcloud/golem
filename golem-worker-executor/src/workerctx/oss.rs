@@ -12,7 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::AdditionalDeps;
+use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
+use crate::error::GolemError;
+use crate::model::{
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
+    ReadFileResult, TrapType, WorkerConfig,
+};
+use crate::services::active_workers::ActiveWorkers;
+use crate::services::blob_store::BlobStoreService;
+use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::file_loader::FileLoader;
+use crate::services::golem_config::GolemConfig;
+use crate::services::key_value::KeyValueService;
+use crate::services::oplog::{Oplog, OplogService};
+use crate::services::oss::AdditionalDeps;
+use crate::services::plugins::Plugins;
+use crate::services::promise::PromiseService;
+use crate::services::rdbms::RdbmsService;
+use crate::services::rpc::Rpc;
+use crate::services::scheduler::SchedulerService;
+use crate::services::worker::WorkerService;
+use crate::services::worker_event::WorkerEventService;
+use crate::services::worker_fork::WorkerForkService;
+use crate::services::worker_proxy::WorkerProxy;
+use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplogService};
+use crate::worker::{RetryDecision, Worker};
+use crate::workerctx::{
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
+    UpdateManagement, WorkerCtx,
+};
+use crate::DefaultGolemTypes;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::{
@@ -30,40 +60,6 @@ use golem_wasm_rpc::golem_rpc_0_2_x::types::{
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{ComponentId, HostWasmRpc, RpcError, Uri, Value, WitValue};
-use golem_worker_executor_base::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
-};
-use golem_worker_executor_base::error::GolemError;
-use golem_worker_executor_base::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
-    ReadFileResult, TrapType, WorkerConfig,
-};
-use golem_worker_executor_base::services::active_workers::ActiveWorkers;
-use golem_worker_executor_base::services::blob_store::BlobStoreService;
-use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
-use golem_worker_executor_base::services::file_loader::FileLoader;
-use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::key_value::KeyValueService;
-use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
-use golem_worker_executor_base::services::plugins::Plugins;
-use golem_worker_executor_base::services::promise::PromiseService;
-use golem_worker_executor_base::services::rdbms::RdbmsService;
-use golem_worker_executor_base::services::rpc::Rpc;
-use golem_worker_executor_base::services::scheduler::SchedulerService;
-use golem_worker_executor_base::services::worker::WorkerService;
-use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::worker_fork::WorkerForkService;
-use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{
-    worker_enumeration, HasAll, HasConfig, HasOplogService,
-};
-use golem_worker_executor_base::worker::{RetryDecision, Worker};
-use golem_worker_executor_base::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
-    UpdateManagement, WorkerCtx,
-};
-use golem_worker_executor_base::DefaultGolemTypes;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};

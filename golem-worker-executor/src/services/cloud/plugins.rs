@@ -1,10 +1,10 @@
 // Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//     http://license.golem.cloud/LICENSE
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::CloudGolemTypes;
+use crate::cloud::CloudGolemTypes;
+use crate::error::GolemError;
+use crate::grpc::authorised_grpc_request;
+use crate::services::golem_config::PluginServiceConfig;
+use crate::services::plugins::{CachedPlugins, Plugins, PluginsObservations, PluginsUnavailable};
 use applying::Apply;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::component::v1::plugin_service_client::PluginServiceClient;
@@ -28,12 +32,6 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::plugin::{PluginDefinition, PluginInstallation};
 use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
-use golem_worker_executor_base::error::GolemError;
-use golem_worker_executor_base::grpc::authorised_grpc_request;
-use golem_worker_executor_base::services::golem_config::PluginServiceConfig;
-use golem_worker_executor_base::services::plugins::{
-    CachedPlugins, Plugins, PluginsObservations, PluginsUnavailable,
-};
 use http::Uri;
 use std::sync::Arc;
 use std::time::Duration;

@@ -16,10 +16,8 @@
 mod tests {
     use test_r::test;
 
-    use golem_worker_executor_base::services::additional_config::{
-        load_or_dump_config, make_additional_config_loader,
-    };
-    use golem_worker_executor_base::services::golem_config::make_config_loader;
+    use crate::services::additional_config::{load_or_dump_config, make_additional_config_loader};
+    use crate::services::golem_config::make_config_loader;
 
     #[test]
     pub fn base_config_is_loadable() {

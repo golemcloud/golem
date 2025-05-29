@@ -1,10 +1,24 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
-use crate::services::config::ResourceLimitsConfig;
+use crate::services::cloud::config::ResourceLimitsConfig;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
 use cloud_api_grpc::proto::golem::cloud::limit::v1::{
@@ -16,9 +30,9 @@ use golem_common::metrics::external_calls::record_external_call_response_size_by
 use golem_common::model::AccountId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
-use golem_worker_executor_base::error::GolemError;
-use golem_worker_executor_base::grpc::{is_grpc_retriable, GrpcError};
-use golem_worker_executor_base::model::CurrentResourceLimits;
+use crate::error::GolemError;
+use crate::grpc::{is_grpc_retriable, GrpcError};
+use crate::model::CurrentResourceLimits;
 use http::Uri;
 use prost::Message;
 use tokio::task::JoinHandle;

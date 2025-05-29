@@ -1,36 +1,51 @@
-use crate::context::Context;
-use crate::services::config::AdditionalGolemConfig;
-use crate::services::{resource_limits, AdditionalDeps};
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::durable_host::DurableWorkerCtx;
+use crate::preview2::{golem_api_1_x, golem_durability};
+use crate::services::active_workers::ActiveWorkers;
+use crate::services::blob_store::BlobStoreService;
+use crate::services::cloud::component::ComponentServiceCloudGrpc;
+use crate::services::cloud::config::AdditionalGolemConfig;
+use crate::services::cloud::{resource_limits, AdditionalDeps};
+use crate::services::component::ComponentService;
+use crate::services::events::Events;
+use crate::services::file_loader::FileLoader;
+use crate::services::golem_config::GolemConfig;
+use crate::services::key_value::KeyValueService;
+use crate::services::oplog::plugin::OplogProcessorPlugin;
+use crate::services::oplog::OplogService;
+use crate::services::plugins::{Plugins, PluginsObservations};
+use crate::services::promise::PromiseService;
+use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
+use crate::services::scheduler::SchedulerService;
+use crate::services::shard::ShardService;
+use crate::services::shard_manager::ShardManagerService;
+use crate::services::worker::WorkerService;
+use crate::services::worker_activator::WorkerActivator;
+use crate::services::worker_enumeration::{
+    RunningWorkerEnumerationService, WorkerEnumerationService,
+};
+use crate::services::worker_fork::DefaultWorkerFork;
+use crate::services::worker_proxy::WorkerProxy;
+use crate::services::{compiled_component, rdbms, All};
+use crate::wasi_host::create_linker;
+use crate::workerctx::cloud::Context;
+use crate::{Bootstrap, GolemTypes};
 use async_trait::async_trait;
 use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, CloudPluginScope};
 use golem_service_base::storage::blob::BlobStorage;
-use golem_worker_executor_base::durable_host::DurableWorkerCtx;
-use golem_worker_executor_base::preview2::{golem_api_1_x, golem_durability};
-use golem_worker_executor_base::services::active_workers::ActiveWorkers;
-use golem_worker_executor_base::services::blob_store::BlobStoreService;
-use golem_worker_executor_base::services::component::ComponentService;
-use golem_worker_executor_base::services::events::Events;
-use golem_worker_executor_base::services::file_loader::FileLoader;
-use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::key_value::KeyValueService;
-use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
-use golem_worker_executor_base::services::oplog::OplogService;
-use golem_worker_executor_base::services::plugins::{Plugins, PluginsObservations};
-use golem_worker_executor_base::services::promise::PromiseService;
-use golem_worker_executor_base::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
-use golem_worker_executor_base::services::scheduler::SchedulerService;
-use golem_worker_executor_base::services::shard::ShardService;
-use golem_worker_executor_base::services::shard_manager::ShardManagerService;
-use golem_worker_executor_base::services::worker::WorkerService;
-use golem_worker_executor_base::services::worker_activator::WorkerActivator;
-use golem_worker_executor_base::services::worker_enumeration::{
-    RunningWorkerEnumerationService, WorkerEnumerationService,
-};
-use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
-use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{compiled_component, rdbms, All};
-use golem_worker_executor_base::wasi_host::create_linker;
-use golem_worker_executor_base::{Bootstrap, GolemTypes};
 use prometheus::Registry;
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -40,14 +55,8 @@ use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
-use self::services::component::ComponentServiceCloudGrpc;
-
 #[cfg(test)]
 test_r::enable!();
-
-pub mod context;
-pub mod metrics;
-pub mod services;
 
 pub struct CloudGolemTypes;
 
@@ -74,7 +83,8 @@ impl Bootstrap<Context> for ServerBootstrap {
         Arc<dyn Plugins<CloudGolemTypes>>,
         Arc<dyn PluginsObservations>,
     ) {
-        let plugins = crate::services::plugins::cloud_configured(&golem_config.plugin_service);
+        let plugins =
+            crate::services::cloud::plugins::cloud_configured(&golem_config.plugin_service);
         (plugins.clone(), plugins)
     }
 
