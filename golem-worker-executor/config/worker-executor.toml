@@ -2,6 +2,7 @@
 grpc_address = "0.0.0.0"
 http_address = "0.0.0.0"
 http_port = 8082
+mode = "Oss"
 port = 9000
 tracing_file_name_with_port = true
 
@@ -19,6 +20,30 @@ root = "../data/blob_storage"
 type = "Enabled"
 
 [compiled_component_service.config]
+
+[component_cache]
+max_capacity = 32
+max_metadata_capacity = 16384
+max_resolved_component_capacity = 1024
+max_resolved_project_capacity = 1024
+time_to_idle = "12h"
+
+[component_service]
+type = "Grpc"
+
+[component_service.config]
+access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+connect_timeout = "30s"
+host = "localhost"
+max_component_size = 52428800
+port = 9090
+
+[component_service.config.retries]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
 
 [indexed_storage]
 type = "KVStoreRedis"
@@ -91,6 +116,8 @@ max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
+[project_service.Disabled]
+
 [public_worker_api]
 access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 connect_timeout = "10s"
@@ -111,6 +138,22 @@ max_connections = 20
 
 [rdbms.query]
 query_batch = 50
+
+[resource_limits]
+type = "Grpc"
+
+[resource_limits.config]
+access_token = "00000000-0000-0000-0000-000000000000"
+batch_update_interval = "1m"
+host = "localhost"
+port = 8080
+
+[resource_limits.config.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
 
 [retry]
 max_attempts = 3
@@ -174,6 +217,7 @@ without_time = false
 # grpc_address = "0.0.0.0"
 # http_address = "0.0.0.0"
 # http_port = 8082
+# mode = "Oss"
 # port = 9000
 # tracing_file_name_with_port = true
 # 
@@ -207,6 +251,30 @@ without_time = false
 # type = "Enabled"
 # 
 # [compiled_component_service.config]
+# 
+# [component_cache]
+# max_capacity = 32
+# max_metadata_capacity = 16384
+# max_resolved_component_capacity = 1024
+# max_resolved_project_capacity = 1024
+# time_to_idle = "12h"
+# 
+# [component_service]
+# type = "Grpc"
+# 
+# [component_service.config]
+# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# connect_timeout = "30s"
+# host = "localhost"
+# max_component_size = 52428800
+# port = 9090
+# 
+# [component_service.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [indexed_storage]
 # type = "Redis"
@@ -279,6 +347,8 @@ without_time = false
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
+# [project_service.Disabled]
+# 
 # [public_worker_api]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # connect_timeout = "10s"
@@ -299,6 +369,22 @@ without_time = false
 # 
 # [rdbms.query]
 # query_batch = 50
+# 
+# [resource_limits]
+# type = "Grpc"
+# 
+# [resource_limits.config]
+# access_token = "00000000-0000-0000-0000-000000000000"
+# batch_update_interval = "1m"
+# host = "localhost"
+# port = 8080
+# 
+# [resource_limits.config.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
 # 
 # [retry]
 # max_attempts = 3
@@ -352,6 +438,7 @@ without_time = false
 # grpc_address = "0.0.0.0"
 # http_address = "0.0.0.0"
 # http_port = 8082
+# mode = "Oss"
 # port = 9000
 # tracing_file_name_with_port = true
 # 
@@ -368,6 +455,30 @@ without_time = false
 # type = "Enabled"
 # 
 # [compiled_component_service.config]
+# 
+# [component_cache]
+# max_capacity = 32
+# max_metadata_capacity = 16384
+# max_resolved_component_capacity = 1024
+# max_resolved_project_capacity = 1024
+# time_to_idle = "12h"
+# 
+# [component_service]
+# type = "Grpc"
+# 
+# [component_service.config]
+# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# connect_timeout = "30s"
+# host = "localhost"
+# max_component_size = 52428800
+# port = 9090
+# 
+# [component_service.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [indexed_storage]
 # type = "InMemory"
@@ -427,6 +538,8 @@ without_time = false
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
+# [project_service.Disabled]
+# 
 # [public_worker_api]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # connect_timeout = "10s"
@@ -447,6 +560,22 @@ without_time = false
 # 
 # [rdbms.query]
 # query_batch = 50
+# 
+# [resource_limits]
+# type = "Grpc"
+# 
+# [resource_limits.config]
+# access_token = "00000000-0000-0000-0000-000000000000"
+# batch_update_interval = "1m"
+# host = "localhost"
+# port = 8080
+# 
+# [resource_limits.config.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
 # 
 # [retry]
 # max_attempts = 3
@@ -504,27 +633,3 @@ without_time = false
 # span_events_active = false
 # span_events_full = false
 # without_time = false
-## Generated from default config
-[component_cache]
-max_capacity = 32
-max_metadata_capacity = 16384
-max_resolved_component_capacity = 1024
-time_to_idle = "12h"
-
-[component_service]
-type = "Grpc"
-
-[component_service.config]
-access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
-connect_timeout = "30s"
-host = "localhost"
-max_component_size = 52428800
-port = 9090
-
-[component_service.config.retries]
-max_attempts = 3
-max_delay = "1s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 3.0
-

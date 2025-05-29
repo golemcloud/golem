@@ -924,8 +924,6 @@ export RUST_BACKTRACE=1
 ./target/debug/cloud-worker-service --dump-config-default-env-var > cloud-worker-service/config/worker-service.sample.env
 ./target/debug/cloud-debugging-service --dump-config-default-toml > cloud-debugging-service/config/debug-worker-executor.toml
 ./target/debug/cloud-debugging-service --dump-config-default-env-var > cloud-debugging-service/config/debug-worker-executor.sample.env
-./target/debug/cloud-worker-executor --dump-config-default-toml > cloud-worker-executor/config/worker-executor.toml
-./target/debug/cloud-worker-executor --dump-config-default-env-var > cloud-worker-executor/config/worker-executor.sample.env
 ./target/debug/cloud-service --dump-config-default-toml > cloud-service/config/cloud-service.toml
 ./target/debug/cloud-service --dump-config-default-env-var > cloud-service/config/cloud-service.sample.env
 '''
@@ -956,8 +954,6 @@ git diff --exit-code \
     cloud-component-service/config/component-service.sample.env \
     cloud-worker-service/config/worker-service.toml \
     cloud-worker-service/config/worker-service.sample.env \
-    cloud-worker-executor/config/worker-executor.toml \
-    cloud-worker-executor/config/worker-executor.sample.env \
     cloud-service/config/cloud-service.toml \
     cloud-service/config/cloud-service.sample.env
 '''
