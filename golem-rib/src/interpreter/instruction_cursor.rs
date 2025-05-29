@@ -27,11 +27,7 @@ impl RibByteCodeCursor {
     }
 
     pub fn last(&self) -> Option<&RibIR> {
-        if !self.byte_code.instructions.is_empty() {
-            self.byte_code.instructions.last()
-        } else {
-            None
-        }
+        self.byte_code.instructions.last()
     }
 
     pub fn from_rib_byte_code(byte_code: RibByteCode) -> RibByteCodeCursor {

@@ -36,12 +36,12 @@ impl ReplState {
         &self.invocation_results
     }
 
-    pub fn update_result(&self, instruction_id: &InstructionId, result: ValueAndType) {
+    pub fn update_cache(&self, instruction_id: InstructionId, result: ValueAndType) {
         self.invocation_results
             .results
             .write()
             .unwrap()
-            .insert(instruction_id.clone(), result);
+            .insert(instruction_id, result);
     }
 
     pub fn last_executed_instruction(&self) -> InstructionId {

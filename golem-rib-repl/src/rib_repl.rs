@@ -20,6 +20,7 @@ use crate::repl_state::ReplState;
 use crate::rib_edit::RibEdit;
 use async_trait::async_trait;
 use colored::Colorize;
+use golem_wasm_rpc::ValueAndType;
 use rib::{
     EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, Interpreter, RibByteCode,
     RibInput,
@@ -342,6 +343,17 @@ impl ReplRibFunctionInvoke {
     pub fn new(repl_state: Arc<ReplState>) -> Self {
         Self { repl_state }
     }
+
+    fn get_cached_result(&self, instruction_id: &InstructionId) -> Option<ValueAndType> {
+        // If the current instruction index is greater than the last played index result,
+        // then we shouldn't use the cache result no matter what.
+        // This check is important because without this, loops end up reusing the cached invocation result
+        if instruction_id.index > self.repl_state.last_executed_instruction().index {
+            None
+        } else {
+            self.repl_state.invocation_results().get(instruction_id)
+        }
+    }
 }
 
 #[async_trait]
@@ -356,17 +368,8 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
         let component_id = self.repl_state.dependency().component_id;
         let component_name = &self.repl_state.dependency().component_name;
 
-        let cached_result =
-            if self.repl_state.last_executed_instruction().index < instruction_id.index {
-                // If the running instruction is newer than the last played index result,
-                // then we shouldn't use the cache result. This logic comes into a play
-                // when the same instruction is executed multiple times live (e.g., in a loop).
-                None
-            } else {
-                self.repl_state.invocation_results().get(instruction_id)
-            };
-
-        match cached_result {
+        match self.get_cached_result(instruction_id) {
+            Some(result) => Ok(result),
             None => {
                 let rib_invocation_result = self
                     .repl_state
@@ -382,16 +385,14 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
 
                 match rib_invocation_result {
                     Ok(result) => {
-                        // Update the invocation results cache
                         self.repl_state
-                            .update_result(instruction_id, result.clone());
+                            .update_cache(instruction_id.clone(), result.clone());
 
                         Ok(result)
                     }
                     Err(err) => Err(err.into()),
                 }
             }
-            Some(result) => Ok(result),
         }
     }
 }
