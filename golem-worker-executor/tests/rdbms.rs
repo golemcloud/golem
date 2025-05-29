@@ -23,8 +23,9 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_common::model::public_oplog::{
-    BeginRemoteTransactionParameters, ImportedFunctionInvokedParameters, PublicDurableFunctionType,
-    PublicOplogEntry, RemoteTransactionParameters, WriteRemoteTransactionParameters,
+    BeginRemoteTransactionParameters, ImportedFunctionInvokedParameters, JumpParameters,
+    PublicDurableFunctionType, PublicOplogEntry, RemoteTransactionParameters,
+    WriteRemoteTransactionParameters,
 };
 use golem_common::model::{ComponentId, IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
@@ -404,16 +405,14 @@ async fn rdbms_postgres_idempotency(
     drop(executor);
 }
 
-#[test]
-#[tracing::instrument]
-async fn rdbms_postgres_commit_recovery(
+async fn postgres_transaction_recovery_test(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
-    _tracing: &Tracing,
+    fail_on_oplog_entry: &str,
+    commit: bool,
 ) {
     let db_address = postgres.public_connection_string();
-
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.component("rdbms-service").store().await;
@@ -422,57 +421,103 @@ async fn rdbms_postgres_commit_recovery(
         &executor,
         &component_id,
         &db_address,
-        "-FailOnCommitedRemoteTransaction",
+        format!("-FailOn{}", fail_on_oplog_entry).as_str(),
         1,
     )
     .await;
 
     let worker_id = worker_ids[0].clone();
 
-    let table_name = "test_users_recover1";
+    let table_name = format!("test_users_{}", fail_on_oplog_entry.to_lowercase());
 
-    let count = 2;
-
-    let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
-
-    insert_tests.push(StatementTest::execute_test(
-        postgres_create_table_statement(table_name),
-        vec![],
+    let create_test = RdbmsTest::new(
+        vec![StatementTest::execute_test(
+            postgres_create_table_statement(&table_name),
+            vec![],
+            None,
+        )],
         None,
-    ));
+    );
+
+    let result1 = execute_worker_test::<PostgresType>(
+        &executor,
+        &worker_id,
+        &IdempotencyKey::fresh(),
+        create_test.clone(),
+    )
+    .await;
+
+    check_test_result(&worker_id, result1.clone(), create_test.clone());
+
+    let count = 3;
 
     let expected_values: Vec<(Uuid, String, String)> = postgres_get_values(count);
-    insert_tests.append(&mut postgres_insert_statements(
-        table_name,
-        expected_values.clone(),
-        None,
-    ));
 
-    let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
+    let transaction_end = if commit {
+        TransactionEnd::Commit
+    } else {
+        TransactionEnd::Rollback
+    };
 
-    let result1 = execute_worker_test::<PostgresType>(
-        &executor,
-        &worker_id,
-        &IdempotencyKey::fresh(),
-        test.clone(),
-    )
-    .await;
-    println!("rdbms_postgres_commit_recovery after insert");
-    check_test_result(&worker_id, result1.clone(), test.clone());
-
-    let test = RdbmsTest::new(postgres_select_statements(table_name, expected_values), None);
+    let insert_test = RdbmsTest::new(
+        postgres_insert_statements(&table_name, expected_values.clone(), None),
+        Some(transaction_end),
+    );
 
     let result1 = execute_worker_test::<PostgresType>(
         &executor,
         &worker_id,
         &IdempotencyKey::fresh(),
-        test.clone(),
+        insert_test.clone(),
     )
     .await;
 
-    check_test_result(&worker_id, result1.clone(), test.clone());
+    check_test_result(&worker_id, result1.clone(), insert_test.clone());
+
+    let select_test = if commit {
+        RdbmsTest::new(
+            postgres_select_statements(&table_name, expected_values),
+            None,
+        )
+    } else {
+        RdbmsTest::new(postgres_select_statements(&table_name, vec![]), None)
+    };
+
+    let result1 = execute_worker_test::<PostgresType>(
+        &executor,
+        &worker_id,
+        &IdempotencyKey::fresh(),
+        select_test.clone(),
+    )
+    .await;
+
+    check_test_result(&worker_id, result1.clone(), select_test.clone());
 
     workers_resume_test(&executor, worker_ids).await;
+
+    let result1 = execute_worker_test::<PostgresType>(
+        &executor,
+        &worker_id,
+        &IdempotencyKey::fresh(),
+        select_test.clone(),
+    )
+    .await;
+
+    check_test_result(&worker_id, result1.clone(), select_test.clone());
+
+    let delete = StatementTest::execute_test(format!("DELETE FROM {table_name}"), vec![], None);
+
+    let test = RdbmsTest::new(vec![delete], None);
+
+    let result1 = execute_worker_test::<PostgresType>(
+        &executor,
+        &worker_id,
+        &IdempotencyKey::fresh(),
+        test.clone(),
+    )
+    .await;
+
+    check_test_result(&worker_id, result1.clone(), test.clone());
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
     let oplog_json = serde_json::to_string(&oplog);
@@ -486,82 +531,74 @@ async fn rdbms_postgres_commit_recovery(
 
 #[test]
 #[tracing::instrument]
+async fn rdbms_postgres_commit_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    postgres: &DockerPostgresRdb,
+    _tracing: &Tracing,
+) {
+    postgres_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        postgres,
+        "CommitedRemoteTransaction",
+        true,
+    )
+    .await;
+}
+
+#[test]
+#[tracing::instrument]
 async fn rdbms_postgres_pre_commit_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
-    let db_address = postgres.public_connection_string();
-
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
-    let component_id = executor.component("rdbms-service").store().await;
-
-    let worker_ids = start_workers::<PostgresType>(
-        &executor,
-        &component_id,
-        &db_address,
-        "-FailOnPreCommitRemoteTransaction",
-        1,
+    postgres_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        postgres,
+        "PreCommitRemoteTransaction",
+        true,
     )
     .await;
+}
 
-    let worker_id = worker_ids[0].clone();
-
-    let table_name = "test_users_recover2";
-
-    let count = 2;
-
-    let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
-
-    insert_tests.push(StatementTest::execute_test(
-        postgres_create_table_statement(table_name),
-        vec![],
-        None,
-    ));
-
-    let expected_values: Vec<(Uuid, String, String)> = postgres_get_values(count);
-    insert_tests.append(&mut postgres_insert_statements(
-        table_name,
-        expected_values.clone(),
-        None,
-    ));
-
-    let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
-
-    let result1 = execute_worker_test::<PostgresType>(
-        &executor,
-        &worker_id,
-        &IdempotencyKey::fresh(),
-        test.clone(),
+#[test]
+#[tracing::instrument]
+async fn rdbms_postgres_rollback_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    postgres: &DockerPostgresRdb,
+    _tracing: &Tracing,
+) {
+    postgres_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        postgres,
+        "RolledBackRemoteTransaction",
+        false,
     )
     .await;
-    println!("rdbms_postgres_pre_commit_recovery after insert");
-    check_test_result(&worker_id, result1.clone(), test.clone());
+}
 
-    let test = RdbmsTest::new(postgres_select_statements(table_name, expected_values), None);
-
-    let result1 = execute_worker_test::<PostgresType>(
-        &executor,
-        &worker_id,
-        &IdempotencyKey::fresh(),
-        test.clone(),
+#[test]
+#[tracing::instrument]
+async fn rdbms_postgres_pre_rollback_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    postgres: &DockerPostgresRdb,
+    _tracing: &Tracing,
+) {
+    postgres_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        postgres,
+        "PreRollbackRemoteTransaction",
+        false,
     )
     .await;
-
-    check_test_result(&worker_id, result1.clone(), test.clone());
-
-    workers_resume_test(&executor, worker_ids).await;
-
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
-    let oplog_json = serde_json::to_string(&oplog);
-    check!(oplog_json.is_ok());
-    // println!("{}", oplog_json.unwrap());
-
-    check_transaction_oplog_entries::<PostgresType>(oplog);
-
-    drop(executor);
 }
 
 fn postgres_create_table_statement(table_name: &str) -> String {
@@ -970,16 +1007,14 @@ async fn rdbms_mysql_idempotency(
     drop(executor);
 }
 
-#[test]
-#[tracing::instrument]
-async fn rdbms_mysql_commit_recovery(
+async fn mysql_transaction_recovery_test(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
-    _tracing: &Tracing,
+    fail_on_oplog_entry: &str,
+    commit: bool,
 ) {
     let db_address = mysql.public_connection_string();
-
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.component("rdbms-service").store().await;
@@ -988,68 +1023,127 @@ async fn rdbms_mysql_commit_recovery(
         &executor,
         &component_id,
         &db_address,
-        "-FailOnCommitedRemoteTransaction",
+        format!("-FailOn{}", fail_on_oplog_entry).as_str(),
         1,
     )
     .await;
 
     let worker_id = worker_ids[0].clone();
 
-    let table_name = "test_users_recover1";
+    let table_name = format!("test_users_{}", fail_on_oplog_entry.to_lowercase());
 
-    let count = 2;
-
-    let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
-
-    insert_tests.push(StatementTest::execute_test(
-        mysql_create_table_statement(table_name),
-        vec![],
+    let create_test = RdbmsTest::new(
+        vec![StatementTest::execute_test(
+            mysql_create_table_statement(&table_name),
+            vec![],
+            None,
+        )],
         None,
-    ));
+    );
+
+    let result1 = execute_worker_test::<MysqlType>(
+        &executor,
+        &worker_id,
+        &IdempotencyKey::fresh(),
+        create_test.clone(),
+    )
+    .await;
+
+    check_test_result(&worker_id, result1.clone(), create_test.clone());
+
+    let count = 3;
 
     let expected_values: Vec<(String, String)> = mysql_get_values(count);
 
-    insert_tests.append(&mut mysql_insert_statements(
-        table_name,
-        expected_values.clone(),
-        None,
-    ));
+    let transaction_end = if commit {
+        TransactionEnd::Commit
+    } else {
+        TransactionEnd::Rollback
+    };
 
-    let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
-
-    let result1 = execute_worker_test::<MysqlType>(
-        &executor,
-        &worker_id,
-        &IdempotencyKey::fresh(),
-        test.clone(),
-    )
-    .await;
-
-    println!("rdbms_mysql_commit_recovery after insert");
-    check_test_result(&worker_id, result1.clone(), test.clone());
-
-    let test = RdbmsTest::new(mysql_select_statements(table_name, expected_values), None);
+    let insert_test = RdbmsTest::new(
+        mysql_insert_statements(&table_name, expected_values.clone(), None),
+        Some(transaction_end),
+    );
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
         &worker_id,
         &IdempotencyKey::fresh(),
-        test.clone(),
+        insert_test.clone(),
     )
     .await;
 
-    check_test_result(&worker_id, result1.clone(), test.clone());
+    check_test_result(&worker_id, result1.clone(), insert_test.clone());
+
+    let select_test = if commit {
+        RdbmsTest::new(mysql_select_statements(&table_name, expected_values), None)
+    } else {
+        RdbmsTest::new(mysql_select_statements(&table_name, vec![]), None)
+    };
+
+    let result1 = execute_worker_test::<MysqlType>(
+        &executor,
+        &worker_id,
+        &IdempotencyKey::fresh(),
+        select_test.clone(),
+    )
+    .await;
+
+    check_test_result(&worker_id, result1.clone(), select_test.clone());
 
     workers_resume_test(&executor, worker_ids).await;
+
+    let result1 = execute_worker_test::<MysqlType>(
+        &executor,
+        &worker_id,
+        &IdempotencyKey::fresh(),
+        select_test.clone(),
+    )
+    .await;
+
+    check_test_result(&worker_id, result1.clone(), select_test.clone());
+
+    let delete = StatementTest::execute_test(format!("DELETE FROM {table_name}"), vec![], None);
+
+    let test = RdbmsTest::new(vec![delete], None);
+
+    let result1 = execute_worker_test::<MysqlType>(
+        &executor,
+        &worker_id,
+        &IdempotencyKey::fresh(),
+        test.clone(),
+    )
+    .await;
+
+    check_test_result(&worker_id, result1.clone(), test.clone());
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
-    // println!("{}", oplog.unwrap());
+    // println!("{}", oplog_json.unwrap());
 
     check_transaction_oplog_entries::<MysqlType>(oplog);
 
     drop(executor);
+}
+
+#[test]
+#[tracing::instrument]
+async fn rdbms_mysql_commit_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    mysql: &DockerMysqlRdb,
+    _tracing: &Tracing,
+) {
+    mysql_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        mysql,
+        "CommitedRemoteTransaction",
+        true,
+    )
+    .await;
 }
 
 #[test]
@@ -1060,78 +1154,50 @@ async fn rdbms_mysql_pre_commit_recovery(
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
-    let db_address = mysql.public_connection_string();
-
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
-    let component_id = executor.component("rdbms-service").store().await;
-
-    let worker_ids = start_workers::<MysqlType>(
-        &executor,
-        &component_id,
-        &db_address,
-        "-FailOnPreCommitRemoteTransaction",
-        1,
+    mysql_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        mysql,
+        "PreCommitRemoteTransaction",
+        true,
     )
     .await;
+}
 
-    let worker_id = worker_ids[0].clone();
-
-    let table_name = "test_users_recover2";
-
-    let count = 2;
-
-    let mut insert_tests: Vec<StatementTest> = Vec::with_capacity(count + 1);
-
-    insert_tests.push(StatementTest::execute_test(
-        mysql_create_table_statement(table_name),
-        vec![],
-        None,
-    ));
-
-    let expected_values: Vec<(String, String)> = mysql_get_values(count);
-
-    insert_tests.append(&mut mysql_insert_statements(
-        table_name,
-        expected_values.clone(),
-        None,
-    ));
-
-    let test = RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit));
-
-    let result1 = execute_worker_test::<MysqlType>(
-        &executor,
-        &worker_id,
-        &IdempotencyKey::fresh(),
-        test.clone(),
+#[test]
+#[tracing::instrument]
+async fn rdbms_mysql_rollback_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    mysql: &DockerMysqlRdb,
+    _tracing: &Tracing,
+) {
+    mysql_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        mysql,
+        "RolledBackRemoteTransaction",
+        false,
     )
     .await;
+}
 
-    println!("rdbms_mysql_pre_commit_recovery after insert");
-    check_test_result(&worker_id, result1.clone(), test.clone());
-
-    let test = RdbmsTest::new(mysql_select_statements(table_name, expected_values), None);
-
-    let result1 = execute_worker_test::<MysqlType>(
-        &executor,
-        &worker_id,
-        &IdempotencyKey::fresh(),
-        test.clone(),
+#[test]
+#[tracing::instrument]
+async fn rdbms_mysql_pre_rollback_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    mysql: &DockerMysqlRdb,
+    _tracing: &Tracing,
+) {
+    mysql_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        mysql,
+        "PreRollbackRemoteTransaction",
+        false,
     )
     .await;
-
-    check_test_result(&worker_id, result1.clone(), test.clone());
-
-    workers_resume_test(&executor, worker_ids).await;
-
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
-    let oplog_json = serde_json::to_string(&oplog);
-    check!(oplog_json.is_ok());
-    // println!("{}", oplog.unwrap());
-
-    check_transaction_oplog_entries::<MysqlType>(oplog);
-
-    drop(executor);
 }
 
 fn mysql_create_table_statement(table_name: &str) -> String {
@@ -1563,6 +1629,7 @@ fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>)
         let mut begin_entry: Option<(usize, BeginRemoteTransactionParameters)> = None;
         let mut pre_entry: Option<(usize, RemoteTransactionParameters)> = None;
         let mut end_entry: Option<(usize, RemoteTransactionParameters)> = None;
+        let mut jump_entry: Option<(usize, JumpParameters)> = None;
         let mut imported_function_invoked: Vec<(usize, ImportedFunctionInvokedParameters)> = vec![];
 
         for (i, e) in entries.iter().enumerate() {
@@ -1599,6 +1666,12 @@ fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>)
                                 .ok()
                                 .map(|v| (i, v));
                     }
+
+                    if jump_entry.is_none() {
+                        jump_entry = try_match!(e.clone(), PublicOplogEntry::Jump(v))
+                            .ok()
+                            .map(|v| (i, v));
+                    }
                 }
                 None => {
                     begin_entry =
@@ -1610,17 +1683,27 @@ fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>)
         }
 
         check!(begin_entry.is_some());
-        check!(end_entry.is_some());
-        check!(pre_entry.is_some());
-        check!(!imported_function_invoked.is_empty());
 
         let (begin_index, _) = begin_entry.unwrap();
-        let (pre_index, pre_entry) = pre_entry.unwrap();
-        let (end_index, end_entry) = end_entry.unwrap();
 
-        check!(pre_index > begin_index);
-        check!(end_index > pre_index);
-        check!(end_entry.begin_index == pre_entry.begin_index);
+        let (end_index, oplog_begin_index) = if let Some((end_index, jump_entry)) = jump_entry {
+            check!(pre_entry.is_none() || end_entry.is_none());
+            (end_index, jump_entry.jump.start.previous())
+        } else {
+            check!(pre_entry.is_some());
+            check!(end_entry.is_some());
+
+            let (pre_index, pre_entry) = pre_entry.unwrap();
+            let (end_index, end_entry) = end_entry.unwrap();
+
+            check!(pre_index > begin_index);
+            check!(end_index > pre_index);
+            check!(end_entry.begin_index == pre_entry.begin_index);
+
+            (end_index, end_entry.begin_index)
+        };
+
+        check!(!imported_function_invoked.is_empty());
 
         let fn_prefix1 = format!("rdbms::{}::db-transaction::", T::default());
         let fn_prefix2 = format!("rdbms::{}::db-result-stream::", T::default());
@@ -1637,7 +1720,7 @@ fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>)
                 v.wrapped_function_type
                     == PublicDurableFunctionType::WriteRemoteTransaction(
                         WriteRemoteTransactionParameters {
-                            index: Some(pre_entry.begin_index)
+                            index: Some(oplog_begin_index)
                         }
                     )
             );
@@ -1672,7 +1755,6 @@ fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>)
         if group
             .iter()
             .any(|e| matches!(e, PublicOplogEntry::BeginRemoteTransaction(_)))
-            && !group.iter().any(|e| matches!(e, PublicOplogEntry::Jump(_)))
         {
             check_entries::<T>(group);
         }
