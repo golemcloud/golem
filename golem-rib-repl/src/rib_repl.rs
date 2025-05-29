@@ -13,14 +13,17 @@
 // limitations under the License.
 
 use crate::compiler::compile_rib_script;
-use crate::dependency_manager::{RibComponentMetadata, RibDependencyManager};
+use crate::dependency_manager::RibDependencyManager;
 use crate::invoke::WorkerFunctionInvoke;
 use crate::repl_printer::{DefaultReplResultPrinter, ReplPrinter};
-use crate::repl_state::{ReplState};
+use crate::repl_state::ReplState;
 use crate::rib_edit::RibEdit;
 use async_trait::async_trait;
 use colored::Colorize;
-use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, Interpreter, RibByteCode, RibInput};
+use rib::{
+    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, Interpreter, RibByteCode,
+    RibInput,
+};
 use rib::{RibCompilationError, RibFunctionInvoke};
 use rib::{RibFunctionInvokeResult, RibResult, RibRuntimeError};
 use rustyline::error::ReadlineError;
@@ -29,9 +32,6 @@ use rustyline::{Config, Editor};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
-use golem_wasm_ast::analysis::analysed_type::tuple;
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{Value, ValueAndType};
 
 /// The REPL environment for Rib, providing an interactive shell for executing Rib code.
 pub struct RibRepl {
@@ -119,9 +119,7 @@ impl RibRepl {
             }
         }?;
 
-
-        let repl_state =
-            ReplState::new(&component_dependency, config.worker_function_invoke);
+        let repl_state = ReplState::new(&component_dependency, config.worker_function_invoke);
 
         Ok(RibRepl {
             history_file_path,
@@ -270,10 +268,7 @@ async fn eval(
 }
 
 pub fn interpreter(repl_state: &Arc<ReplState>) -> Interpreter {
-    let rib_function_invoke =
-        Arc::new(ReplRibFunctionInvoke::new(
-            repl_state.clone()
-        ));
+    let rib_function_invoke = Arc::new(ReplRibFunctionInvoke::new(repl_state.clone()));
 
     Interpreter::new(RibInput::default(), rib_function_invoke)
 }
@@ -333,16 +328,12 @@ impl Display for ReplBootstrapError {
 // Once multi-component support is added, the trait will be updated to include `component_id`,
 // and we can use it directly instead of `WorkerFunctionInvoke` in the `golem-rib-repl` module.
 pub struct ReplRibFunctionInvoke {
-    repl_state: Arc<ReplState>
+    repl_state: Arc<ReplState>,
 }
 
-impl<'a>ReplRibFunctionInvoke {
-    pub fn new(
-        repl_state: Arc<ReplState>
-    ) -> Self {
-        Self {
-            repl_state
-        }
+impl ReplRibFunctionInvoke {
+    pub fn new(repl_state: Arc<ReplState>) -> Self {
+        Self { repl_state }
     }
 }
 
@@ -358,12 +349,13 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
         let component_id = self.repl_state.dependency().component_id;
         let component_name = &self.repl_state.dependency().component_name;
 
-        let result =
-            self.repl_state.invocation_results().get(instruction_id);
+        let result = self.repl_state.invocation_results().get(instruction_id);
 
         match result {
             None => {
-                let rib_invocation_result = self.repl_state.worker_function_invoke()
+                let rib_invocation_result = self
+                    .repl_state
+                    .worker_function_invoke()
                     .invoke(
                         component_id,
                         component_name,
@@ -376,23 +368,15 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
                 match rib_invocation_result {
                     Ok(result) => {
                         // Update the invocation results cache
-                        self.repl_state.update_result(
-                            instruction_id,
-                            result.clone()
-                        );
+                        self.repl_state
+                            .update_result(instruction_id, result.clone());
 
                         Ok(result)
                     }
-                    Err(err) => {
-                       Err(err.into())
-                    }
+                    Err(err) => Err(err.into()),
                 }
             }
-            Some(result) => {
-                Ok(result)
-            }
+            Some(result) => Ok(result),
         }
-
-
     }
 }

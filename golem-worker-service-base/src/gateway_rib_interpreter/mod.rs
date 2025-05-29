@@ -17,7 +17,10 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibByteCode, RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult};
+use rib::{
+    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibByteCode,
+    RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult,
+};
 use std::fmt::Display;
 use std::sync::Arc;
 

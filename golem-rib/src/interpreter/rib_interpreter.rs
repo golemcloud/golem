@@ -19,10 +19,7 @@ use crate::interpreter::rib_runtime_error::{
     arithmetic_error, no_result, throw_error, RibRuntimeError,
 };
 use crate::interpreter::stack::InterpreterStack;
-use crate::{
-    internal_corrupted_state, InstructionId, RibByteCode, RibFunctionInvoke, RibIR, RibInput,
-    RibResult,
-};
+use crate::{internal_corrupted_state, RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
 use std::sync::Arc;
 
 pub struct Interpreter {
@@ -568,7 +565,7 @@ mod internal {
     pub(crate) fn run_advance_iterator_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {
-        let mut stack_value = interpreter_stack.pop().ok_or_else(|| empty_stack())?;
+        let mut stack_value = interpreter_stack.pop().ok_or_else(empty_stack)?;
 
         match &mut stack_value {
             RibInterpreterStackValue::Sink(_, _) => {
