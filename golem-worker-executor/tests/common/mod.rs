@@ -12,7 +12,6 @@ use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
 use golem_worker_executor::services::file_loader::FileLoader;
 use prometheus::Registry;
-use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
@@ -35,7 +34,7 @@ use golem_worker_executor::services::golem_config::{
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
-
+use std::time::Duration;
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
