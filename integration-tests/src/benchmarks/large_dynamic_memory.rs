@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
-use golem_test_framework::config::{CliParams, TestDependencies};
-use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use integration_tests::benchmarks::{
+use crate::benchmarks::{
     benchmark_invocations, delete_workers, invoke_and_await, run_benchmark, setup_benchmark,
     setup_simple_iteration, SimpleBenchmarkContext, SimpleIterationContext,
 };
+use async_trait::async_trait;
+use golem_test_framework::config::{CliParams, TestDependencies};
+use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 
 struct LargeDynamicMemory {
     config: RunConfig,
@@ -100,7 +100,6 @@ impl Benchmark for LargeDynamicMemory {
     }
 }
 
-#[tokio::main]
-async fn main() {
+pub async fn run() {
     run_benchmark::<LargeDynamicMemory>().await;
 }
