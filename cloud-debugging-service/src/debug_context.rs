@@ -17,40 +17,39 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{CancellationTokenEntry, ComponentId, Value};
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, WitValue};
-use golem_worker_executor_base::durable_host::{
+use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
-use golem_worker_executor_base::error::GolemError;
-use golem_worker_executor_base::model::{
+use golem_worker_executor::error::GolemError;
+use golem_worker_executor::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
     ReadFileResult, TrapType, WorkerConfig,
 };
-use golem_worker_executor_base::services::active_workers::ActiveWorkers;
-use golem_worker_executor_base::services::blob_store::BlobStoreService;
-use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
-use golem_worker_executor_base::services::file_loader::FileLoader;
-use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::key_value::KeyValueService;
-use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
-use golem_worker_executor_base::services::plugins::Plugins;
-use golem_worker_executor_base::services::promise::PromiseService;
-use golem_worker_executor_base::services::rdbms::RdbmsService;
-use golem_worker_executor_base::services::rpc::Rpc;
-use golem_worker_executor_base::services::scheduler::SchedulerService;
-use golem_worker_executor_base::services::worker::WorkerService;
-use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::worker_fork::WorkerForkService;
-use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{
-    worker_enumeration, HasAll, HasConfig, HasOplogService,
-};
-use golem_worker_executor_base::worker::{RetryDecision, Worker};
-use golem_worker_executor_base::workerctx::{
+use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::blob_store::BlobStoreService;
+use golem_worker_executor::services::component::{ComponentMetadata, ComponentService};
+use golem_worker_executor::services::file_loader::FileLoader;
+use golem_worker_executor::services::golem_config::GolemConfig;
+use golem_worker_executor::services::key_value::KeyValueService;
+use golem_worker_executor::services::oplog::{Oplog, OplogService};
+use golem_worker_executor::services::plugins::Plugins;
+use golem_worker_executor::services::promise::PromiseService;
+use golem_worker_executor::services::rdbms::RdbmsService;
+use golem_worker_executor::services::resource_limits::ResourceLimits;
+use golem_worker_executor::services::rpc::Rpc;
+use golem_worker_executor::services::scheduler::SchedulerService;
+use golem_worker_executor::services::worker::WorkerService;
+use golem_worker_executor::services::worker_event::WorkerEventService;
+use golem_worker_executor::services::worker_fork::WorkerForkService;
+use golem_worker_executor::services::worker_proxy::WorkerProxy;
+use golem_worker_executor::services::{worker_enumeration, HasAll, HasConfig, HasOplogService};
+use golem_worker_executor::worker::{RetryDecision, Worker};
+use golem_worker_executor::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
     InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
-use golem_worker_executor_base::GolemTypes;
+use golem_worker_executor::GolemTypes;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
@@ -548,6 +547,7 @@ impl<T: GolemTypes> WorkerCtx for DebugContext<T> {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<T>>,
         worker_fork: Arc<dyn WorkerForkService>,
+        _resource_limits: Arc<dyn ResourceLimits>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,

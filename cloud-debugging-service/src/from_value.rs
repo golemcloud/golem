@@ -2,20 +2,20 @@ use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentId, ComponentVersion, PromiseId, WorkerId};
 use golem_wasm_rpc::Value;
-use golem_worker_executor_base::durable_host::http::serialized::{
+use golem_worker_executor::durable_host::http::serialized::{
     SerializableDnsErrorPayload, SerializableErrorCode, SerializableFieldSizePayload,
     SerializableHttpMethod, SerializableHttpRequest, SerializableResponse,
     SerializableResponseHeaders, SerializableTlsAlertReceivedPayload,
 };
-use golem_worker_executor_base::durable_host::serialized::{
+use golem_worker_executor::durable_host::serialized::{
     SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddress,
     SerializableIpAddresses, SerializableStreamError,
 };
-use golem_worker_executor_base::error::GolemError;
-use golem_worker_executor_base::model::InterruptKind;
-use golem_worker_executor_base::services::blob_store::ObjectMetadata;
-use golem_worker_executor_base::services::rpc::RpcError;
-use golem_worker_executor_base::services::worker_proxy::WorkerProxyError;
+use golem_worker_executor::error::GolemError;
+use golem_worker_executor::model::InterruptKind;
+use golem_worker_executor::services::blob_store::ObjectMetadata;
+use golem_worker_executor::services::rpc::RpcError;
+use golem_worker_executor::services::worker_proxy::WorkerProxyError;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::ops::Deref;
