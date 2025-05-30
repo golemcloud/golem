@@ -35,8 +35,7 @@ const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
 const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
 const GOLEM_API_GATEWAY_BINDING: &str = "x-golem-api-gateway-binding";
 
-// OpenApiHttpApiDefinitionResponse had id, version and open api schema as yaml string
-// OpenApiHttpApiDefinitionResponse is a wrapper around OpenApiHttpApiDefinition
+// OpenApiHttpApiDefinitionResponse is a wrapper id, version and open api schema as yaml string
 // OpenApiHttpApiDefinition struct is defined using crate openapiv3 as OPENAPI+GOLEMEXTENSIONS
 // openapiv3 does not have Json(T) trait, so we convert to yaml string and wrap it
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
@@ -193,7 +192,6 @@ async fn create_operation(
 ) -> Result<openapiv3::Operation, String> {
     let mut operation = openapiv3::Operation::default();
 
-    // Add parameters (both path and query)
     add_parameters(&mut operation, route);
     add_request_body(&mut operation, route);
     add_responses(&mut operation, route);
@@ -273,7 +271,7 @@ fn get_parameters(
     match &route.binding {
         GatewayBindingCompiled::Worker(worker_binding)
         | GatewayBindingCompiled::FileServer(worker_binding) => {
-            // Check worker_name_input first
+            // Check worker_name_compiled
             if let Some(worker_name_compiled) = &worker_binding.worker_name_compiled {
                 if let Some(request_record) = worker_name_compiled
                     .rib_input_type_info
@@ -305,7 +303,7 @@ fn get_parameters(
             }
         }
         GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
-            // Check worker_name_input for HttpHandler
+            // Check worker_name_compiled for HttpHandler
             if let Some(worker_name_compiled) = &http_handler_binding.worker_name_compiled {
                 if let Some(request_record) = worker_name_compiled
                     .rib_input_type_info
@@ -415,14 +413,6 @@ fn add_request_body(operation: &mut openapiv3::Operation, route: &CompiledRoute)
     }
 }
 
-
-// NOTE: Content-Type is always application/json for OpenAPI generation 
-// because headers follows the HttpFields::analyzed_type() = List(Tuple(String, List(U8))) structure from WIT,
-// Since we can't access actual header names/values at compile time, only type
-// Actual header names are determined by RIB expression evaluation at runtime
-// I am not 100% certain on this logic
-// It is still possible to string scan the header value from the ribscript
-
 // Helper function: Determines response schema
 fn determine_response_schema_and_content_type(
     route: &CompiledRoute,
@@ -430,16 +420,10 @@ fn determine_response_schema_and_content_type(
     if let GatewayBindingCompiled::Worker(worker_binding) = &route.binding {
         if let Some(output_info) = &worker_binding.response_compiled.rib_output {
             if let AnalysedType::Record(record) = &output_info.analysed_type {
-                let headers_opt = extract_header_type(&record.fields);
-                let body_opt = extract_body_type(&record.fields);
-                let status_opt = extract_status_type(&record.fields);
+                let (headers_opt, body_opt, status_opt) = extract_response_fields(&record.fields);
                 let content_type = "application/json".to_string();
                 if headers_opt.is_some() || body_opt.is_some() || status_opt.is_some() {
-                    let schema = Some(
-                        body_opt
-                            .map(|body| create_schema_from_analysed_type(&body))
-                            .unwrap_or_else(create_default_schema),
-                    );
+                    let schema = body_opt.map(|body| create_schema_from_analysed_type(&body));
                     return (schema, content_type);
                 } else {
                     // No structured response fields, use entire record
@@ -455,20 +439,31 @@ fn determine_response_schema_and_content_type(
     (None, "application/json".to_string())
 }
 
+// Helper function for extracting headers, body and status from response record fields
+fn extract_response_fields(record_name_type_pairs: &[NameTypePair]) -> (Option<AnalysedType>, Option<AnalysedType>, Option<AnalysedType>) {
+    let mut headers_opt = None;
+    let mut body_opt = None;
+    let mut status_opt = None;
+    
+    for field in record_name_type_pairs {
+        match field.name.as_str() {
+            "headers" => headers_opt = Some(field.typ.clone()),
+            "body" => body_opt = Some(field.typ.clone()),
+            "status" => status_opt = Some(field.typ.clone()),
+            _ => {}
+        }
+    }
+    
+    (headers_opt, body_opt, status_opt)
+}
+
 // Helper function: Adds responses to the operation
 fn add_responses(operation: &mut openapiv3::Operation, route: &CompiledRoute) {
     let default_status = get_default_status_code(&route.method);
-
-    // Get both schema and content type in one call
     let (response_schema_opt, content_type) = determine_response_schema_and_content_type(route);
-
     let response = create_response_with_schema(default_status, response_schema_opt, &content_type);
 
-    // It is possible that rib outputs status 200, while we are expecting 201
-    // Also in the case that we have multiple possible response status, but a single response type
-    // {status: 200, body: string}, {status: 400, body: string}
-    // We create one response using method default status code, and another response using the default response
-
+    // Once as specific response and another as default to cover other status codes
     operation.responses.responses.insert(
         openapiv3::StatusCode::Code(default_status),
         openapiv3::ReferenceOr::Item(response.clone()),
@@ -641,36 +636,6 @@ fn get_status_description(status_code: u16) -> String {
         .unwrap_or_else(|_| "Unknown".to_string())
 }
 
-// Helper functions for extracting headers, body and status
-
-// Seperate functions because header part might not changes
-fn extract_header_type(record_name_type_pairs: &[NameTypePair]) -> Option<AnalysedType> {
-    for field in record_name_type_pairs {
-        if field.name == "headers" {
-            return Some(field.typ.clone());
-        }
-    }
-    None
-}
-
-fn extract_body_type(record_name_type_pairs: &[NameTypePair]) -> Option<AnalysedType> {
-    for field in record_name_type_pairs {
-        if field.name == "body" {
-            return Some(field.typ.clone());
-        }
-    }
-    None
-}
-
-fn extract_status_type(record_name_type_pairs: &[NameTypePair]) -> Option<AnalysedType> {
-    for field in record_name_type_pairs {
-        if field.name == "status" {
-            return Some(field.typ.clone());
-        }
-    }
-    None
-}
-
 // Helper function: Converts GatewayBindingCompiled to GatewayBindingType for automatic kebab-case serialization
 fn get_binding_type_from_compiled(binding: &GatewayBindingCompiled) -> GatewayBindingType {
     match binding {
@@ -690,7 +655,6 @@ struct ExtractedBindingData<'a> {
     component_id: Option<&'a VersionedComponentId>,
     worker_name: Option<&'a WorkerNameCompiled>,
     response: Option<&'a ResponseMappingCompiled>,
-    //We dont pass Invocation Context, hopefully not needed
     cors_preflight: Option<&'a HttpCors>,
 }
 
@@ -1094,7 +1058,6 @@ fn create_schema_from_analysed_type(
                         openapiv3::ReferenceOr::Item(Box::new(case_schema)),
                     );
 
-                    // Use vec! macro for initialization
                     let required = vec![case_name.clone()];
 
                     let schema = openapiv3::Schema {
@@ -1185,7 +1148,6 @@ fn create_schema_from_analysed_type(
                 openapiv3::ReferenceOr::Item(Box::new(ok_schema)),
             );
 
-            // Use vec! macro for initialization
             let ok_required = vec!["ok".to_string()];
 
             let ok_object_schema = openapiv3::Schema {
@@ -1208,7 +1170,6 @@ fn create_schema_from_analysed_type(
                 openapiv3::ReferenceOr::Item(Box::new(err_schema)),
             );
 
-            // Use vec! macro for initialization
             let err_required = vec!["err".to_string()];
 
             let err_object_schema = openapiv3::Schema {
@@ -1235,8 +1196,7 @@ fn create_schema_from_analysed_type(
             }
         }
         AnalysedType::Flags(type_flags) => {
-            // Flags in WIT are like bitflags - multiple values can be set
-            // Represent as an array of strings where each string is a flag name
+            // Flags are represented as an array of strings where each string is a flag name
             let enum_values: Vec<Option<String>> = type_flags
                 .names
                 .iter()
@@ -1273,8 +1233,7 @@ fn create_schema_from_analysed_type(
             }
         }
         AnalysedType::Chr(_) => {
-            // Chr represents a Unicode character in WIT
-            // Represent as a string with length constraints
+            // Chr is represented as a string with one character
             openapiv3::Schema {
                 schema_data: openapiv3::SchemaData {
                     description: Some("Unicode character".to_string()),
@@ -1283,7 +1242,7 @@ fn create_schema_from_analysed_type(
                 schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(
                     openapiv3::StringType {
                         format: openapiv3::VariantOrUnknownOrEmpty::Empty,
-                        pattern: Some("^.{1}$".to_string()), // Exactly one character
+                        pattern: Some("^.{1}$".to_string()),
                         enumeration: vec![],
                         min_length: Some(1),
                         max_length: Some(1),
