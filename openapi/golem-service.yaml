@@ -5715,6 +5715,7 @@ components:
       - name
       - typ
     OpenApiHttpApiDefinitionResponse:
+      title: OpenApiHttpApiDefinitionResponse
       type: object
       properties:
         id:
