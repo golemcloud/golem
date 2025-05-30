@@ -209,7 +209,7 @@ impl InstanceType {
 
                     let functions = interfaces
                         .into_iter()
-                        .filter(|(f, _)| f.name_without_qualifier() == method_name)
+                        .filter(|(f, _)| f.name() == method_name)
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
@@ -246,7 +246,7 @@ impl InstanceType {
 
                     let functions = packages
                         .into_iter()
-                        .filter(|(f, _)| f.name_without_qualifier() == method_name)
+                        .filter(|(f, _)| f.name() == method_name)
                         .collect::<Vec<_>>();
 
                     if functions.is_empty() {
@@ -275,7 +275,7 @@ impl InstanceType {
                         .filter(|(f, _)| {
                             f.package_name() == Some(fq_iface.package_name.clone())
                                 && f.interface_name() == Some(fq_iface.interface_name.clone())
-                                && f.name_without_qualifier() == method_name
+                                && f.name() == method_name
                         })
                         .collect::<Vec<_>>();
 
@@ -442,7 +442,7 @@ impl FunctionDictionary {
     pub fn function_names(&self) -> Vec<String> {
         self.name_and_types
             .iter()
-            .map(|(f, _)| f.name_without_qualifier())
+            .map(|(f, _)| f.name())
             .collect::<Vec<_>>()
     }
 }
@@ -616,7 +616,7 @@ impl FunctionName {
         }
     }
 
-    pub fn name_without_qualifier(&self) -> String {
+    pub fn name(&self) -> String {
         match self {
             FunctionName::Function(fqfn) => fqfn.function_name.to_string(),
             FunctionName::ResourceConstructor(fqfn) => fqfn.resource_name.to_string(),
@@ -735,7 +735,7 @@ fn search_function_in_instance(
         .function_dict()
         .name_and_types
         .into_iter()
-        .filter(|(f, _)| f.name_without_qualifier() == *function_name)
+        .filter(|(f, _)| f.name() == *function_name)
         .collect();
 
     if functions.is_empty() {
