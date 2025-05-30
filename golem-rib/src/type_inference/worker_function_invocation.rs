@@ -16,14 +16,14 @@ use crate::call_type::{CallType, InstanceCreationType};
 use crate::instance_type::{FunctionName, InstanceType};
 use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
-use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionCallError, FunctionTypeRegistry, InferredType, TypeInternal, TypeName, TypeOrigin};
+use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, Function, FunctionCallError, FunctionTypeRegistry, InferredType, TypeInternal, TypeName, TypeOrigin};
 use std::collections::VecDeque;
 use std::ops::Deref;
 
 // This phase is responsible for identifying the worker function invocations
 // such as `worker.foo("x, y, z")` or `cart-resource.add-item(..)` etc
 // lazy method invocations are converted to actual Expr::Call
-pub fn infer_worker_function_invokes(expr: &mut Expr, function_type_registry: &FunctionTypeRegistry) -> Result<(), RibTypeError> {
+pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
@@ -40,6 +40,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr, function_type_registry: &F
         {
             let inferred_type = lhs.inferred_type();
 
+
+
             match inferred_type.internal_type() {
                 TypeInternal::Instance { instance_type } => {
                     let type_parameter = generic_type_parameter
@@ -51,7 +53,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr, function_type_registry: &F
                         })
                         .transpose()?;
 
-                    let fqn =
+                    let function =
                         instance_type
                             .get_function(method, type_parameter)
                             .map_err(|err| {
@@ -70,7 +72,27 @@ pub fn infer_worker_function_invokes(expr: &mut Expr, function_type_registry: &F
                                 )
                             })?;
 
-                    match fqn.function_name {
+                    let function_type =
+                        function.function_type.parameter_types();
+
+                    if args.len()!= function_type.len() {
+                        return Err(FunctionCallError::ArgumentSizeMisMatch {
+                            function_name: function.function_name.name_without_qualifier(),
+                            expr: Expr::InvokeMethodLazy {
+                                lhs: lhs.clone(),
+                                method: method.clone(),
+                                generic_type_parameter: generic_type_parameter.clone(),
+                                args: args.clone(),
+                                source_span: source_span.clone(),
+                                type_annotation: type_annotation.clone(),
+                                inferred_type: inferred_type.clone(),
+                            },
+                            expected: function_type.len(),
+                            provided: args.len(),
+                        }.into())
+                    }
+
+                    match function.function_name {
                         FunctionName::Function(function_name) => {
                             let dynamic_parsed_function_name = function_name.to_string();
                             let dynamic_parsed_function_name = DynamicParsedFunctionName::parse(
@@ -122,8 +144,6 @@ pub fn infer_worker_function_invokes(expr: &mut Expr, function_type_registry: &F
                                     worker_name: instance_type.worker_name(),
                                     resource_name: fully_qualified_resource_constructor.clone(),
                                 });
-
-                            dbg!(&function_type_registry);
 
                             *expr = Expr::call(new_call_type, None, args.clone())
                                 .with_inferred_type(new_inferred_type)
@@ -261,3 +281,4 @@ pub fn infer_worker_function_invokes(expr: &mut Expr, function_type_registry: &F
 
     Ok(())
 }
+

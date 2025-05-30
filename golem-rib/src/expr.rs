@@ -1141,7 +1141,7 @@ impl Expr {
     }
 
     pub fn infer_worker_function_invokes(&mut self, registry: &FunctionTypeRegistry) -> Result<(), RibTypeError> {
-        type_inference::infer_worker_function_invokes(self, registry)
+        type_inference::infer_worker_function_invokes(self)
     }
 
     pub fn bind_default_types_to_index_expressions(&mut self) {

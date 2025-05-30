@@ -103,7 +103,7 @@ impl RibEdit {
             instance_vars.get_worker_instance_method_dict(instance_var_name)
         {
             for (function, tpe) in &worker_instance_func_dict.name_and_types {
-                let name_with_paren = format!("{}(", function.name());
+                let name_with_paren = format!("{}(", function.name_without_qualifier());
 
                 // If user has typed in `(`, complete the method call with arguments
                 if name_with_paren == method_prefix {
@@ -126,8 +126,8 @@ impl RibEdit {
                     return Ok(Some((end_pos, completions)));
                 }
 
-                if function.name().starts_with(method_prefix) {
-                    completions.push(function.name());
+                if function.name_without_qualifier().starts_with(method_prefix) {
+                    completions.push(function.name_without_qualifier());
                 }
             }
         }
@@ -136,7 +136,7 @@ impl RibEdit {
             instance_vars.get_resource_instance_method_dict(instance_var_name)
         {
             for (resource_method_name, tpe) in &resource_instance_func_dict.name_and_types {
-                let resource_method_with_paren = format!("{}(", resource_method_name.name());
+                let resource_method_with_paren = format!("{}(", resource_method_name.name_without_qualifier());
 
                 // If user has typed in `(`, complete the method call with arguments
                 if resource_method_with_paren == method_prefix {
@@ -160,8 +160,8 @@ impl RibEdit {
                     return Ok(Some((end_pos, completions)));
                 }
 
-                if resource_method_name.name().starts_with(method_prefix) {
-                    completions.push(resource_method_name.name());
+                if resource_method_name.name_without_qualifier().starts_with(method_prefix) {
+                    completions.push(resource_method_name.name_without_qualifier());
                 }
             }
         }
