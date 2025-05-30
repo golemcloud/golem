@@ -156,13 +156,13 @@ impl From<FunctionCallError> for RibTypeError {
                 help_messages: vec![],
             },
             FunctionCallError::TypeMisMatch {
-                function_name: call_type,
+                function_name,
                 error,
                 ..
             } => {
                 let mut original_compilation: RibTypeError = error.into();
 
-                let error_detail = format!("invalid argument to the function `{}`", call_type);
+                let error_detail = format!("invalid argument to the function `{}`", function_name);
 
                 original_compilation
                     .additional_error_details

@@ -16,7 +16,10 @@ use crate::call_type::{CallType, InstanceCreationType};
 use crate::instance_type::{FunctionName, InstanceType};
 use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
-use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, Function, FunctionCallError, FunctionTypeRegistry, InferredType, TypeInternal, TypeName, TypeOrigin};
+use crate::{
+    DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, Function, FunctionCallError,
+    FunctionTypeRegistry, InferredType, TypeInternal, TypeName, TypeOrigin,
+};
 use std::collections::VecDeque;
 use std::ops::Deref;
 
@@ -69,26 +72,6 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                     err,
                                 )
                             })?;
-
-                    let function_params_types =
-                        function.function_type.parameter_types();
-
-                    if args.len() != function_params_types.len() {
-                        return Err(FunctionCallError::ArgumentSizeMisMatch {
-                            function_name: function.function_name.name_without_qualifier(),
-                            expr: Expr::InvokeMethodLazy {
-                                lhs: lhs.clone(),
-                                method: method.clone(),
-                                generic_type_parameter: generic_type_parameter.clone(),
-                                args: args.clone(),
-                                source_span: source_span.clone(),
-                                type_annotation: type_annotation.clone(),
-                                inferred_type: inferred_type.clone(),
-                            },
-                            expected: function_params_types.len(),
-                            provided: args.len(),
-                        }.into())
-                    }
 
                     match function.function_name {
                         FunctionName::Function(function_name) => {
@@ -177,7 +160,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                             },
                                             format!(
                                                 "Resource method {} not found in resource {}",
-                                                resource_method.method_name(), resource_constructor
+                                                resource_method.method_name(),
+                                                resource_constructor
                                             ),
                                         ))?;
 
@@ -279,4 +263,3 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
 
     Ok(())
 }
-

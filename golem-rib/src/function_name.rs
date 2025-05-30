@@ -179,26 +179,33 @@ impl DynamicParsedFunctionReference {
             DynamicParsedFunctionReference::Function { function, .. } => function.clone(),
             DynamicParsedFunctionReference::RawResourceConstructor { resource, .. } => {
                 resource.to_string()
-            },
-            DynamicParsedFunctionReference::RawResourceDrop {  .. } => "drop".to_string(),
-            DynamicParsedFunctionReference::RawResourceMethod { method, .. } =>  method.to_string(),
-            DynamicParsedFunctionReference::RawResourceStaticMethod { resource, method, .. } => {
+            }
+            DynamicParsedFunctionReference::RawResourceDrop { .. } => "drop".to_string(),
+            DynamicParsedFunctionReference::RawResourceMethod { method, .. } => method.to_string(),
+            DynamicParsedFunctionReference::RawResourceStaticMethod {
+                resource, method, ..
+            } => method.to_string(),
+            DynamicParsedFunctionReference::IndexedResourceConstructor {
+                resource,
+                resource_params,
+            } => format!(
+                "{}({})",
+                resource,
+                resource_params
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            DynamicParsedFunctionReference::IndexedResourceMethod { method, .. } => {
                 method.to_string()
             }
-            DynamicParsedFunctionReference::IndexedResourceConstructor { resource, resource_params } =>
-                format!("{}({})", resource, resource_params.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")),
-            DynamicParsedFunctionReference::IndexedResourceMethod {
-                method,
-                ..
-            } => method.to_string(),
-            DynamicParsedFunctionReference::IndexedResourceStaticMethod {
-                method,
-                ..
-            } => method.to_string(),
-            DynamicParsedFunctionReference::IndexedResourceDrop { .. } => "drop".to_string()
+            DynamicParsedFunctionReference::IndexedResourceStaticMethod { method, .. } => {
+                method.to_string()
+            }
+            DynamicParsedFunctionReference::IndexedResourceDrop { .. } => "drop".to_string(),
         }
     }
-
 
     fn to_static(&self) -> ParsedFunctionReference {
         match self {

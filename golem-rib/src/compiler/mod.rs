@@ -209,8 +209,8 @@ mod compiler_error_tests {
         use test_r::test;
 
         use crate::compiler::compiler_error_tests::test_utils;
-        use crate::{Expr, RibCompiler, RibCompilerConfig};
         use crate::compiler::compiler_error_tests::test_utils::strip_spaces;
+        use crate::{Expr, RibCompiler, RibCompilerConfig};
 
         #[test]
         async fn test_invalid_pattern_match0() {
@@ -707,7 +707,7 @@ mod compiler_error_tests {
 
             let expected = r#"
             error in the following rib found at line 3, column 19
-            `worker.cart()`
+            `cart()`
             cause: invalid argument size for function `cart`. expected 1 arguments, found 0
             "#;
 
@@ -733,7 +733,7 @@ mod compiler_error_tests {
             found within:
             `cart(1)`
             cause: type mismatch. expected string, found s32
-            invalid argument to the function `[constructor]cart`
+            invalid argument to the function `cart`
             "#;
 
             assert_eq!(error_message, strip_spaces(expected));
@@ -744,7 +744,7 @@ mod compiler_error_tests {
             let expr = r#"
           let worker = instance("my-worker");
           let x = worker.cart("foo");
-          x.add-item({product_id: "p1", name: "item1", price: 10.0, quantity: 2})
+          x.add-item(1)
         "#;
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = test_utils::get_metadata();
@@ -754,23 +754,26 @@ mod compiler_error_tests {
             let error_message = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 3, column 31
+            error in the following rib found at line 4, column 22
             `1`
             found within:
-            `cart(1)`
-            cause: type mismatch. expected string, found s32
-            invalid argument to the function `[constructor]cart`
+            `add-item(1)`
+            cause: type mismatch. expected record { product-id: string, name: string, price: f32, quantity: u32 }, found s32
+            invalid argument to the function `add-item`
             "#;
 
             assert_eq!(error_message, strip_spaces(expected));
         }
-
-
     }
 
     mod test_utils {
-        use golem_wasm_ast::analysis::analysed_type::{case, f32, field, handle, list, record, s32, str, tuple, u32, u64, variant};
-        use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, NameTypePair};
+        use golem_wasm_ast::analysis::analysed_type::{
+            case, f32, field, handle, list, record, s32, str, tuple, u32, u64, variant,
+        };
+        use golem_wasm_ast::analysis::{
+            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, NameTypePair,
+        };
 
         pub(crate) fn strip_spaces(input: &str) -> String {
             let lines = input.lines();
@@ -857,9 +860,9 @@ mod compiler_error_tests {
                 functions: vec![
                     AnalysedFunction {
                         name: "[constructor]cart".to_string(),
-                        parameters: vec![AnalysedFunctionParameter{
+                        parameters: vec![AnalysedFunctionParameter {
                             name: "cons".to_string(),
-                            typ: str()
+                            typ: str(),
                         }],
                         results: vec![AnalysedFunctionResult {
                             name: None,

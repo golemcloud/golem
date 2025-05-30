@@ -369,20 +369,15 @@ impl<W: Write> Writer<W> {
                     CallType::Function { function_name, .. } => {
                         function_name.function.name_pretty()
                     }
-                    CallType::VariantConstructor(name) => {
-                        name.to_string()
-                    }
-                    CallType::EnumConstructor(name) => {
-                        name.to_string()
-                    }
-                    CallType::InstanceCreation(instance) => {
-                        match instance {
-                            InstanceCreationType::Worker {..} => "instance".to_string(),
-                            InstanceCreationType::Resource {resource_name, ..} => resource_name.resource_name.to_string()
+                    CallType::VariantConstructor(name) => name.to_string(),
+                    CallType::EnumConstructor(name) => name.to_string(),
+                    CallType::InstanceCreation(instance) => match instance {
+                        InstanceCreationType::Worker { .. } => "instance".to_string(),
+                        InstanceCreationType::Resource { resource_name, .. } => {
+                            resource_name.resource_name.to_string()
                         }
-                    }
+                    },
                 };
-
 
                 self.write_str(function_name)?;
 

@@ -49,7 +49,11 @@ mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::inferred_type::TypeOrigin;
     use crate::type_inference::GetTypeHint;
-    use crate::{ActualType, DynamicParsedFunctionName, DynamicParsedFunctionReference, ExpectedType, Expr, FunctionCallError, FunctionTypeRegistry, InferredType, ParsedFunctionReference, RegistryKey, RegistryValue, TypeMismatchError};
+    use crate::{
+        ActualType, DynamicParsedFunctionName, DynamicParsedFunctionReference, ExpectedType, Expr,
+        FunctionCallError, FunctionTypeRegistry, InferredType, ParsedFunctionReference,
+        RegistryKey, RegistryValue, TypeMismatchError,
+    };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
 
@@ -72,14 +76,17 @@ mod internal {
                     Ok(())
                 }
 
-                InstanceCreationType::Resource {resource_name, ..} => {
+                InstanceCreationType::Resource { resource_name, .. } => {
                     let resource_constructor_with_prefix =
                         format!["[constructor]{}", resource_name.resource_name];
-                    let interface = match (&resource_name.package_name, &resource_name.interface_name) {
-                        (Some(package_name), Some(interface_name)) => Some(format!("{}/{}", package_name, interface_name)),
-                        (None, Some(interface_name)) => Some(interface_name.to_string()),
-                        _ => None,
-                    };
+                    let interface =
+                        match (&resource_name.package_name, &resource_name.interface_name) {
+                            (Some(package_name), Some(interface_name)) => {
+                                Some(format!("{}/{}", package_name, interface_name))
+                            }
+                            (None, Some(interface_name)) => Some(interface_name.to_string()),
+                            _ => None,
+                        };
 
                     let registry_key = match interface {
                         None => RegistryKey::FunctionName(resource_constructor_with_prefix),
@@ -203,9 +210,14 @@ mod internal {
         let resource_method_name_in_metadata =
             dynamic_parsed_function_name.function_name_with_prefix_identifiers();
 
+        let resource_constructor_name = dynamic_parsed_function_name
+            .resource_name_simplified()
+            .unwrap_or_default();
+
         infer_args_and_result_type(
             original_expr,
             &FunctionDetails::ResourceMethodName {
+                resource_name: resource_constructor_name,
                 resource_method_name: resource_method_name_in_metadata,
             },
             function_type_registry,
@@ -223,7 +235,7 @@ mod internal {
     ) -> Result<(), FunctionCallError> {
         let mut constructor_params: &mut [Expr] = &mut vec![];
 
-        if let Some(resource_params) = raw_resource_parameters{
+        if let Some(resource_params) = raw_resource_parameters {
             constructor_params = resource_params
         }
 
@@ -323,8 +335,13 @@ mod internal {
 
     #[derive(Clone)]
     enum FunctionDetails {
-        ResourceConstructorName { resource_constructor_name: String },
-        ResourceMethodName { resource_method_name: String },
+        ResourceConstructorName {
+            resource_constructor_name: String,
+        },
+        ResourceMethodName {
+            resource_name: String,
+            resource_method_name: String,
+        },
         Fqn(DynamicParsedFunctionName),
         VariantName(String),
     }
@@ -332,15 +349,17 @@ mod internal {
     impl FunctionDetails {
         pub fn name(&self) -> String {
             match self {
-                FunctionDetails::ResourceConstructorName { resource_constructor_name } => {
-                    resource_constructor_name.replace("[constructor]", "")
+                FunctionDetails::ResourceConstructorName {
+                    resource_constructor_name,
+                } => resource_constructor_name.replace("[constructor]", ""),
+                FunctionDetails::ResourceMethodName {
+                    resource_name,
+                    resource_method_name,
+                } => {
+                    let resource_constructor_prefix = format!("[method]{}.", resource_name);
+                    resource_method_name.replace(&resource_constructor_prefix, "")
                 }
-                FunctionDetails::ResourceMethodName { resource_method_name } => {
-                    resource_method_name.clone()
-                }
-                FunctionDetails::Fqn(fqn) => {
-                    fqn.function.name_pretty()
-                }
+                FunctionDetails::Fqn(fqn) => fqn.function.name_pretty(),
                 FunctionDetails::VariantName(name) => name.clone(),
             }
         }
@@ -388,8 +407,12 @@ mod internal {
         if is_valid {
             Ok(())
         } else {
+            dbg!(
+                "Function call argument type mismatch",
+                &function_name.name()
+            );
             Err(FunctionCallError::TypeMisMatch {
-                function_name: function_name.to_string(),
+                function_name: function_name.name(),
                 argument: provided.clone(),
                 error: TypeMismatchError {
                     expr_with_wrong_type: provided.clone(),
