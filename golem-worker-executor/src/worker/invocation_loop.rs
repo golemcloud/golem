@@ -396,13 +396,23 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 function_input,
                 invocation_context,
             } => {
-                self.invoke_exported_function(
-                    invocation_context,
-                    idempotency_key,
-                    full_function_name,
-                    function_input,
-                )
-                .await
+                // Need to check if the same idempotency key has already been processed and then ignore this entry.
+                let has_result = {
+                    let invocation_results = self.parent.invocation_results.read().await;
+                    invocation_results.contains_key(&idempotency_key)
+                };
+                if !has_result {
+                    self.invoke_exported_function(
+                        invocation_context,
+                        idempotency_key,
+                        full_function_name,
+                        function_input,
+                    )
+                    .await
+                } else {
+                    debug!("Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result");
+                    CommandOutcome::Continue
+                }
             }
             WorkerInvocation::ManualUpdate { target_version } => {
                 self.manual_update(target_version).await
@@ -472,7 +482,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
     }
 
-    /// Sets the necessary contextual information on the worker, and performs the actual
+    /// Sets the necessary contextual information on the worker and performs the actual
     /// invocation.
     async fn invoke_exported_function_with_context(
         &mut self,

@@ -96,9 +96,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .get_current_idempotency_key()
                 .await
                 .unwrap_or(IdempotencyKey::fresh());
-            let oplog_index = self.state.current_oplog_index().await;
-            // this is guaranteed to be a unique new index because of the `begin_durable_function` call above
-            let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+            let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, begin_index);
 
             let header_name = HeaderName::from_static("idempotency-key");
 
