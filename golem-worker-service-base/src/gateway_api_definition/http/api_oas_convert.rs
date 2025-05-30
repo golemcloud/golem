@@ -440,11 +440,17 @@ fn determine_response_schema_and_content_type(
 }
 
 // Helper function for extracting headers, body and status from response record fields
-fn extract_response_fields(record_name_type_pairs: &[NameTypePair]) -> (Option<AnalysedType>, Option<AnalysedType>, Option<AnalysedType>) {
+fn extract_response_fields(
+    record_name_type_pairs: &[NameTypePair],
+) -> (
+    Option<AnalysedType>,
+    Option<AnalysedType>,
+    Option<AnalysedType>,
+) {
     let mut headers_opt = None;
     let mut body_opt = None;
     let mut status_opt = None;
-    
+
     for field in record_name_type_pairs {
         match field.name.as_str() {
             "headers" => headers_opt = Some(field.typ.clone()),
@@ -453,7 +459,7 @@ fn extract_response_fields(record_name_type_pairs: &[NameTypePair]) -> (Option<A
             _ => {}
         }
     }
-    
+
     (headers_opt, body_opt, status_opt)
 }
 
