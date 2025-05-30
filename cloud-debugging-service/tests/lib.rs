@@ -23,12 +23,10 @@ use golem_test_framework::components::worker_executor_cluster::WorkerExecutorClu
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
 use golem_test_framework::config::TestDependencies;
-use golem_worker_executor_base::services::additional_config::{
-    ComponentCacheConfig, ComponentServiceConfig, ComponentServiceLocalConfig,
-};
-use golem_worker_executor_base::services::golem_config::{
-    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, GolemConfig,
-    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
+use golem_worker_executor::services::golem_config::{
+    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentCacheConfig,
+    ComponentServiceConfig, ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
+    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
     ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, WorkerServiceGrpcConfig,
 };
 use std::fmt::{Debug, Formatter};
@@ -130,7 +128,7 @@ pub fn get_component_cache_config() -> ComponentCacheConfig {
     ComponentCacheConfig::default()
 }
 
-// In a debuggint test suite, we have a regular worker executor with its own dependencies
+// In a debugging test suite, we have a regular worker executor with its own dependencies
 #[derive(Clone)]
 pub struct RegularWorkerExecutorPerTestDependencies {
     redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -171,6 +169,10 @@ impl TestDependencies for RegularWorkerExecutorPerTestDependencies {
         &self.component_directory
     }
 
+    fn component_temp_directory(&self) -> &Path {
+        self.component_temp_directory.path()
+    }
+
     fn component_service(&self) -> Arc<dyn ComponentService + 'static> {
         self.component_service.clone()
     }
@@ -195,10 +197,6 @@ impl TestDependencies for RegularWorkerExecutorPerTestDependencies {
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
-    }
-
-    fn component_temp_directory(&self) -> &Path {
-        self.component_temp_directory.path()
     }
 }
 
@@ -324,6 +322,10 @@ impl TestDependencies for RegularWorkerExecutorTestDependencies {
         &self.component_directory
     }
 
+    fn component_temp_directory(&self) -> &Path {
+        self.component_temp_directory.path()
+    }
+
     fn component_service(&self) -> Arc<dyn ComponentService + 'static> {
         self.component_service.clone()
     }
@@ -348,9 +350,5 @@ impl TestDependencies for RegularWorkerExecutorTestDependencies {
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
-    }
-
-    fn component_temp_directory(&self) -> &Path {
-        self.component_temp_directory.path()
     }
 }

@@ -22,18 +22,18 @@ use golem_common::model::{
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, ValueAndType};
-use golem_worker_executor_base::durable_host::http::serialized::{
+use golem_worker_executor::durable_host::http::serialized::{
     SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
 };
-use golem_worker_executor_base::durable_host::serialized::{
+use golem_worker_executor::durable_host::serialized::{
     SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddresses,
     SerializableStreamError,
 };
-use golem_worker_executor_base::durable_host::wasm_rpc::serialized::{
+use golem_worker_executor::durable_host::wasm_rpc::serialized::{
     SerializableInvokeRequest, SerializableInvokeResult,
 };
-use golem_worker_executor_base::services::blob_store::ObjectMetadata;
-use golem_worker_executor_base::services::rpc::RpcError;
+use golem_worker_executor::services::blob_store::ObjectMetadata;
+use golem_worker_executor::services::rpc::RpcError;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
@@ -1251,10 +1251,10 @@ mod tests {
     use golem_wasm_ast::analysis::NameOptionTypePair;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
-    use golem_worker_executor_base::durable_host::wasm_rpc::serialized::{
+    use golem_worker_executor::durable_host::wasm_rpc::serialized::{
         SerializableInvokeRequest, SerializableInvokeResult,
     };
-    use golem_worker_executor_base::services::rpc::RpcError;
+    use golem_worker_executor::services::rpc::RpcError;
     use test_r::test;
     use uuid::Uuid;
 

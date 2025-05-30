@@ -11,34 +11,32 @@ use cloud_debugging_service::oplog::debug_oplog_service::DebugOplogService;
 use cloud_debugging_service::{create_debug_wasmtime_linker, run_debug_server};
 use golem_service_base::storage::blob::BlobStorage;
 use golem_test_framework::components::worker_executor::provided::ProvidedWorkerExecutor;
-use golem_worker_executor_base::services::active_workers::ActiveWorkers;
-use golem_worker_executor_base::services::blob_store::BlobStoreService;
-use golem_worker_executor_base::services::component::ComponentService;
-use golem_worker_executor_base::services::events::Events;
-use golem_worker_executor_base::services::file_loader::FileLoader;
-use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::key_value::KeyValueService;
-use golem_worker_executor_base::services::oplog::plugin::OplogProcessorPlugin;
-use golem_worker_executor_base::services::oplog::OplogService;
-use golem_worker_executor_base::services::plugins;
-use golem_worker_executor_base::services::plugins::{Plugins, PluginsObservations};
-use golem_worker_executor_base::services::promise::PromiseService;
-use golem_worker_executor_base::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
-use golem_worker_executor_base::services::scheduler::SchedulerService;
-use golem_worker_executor_base::services::shard::ShardService;
-use golem_worker_executor_base::services::shard_manager::ShardManagerService;
-use golem_worker_executor_base::services::worker::WorkerService;
-use golem_worker_executor_base::services::worker_activator::{
-    LazyWorkerActivator, WorkerActivator,
-};
-use golem_worker_executor_base::services::worker_enumeration::{
+use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::blob_store::BlobStoreService;
+use golem_worker_executor::services::component::ComponentService;
+use golem_worker_executor::services::events::Events;
+use golem_worker_executor::services::file_loader::FileLoader;
+use golem_worker_executor::services::golem_config::{GolemConfig, ResourceLimitsConfig};
+use golem_worker_executor::services::key_value::KeyValueService;
+use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
+use golem_worker_executor::services::oplog::OplogService;
+use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
+use golem_worker_executor::services::promise::PromiseService;
+use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
+use golem_worker_executor::services::scheduler::SchedulerService;
+use golem_worker_executor::services::shard::ShardService;
+use golem_worker_executor::services::shard_manager::ShardManagerService;
+use golem_worker_executor::services::worker::WorkerService;
+use golem_worker_executor::services::worker_activator::{LazyWorkerActivator, WorkerActivator};
+use golem_worker_executor::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
-use golem_worker_executor_base::services::worker_fork::DefaultWorkerFork;
-use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::All;
-use golem_worker_executor_base::services::{component, rdbms};
-use golem_worker_executor_base::{Bootstrap, DefaultGolemTypes};
+use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
+use golem_worker_executor::services::worker_proxy::WorkerProxy;
+use golem_worker_executor::services::All;
+use golem_worker_executor::services::{component, rdbms};
+use golem_worker_executor::services::{plugins, resource_limits};
+use golem_worker_executor::{Bootstrap, DefaultGolemTypes};
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -151,6 +149,7 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
         ));
 
         let addition_deps = AdditionalDeps::new(auth_service, debug_sessions);
+        let resource_limits = resource_limits::configured(&ResourceLimitsConfig::Disabled);
 
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
@@ -180,6 +179,7 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
+            resource_limits.clone(),
             addition_deps.clone(),
         ));
 
@@ -211,6 +211,7 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
+            resource_limits.clone(),
             addition_deps.clone(),
         ));
 
@@ -240,6 +241,7 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
             file_loader.clone(),
             plugins.clone(),
             oplog_processor_plugin.clone(),
+            resource_limits,
             addition_deps,
         ))
     }

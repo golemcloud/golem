@@ -1,3 +1,4 @@
+use crate::InstructionId;
 use async_trait::async_trait;
 use golem_wasm_rpc::ValueAndType;
 
@@ -5,6 +6,7 @@ use golem_wasm_rpc::ValueAndType;
 pub trait RibFunctionInvoke {
     async fn invoke(
         &self,
+        instruction_id: &InstructionId,
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,

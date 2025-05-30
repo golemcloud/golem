@@ -16,42 +16,43 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, WitValue};
-use golem_worker_executor_base::services::worker_fork::WorkerForkService;
-use golem_worker_executor_base::workerctx::{
+use golem_worker_executor::services::worker_fork::WorkerForkService;
+use golem_worker_executor::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
     InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
-use golem_worker_executor_base::DefaultGolemTypes;
+use golem_worker_executor::DefaultGolemTypes;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 
-use golem_worker_executor_base::durable_host::{
+use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
-use golem_worker_executor_base::error::GolemError;
-use golem_worker_executor_base::model::{
+use golem_worker_executor::error::GolemError;
+use golem_worker_executor::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
     ReadFileResult, TrapType, WorkerConfig,
 };
-use golem_worker_executor_base::services::active_workers::ActiveWorkers;
-use golem_worker_executor_base::services::blob_store::BlobStoreService;
-use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
-use golem_worker_executor_base::services::file_loader::FileLoader;
-use golem_worker_executor_base::services::golem_config::GolemConfig;
-use golem_worker_executor_base::services::key_value::KeyValueService;
-use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
-use golem_worker_executor_base::services::plugins::Plugins;
-use golem_worker_executor_base::services::promise::PromiseService;
-use golem_worker_executor_base::services::rdbms::RdbmsService;
-use golem_worker_executor_base::services::rpc::Rpc;
-use golem_worker_executor_base::services::scheduler::SchedulerService;
-use golem_worker_executor_base::services::worker::WorkerService;
-use golem_worker_executor_base::services::worker_enumeration::WorkerEnumerationService;
-use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{HasAll, HasConfig, HasOplogService};
-use golem_worker_executor_base::worker::{RetryDecision, Worker};
+use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::blob_store::BlobStoreService;
+use golem_worker_executor::services::component::{ComponentMetadata, ComponentService};
+use golem_worker_executor::services::file_loader::FileLoader;
+use golem_worker_executor::services::golem_config::GolemConfig;
+use golem_worker_executor::services::key_value::KeyValueService;
+use golem_worker_executor::services::oplog::{Oplog, OplogService};
+use golem_worker_executor::services::plugins::Plugins;
+use golem_worker_executor::services::promise::PromiseService;
+use golem_worker_executor::services::rdbms::RdbmsService;
+use golem_worker_executor::services::resource_limits::ResourceLimits;
+use golem_worker_executor::services::rpc::Rpc;
+use golem_worker_executor::services::scheduler::SchedulerService;
+use golem_worker_executor::services::worker::WorkerService;
+use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
+use golem_worker_executor::services::worker_event::WorkerEventService;
+use golem_worker_executor::services::worker_proxy::WorkerProxy;
+use golem_worker_executor::services::{HasAll, HasConfig, HasOplogService};
+use golem_worker_executor::worker::{RetryDecision, Worker};
 use tracing::debug;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
@@ -64,9 +65,9 @@ pub struct TestWorkerCtx {
 
 #[async_trait]
 impl WorkerCtx for TestWorkerCtx {
-    type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
-
     type Types = DefaultGolemTypes;
+
+    type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
@@ -93,6 +94,7 @@ impl WorkerCtx for TestWorkerCtx {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
         worker_fork: Arc<dyn WorkerForkService>,
+        _resource_limits: Arc<dyn ResourceLimits>,
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -120,10 +122,6 @@ impl WorkerCtx for TestWorkerCtx {
         )
         .await?;
         Ok(Self { durable_ctx })
-    }
-
-    fn component_service(&self) -> Arc<dyn ComponentService<DefaultGolemTypes> + Send + Sync> {
-        self.durable_ctx.component_service()
     }
 
     fn as_wasi_view(&mut self) -> impl WasiView {
@@ -164,6 +162,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy> {
         self.durable_ctx.worker_proxy()
+    }
+
+    fn component_service(&self) -> Arc<dyn ComponentService<DefaultGolemTypes> + Send + Sync> {
+        self.durable_ctx.component_service()
     }
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
@@ -482,15 +484,15 @@ impl InvocationManagement for TestWorkerCtx {
         self.durable_ctx.get_current_idempotency_key().await
     }
 
-    async fn get_current_invocation_context(&self) -> InvocationContextStack {
-        self.durable_ctx.get_current_invocation_context().await
-    }
-
     async fn set_current_invocation_context(
         &mut self,
         stack: InvocationContextStack,
     ) -> Result<(), GolemError> {
         self.durable_ctx.set_current_invocation_context(stack).await
+    }
+
+    async fn get_current_invocation_context(&self) -> InvocationContextStack {
+        self.durable_ctx.get_current_invocation_context().await
     }
 
     fn is_live(&self) -> bool {
@@ -617,30 +619,27 @@ impl UpdateManagement for TestWorkerCtx {
 impl InvocationContextManagement for TestWorkerCtx {
     async fn start_span(
         &mut self,
-        initial_attributes: &[(String, invocation_context::AttributeValue)],
+        initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, GolemError> {
         self.durable_ctx.start_span(initial_attributes).await
     }
 
     async fn start_child_span(
         &mut self,
-        parent: &invocation_context::SpanId,
-        initial_attributes: &[(String, invocation_context::AttributeValue)],
+        parent: &SpanId,
+        initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, GolemError> {
         self.durable_ctx
             .start_child_span(parent, initial_attributes)
             .await
     }
 
-    async fn finish_span(
-        &mut self,
-        span_id: &invocation_context::SpanId,
-    ) -> Result<(), GolemError> {
-        self.durable_ctx.finish_span(span_id).await
+    fn remove_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.remove_span(span_id)
     }
 
-    fn remove_span(&mut self, span_id: &invocation_context::SpanId) -> Result<(), GolemError> {
-        self.durable_ctx.remove_span(span_id)
+    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), GolemError> {
+        self.durable_ctx.finish_span(span_id).await
     }
 
     async fn set_span_attribute(

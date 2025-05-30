@@ -1,16 +1,15 @@
 use cloud_common::config::RemoteCloudServiceConfig;
-use cloud_worker_executor::services::config::{
-    CloudComponentCacheConfig, CloudComponentServiceConfig,
-};
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::config::BlobStorageConfig;
-use golem_worker_executor_base::services::golem_config::{
-    ActiveWorkersConfig, CompiledComponentServiceConfig, GolemConfig, IndexedStorageConfig,
-    KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, PluginServiceConfig, RdbmsConfig,
-    SchedulerConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
-    SuspendConfig, WorkerServiceGrpcConfig,
+use golem_worker_executor::services::golem_config::{
+    ActiveWorkersConfig, CompiledComponentServiceConfig, ComponentCacheConfig,
+    ComponentServiceConfig, ComponentServiceGrpcConfig, GolemConfig, IndexedStorageConfig,
+    KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, PluginServiceConfig,
+    ProjectServiceConfig, RdbmsConfig, ResourceLimitsConfig, SchedulerConfig,
+    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SuspendConfig,
+    WorkerExecutorMode, WorkerServiceGrpcConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -42,8 +41,10 @@ pub struct DebugConfig {
 
     // debug service specific fields
     pub cloud_service: RemoteCloudServiceConfig,
-    pub component_service: CloudComponentServiceConfig,
-    pub component_cache: CloudComponentCacheConfig,
+    pub component_service: ComponentServiceGrpcConfig,
+    pub component_cache: ComponentCacheConfig,
+    pub project_service: ProjectServiceConfig,
+    pub resource_limits: ResourceLimitsConfig,
 }
 
 impl DebugConfig {
@@ -65,6 +66,11 @@ impl DebugConfig {
             public_worker_api: self.public_worker_api,
             memory: self.memory,
             rdbms: self.rdbms,
+            resource_limits: self.resource_limits,
+            component_service: ComponentServiceConfig::Grpc(self.component_service),
+            component_cache: self.component_cache,
+            project_service: Default::default(),
+            mode: WorkerExecutorMode::Cloud,
             grpc_address: self.grpc_address,
             port: self.port,
             http_address: self.http_address,
@@ -101,8 +107,10 @@ impl Default for DebugConfig {
             http_address: default_golem_config.http_address,
             http_port: default_golem_config.http_port,
             cloud_service: RemoteCloudServiceConfig::default(),
-            component_cache: CloudComponentCacheConfig::default(),
-            component_service: CloudComponentServiceConfig::default(),
+            component_cache: ComponentCacheConfig::default(),
+            component_service: ComponentServiceGrpcConfig::default(),
+            project_service: ProjectServiceConfig::default(),
+            resource_limits: ResourceLimitsConfig::default(),
         }
     }
 }

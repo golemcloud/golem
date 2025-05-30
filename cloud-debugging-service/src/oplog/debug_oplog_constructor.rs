@@ -3,8 +3,8 @@ use crate::oplog::debug_oplog::DebugOplog;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{OwnedWorkerId, WorkerMetadata};
-use golem_worker_executor_base::model::ExecutionStatus;
-use golem_worker_executor_base::services::oplog::{Oplog, OplogConstructor, OplogService};
+use golem_worker_executor::model::ExecutionStatus;
+use golem_worker_executor::services::oplog::{Oplog, OplogConstructor, OplogService};
 use std::sync::Arc;
 
 #[derive(Clone)]

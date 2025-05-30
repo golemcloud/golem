@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use golem_worker_executor_base::services::compiled_component::CompiledComponentService;
+use golem_worker_executor::services::compiled_component::CompiledComponentService;
 use tokio::sync::mpsc;
 use tracing::Instrument;
 
