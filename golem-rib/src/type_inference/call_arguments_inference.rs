@@ -232,7 +232,7 @@ mod internal {
         raw_resource_parameters: Option<&mut [Expr]>,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), FunctionCallError> {
-        let mut constructor_params: &mut [Expr] = &mut vec![];
+        let mut constructor_params: &mut [Expr] = &mut [];
 
         if let Some(resource_params) = raw_resource_parameters {
             constructor_params = resource_params
