@@ -618,7 +618,7 @@ async fn file_write_read(
 
 #[test]
 #[tracing::instrument]
-async fn file_updates(
+async fn file_update(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -840,6 +840,135 @@ async fn file_updates(
 
         check!(content_after_crash[0] == Value::String("baz\n".to_string()));
     }
+}
+
+#[test]
+#[tracing::instrument]
+async fn file_update_in_the_middle_of_exported_function(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    let guard = lock.lock().await;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = {
+        let lock_clone = lock.clone();
+
+        let start_server = async {
+            let route = Router::new().route(
+                "/",
+                get(async move || {
+                    let _ = lock_clone.lock().await;
+                    "Hello, World!".to_string()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        };
+
+        spawn(start_server.in_current_span())
+    };
+
+    let component_id = {
+        let component_files = executor
+            .add_initial_component_files(
+                &AccountId {
+                    value: "test-account".to_string(),
+                },
+                &[(
+                    "ifs-update-inside-exported-function/files/foo.txt",
+                    "/foo.txt",
+                    ComponentFilePermissions::ReadOnly,
+                )],
+            )
+            .await;
+
+        let env = vec![
+            ("PORT".to_string(), host_http_port.to_string()),
+            ("RUST_BACKTRACE".to_string(), "full".to_string()),
+        ];
+
+        executor
+            .component("golem_it_ifs_update_inside_exported_function")
+            .unique()
+            .with_files(&component_files)
+            .with_env(env)
+            .store()
+            .await
+    };
+
+    let worker_id = executor.start_worker(&component_id, "ifs-update-1").await;
+
+    let idempotency_key = IdempotencyKey::fresh();
+
+    executor
+        .invoke_with_key(
+            &worker_id,
+            &idempotency_key,
+            "golem-it:ifs-update-inside-exported-function-exports/golem-it-ifs-update-inside-exported-function-api.{run}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    {
+        let component_files = executor
+            .add_initial_component_files(
+                &AccountId {
+                    value: "test-account".to_string(),
+                },
+                &[(
+                    "ifs-update-inside-exported-function/files/bar.txt",
+                    "/bar.txt",
+                    ComponentFilePermissions::ReadOnly,
+                )],
+            )
+            .await;
+
+        let target_version = executor
+            .update_component_with_files(
+                &component_id,
+                "golem_it_ifs_update_inside_exported_function",
+                Some(&component_files),
+            )
+            .await;
+
+        let handle = unsafe {
+            async_scoped::TokioScope::scope_and_collect(|s| {
+                s.spawn(executor.auto_update_worker(&worker_id, target_version))
+            })
+        };
+        drop(guard);
+        handle.await;
+    };
+
+    {
+        let result = executor
+            .invoke_and_await_with_key(
+                &worker_id,
+                &idempotency_key,
+                "golem-it:ifs-update-inside-exported-function-exports/golem-it-ifs-update-inside-exported-function-api.{run}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        check!(
+            result[0]
+                == Value::Tuple(vec![
+                    Value::String("foo\n".to_string()),
+                    Value::String("bar\n".to_string())
+                ])
+        );
+    }
+
+    http_server.abort();
 }
 
 #[test]
