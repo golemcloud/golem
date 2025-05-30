@@ -50,9 +50,8 @@ mod internal {
     use crate::inferred_type::TypeOrigin;
     use crate::type_inference::GetTypeHint;
     use crate::{
-        ActualType, DynamicParsedFunctionName, DynamicParsedFunctionReference, ExpectedType, Expr,
-        FunctionCallError, FunctionTypeRegistry, InferredType, ParsedFunctionReference,
-        RegistryKey, RegistryValue, TypeMismatchError,
+        ActualType, DynamicParsedFunctionName, ExpectedType, Expr, FunctionCallError,
+        FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeMismatchError,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;

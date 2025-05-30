@@ -1083,10 +1083,7 @@ impl Expr {
         // worker function invocations as this forms the foundation for the rest of the
         // compilation. This is compiler doing its best to infer all the calls such
         // as worker invokes or instance calls etc.
-        type_inference::type_inference_fix_point(
-            |x| Self::resolve_method_calls(x, function_type_registry),
-            self,
-        )?;
+        type_inference::type_inference_fix_point(Self::resolve_method_calls, self)?;
         self.infer_function_call_types(function_type_registry)?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)?;
         self.check_types(function_type_registry)?;
@@ -1113,12 +1110,9 @@ impl Expr {
         Ok(())
     }
 
-    pub fn resolve_method_calls(
-        &mut self,
-        function_type_registry: &FunctionTypeRegistry,
-    ) -> Result<(), RibTypeError> {
+    pub fn resolve_method_calls(&mut self) -> Result<(), RibTypeError> {
         self.bind_instance_types();
-        self.infer_worker_function_invokes(function_type_registry)?;
+        self.infer_worker_function_invokes()?;
         Ok(())
     }
 
@@ -1146,10 +1140,7 @@ impl Expr {
         Ok(())
     }
 
-    pub fn infer_worker_function_invokes(
-        &mut self,
-        registry: &FunctionTypeRegistry,
-    ) -> Result<(), RibTypeError> {
+    pub fn infer_worker_function_invokes(&mut self) -> Result<(), RibTypeError> {
         type_inference::infer_worker_function_invokes(self)
     }
 

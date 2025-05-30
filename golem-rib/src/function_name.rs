@@ -182,9 +182,9 @@ impl DynamicParsedFunctionReference {
             }
             DynamicParsedFunctionReference::RawResourceDrop { .. } => "drop".to_string(),
             DynamicParsedFunctionReference::RawResourceMethod { method, .. } => method.to_string(),
-            DynamicParsedFunctionReference::RawResourceStaticMethod {
-                resource, method, ..
-            } => method.to_string(),
+            DynamicParsedFunctionReference::RawResourceStaticMethod { method, .. } => {
+                method.to_string()
+            }
             DynamicParsedFunctionReference::IndexedResourceConstructor {
                 resource,
                 resource_params,
