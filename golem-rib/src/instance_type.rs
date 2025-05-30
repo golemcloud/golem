@@ -68,12 +68,6 @@ pub enum InstanceType {
     },
 }
 
-// impl Debug for InstanceType {
-//     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-//
-//     }
-// }
-
 impl InstanceType {
     pub fn set_worker_name(&mut self, worker_name: Expr) {
         match self {

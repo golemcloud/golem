@@ -49,10 +49,7 @@ mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::inferred_type::TypeOrigin;
     use crate::type_inference::GetTypeHint;
-    use crate::{
-        ActualType, DynamicParsedFunctionName, ExpectedType, Expr, FunctionCallError,
-        FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeMismatchError,
-    };
+    use crate::{ActualType, DynamicParsedFunctionName, DynamicParsedFunctionReference, ExpectedType, Expr, FunctionCallError, FunctionTypeRegistry, InferredType, ParsedFunctionReference, RegistryKey, RegistryValue, TypeMismatchError};
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
 
@@ -101,7 +98,7 @@ mod internal {
 
                         infer_args_and_result_type(
                             original_expr,
-                            &FunctionDetails::Fqn(function_name.to_string()),
+                            &FunctionDetails::Fqn(function_name.clone()),
                             function_type_registry,
                             &registry_key,
                             args,
@@ -244,7 +241,7 @@ mod internal {
                         Ok(())
                     } else {
                         Err(FunctionCallError::ArgumentSizeMisMatch {
-                            function_name: function_name.to_string(),
+                            function_name: function_name.name(),
                             expr: original_expr.clone(),
                             expected: parameter_types.len(),
                             provided: args.len(),
@@ -281,7 +278,7 @@ mod internal {
                         Ok(())
                     } else {
                         Err(FunctionCallError::ArgumentSizeMisMatch {
-                            function_name: function_name.to_string(),
+                            function_name: function_name.name(),
                             expr: original_expr.clone(),
                             expected: parameter_types.len(),
                             provided: args.len(),
@@ -302,8 +299,25 @@ mod internal {
     enum FunctionDetails {
         ResourceConstructorName { resource_constructor_name: String },
         ResourceMethodName { resource_method_name: String },
-        Fqn(String),
+        Fqn(DynamicParsedFunctionName),
         VariantName(String),
+    }
+
+    impl FunctionDetails {
+        pub fn name(&self) -> String {
+            match self {
+                FunctionDetails::ResourceConstructorName { resource_constructor_name } => {
+                    resource_constructor_name.replace("[constructor]", "")
+                }
+                FunctionDetails::ResourceMethodName { resource_method_name } => {
+                    resource_method_name.clone()
+                }
+                FunctionDetails::Fqn(fqn) => {
+                    fqn.function.name_pretty()
+                }
+                FunctionDetails::VariantName(name) => name.clone(),
+            }
+        }
     }
 
     impl Display for FunctionDetails {

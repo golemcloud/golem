@@ -167,11 +167,11 @@ mod internal {
                     _ => None,
                 }
             }
-            CallType::VariantConstructor(_) => None,
-            CallType::EnumConstructor(_) => None,
             CallType::InstanceCreation(instance_creation_type) => {
                 Some(instance_creation_type.clone())
             }
+            CallType::VariantConstructor(_) => None,
+            CallType::EnumConstructor(_) => None,
         }
     }
 }

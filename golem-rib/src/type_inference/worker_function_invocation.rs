@@ -16,17 +16,14 @@ use crate::call_type::{CallType, InstanceCreationType};
 use crate::instance_type::{FunctionName, InstanceType};
 use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
-use crate::{
-    DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionCallError,
-    InferredType, TypeInternal, TypeName, TypeOrigin,
-};
+use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionCallError, FunctionTypeRegistry, InferredType, TypeInternal, TypeName, TypeOrigin};
 use std::collections::VecDeque;
 use std::ops::Deref;
 
 // This phase is responsible for identifying the worker function invocations
 // such as `worker.foo("x, y, z")` or `cart-resource.add-item(..)` etc
 // lazy method invocations are converted to actual Expr::Call
-pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError> {
+pub fn infer_worker_function_invokes(expr: &mut Expr, function_type_registry: &FunctionTypeRegistry) -> Result<(), RibTypeError> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
@@ -106,7 +103,6 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                             .with_source_span(source_span.clone());
                             *expr = new_call;
                         }
-                        // We are yet to be able to create a call_type
                         FunctionName::ResourceConstructor(fully_qualified_resource_constructor) => {
                             let resource_instance_type = instance_type.get_resource_instance_type(
                                 fully_qualified_resource_constructor.clone(),
@@ -126,6 +122,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                     worker_name: instance_type.worker_name(),
                                     resource_name: fully_qualified_resource_constructor.clone(),
                                 });
+
+                            dbg!(&function_type_registry);
 
                             *expr = Expr::call(new_call_type, None, args.clone())
                                 .with_inferred_type(new_inferred_type)
@@ -160,8 +158,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                                 inferred_type: inferred_type.clone(),
                                             },
                                             format!(
-                                                "Resource method {:?} not found in resource {}",
-                                                resource_method, resource_constructor
+                                                "Resource method {} not found in resource {}",
+                                                resource_method.method_name(), resource_constructor
                                             ),
                                         ))?;
 
