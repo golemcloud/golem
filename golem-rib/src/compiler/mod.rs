@@ -707,7 +707,7 @@ mod compiler_error_tests {
 
             let expected = r#"
             error in the following rib found at line 3, column 19
-            `cart()`
+            `worker.cart()`
             cause: invalid argument size for function `cart`. expected 1 arguments, found 0
             "#;
 

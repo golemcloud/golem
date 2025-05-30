@@ -73,6 +73,23 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                     let function_params_types =
                         function.function_type.parameter_types();
 
+                    if args.len() != function_params_types.len() {
+                        return Err(FunctionCallError::ArgumentSizeMisMatch {
+                            function_name: function.function_name.name_without_qualifier(),
+                            expr: Expr::InvokeMethodLazy {
+                                lhs: lhs.clone(),
+                                method: method.clone(),
+                                generic_type_parameter: generic_type_parameter.clone(),
+                                args: args.clone(),
+                                source_span: source_span.clone(),
+                                type_annotation: type_annotation.clone(),
+                                inferred_type: inferred_type.clone(),
+                            },
+                            expected: function_params_types.len(),
+                            provided: args.len(),
+                        }.into())
+                    }
+
                     match function.function_name {
                         FunctionName::Function(function_name) => {
                             let dynamic_parsed_function_name = function_name.to_string();
@@ -96,23 +113,6 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                             })?;
 
                             let worker_name = instance_type.worker_name().as_deref().cloned();
-
-                            if args.len()!= function_params_types.len() {
-                                return Err(FunctionCallError::ArgumentSizeMisMatch {
-                                    function_name: function_name.function_name,
-                                    expr: Expr::InvokeMethodLazy {
-                                        lhs: lhs.clone(),
-                                        method: method.clone(),
-                                        generic_type_parameter: generic_type_parameter.clone(),
-                                        args: args.clone(),
-                                        source_span: source_span.clone(),
-                                        type_annotation: type_annotation.clone(),
-                                        inferred_type: inferred_type.clone(),
-                                    },
-                                    expected: function_params_types.len(),
-                                    provided: args.len(),
-                                }.into())
-                            }
 
                             let new_call = Expr::call_worker_function(
                                 dynamic_parsed_function_name,
@@ -142,25 +142,6 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                     worker_name: instance_type.worker_name(),
                                     resource_name: fully_qualified_resource_constructor.clone(),
                                 });
-
-                            // all resource constructor has self as the first argument
-                            // hence we need to subtract 1 from the args length
-                            if args.len() != (function_params_types.len() - 1) {
-                                return Err(FunctionCallError::ArgumentSizeMisMatch {
-                                    function_name: fully_qualified_resource_constructor.resource_name,
-                                    expr: Expr::InvokeMethodLazy {
-                                        lhs: lhs.clone(),
-                                        method: method.clone(),
-                                        generic_type_parameter: generic_type_parameter.clone(),
-                                        args: args.clone(),
-                                        source_span: source_span.clone(),
-                                        type_annotation: type_annotation.clone(),
-                                        inferred_type: inferred_type.clone(),
-                                    },
-                                    expected: function_params_types.len(),
-                                    provided: args.len(),
-                                }.into())
-                            }
 
                             *expr = Expr::call(new_call_type, None, args.clone())
                                 .with_inferred_type(new_inferred_type)
@@ -241,25 +222,6 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
 
                                     let worker_name =
                                         instance_type.worker_name().as_deref().cloned();
-
-                                    // all resource constructor has self as the first argument
-                                    // hence we need to subtract 1 from the args length
-                                    if args.len() != function_params_types.len() {
-                                        return Err(FunctionCallError::ArgumentSizeMisMatch {
-                                            function_name: resource_method.method_name().to_string(),
-                                            expr: Expr::InvokeMethodLazy {
-                                                lhs: lhs.clone(),
-                                                method: method.clone(),
-                                                generic_type_parameter: generic_type_parameter.clone(),
-                                                args: args.clone(),
-                                                source_span: source_span.clone(),
-                                                type_annotation: type_annotation.clone(),
-                                                inferred_type: inferred_type.clone(),
-                                            },
-                                            expected: function_params_types.len(),
-                                            provided: args.len(),
-                                        }.into())
-                                    }
 
                                     let new_call = Expr::call_worker_function(
                                         dynamic_parsed_function_name,

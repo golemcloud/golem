@@ -1507,7 +1507,7 @@ mod compiler_tests {
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 3, column 16\n`golem:it/api.{cart(user_id, user_id).add-item}(\"apple\")`\ncause: invalid argument size for function `[constructor]cart`. expected 1 arguments, found 2\n"
+                "error in the following rib found at line 3, column 16\n`add-item(\"apple\")`\ncause: invalid argument size for function `cart`. expected 1 arguments, found 2\n"
             );
         }
 
