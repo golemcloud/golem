@@ -2030,6 +2030,7 @@ mod mock_interpreter {
     use golem_wasm_ast::analysis::analysed_type::tuple;
     use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
     use golem_wasm_rpc::{Value, ValueAndType};
+    use rib::InstructionId;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -2223,12 +2224,7 @@ mod mock_interpreter {
             functions_and_result,
         });
 
-        Interpreter::new(
-            RibInput::new(interpreter_env_input),
-            dynamic_worker_invoke,
-            None,
-            None,
-        )
+        Interpreter::new(RibInput::new(interpreter_env_input), dynamic_worker_invoke)
     }
 
     struct DynamicRibFunctionInvoke {
@@ -2239,6 +2235,7 @@ mod mock_interpreter {
     impl RibFunctionInvoke for DynamicRibFunctionInvoke {
         async fn invoke(
             &self,
+            _instruction_id: &InstructionId,
             _worker_name: Option<EvaluatedWorkerName>,
             function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
