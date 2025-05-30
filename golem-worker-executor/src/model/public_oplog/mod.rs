@@ -1011,11 +1011,12 @@ fn encode_host_function_request_as_value(
         "monotonic_clock::subscribe_duration" => no_payload(),
         "wall_clock::now" => no_payload(),
         "wall_clock::resolution" => no_payload(),
-        "golem_delete_promise" => {
+        "golem::api::create_promise" => no_payload(),
+        "golem::api::delete_promise" => {
             let payload: PromiseId = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "golem_complete_promise" => {
+        "golem::api::complete_promise" => {
             let payload: PromiseId = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
@@ -1386,11 +1387,15 @@ fn encode_host_function_response_as_value(
             let payload: Result<SerializableDateTime, SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "golem_delete_promise" => {
+        "golem::api::create_promise" => {
+            let payload: Result<PromiseId, SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem::api::delete_promise" => {
             let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "golem_complete_promise" => {
+        "golem::api::complete_promise" => {
             let payload: Result<bool, SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }

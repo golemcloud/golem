@@ -104,17 +104,30 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn create_promise(&mut self) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
         self.observe_function_call("golem::api", "create_promise");
-        let oplog_idx = self.get_oplog_index().await?;
 
-        Ok(self
-            .public_state
-            .promise_service
-            .create(
-                &self.owned_worker_id.worker_id,
-                OplogIndex::from_u64(oplog_idx),
-            )
-            .await
-            .into())
+        let durability = Durability::<PromiseId, SerializableError>::new(
+            self,
+            "golem::api",
+            "create_promise",
+            DurableFunctionType::WriteLocal,
+        )
+        .await?;
+
+        let promise_id = if durability.is_live() {
+            let oplog_idx = self.state.current_oplog_index().await.next();
+            let promise_id = self
+                .public_state
+                .promise_service
+                .create(&self.owned_worker_id.worker_id, oplog_idx)
+                .await;
+            durability
+                .persist(self, (), Ok::<PromiseId, GolemError>(promise_id))
+                .await?
+        } else {
+            durability.replay::<PromiseId, GolemError>(self).await?
+        };
+
+        Ok(promise_id.into())
     }
 
     async fn await_promise(
@@ -171,7 +184,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<bool> {
         let durability = Durability::<bool, SerializableError>::new(
             self,
-            "golem:api",
+            "golem::api",
             "complete_promise",
             DurableFunctionType::WriteLocal,
         )
@@ -198,7 +211,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<()> {
         let durability = Durability::<(), SerializableError>::new(
             self,
-            "golem:api",
+            "golem::api",
             "delete_promise",
             DurableFunctionType::WriteLocal,
         )
