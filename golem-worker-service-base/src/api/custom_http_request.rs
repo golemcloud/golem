@@ -27,9 +27,7 @@ use crate::gateway_execution::swagger_binding_handler::DefaultSwaggerBindingHand
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_rib_interpreter::DefaultRibInterpreter;
 use crate::gateway_security::DefaultIdentityProvider;
-use crate::service::gateway::api_definition::ApiDefinitionService;
 use futures_util::FutureExt;
-use golem_service_base::auth::EmptyAuthCtx;
 use poem::{Endpoint, Request, Response};
 
 pub struct CustomHttpRequestApi {
@@ -45,9 +43,6 @@ impl CustomHttpRequestApi {
         file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
         http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send>,
         gateway_session_store: Arc<dyn GatewaySession + Sync + Send>,
-        definition_service: Option<
-            Arc<dyn ApiDefinitionService<EmptyAuthCtx, Namespace> + Sync + Send>,
-        >,
     ) -> Self {
         let evaluator = Arc::new(DefaultRibInterpreter::from_worker_request_executor(
             worker_request_executor_service.clone(),
@@ -66,7 +61,7 @@ impl CustomHttpRequestApi {
             api_definition_lookup_service,
             gateway_session_store,
             identity_provider: Arc::new(DefaultIdentityProvider),
-            definition_service,
+            definition_service: None,
         });
 
         Self {

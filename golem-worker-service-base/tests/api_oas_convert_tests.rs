@@ -1989,7 +1989,9 @@ async fn test_path_query_header_parameter_combinations() {
             worker_name_compiled: Some(WorkerNameCompiled {
                 worker_name: Expr::literal("worker-${user}"),
                 compiled_worker_name: RibByteCode::default(),
-                rib_input_type_info: RibInputTypeInfo { types: worker_input_types },
+                rib_input_type_info: RibInputTypeInfo {
+                    types: worker_input_types,
+                },
             }),
             idempotency_key_compiled: None,
             response_compiled: ResponseMappingCompiled {
@@ -1997,7 +1999,9 @@ async fn test_path_query_header_parameter_combinations() {
                     "{status: 200, body: \"User profile for ${user_id}\"}",
                 ),
                 response_mapping_compiled: RibByteCode::default(),
-                rib_input: RibInputTypeInfo { types: response_input_types },
+                rib_input: RibInputTypeInfo {
+                    types: response_input_types,
+                },
                 worker_calls: None,
                 rib_output: Some(RibOutputTypeInfo {
                     analysed_type: AnalysedType::Record(TypeRecord {
@@ -2166,7 +2170,6 @@ async fn test_path_query_header_parameter_combinations() {
     // Single assert comparing the complete structure
     assert_eq!(actual_yaml, expected_yaml);
 }
-
 
 // Test 14: Comprehensive AnalysedType Coverage Test (10 Routes)
 #[tokio::test]
@@ -3261,4 +3264,3 @@ x-golem-api-definition-version: 2.0.0
     // Single assert comparing the complete structure
     assert_eq!(actual_yaml, expected_yaml);
 }
-
