@@ -9211,6 +9211,7 @@ components:
       - file-server
       - http-handler
       - cors-preflight
+      - swagger-ui
     GetFilesResponse:
       title: GetFilesResponse
       type: object
