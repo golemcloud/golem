@@ -136,7 +136,8 @@ impl RibEdit {
             instance_vars.get_resource_instance_method_dict(instance_var_name)
         {
             for (resource_method_name, tpe) in &resource_instance_func_dict.name_and_types {
-                let resource_method_with_paren = format!("{}(", resource_method_name.name_without_qualifier());
+                let resource_method_with_paren =
+                    format!("{}(", resource_method_name.name_without_qualifier());
 
                 // If user has typed in `(`, complete the method call with arguments
                 if resource_method_with_paren == method_prefix {
@@ -160,7 +161,10 @@ impl RibEdit {
                     return Ok(Some((end_pos, completions)));
                 }
 
-                if resource_method_name.name_without_qualifier().starts_with(method_prefix) {
+                if resource_method_name
+                    .name_without_qualifier()
+                    .starts_with(method_prefix)
+                {
                     completions.push(resource_method_name.name_without_qualifier());
                 }
             }
