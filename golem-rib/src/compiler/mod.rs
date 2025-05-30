@@ -764,6 +764,75 @@ mod compiler_error_tests {
 
             assert_eq!(error_message, strip_spaces(expected));
         }
+
+        #[test]
+        async fn test_invalid_type_parameter0() {
+            let expr = r#"
+          let worker = instance[golem:it2]("my-worker");
+          let x = worker.cart("foo");
+          x.add-item(1)
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = test_utils::get_metadata();
+
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
+            let error_message = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 2, column 24
+            `instance[golem:it2]("my-worker")`
+            cause: failed to create instance: package `golem:it2` not found
+            "#;
+
+            assert_eq!(error_message, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_invalid_type_parameter1() {
+            let expr = r#"
+          let worker = instance[golem:it/api2]("my-worker");
+          let x = worker.cart("foo");
+          x.add-item(1)
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = test_utils::get_metadata();
+
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
+            let error_message = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 2, column 24
+            `instance[golem:it/api2]("my-worker")`
+            cause: failed to create instance: `golem:it/api2` not found
+            "#;
+
+            assert_eq!(error_message, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_invalid_type_parameter2() {
+            let expr = r#"
+          let worker = instance[api2]("my-worker");
+          let x = worker.cart("foo");
+          x.add-item(1)
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = test_utils::get_metadata();
+
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
+            let error_message = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 2, column 24
+            `instance[api2]("my-worker")`
+            cause: failed to create instance: interface `api2` not found
+            "#;
+
+            assert_eq!(error_message, strip_spaces(expected));
+        }
     }
 
     mod test_utils {

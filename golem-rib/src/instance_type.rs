@@ -369,7 +369,7 @@ impl InstanceType {
                         .collect::<Vec<_>>();
 
                     if name_and_types.is_empty() {
-                        return Err(format!("interface '{}' not found", interface_name));
+                        return Err(format!("interface `{}` not found", interface_name));
                     }
 
                     let function_dict = FunctionDictionary { name_and_types };
@@ -388,7 +388,7 @@ impl InstanceType {
                         .collect::<Vec<_>>();
 
                     if name_and_types.is_empty() {
-                        return Err(format!("package '{}' not found", package_name));
+                        return Err(format!("package `{}` not found", package_name));
                     }
 
                     let function_dict = FunctionDictionary { name_and_types };
@@ -410,7 +410,7 @@ impl InstanceType {
                         .collect::<Vec<_>>();
 
                     if name_and_types.is_empty() {
-                        return Err(format!("{} not found", fq_interface));
+                        return Err(format!("`{}` not found", fq_interface));
                     }
 
                     let function_dict = FunctionDictionary { name_and_types };

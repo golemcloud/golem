@@ -125,7 +125,7 @@ mod internal {
                         RibTypeError::from(CustomError::new(
                             &Expr::Call {
                                 call_type: call_type.clone(),
-                                generic_type_parameter: None,
+                                generic_type_parameter: generic_type_parameter.clone(),
                                 args: args.clone(),
                                 inferred_type: InferredType::unknown(),
                                 source_span: source_span.clone(),
