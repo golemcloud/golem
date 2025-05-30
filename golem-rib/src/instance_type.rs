@@ -362,13 +362,17 @@ impl InstanceType {
             }),
             Some(type_parameter) => match type_parameter {
                 TypeParameter::Interface(interface_name) => {
-                    let function_dict = FunctionDictionary {
-                        name_and_types: function_dict
-                            .name_and_types
-                            .into_iter()
-                            .filter(|(f, _)| f.interface_name() == Some(interface_name.clone()))
-                            .collect::<Vec<_>>(),
-                    };
+                    let name_and_types = function_dict
+                        .name_and_types
+                        .into_iter()
+                        .filter(|(f, _)| f.interface_name() == Some(interface_name.clone()))
+                        .collect::<Vec<_>>();
+
+                    if name_and_types.is_empty() {
+                        return Err(format!("interface '{}' not found", interface_name));
+                    }
+
+                    let function_dict = FunctionDictionary { name_and_types };
 
                     Ok(InstanceType::Interface {
                         worker_name: worker_name.cloned().map(Box::new),
@@ -377,13 +381,17 @@ impl InstanceType {
                     })
                 }
                 TypeParameter::PackageName(package_name) => {
-                    let function_dict = FunctionDictionary {
-                        name_and_types: function_dict
-                            .name_and_types
-                            .into_iter()
-                            .filter(|(f, _)| f.package_name() == Some(package_name.clone()))
-                            .collect(),
-                    };
+                    let name_and_types = function_dict
+                        .name_and_types
+                        .into_iter()
+                        .filter(|(f, _)| f.package_name() == Some(package_name.clone()))
+                        .collect::<Vec<_>>();
+
+                    if name_and_types.is_empty() {
+                        return Err(format!("package '{}' not found", package_name));
+                    }
+
+                    let function_dict = FunctionDictionary { name_and_types };
 
                     Ok(InstanceType::Package {
                         worker_name: worker_name.cloned().map(Box::new),
@@ -392,17 +400,20 @@ impl InstanceType {
                     })
                 }
                 TypeParameter::FullyQualifiedInterface(fq_interface) => {
-                    let function_dict = FunctionDictionary {
-                        name_and_types: function_dict
-                            .name_and_types
-                            .into_iter()
-                            .filter(|(f, _)| {
-                                f.package_name() == Some(fq_interface.package_name.clone())
-                                    && f.interface_name()
-                                        == Some(fq_interface.interface_name.clone())
-                            })
-                            .collect(),
-                    };
+                    let name_and_types = function_dict
+                        .name_and_types
+                        .into_iter()
+                        .filter(|(f, _)| {
+                            f.package_name() == Some(fq_interface.package_name.clone())
+                                && f.interface_name() == Some(fq_interface.interface_name.clone())
+                        })
+                        .collect::<Vec<_>>();
+
+                    if name_and_types.is_empty() {
+                        return Err(format!("{} not found", fq_interface));
+                    }
+
+                    let function_dict = FunctionDictionary { name_and_types };
 
                     Ok(InstanceType::PackageInterface {
                         worker_name: worker_name.cloned().map(Box::new),

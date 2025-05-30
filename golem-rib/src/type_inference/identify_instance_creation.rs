@@ -131,7 +131,7 @@ mod internal {
                                 source_span: source_span.clone(),
                                 type_annotation: type_annotation.clone(),
                             },
-                            format!("Failed to create instance type: {}", err),
+                            format!("failed to create instance: {}", err),
                         ))
                     })?;
 
