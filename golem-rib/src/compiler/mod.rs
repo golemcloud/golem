@@ -707,7 +707,7 @@ mod compiler_error_tests {
 
             let expected = r#"
             error in the following rib found at line 3, column 19
-            `worker.cart()`
+            `cart()`
             cause: invalid argument size for function `cart`. expected 1 arguments, found 0
             "#;
 
@@ -738,6 +738,34 @@ mod compiler_error_tests {
 
             assert_eq!(error_message, strip_spaces(expected));
         }
+
+        #[test]
+        async fn test_invalid_resource_method_call0() {
+            let expr = r#"
+          let worker = instance("my-worker");
+          let x = worker.cart("foo");
+          x.add-item({product_id: "p1", name: "item1", price: 10.0, quantity: 2})
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = test_utils::get_metadata();
+
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
+            let error_message = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 3, column 31
+            `1`
+            found within:
+            `cart(1)`
+            cause: type mismatch. expected string, found s32
+            invalid argument to the function `[constructor]cart`
+            "#;
+
+            assert_eq!(error_message, strip_spaces(expected));
+        }
+
+
     }
 
     mod test_utils {

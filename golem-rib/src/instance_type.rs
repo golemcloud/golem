@@ -623,9 +623,9 @@ pub struct FullyQualifiedResourceConstructor {
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FullyQualifiedFunctionName {
-    package_name: Option<PackageName>,
-    interface_name: Option<InterfaceName>,
-    function_name: String,
+    pub package_name: Option<PackageName>,
+    pub interface_name: Option<InterfaceName>,
+    pub function_name: String,
 }
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
