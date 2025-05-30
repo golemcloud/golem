@@ -804,7 +804,7 @@ async fn outgoing_http_contains_idempotency_key(
     check!(
         result
             == vec![Value::String(
-                "200 ExampleResponse { percentage: 0.0, message: Some(\"8c25adee-7935-5315-a99b-457f41180bc1\") }"
+                "200 ExampleResponse { percentage: 0.0, message: Some(\"25b5624b-3a2a-5574-bdad-418287838cba\") }"
                     .to_string()
             )]
     );
