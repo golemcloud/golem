@@ -13,44 +13,63 @@
 // limitations under the License.
 
 use crate::dependency_manager::RibComponentMetadata;
-use rib::{
-    Interpreter, InterpreterEnv, InterpreterStack, RibByteCode, RibFunctionInvoke, RibInput,
-};
-use std::sync::Arc;
+use crate::WorkerFunctionInvoke;
+use golem_wasm_rpc::ValueAndType;
+use rib::InstructionId;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 pub struct ReplState {
-    byte_code: RibByteCode,
-    interpreter: Interpreter,
     dependency: RibComponentMetadata,
-    rib_code_collection: Vec<String>,
+    rib_script: RwLock<RawRibScript>,
+    worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
+    invocation_results: InvocationResultCache,
+    last_executed_instruction: RwLock<Option<InstructionId>>,
 }
 
 impl ReplState {
-    pub fn current_rib_program(&self) -> String {
-        self.rib_code_collection.join(";\n")
+    pub fn worker_function_invoke(&self) -> &Arc<dyn WorkerFunctionInvoke + Sync + Send> {
+        &self.worker_function_invoke
     }
 
-    pub fn update_rib(&mut self, rib: &str) {
-        self.rib_code_collection.push(rib.to_string());
+    pub fn invocation_results(&self) -> &InvocationResultCache {
+        &self.invocation_results
+    }
+
+    pub fn update_cache(&self, instruction_id: InstructionId, result: ValueAndType) {
+        self.invocation_results
+            .results
+            .write()
+            .unwrap()
+            .insert(instruction_id, result);
+    }
+
+    pub fn last_executed_instruction(&self) -> InstructionId {
+        self.last_executed_instruction
+            .read()
+            .unwrap()
+            .clone()
+            .unwrap_or(InstructionId { index: 0 })
+    }
+
+    pub fn update_last_executed_instruction(&self, instruction_id: InstructionId) {
+        *self.last_executed_instruction.write().unwrap() = Some(instruction_id);
+    }
+
+    pub fn current_rib_program(&self) -> String {
+        self.rib_script.read().unwrap().as_text()
+    }
+
+    pub fn update_rib(&self, rib: &str) {
+        self.rib_script.write().unwrap().push(rib);
     }
 
     pub fn update_dependency(&mut self, dependency: RibComponentMetadata) {
         self.dependency = dependency;
     }
 
-    pub fn pop_rib_text(&mut self) {
-        self.rib_code_collection.pop();
-    }
-
-    pub fn interpreter(&mut self) -> &mut Interpreter {
-        &mut self.interpreter
-    }
-    pub fn byte_code(&self) -> &RibByteCode {
-        &self.byte_code
-    }
-
-    pub fn update_byte_code(&mut self, byte_code: RibByteCode) {
-        self.byte_code = byte_code;
+    pub fn remove_last_rib_expression(&self) {
+        self.rib_script.write().unwrap().pop();
     }
 
     pub fn dependency(&self) -> &RibComponentMetadata {
@@ -59,20 +78,46 @@ impl ReplState {
 
     pub fn new(
         dependency: &RibComponentMetadata,
-        invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
+        worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
     ) -> Self {
-        let interpreter_env = InterpreterEnv::from(&RibInput::default(), &invoke);
-
         Self {
-            byte_code: RibByteCode::default(),
-            interpreter: Interpreter::new(
-                RibInput::default(),
-                invoke,
-                Some(InterpreterStack::default()),
-                Some(interpreter_env),
-            ),
             dependency: dependency.clone(),
-            rib_code_collection: vec![],
+            rib_script: RwLock::new(RawRibScript::default()),
+            worker_function_invoke,
+            invocation_results: InvocationResultCache {
+                results: RwLock::new(HashMap::new()),
+            },
+            last_executed_instruction: RwLock::new(None),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct InvocationResultCache {
+    pub results: RwLock<HashMap<InstructionId, ValueAndType>>,
+}
+
+impl InvocationResultCache {
+    pub fn get(&self, script_id: &InstructionId) -> Option<ValueAndType> {
+        self.results.read().unwrap().get(script_id).cloned()
+    }
+}
+
+#[derive(Default)]
+pub struct RawRibScript {
+    value: Vec<String>,
+}
+
+impl RawRibScript {
+    pub fn push(&mut self, rib: &str) {
+        self.value.push(rib.to_string());
+    }
+
+    pub fn pop(&mut self) {
+        self.value.pop();
+    }
+
+    pub fn as_text(&self) -> String {
+        self.value.join(";\n")
     }
 }

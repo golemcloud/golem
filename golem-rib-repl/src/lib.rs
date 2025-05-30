@@ -21,6 +21,7 @@ pub use rib_repl::*;
 
 mod compiler;
 mod dependency_manager;
+mod eval;
 mod invoke;
 mod repl_printer;
 mod repl_state;

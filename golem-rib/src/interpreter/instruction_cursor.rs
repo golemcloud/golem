@@ -20,6 +20,16 @@ pub struct RibByteCodeCursor {
 }
 
 impl RibByteCodeCursor {
+    pub fn position(&self) -> InstructionId {
+        InstructionId {
+            index: self.position,
+        }
+    }
+
+    pub fn last(&self) -> Option<&RibIR> {
+        self.byte_code.instructions.last()
+    }
+
     pub fn from_rib_byte_code(byte_code: RibByteCode) -> RibByteCodeCursor {
         RibByteCodeCursor {
             byte_code,

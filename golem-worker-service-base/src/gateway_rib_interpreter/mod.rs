@@ -18,8 +18,8 @@ use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use rib::{
-    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode, RibFunctionInvoke,
-    RibFunctionInvokeResult, RibInput, RibResult,
+    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibByteCode,
+    RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -145,6 +145,7 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
 {
     async fn invoke(
         &self,
+        _instruction_id: &InstructionId,
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         parameters: EvaluatedFnArgs,
