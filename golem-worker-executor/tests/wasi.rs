@@ -37,6 +37,7 @@ use golem_test_framework::dsl::{
 };
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use http::{HeaderMap, StatusCode};
+use serde_json::json;
 use tokio::spawn;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
@@ -743,6 +744,74 @@ async fn http_client_using_reqwest(
 
 #[test]
 #[tracing::instrument]
+async fn outgoing_http_contains_idempotency_key(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/post-example",
+                post(move |headers: HeaderMap| async move {
+                    let idempotency_key = headers
+                        .get("idempotency-key")
+                        .map(|h| h.to_str().unwrap().to_string());
+                    let idempotency_key_str = idempotency_key.map(|i| i.to_string());
+                    json!({
+                        "percentage": 0.0,
+                        "message": idempotency_key_str
+                    })
+                    .to_string()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component_id = executor.component("http-client-2").store().await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "outgoing-http-contains-idempotency-key",
+            vec![],
+            env,
+        )
+        .await;
+
+    let key = IdempotencyKey::new("177db03d-3234-4a04-8d03-e8d042348abd".to_string());
+    let result = executor
+        .invoke_and_await_with_key(&worker_id, &key, "golem:it/api.{run}", vec![])
+        .await
+        .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    drop(executor);
+    http_server.abort();
+
+    check!(
+        result
+            == vec![Value::String(
+                "200 ExampleResponse { percentage: 0.0, message: Some(\"25b5624b-3a2a-5574-bdad-418287838cba\") }"
+                    .to_string()
+            )]
+    );
+}
+
+#[test]
+#[tracing::instrument]
 async fn environment_service(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -887,12 +956,21 @@ async fn http_client_interrupting_response_stream(
     let host_http_port = listener.local_addr().unwrap().port();
 
     let (signal_tx, mut signal_rx) = tokio::sync::mpsc::unbounded_channel();
+    let idempotency_keys = Arc::new(Mutex::new(Vec::new()));
+    let idempotency_keys_clone = idempotency_keys.clone();
 
     let http_server = spawn(
         async move {
             let route = Router::new().route(
                 "/big-byte-array",
-                get(move || async move {
+                get(move |headers: HeaderMap| async move {
+                    let idempotency_key = headers
+                        .get("idempotency-key")
+                        .map(|h| h.to_str().unwrap().to_string());
+                    if let Some(key) = idempotency_key {
+                        let mut keys = idempotency_keys_clone.lock().unwrap();
+                        keys.push(key);
+                    }
                     let stream = stream::iter(0..100)
                         .throttle(Duration::from_millis(20))
                         .map(move |i| {
@@ -967,6 +1045,10 @@ async fn http_client_interrupting_response_stream(
     http_server.abort();
 
     check!(result == Ok(vec![Value::U64(100 * 1024)]));
+
+    let idempotency_keys = idempotency_keys.lock().unwrap();
+    check!(idempotency_keys.len() == 2);
+    check!(idempotency_keys[0] == idempotency_keys[1]);
 }
 
 #[test]
