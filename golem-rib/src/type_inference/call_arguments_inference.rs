@@ -406,10 +406,6 @@ mod internal {
         if is_valid {
             Ok(())
         } else {
-            dbg!(
-                "Function call argument type mismatch",
-                &function_name.name()
-            );
             Err(FunctionCallError::TypeMisMatch {
                 function_name: function_name.name(),
                 argument: provided.clone(),
