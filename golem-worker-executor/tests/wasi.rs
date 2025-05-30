@@ -12,13 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
-
-use std::collections::HashMap;
-use std::sync::atomic::AtomicU8;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
-
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{assert, check};
@@ -37,6 +30,11 @@ use golem_test_framework::dsl::{
 };
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use http::{HeaderMap, StatusCode};
+use std::collections::HashMap;
+use std::sync::atomic::AtomicU8;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
+use test_r::{inherit_test_dep, test};
 use tokio::spawn;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
@@ -618,7 +616,7 @@ async fn file_write_read(
 
 #[test]
 #[tracing::instrument]
-async fn file_update(
+async fn file_update_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -852,19 +850,23 @@ async fn file_update_in_the_middle_of_exported_function(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let lock = Arc::new(tokio::sync::Mutex::new(()));
-    let guard = lock.lock().await;
+    let (sender, mut latch) = tokio::sync::mpsc::channel::<()>(1);
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
 
     let http_server = {
-        let lock_clone = lock.clone();
-
+        let sender = Arc::new(sender);
+        let first_request = Arc::new(tokio::sync::Mutex::new(true));
         let start_server = async {
             let route = Router::new().route(
                 "/",
                 get(async move || {
-                    let _ = lock_clone.lock().await;
+                    sender.send(()).await.unwrap();
+                    let mut first_request = first_request.lock().await;
+                    if *first_request {
+                        (*first_request) = false;
+                        tokio::time::sleep(Duration::from_secs(600)).await;
+                    }
                     "Hello, World!".to_string()
                 }),
             );
@@ -917,6 +919,8 @@ async fn file_update_in_the_middle_of_exported_function(
         .await
         .unwrap();
 
+    latch.recv().await.expect("channel should produce value");
+
     {
         let component_files = executor
             .add_initial_component_files(
@@ -925,7 +929,7 @@ async fn file_update_in_the_middle_of_exported_function(
                 },
                 &[(
                     "ifs-update-inside-exported-function/files/bar.txt",
-                    "/bar.txt",
+                    "/foo.txt",
                     ComponentFilePermissions::ReadOnly,
                 )],
             )
@@ -939,13 +943,9 @@ async fn file_update_in_the_middle_of_exported_function(
             )
             .await;
 
-        let handle = unsafe {
-            async_scoped::TokioScope::scope_and_collect(|s| {
-                s.spawn(executor.auto_update_worker(&worker_id, target_version))
-            })
-        };
-        drop(guard);
-        handle.await;
+        executor
+            .auto_update_worker(&worker_id, target_version)
+            .await;
     };
 
     {

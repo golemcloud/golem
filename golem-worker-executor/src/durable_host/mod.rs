@@ -67,7 +67,7 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
-    UpdateDescription, WorkerError, WorkerResourceId,
+    TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{exports, PluginInstallationId};
@@ -83,7 +83,7 @@ use golem_common::retries::get_delay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
-use replay_state::ReplayAction;
+use replay_state::ReplayEvent;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -543,14 +543,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
-    /// Records the result of an automatic update, if any was active, and returns whether the worker
-    /// should be restarted to retry recovering without the pending update.
-    pub async fn finalize_pending_update(
-        result: &Result<RetryDecision, GolemError>,
+    pub async fn finalize_pending_snapshot_update(
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> RetryDecision {
-        let worker_id = store.as_context().data().worker_id().clone();
         let pending_update = store
             .as_context()
             .data()
@@ -560,174 +556,192 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             .pop_pending_update()
             .await;
         match pending_update {
-            Some(pending_update) => match result {
-                Ok(RetryDecision::None) => {
-                    if let UpdateDescription::SnapshotBased { .. } = &pending_update.description {
-                        // snapshot based updates will already start replaying at the most recent version,
-                        // so no need to apply the update here.
+            Some(TimestampedUpdateDescription {
+                description: description @ UpdateDescription::SnapshotBased { .. },
+                ..
+            }) => {
+                let target_version = *description.target_version();
 
-                        let target_version = *pending_update.description.target_version();
-
-                        match store
-                            .as_context_mut()
-                            .data_mut()
-                            .get_public_state()
-                            .oplog()
-                            .get_upload_description_payload(&pending_update.description)
-                            .await
-                        {
-                            Ok(Some(data)) => {
-                                let failed = if let Some(load_snapshot) =
-                                    find_first_available_function(
-                                        store,
-                                        instance,
-                                        vec![
-                                            "golem:api/load-snapshot@1.1.0.{load}".to_string(),
-                                            "golem:api/load-snapshot@0.2.0.{load}".to_string(),
-                                        ],
-                                    ) {
-                                    let idempotency_key = IdempotencyKey::fresh();
-                                    store
-                                        .as_context_mut()
-                                        .data_mut()
-                                        .durable_ctx_mut()
-                                        .set_current_idempotency_key(idempotency_key.clone())
-                                        .await;
-
-                                    store
-                                        .as_context_mut()
-                                        .data_mut()
-                                        .begin_call_snapshotting_function();
-                                    let load_result = invoke_observed_and_traced(
-                                        load_snapshot,
-                                        vec![Value::List(
-                                            data.iter().map(|b| Value::U8(*b)).collect(),
-                                        )],
-                                        store,
-                                        instance,
-                                    )
-                                    .await;
-                                    store
-                                        .as_context_mut()
-                                        .data_mut()
-                                        .end_call_snapshotting_function();
-
-                                    match load_result {
-                                        Err(error) => Some(format!(
-                                            "Manual update failed to load snapshot: {error}"
-                                        )),
-                                        Ok(InvokeResult::Failed { error, .. }) => {
-                                            let stderr = store
-                                                .as_context()
-                                                .data()
-                                                .get_public_state()
-                                                .event_service()
-                                                .get_last_invocation_errors();
-                                            let error = error.to_string(&stderr);
-                                            Some(format!(
-                                                "Manual update failed to load snapshot: {error}"
-                                            ))
-                                        }
-                                        Ok(InvokeResult::Succeeded { output, .. }) => {
-                                            if output.len() == 1 {
-                                                match &output[0] {
-                                                        Value::Result(Err(Some(boxed_error_value))) => {
-                                                            match &**boxed_error_value {
-                                                                Value::String(error) =>
-                                                                    Some(format!("Manual update failed to load snapshot: {error}")),
-                                                                _ =>
-                                                                    Some("Unexpected result value from the snapshot load function".to_string())
-                                                            }
-                                                        }
-                                                        _ => None
-                                                    }
-                                            } else {
-                                                Some("Unexpected result value from the snapshot load function".to_string())
-                                            }
-                                        }
-                                        _ => None,
-                                    }
-                                } else {
-                                    Some(
-                                        "Failed to find exported load-snapshot function"
-                                            .to_string(),
-                                    )
-                                };
-
-                                if let Some(error) = failed {
-                                    store
-                                        .as_context_mut()
-                                        .data_mut()
-                                        .on_worker_update_failed(target_version, Some(error))
-                                        .await;
-                                    RetryDecision::Immediate
-                                } else {
-                                    let component_metadata =
-                                        store.as_context().data().component_metadata().clone();
-                                    store
-                                        .as_context_mut()
-                                        .data_mut()
-                                        .on_worker_update_succeeded(
-                                            &pending_update.description,
-                                            component_metadata.size,
-                                            HashSet::from_iter(
-                                                component_metadata
-                                                    .plugin_installations
-                                                    .into_iter()
-                                                    .map(|installation| installation.id),
-                                            ),
-                                        )
-                                        .await;
-                                    RetryDecision::None
-                                }
-                            }
-                            Ok(None) => {
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .on_worker_update_failed(
-                                        target_version,
-                                        Some("Failed to find snapshot data for update".to_string()),
-                                    )
-                                    .await;
-                                RetryDecision::Immediate
-                            }
-                            Err(error) => {
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .on_worker_update_failed(target_version, Some(error))
-                                    .await;
-                                RetryDecision::Immediate
-                            }
-                        }
-                    } else {
-                        let target_version = *pending_update.description.target_version();
-
-                        // apply side effects that are part of the update
-                        if let Err(error) =
-                            update_state_to_new_component_version(store, target_version).await
-                        {
-                            let stringified_error =
-                                format!("Applying worker update failed: {error}");
+                match store
+                    .as_context_mut()
+                    .data_mut()
+                    .get_public_state()
+                    .oplog()
+                    .get_upload_description_payload(&description)
+                    .await
+                {
+                    Ok(Some(data)) => {
+                        let failed = if let Some(load_snapshot) = find_first_available_function(
+                            store,
+                            instance,
+                            vec![
+                                "golem:api/load-snapshot@1.1.0.{load}".to_string(),
+                                "golem:api/load-snapshot@0.2.0.{load}".to_string(),
+                            ],
+                        ) {
+                            let idempotency_key = IdempotencyKey::fresh();
+                            store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .set_current_idempotency_key(idempotency_key.clone())
+                                .await;
 
                             store
                                 .as_context_mut()
                                 .data_mut()
-                                .on_worker_update_failed(target_version, Some(stringified_error))
-                                .await;
+                                .begin_call_snapshotting_function();
+                            let load_result = invoke_observed_and_traced(
+                                load_snapshot,
+                                vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
+                                store,
+                                instance,
+                            )
+                            .await;
+                            store
+                                .as_context_mut()
+                                .data_mut()
+                                .end_call_snapshotting_function();
 
-                            return RetryDecision::Immediate;
+                            match load_result {
+                                Err(error) => {
+                                    Some(format!("Manual update failed to load snapshot: {error}"))
+                                }
+                                Ok(InvokeResult::Failed { error, .. }) => {
+                                    let stderr = store
+                                        .as_context()
+                                        .data()
+                                        .get_public_state()
+                                        .event_service()
+                                        .get_last_invocation_errors();
+                                    let error = error.to_string(&stderr);
+                                    Some(format!("Manual update failed to load snapshot: {error}"))
+                                }
+                                Ok(InvokeResult::Succeeded { output, .. }) => {
+                                    if output.len() == 1 {
+                                        match &output[0] {
+                                                Value::Result(Err(Some(boxed_error_value))) => {
+                                                    match &**boxed_error_value {
+                                                        Value::String(error) =>
+                                                            Some(format!("Manual update failed to load snapshot: {error}")),
+                                                        _ =>
+                                                            Some("Unexpected result value from the snapshot load function".to_string())
+                                                    }
+                                                }
+                                                _ => None
+                                            }
+                                    } else {
+                                        Some("Unexpected result value from the snapshot load function".to_string())
+                                    }
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            Some("Failed to find exported load-snapshot function".to_string())
                         };
 
-                        // Automatic update succeeded
-                        let component_metadata =
-                            store.as_context().data().component_metadata().clone();
-
+                        if let Some(error) = failed {
+                            store
+                                .as_context_mut()
+                                .data_mut()
+                                .on_worker_update_failed(target_version, Some(error))
+                                .await;
+                            RetryDecision::Immediate
+                        } else {
+                            let component_metadata =
+                                store.as_context().data().component_metadata().clone();
+                            store
+                                .as_context_mut()
+                                .data_mut()
+                                .on_worker_update_succeeded(
+                                    &description,
+                                    component_metadata.size,
+                                    HashSet::from_iter(
+                                        component_metadata
+                                            .plugin_installations
+                                            .into_iter()
+                                            .map(|installation| installation.id),
+                                    ),
+                                )
+                                .await;
+                            RetryDecision::None
+                        }
+                    }
+                    Ok(None) => {
                         store
                             .as_context_mut()
                             .data_mut()
-                            .on_worker_update_succeeded(
+                            .on_worker_update_failed(
+                                target_version,
+                                Some("Failed to find snapshot data for update".to_string()),
+                            )
+                            .await;
+                        RetryDecision::Immediate
+                    }
+                    Err(error) => {
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .on_worker_update_failed(target_version, Some(error))
+                            .await;
+                        RetryDecision::Immediate
+                    }
+                }
+            }
+            _ => {
+                panic!("`finalize_pending_snapshot_update` can only be called with a snapshot update description")
+            }
+        }
+    }
+}
+
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub async fn process_pending_replay_events(&mut self) -> Result<(), GolemError> {
+        debug!("Applying pending side effects accumulated during replay");
+
+        let replay_events = self.state.replay_state.take_new_replay_events().await;
+        for event in replay_events {
+            match event {
+                ReplayEvent::UpdateReplayed { new_version } => {
+                    debug!("Updating worker state to component metadata version {new_version}");
+                    self.update_state_to_new_component_version(new_version)
+                        .await?;
+                }
+                ReplayEvent::ReplayFinished => {
+                    debug!("Replaying oplog finished");
+
+                    let pending_update = self.public_state.worker().peek_pending_update().await;
+
+                    let pending_update = if let Some(pending_update) = pending_update {
+                        pending_update
+                    } else {
+                        continue;
+                    };
+
+                    match pending_update.description {
+                        UpdateDescription::Automatic { target_version } => {
+                            debug!("Finalizing pending automatic update");
+                            self.public_state.worker().pop_pending_update().await;
+
+                            if let Err(error) = self
+                                .update_state_to_new_component_version(target_version)
+                                .await
+                            {
+                                let stringified_error =
+                                    format!("Applying worker update failed: {error}");
+
+                                self.on_worker_update_failed(
+                                    target_version,
+                                    Some(stringified_error),
+                                )
+                                .await;
+
+                                Err(error)?
+                            };
+
+                            let component_metadata = self.component_metadata().clone();
+
+                            self.on_worker_update_succeeded(
                                 &pending_update.description,
                                 component_metadata.size,
                                 HashSet::from_iter(
@@ -738,44 +752,63 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                 ),
                             )
                             .await;
-                        RetryDecision::None
+
+                            debug!("Finalizing automatic update to version {target_version}");
+                        }
+                        _ => {
+                            panic!("Expected snapshot-based update description")
+                        }
                     }
                 }
-                Ok(_) => {
-                    // TODO: we loose knowledge of the error here
-                    // Failure that triggered a retry
-                    let target_version = *pending_update.description.target_version();
-
-                    store
-                        .as_context_mut()
-                        .data_mut()
-                        .on_worker_update_failed(
-                            target_version,
-                            Some("Automatic update failed".to_string()),
-                        )
-                        .await;
-                    RetryDecision::Immediate
-                }
-                Err(error) => {
-                    let target_version = *pending_update.description.target_version();
-
-                    store
-                        .as_context_mut()
-                        .data_mut()
-                        .on_worker_update_failed(
-                            target_version,
-                            Some(format!("Automatic update failed: {error}")),
-                        )
-                        .await;
-                    RetryDecision::Immediate
-                }
-            },
-            None => {
-                debug!("No pending updates to finalize for {}", worker_id);
-                RetryDecision::None
             }
         }
+
+        Ok(())
     }
+
+    pub async fn update_state_to_new_component_version(
+        &mut self,
+        new_version: ComponentVersion,
+    ) -> Result<(), GolemError> {
+        let current_metadata = &self.state.component_metadata;
+
+        if new_version <= current_metadata.version {
+            debug!("Update {new_version} was already applied, skipping");
+            return Ok(());
+        };
+
+        let new_metadata = self
+            .component_service()
+            .get_metadata(
+                &self.owned_worker_id.account_id,
+                &self.owned_worker_id.component_id(),
+                Some(new_version),
+            )
+            .await?;
+
+        let mut current_files = self.state.files.write().await;
+        update_filesystem(
+            &mut current_files,
+            &self.state.file_loader,
+            &self.owned_worker_id.account_id,
+            self.temp_dir.path(),
+            &new_metadata.files,
+        )
+        .await?;
+
+        (*self.state.read_only_paths.write().unwrap()) = compute_read_only_paths(&current_files);
+
+        self.state.component_metadata = new_metadata;
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ProcessReplayEventsResult {
+    Ok,
+    RetryReplay,
+    FailReplay(GolemError),
 }
 
 #[async_trait]
@@ -1508,24 +1541,32 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .durable_ctx_mut()
                     .state
                     .replay_state
-                    .get_next_replay_action()
+                    .get_oplog_entry_exported_function_invoked()
                     .await;
                 match oplog_entry {
                     Err(error) => break Err(error),
-                    Ok(ReplayAction::Done) => break Ok(RetryDecision::None),
-                    Ok(ReplayAction::UpdateSucceeded { new_version }) => {
-                        debug!(
-                            "Replaying side effects of update to version {}",
-                            new_version
-                        );
-                        update_state_to_new_component_version(store, new_version).await?;
+                    Ok(None) => {
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .durable_ctx_mut()
+                            .process_pending_replay_events()
+                            .await?;
+                        break Ok(RetryDecision::None);
                     }
-                    Ok(ReplayAction::ExportedFunctionInvoked {
+                    Ok(Some(replay_state::ExportedFunctionInvoked {
                         function_name,
                         function_input,
                         idempotency_key,
                         invocation_context,
-                    }) => {
+                    })) => {
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .durable_ctx_mut()
+                            .process_pending_replay_events()
+                            .await?;
+
                         debug!("Replaying function {function_name}");
                         let span = span!(Level::INFO, "replaying", function = function_name);
                         store
@@ -1689,6 +1730,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     }
                 }
             } else {
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .process_pending_replay_events()
+                    .await?;
                 break Ok(RetryDecision::None);
             }
         };
@@ -1723,7 +1770,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .durable_ctx_mut()
                 .state
                 .replay_state
-                .switch_to_live();
+                .switch_to_live()
+                .await;
 
             // Appending a Restart marker
             store
@@ -1736,20 +1784,89 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
             Ok(RetryDecision::None)
         } else {
-            let result = Self::resume_replay(store, instance).await;
+            let pending_update = store
+                .as_context()
+                .data()
+                .durable_ctx()
+                .public_state
+                .worker()
+                .peek_pending_update()
+                .await;
+            let prepare_result = match pending_update {
+                Some(timestamped_update) => {
+                    match &timestamped_update.description {
+                        UpdateDescription::SnapshotBased { .. } => {
+                            // If a snapshot based update is pending, no replay should be necessary
+                            assert!(store.as_context().data().durable_ctx().is_live());
 
-            record_resume_worker(start.elapsed());
+                            Ok(Self::finalize_pending_snapshot_update(instance, store).await)
+                        }
+                        UpdateDescription::Automatic { target_version, .. } => {
+                            // snapshot update will be succeeded as part of the replay.
+                            let result = Self::resume_replay(store, instance).await;
+                            record_resume_worker(start.elapsed());
 
-            let final_decision = Self::finalize_pending_update(&result, instance, store).await;
+                            match result {
+                                Err(error) => {
+                                    // replay failed. There are two cases here:
+                                    // 1. We failed before the update has succeeded. In this case we fail the update and retry the replay.
+                                    // 2. We failed after the update has succeeded. In this case we can the original failure.
+                                    let final_pending_update = store
+                                        .as_context()
+                                        .data()
+                                        .durable_ctx()
+                                        .public_state
+                                        .worker()
+                                        .peek_pending_update()
+                                        .await;
+                                    match final_pending_update {
+                                        Some(final_pending_update)
+                                            if final_pending_update == timestamped_update =>
+                                        {
+                                            // We failed before the update has succeeded
+                                            store
+                                                .as_context_mut()
+                                                .data_mut()
+                                                .on_worker_update_failed(
+                                                    *target_version,
+                                                    Some(format!(
+                                                        "Automatic update failed: {error}"
+                                                    )),
+                                                )
+                                                .await;
+                                            debug!("Retrying prepare_instance after failed update attempt");
+                                            Ok(RetryDecision::Immediate)
+                                        }
+                                        Some(_) => {
+                                            // There is another pending update. Maybe that one can fix the worker.
+                                            debug!("Immediately retrying failed worker with next pending update");
+                                            Ok(RetryDecision::Immediate)
+                                        }
+                                        _ => Err(error),
+                                    }
+                                }
+                                _ => result,
+                            }
+                        }
+                    }
+                }
+                None => {
+                    let result = Self::resume_replay(store, instance).await;
+                    record_resume_worker(start.elapsed());
 
-            // The update finalization has the right to override the Err result with an explicit retry request
-            if final_decision != RetryDecision::None {
-                debug!("Retrying prepare_instance after failed update attempt");
-                Ok(final_decision)
-            } else {
-                store.as_context_mut().data_mut().set_suspended().await?;
-                debug!("Finished prepare_instance");
-                result.map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
+                    result
+                }
+            };
+            match prepare_result {
+                Ok(RetryDecision::None) => {
+                    store.as_context_mut().data_mut().set_suspended().await?;
+                    Ok(RetryDecision::None)
+                }
+                Ok(other) => Ok(other),
+                Err(error) => Err(GolemError::failed_to_resume_worker(
+                    worker_id.clone(),
+                    error,
+                )),
             }
         }
     }
@@ -1960,47 +2077,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
 
         Ok(ReadFileResult::Ok(Box::pin(stream)))
     }
-}
-
-async fn update_state_to_new_component_version<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>>(
-    store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    new_version: ComponentVersion,
-) -> Result<(), GolemError> {
-    let mut store_ctx = store.as_context_mut();
-    let store_data = store_ctx.data_mut();
-    let durable_ctx = store_data.durable_ctx_mut();
-
-    let current_metadata = &durable_ctx.state.component_metadata;
-
-    if new_version <= current_metadata.version {
-        debug!("Update {new_version} was already applied, skipping");
-        return Ok(());
-    };
-
-    let new_metadata = durable_ctx
-        .component_service()
-        .get_metadata(
-            &durable_ctx.owned_worker_id.account_id,
-            &durable_ctx.owned_worker_id.component_id(),
-            Some(new_version),
-        )
-        .await?;
-
-    let mut current_files = durable_ctx.state.files.write().await;
-    update_filesystem(
-        &mut current_files,
-        &durable_ctx.state.file_loader,
-        &durable_ctx.owned_worker_id.account_id,
-        durable_ctx.temp_dir.path(),
-        &new_metadata.files,
-    )
-    .await?;
-
-    (*durable_ctx.state.read_only_paths.write().unwrap()) = compute_read_only_paths(&current_files);
-
-    durable_ctx.state.component_metadata = new_metadata;
-
-    Ok(())
 }
 
 async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
@@ -2282,7 +2358,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         .await;
                     if end_index.is_none() {
                         // Must switch to live mode before failing to be able to commit an Error entry
-                        self.replay_state.switch_to_live();
+                        self.replay_state.switch_to_live().await;
                         Err(GolemError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",
                         ))
@@ -2303,7 +2379,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         .await;
                     if end_index.is_none() {
                         // We need to jump to the end of the oplog
-                        self.replay_state.switch_to_live();
+                        self.replay_state.switch_to_live().await;
 
                         // But this is not enough, because if the retried batched write operation succeeds,
                         // and later we replay it, we need to skip the first attempt and only replay the second.
