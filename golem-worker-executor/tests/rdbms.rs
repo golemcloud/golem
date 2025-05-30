@@ -400,7 +400,7 @@ async fn rdbms_postgres_idempotency(
     check!(oplog_json.is_ok());
     // println!("{}", oplog_json.unwrap());
 
-    check_transaction_oplog_entries::<PostgresType>(oplog);
+    check_transaction_oplog_entries::<PostgresType>(oplog, Some(2), None);
 
     drop(executor);
 }
@@ -524,7 +524,7 @@ async fn postgres_transaction_recovery_test(
     check!(oplog_json.is_ok());
     // println!("{}", oplog_json.unwrap());
 
-    check_transaction_oplog_entries::<PostgresType>(oplog);
+    check_transaction_oplog_entries::<PostgresType>(oplog, Some(1), Some(1));
 
     drop(executor);
 }
@@ -1002,7 +1002,7 @@ async fn rdbms_mysql_idempotency(
     check!(oplog_json.is_ok());
     // println!("{}", oplog.unwrap());
 
-    check_transaction_oplog_entries::<MysqlType>(oplog);
+    check_transaction_oplog_entries::<MysqlType>(oplog, Some(2), None);
 
     drop(executor);
 }
@@ -1123,7 +1123,7 @@ async fn mysql_transaction_recovery_test(
     check!(oplog_json.is_ok());
     // println!("{}", oplog_json.unwrap());
 
-    check_transaction_oplog_entries::<MysqlType>(oplog);
+    check_transaction_oplog_entries::<MysqlType>(oplog, Some(1), Some(1));
 
     drop(executor);
 }
@@ -1624,8 +1624,12 @@ fn query_empty_ok_response() -> serde_json::Value {
     query_ok_response(vec![], vec![])
 }
 
-fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>) {
-    fn check_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>) {
+fn check_transaction_oplog_entries<T: RdbmsType>(
+    entries: Vec<PublicOplogEntry>,
+    tx_blocks_expected: Option<usize>,
+    jump_blocks_expected: Option<usize>,
+) {
+    fn check_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>) -> bool {
         let mut begin_entry: Option<(usize, BeginRemoteTransactionParameters)> = None;
         let mut pre_entry: Option<(usize, RemoteTransactionParameters)> = None;
         let mut end_entry: Option<(usize, RemoteTransactionParameters)> = None;
@@ -1686,22 +1690,23 @@ fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>)
 
         let (begin_index, _) = begin_entry.unwrap();
 
-        let (end_index, oplog_begin_index) = if let Some((end_index, jump_entry)) = jump_entry {
-            check!(pre_entry.is_none() || end_entry.is_none());
-            (end_index, jump_entry.jump.start.previous())
-        } else {
-            check!(pre_entry.is_some());
-            check!(end_entry.is_some());
+        let (end_index, oplog_begin_index) =
+            if let Some((end_index, jump_entry)) = jump_entry.clone() {
+                check!(pre_entry.is_none() || end_entry.is_none());
+                (end_index, jump_entry.jump.start.previous())
+            } else {
+                check!(pre_entry.is_some());
+                check!(end_entry.is_some());
 
-            let (pre_index, pre_entry) = pre_entry.unwrap();
-            let (end_index, end_entry) = end_entry.unwrap();
+                let (pre_index, pre_entry) = pre_entry.unwrap();
+                let (end_index, end_entry) = end_entry.unwrap();
 
-            check!(pre_index > begin_index);
-            check!(end_index > pre_index);
-            check!(end_entry.begin_index == pre_entry.begin_index);
+                check!(pre_index > begin_index);
+                check!(end_index > pre_index);
+                check!(end_entry.begin_index == pre_entry.begin_index);
 
-            (end_index, end_entry.begin_index)
-        };
+                (end_index, end_entry.begin_index)
+            };
 
         check!(!imported_function_invoked.is_empty());
 
@@ -1725,6 +1730,8 @@ fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>)
                     )
             );
         }
+
+        jump_entry.is_none()
     }
 
     let mut grouped: Vec<Vec<PublicOplogEntry>> = Vec::new();
@@ -1751,12 +1758,28 @@ fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>)
         grouped.push(group.clone());
     }
 
+    let mut tx_checked_count = 0;
+    let mut jump_checked_count = 0;
+
     for group in grouped {
         if group
             .iter()
             .any(|e| matches!(e, PublicOplogEntry::BeginRemoteTransaction(_)))
         {
-            check_entries::<T>(group);
+            let tx = check_entries::<T>(group);
+            if tx {
+                tx_checked_count += 1;
+            } else {
+                jump_checked_count += 1;
+            }
         }
+    }
+
+    if let Some(expected) = tx_blocks_expected {
+        check!(tx_checked_count == expected);
+    }
+
+    if let Some(expected) = jump_blocks_expected {
+        check!(jump_checked_count == expected);
     }
 }
