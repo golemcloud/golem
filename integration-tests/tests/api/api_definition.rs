@@ -865,7 +865,7 @@ async fn create_openapi_json_definition(deps: &EnvBasedTestDependencies) {
 // We create an API definition, export it to OpenAPI,
 // We delete the original API definition
 // We import API using the exported OpenAPI and compare the result with the original API definition
-async fn test_export_import_api_definition_fixed(deps: &EnvBasedTestDependencies) {
+async fn test_roundtrip_api_definition(deps: &EnvBasedTestDependencies) {
     // Create a component to use in the API definition
     let component_id = deps.component("counters").unique().store().await;
 
@@ -892,7 +892,7 @@ async fn test_export_import_api_definition_fixed(deps: &EnvBasedTestDependencies
                             r#"
                                 {
                                     headers: {
-                                        {ContentType: "application/json"}
+                                        ContentType: "application/json"
                                     },
                                     body: "Fixed export test response",
                                     status: 200
