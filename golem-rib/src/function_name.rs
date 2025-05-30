@@ -272,7 +272,7 @@ impl DynamicParsedFunctionReference {
         }
     }
 
-    pub fn raw_resource_params_mut(&mut self) -> Option<&mut Vec<Expr>> {
+    pub fn raw_resource_params_mut(&mut self) -> Option<&mut [Expr]> {
         match self {
             Self::IndexedResourceConstructor {
                 resource_params, ..
@@ -285,7 +285,7 @@ impl DynamicParsedFunctionReference {
             }
             | Self::IndexedResourceDrop {
                 resource_params, ..
-            } => Some(resource_params),
+            } => Some(resource_params.as_mut_slice()),
             _ => None,
         }
     }
@@ -573,7 +573,7 @@ impl DynamicParsedFunctionName {
             .resource_method_name()
     }
 
-    pub fn raw_resource_params_mut(&mut self) -> Option<&mut Vec<Expr>> {
+    pub fn raw_resource_params_mut(&mut self) -> Option<&mut [Expr]> {
         self.function.raw_resource_params_mut()
     }
 
