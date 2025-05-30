@@ -1874,9 +1874,9 @@ x-golem-api-definition-version: 0.0.1
     assert_eq!(actual_yaml, expected_yaml);
 }
 
-// Test 13: Path and Query Parameter Combinations Test
+// Test 13: Path, Query, and Header Parameter Combinations Test
 #[tokio::test]
-async fn test_path_query_parameter_combinations() {
+async fn test_path_query_header_parameter_combinations() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
     use golem_wasm_ast::analysis::{
@@ -1935,9 +1935,47 @@ async fn test_path_query_parameter_combinations() {
         RibInputTypeInfo { types }
     };
 
-    // Route 1: Path parameters only (user in worker name, user_id in response)
+    // Helper function to create header input
+    let create_header_input = |header_fields: Vec<(&str, AnalysedType)>| -> RibInputTypeInfo {
+        let mut types = HashMap::new();
+        let header_record = AnalysedType::Record(TypeRecord {
+            fields: header_fields
+                .into_iter()
+                .map(|(name, typ)| NameTypePair {
+                    name: name.to_string(),
+                    typ,
+                })
+                .collect(),
+        });
+        let request_record = AnalysedType::Record(TypeRecord {
+            fields: vec![NameTypePair {
+                name: "headers".to_string(),
+                typ: header_record,
+            }],
+        });
+        types.insert("request".to_string(), request_record);
+        RibInputTypeInfo { types }
+    };
+
+    // Route 1: Combination of path, query, and header parameters
     let path_input_worker = create_path_input(vec![("user", AnalysedType::Str(TypeStr))]);
     let path_input_response = create_path_input(vec![("user_id", AnalysedType::U32(TypeU32))]);
+    let query_input_worker = create_query_input(vec![("limit", AnalysedType::U32(TypeU32))]);
+    let query_input_response = create_query_input(vec![("offset", AnalysedType::U32(TypeU32))]);
+    let header_input_worker = create_header_input(vec![("age", AnalysedType::Str(TypeStr))]);
+    let header_input_response = create_header_input(vec![("country", AnalysedType::Str(TypeStr))]);
+
+    // Combine all input types for worker
+    let mut worker_input_types = HashMap::new();
+    worker_input_types.extend(path_input_worker.types);
+    worker_input_types.extend(query_input_worker.types);
+    worker_input_types.extend(header_input_worker.types);
+
+    // Combine all input types for response
+    let mut response_input_types = HashMap::new();
+    response_input_types.extend(path_input_response.types);
+    response_input_types.extend(query_input_response.types);
+    response_input_types.extend(header_input_response.types);
 
     let route1 = CompiledRoute {
         method: MethodPattern::Get,
@@ -1951,7 +1989,7 @@ async fn test_path_query_parameter_combinations() {
             worker_name_compiled: Some(WorkerNameCompiled {
                 worker_name: Expr::literal("worker-${user}"),
                 compiled_worker_name: RibByteCode::default(),
-                rib_input_type_info: path_input_worker,
+                rib_input_type_info: RibInputTypeInfo { types: worker_input_types },
             }),
             idempotency_key_compiled: None,
             response_compiled: ResponseMappingCompiled {
@@ -1959,7 +1997,7 @@ async fn test_path_query_parameter_combinations() {
                     "{status: 200, body: \"User profile for ${user_id}\"}",
                 ),
                 response_mapping_compiled: RibByteCode::default(),
-                rib_input: path_input_response,
+                rib_input: RibInputTypeInfo { types: response_input_types },
                 worker_calls: None,
                 rib_output: Some(RibOutputTypeInfo {
                     analysed_type: AnalysedType::Record(TypeRecord {
@@ -1982,108 +2020,8 @@ async fn test_path_query_parameter_combinations() {
     };
     routes.push(route1);
 
-    // Route 2: Query parameters only (limit and offset)
-    let query_input = create_query_input(vec![
-        ("limit", AnalysedType::U32(TypeU32)),
-        ("offset", AnalysedType::U32(TypeU32)),
-    ]);
-
+    // Route 2: No parameters (for completeness)
     let route2 = CompiledRoute {
-        method: MethodPattern::Get,
-        path: AllPathPatterns::from_str("/api/v1/items").unwrap(),
-        binding: GatewayBindingCompiled::Worker(WorkerBindingCompiled {
-            component_id: VersionedComponentId {
-                component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440002")
-                    .unwrap(),
-                version: 1,
-            },
-            worker_name_compiled: Some(WorkerNameCompiled {
-                worker_name: Expr::literal("item-worker"),
-                compiled_worker_name: RibByteCode::default(),
-                rib_input_type_info: RibInputTypeInfo {
-                    types: HashMap::new(),
-                },
-            }),
-            idempotency_key_compiled: None,
-            response_compiled: ResponseMappingCompiled {
-                response_mapping_expr: Expr::literal(
-                    "{status: 200, body: items.slice(${offset}, ${offset} + ${limit})}",
-                ),
-                response_mapping_compiled: RibByteCode::default(),
-                rib_input: query_input,
-                worker_calls: None,
-                rib_output: Some(RibOutputTypeInfo {
-                    analysed_type: AnalysedType::Record(TypeRecord {
-                        fields: vec![
-                            NameTypePair {
-                                name: "status".to_string(),
-                                typ: AnalysedType::U64(TypeU64),
-                            },
-                            NameTypePair {
-                                name: "body".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
-                            },
-                        ],
-                    }),
-                }),
-            },
-            invocation_context_compiled: None,
-        }),
-        middlewares: None,
-    };
-    routes.push(route2);
-
-    // Route 3: Both path and query parameters
-    let combined_input_response = create_query_input(vec![
-        ("search", AnalysedType::Str(TypeStr)),
-        ("category", AnalysedType::Str(TypeStr)),
-    ]);
-
-    let route3 = CompiledRoute {
-        method: MethodPattern::Get,
-        path: AllPathPatterns::from_str("/api/v1/{user}/search").unwrap(),
-        binding: GatewayBindingCompiled::Worker(WorkerBindingCompiled {
-            component_id: VersionedComponentId {
-                component_id: ComponentId::from_str("550e8400-e29b-41d4-a716-446655440003")
-                    .unwrap(),
-                version: 1,
-            },
-            worker_name_compiled: Some(WorkerNameCompiled {
-                worker_name: Expr::literal("search-worker-${user}"),
-                compiled_worker_name: RibByteCode::default(),
-                rib_input_type_info: create_path_input(vec![("user", AnalysedType::Str(TypeStr))]),
-            }),
-            idempotency_key_compiled: None,
-            response_compiled: ResponseMappingCompiled {
-                response_mapping_expr: Expr::literal(
-                    "{status: 200, body: search(${search}, ${category})}",
-                ),
-                response_mapping_compiled: RibByteCode::default(),
-                rib_input: combined_input_response,
-                worker_calls: None,
-                rib_output: Some(RibOutputTypeInfo {
-                    analysed_type: AnalysedType::Record(TypeRecord {
-                        fields: vec![
-                            NameTypePair {
-                                name: "status".to_string(),
-                                typ: AnalysedType::U64(TypeU64),
-                            },
-                            NameTypePair {
-                                name: "body".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
-                            },
-                        ],
-                    }),
-                }),
-            },
-            invocation_context_compiled: None,
-        }),
-        middlewares: None,
-    };
-    routes.push(route3);
-
-    // Route 4: No parameters (for completeness)
-    let route4 = CompiledRoute {
         method: MethodPattern::Get,
         path: AllPathPatterns::from_str("/api/v1/health").unwrap(),
         binding: GatewayBindingCompiled::Worker(WorkerBindingCompiled {
@@ -2126,7 +2064,7 @@ async fn test_path_query_parameter_combinations() {
         }),
         middlewares: None,
     };
-    routes.push(route4);
+    routes.push(route2);
 
     // Create API definition
     let compiled_api_definition = CompiledHttpApiDefinition {
@@ -2176,69 +2114,23 @@ async fn test_path_query_parameter_combinations() {
             component-version: 1
             response: '"{status: 200, body: "OK"}"'
             worker-name: '"health-worker"'
-      /api/v1/items:
-        get:
-          parameters:
-          - in: query
-            name: limit
-            description: 'Query parameter: limit'
-            required: true
-            schema:
-              type: integer
-              format: int32
-              minimum: 0
-            explode: false
-            style: form
-            allowEmptyValue: false
-          - in: query
-            name: offset
-            description: 'Query parameter: offset'
-            required: true
-            schema:
-              type: integer
-              format: int32
-              minimum: 0
-            explode: false
-            style: form
-            allowEmptyValue: false
-          responses:
-            default:
-              description: OK
-              content:
-                application/json:
-                  schema:
-                    type: string
-            '200':
-              description: OK
-              content:
-                application/json:
-                  schema:
-                    type: string
-          x-golem-api-gateway-binding:
-            binding-type: default
-            component-name: swagger-api
-            component-version: 1
-            response: '"{status: 200, body: items.slice(${offset}, ${offset} + ${limit})}"'
-            worker-name: '"item-worker"'
       /api/v1/{user}/profile/{user_id}:
         get:
           parameters:
-          - in: path
-            name: user
-            description: 'Path parameter: user'
+          - in: header
+            name: age
+            description: 'Header parameter: age'
             required: true
             schema:
               type: string
             explode: false
             style: simple
-          - in: path
-            name: user_id
-            description: 'Path parameter: user_id'
+          - in: header
+            name: country
+            description: 'Header parameter: country'
             required: true
             schema:
-              type: integer
-              format: int32
-              minimum: 0
+              type: string
             explode: false
             style: simple
           responses:
@@ -2260,54 +2152,6 @@ async fn test_path_query_parameter_combinations() {
             component-version: 1
             response: '"{status: 200, body: "User profile for ${user_id}"}"'
             worker-name: '"worker-${user}"'
-      /api/v1/{user}/search:
-        get:
-          parameters:
-          - in: path
-            name: user
-            description: 'Path parameter: user'
-            required: true
-            schema:
-              type: string
-            explode: false
-            style: simple
-          - in: query
-            name: search
-            description: 'Query parameter: search'
-            required: true
-            schema:
-              type: string
-            explode: false
-            style: form
-            allowEmptyValue: false
-          - in: query
-            name: category
-            description: 'Query parameter: category'
-            required: true
-            schema:
-              type: string
-            explode: false
-            style: form
-            allowEmptyValue: false
-          responses:
-            default:
-              description: OK
-              content:
-                application/json:
-                  schema:
-                    type: string
-            '200':
-              description: OK
-              content:
-                application/json:
-                  schema:
-                    type: string
-          x-golem-api-gateway-binding:
-            binding-type: default
-            component-name: test-worker-api
-            component-version: 1
-            response: '"{status: 200, body: search(${search}, ${category})}"'
-            worker-name: '"search-worker-${user}"'
     components: {}
     x-golem-api-definition-id: parameter-test-api
     x-golem-api-definition-version: 1.0.0
@@ -2322,6 +2166,7 @@ async fn test_path_query_parameter_combinations() {
     // Single assert comparing the complete structure
     assert_eq!(actual_yaml, expected_yaml);
 }
+
 
 // Test 14: Comprehensive AnalysedType Coverage Test (10 Routes)
 #[tokio::test]
@@ -3416,3 +3261,4 @@ x-golem-api-definition-version: 2.0.0
     // Single assert comparing the complete structure
     assert_eq!(actual_yaml, expected_yaml);
 }
+

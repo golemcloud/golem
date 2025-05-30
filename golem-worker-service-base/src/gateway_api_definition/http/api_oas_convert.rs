@@ -18,13 +18,12 @@ use crate::gateway_api_definition::http::{
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_binding::{
-    GatewayBindingCompiled, StaticBinding, WorkerNameCompiled,
-    ResponseMappingCompiled, InvocationContextCompiled,
+    GatewayBindingCompiled, ResponseMappingCompiled, StaticBinding, WorkerNameCompiled,
 };
 use crate::gateway_middleware::{CorsPreflightExpr, HttpCors};
 use crate::service::gateway::BoxConversionContext;
-use golem_common::model::GatewayBindingType;
 use golem_common::model::component::VersionedComponentId;
+use golem_common::model::GatewayBindingType;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::NameTypePair;
 use http::StatusCode;
@@ -154,13 +153,13 @@ async fn process_route(
     Ok(())
 }
 
-// Helper function: Adds both path and query parameters to the operation
+// Helper function: Adds path, query and header parameters to the operation
 fn add_parameters(operation: &mut openapiv3::Operation, route: &CompiledRoute) {
-    let (path_parameters, query_parameters) = get_parameters(route);
+    let (path_parameters, query_parameters, header_parameters) = get_parameters(route);
 
     // Add path parameters
     for (param_name, param_type) in path_parameters {
-        let parameter = create_parameter(&param_name, param_type, true);
+        let parameter = create_path_parameter(&param_name, param_type);
         operation
             .parameters
             .push(openapiv3::ReferenceOr::Item(parameter));
@@ -168,7 +167,15 @@ fn add_parameters(operation: &mut openapiv3::Operation, route: &CompiledRoute) {
 
     // Add query parameters
     for (param_name, param_type) in query_parameters {
-        let parameter = create_parameter(&param_name, param_type, false);
+        let parameter = create_query_parameter(&param_name, param_type);
+        operation
+            .parameters
+            .push(openapiv3::ReferenceOr::Item(parameter));
+    }
+
+    // Add header parameters
+    for (param_name, param_type) in header_parameters {
+        let parameter = create_header_parameter(&param_name, param_type);
         operation
             .parameters
             .push(openapiv3::ReferenceOr::Item(parameter));
@@ -188,17 +195,9 @@ async fn create_operation(
 
     // Add parameters (both path and query)
     add_parameters(&mut operation, route);
-
-    // Add request body
     add_request_body(&mut operation, route);
-
-    // Add responses
     add_responses(&mut operation, route);
-
-    // Add binding info
     add_binding_info(&mut operation, route, conversion_ctx).await?;
-
-    // Add security
     add_security(&mut operation, route, security_schemes);
 
     Ok(operation)
@@ -212,6 +211,7 @@ fn extract_parameters_from_record(
     record: &golem_wasm_ast::analysis::AnalysedType,
     path_parameters: &mut Vec<ParameterTuple>,
     query_parameters: &mut Vec<ParameterTuple>,
+    header_parameters: &mut Vec<ParameterTuple>,
 ) {
     if let AnalysedType::Record(request_record) = record {
         // Check for path field
@@ -240,14 +240,34 @@ fn extract_parameters_from_record(
                 }
             }
         }
+        // Check for headers field
+        if let Some(headers_field) = request_record
+            .fields
+            .iter()
+            .find(|field| field.name == "headers")
+        {
+            if let AnalysedType::Record(headers_record) = &headers_field.typ {
+                for field in &headers_record.fields {
+                    let schema = create_schema_from_analysed_type(&field.typ);
+                    header_parameters.push((field.name.clone(), schema));
+                }
+            }
+        }
     }
 }
 
 // Helper function: Gets path and query parameters with their types from route
-// Returns two separate lists: one for path parameters and one for query parameters
-fn get_parameters(route: &CompiledRoute) -> (Vec<ParameterTuple>, Vec<ParameterTuple>) {
+// Returns three separate lists: one for path parameters, one for query parameters, and one for header parameters
+fn get_parameters(
+    route: &CompiledRoute,
+) -> (
+    Vec<ParameterTuple>,
+    Vec<ParameterTuple>,
+    Vec<ParameterTuple>,
+) {
     let mut path_parameters = Vec::new();
     let mut query_parameters = Vec::new();
+    let mut header_parameters = Vec::new();
 
     // Extract parameters based on binding type
     match &route.binding {
@@ -264,6 +284,7 @@ fn get_parameters(route: &CompiledRoute) -> (Vec<ParameterTuple>, Vec<ParameterT
                         request_record,
                         &mut path_parameters,
                         &mut query_parameters,
+                        &mut header_parameters,
                     );
                 }
             }
@@ -279,6 +300,7 @@ fn get_parameters(route: &CompiledRoute) -> (Vec<ParameterTuple>, Vec<ParameterT
                     request_record,
                     &mut path_parameters,
                     &mut query_parameters,
+                    &mut header_parameters,
                 );
             }
         }
@@ -294,6 +316,7 @@ fn get_parameters(route: &CompiledRoute) -> (Vec<ParameterTuple>, Vec<ParameterT
                         request_record,
                         &mut path_parameters,
                         &mut query_parameters,
+                        &mut header_parameters,
                     );
                 }
             }
@@ -302,22 +325,14 @@ fn get_parameters(route: &CompiledRoute) -> (Vec<ParameterTuple>, Vec<ParameterT
         _ => {}
     }
 
-    (path_parameters, query_parameters)
+    (path_parameters, query_parameters, header_parameters)
 }
 
-// Helper function: Creates a parameter (common logic for both query and path parameters)
-fn create_parameter(
-    param_name: &str,
-    param_type: openapiv3::Schema,
-    is_path: bool,
-) -> openapiv3::Parameter {
+// Helper function: Creates a path parameter
+fn create_path_parameter(param_name: &str, param_type: openapiv3::Schema) -> openapiv3::Parameter {
     let parameter_data = openapiv3::ParameterData {
         name: param_name.to_string(),
-        description: Some(format!(
-            "{} parameter: {}",
-            if is_path { "Path" } else { "Query" },
-            param_name
-        )),
+        description: Some(format!("Path parameter: {}", param_name)),
         required: true,
         deprecated: None,
         explode: Some(false),
@@ -329,18 +344,58 @@ fn create_parameter(
         extensions: Default::default(),
     };
 
-    if is_path {
-        openapiv3::Parameter::Path {
-            parameter_data,
-            style: openapiv3::PathStyle::Simple,
-        }
-    } else {
-        openapiv3::Parameter::Query {
-            parameter_data,
-            style: openapiv3::QueryStyle::Form,
-            allow_empty_value: Some(false),
-            allow_reserved: false,
-        }
+    openapiv3::Parameter::Path {
+        parameter_data,
+        style: openapiv3::PathStyle::Simple,
+    }
+}
+
+// Helper function: Creates a query parameter
+fn create_query_parameter(param_name: &str, param_type: openapiv3::Schema) -> openapiv3::Parameter {
+    let parameter_data = openapiv3::ParameterData {
+        name: param_name.to_string(),
+        description: Some(format!("Query parameter: {}", param_name)),
+        required: true,
+        deprecated: None,
+        explode: Some(false),
+        format: openapiv3::ParameterSchemaOrContent::Schema(openapiv3::ReferenceOr::Item(
+            param_type,
+        )),
+        example: None,
+        examples: Default::default(),
+        extensions: Default::default(),
+    };
+
+    openapiv3::Parameter::Query {
+        parameter_data,
+        style: openapiv3::QueryStyle::Form,
+        allow_empty_value: Some(false),
+        allow_reserved: false,
+    }
+}
+
+// Helper function: Creates a header parameter
+fn create_header_parameter(
+    param_name: &str,
+    param_type: openapiv3::Schema,
+) -> openapiv3::Parameter {
+    let parameter_data = openapiv3::ParameterData {
+        name: param_name.to_string(),
+        description: Some(format!("Header parameter: {}", param_name)),
+        required: true,
+        deprecated: None,
+        explode: Some(false),
+        format: openapiv3::ParameterSchemaOrContent::Schema(openapiv3::ReferenceOr::Item(
+            param_type,
+        )),
+        example: None,
+        examples: Default::default(),
+        extensions: Default::default(),
+    };
+
+    openapiv3::Parameter::Header {
+        parameter_data,
+        style: openapiv3::HeaderStyle::Simple,
     }
 }
 
@@ -360,33 +415,94 @@ fn add_request_body(operation: &mut openapiv3::Operation, route: &CompiledRoute)
     }
 }
 
+
+// NOTE: Content-Type is always application/json for OpenAPI generation 
+// because headers follows the HttpFields::analyzed_type() = List(Tuple(String, List(U8))) structure from WIT,
+// Since we can't access actual header names/values at compile time, only type
+// Actual header names are determined by RIB expression evaluation at runtime
+// I am not 100% certain on this logic
+// It is still possible to string scan the header value from the ribscript
+
+// Helper function: Determines response schema
+fn determine_response_schema_and_content_type(
+    route: &CompiledRoute,
+) -> (Option<openapiv3::Schema>, String) {
+    if let GatewayBindingCompiled::Worker(worker_binding) = &route.binding {
+        if let Some(output_info) = &worker_binding.response_compiled.rib_output {
+            if let AnalysedType::Record(record) = &output_info.analysed_type {
+                let headers_opt = extract_header_type(&record.fields);
+                let body_opt = extract_body_type(&record.fields);
+                let status_opt = extract_status_type(&record.fields);
+                let content_type = "application/json".to_string();
+                if headers_opt.is_some() || body_opt.is_some() || status_opt.is_some() {
+                    let schema = Some(
+                        body_opt
+                            .map(|body| create_schema_from_analysed_type(&body))
+                            .unwrap_or_else(create_default_schema),
+                    );
+                    return (schema, content_type);
+                } else {
+                    // No structured response fields, use entire record
+                    let schema = Some(create_schema_from_analysed_type(&output_info.analysed_type));
+                    return (schema, content_type);
+                }
+            }
+            // Not a record, use type as-is
+            let schema = Some(create_schema_from_analysed_type(&output_info.analysed_type));
+            return (schema, "application/json".to_string());
+        }
+    }
+    (None, "application/json".to_string())
+}
+
 // Helper function: Adds responses to the operation
 fn add_responses(operation: &mut openapiv3::Operation, route: &CompiledRoute) {
-    // Get the default status code based on the method
     let default_status = get_default_status_code(&route.method);
 
-    // Create the specific response for the default status code
-    let specific_response = create_response(default_status, route);
+    // Get both schema and content type in one call
+    let (response_schema_opt, content_type) = determine_response_schema_and_content_type(route);
+
+    let response = create_response_with_schema(default_status, response_schema_opt, &content_type);
 
     // It is possible that rib outputs status 200, while we are expecting 201
     // Also in the case that we have multiple possible response status, but a single response type
     // {status: 200, body: string}, {status: 400, body: string}
     // We create one response using method default status code, and another response using the default response
-    // Create the default response (same structure as the specific response)
 
-    // We can keep only the default response, for easier reading
-    // specific response is only here as opeapi best practices
-
-    let default_response = create_response(default_status, route);
-
-    // Add the specific response to the operation
     operation.responses.responses.insert(
         openapiv3::StatusCode::Code(default_status),
-        openapiv3::ReferenceOr::Item(specific_response),
+        openapiv3::ReferenceOr::Item(response.clone()),
     );
 
-    // Add the default response to the operation
-    operation.responses.default = Some(openapiv3::ReferenceOr::Item(default_response));
+    operation.responses.default = Some(openapiv3::ReferenceOr::Item(response));
+}
+
+// Helper function: Create response with optional schema
+fn create_response_with_schema(
+    status_code: u16,
+    response_schema: Option<openapiv3::Schema>,
+    content_type: &str,
+) -> openapiv3::Response {
+    let mut response = openapiv3::Response {
+        description: get_status_description(status_code),
+        ..Default::default()
+    };
+
+    // Only add content if we have a response schema and it's not a 204 response
+    if status_code != 204 {
+        if let Some(schema) = response_schema {
+            let mut content = indexmap::IndexMap::new();
+            let media = openapiv3::MediaType {
+                schema: Some(openapiv3::ReferenceOr::Item(schema)),
+                ..Default::default()
+            };
+
+            content.insert(content_type.to_string(), media);
+            response.content = content;
+        }
+    }
+
+    response
 }
 
 // Helper function: Adds binding info to the operation
@@ -473,8 +589,6 @@ fn create_request_body(
 
         let mut content = indexmap::IndexMap::new();
         // Request body is always JSON
-        // Other response types are possible, but not part of the RibInputTypeInfo
-        // They can be string scanned in ribscript response/workername mapping
         content.insert("application/json".to_string(), media_type);
 
         Some(openapiv3::RequestBody {
@@ -519,31 +633,6 @@ fn get_default_status_code(method: &MethodPattern) -> u16 {
     }
 }
 
-// Helper function: Create response
-fn create_response(status_code: u16, route: &CompiledRoute) -> openapiv3::Response {
-    let mut response = openapiv3::Response {
-        description: get_status_description(status_code),
-        ..Default::default()
-    };
-
-    // Only add content if we have a response schema and it's not a 204 response
-    if status_code != 204 {
-        if let Some(response_schema) = determine_response_schema(route) {
-            let mut content = indexmap::IndexMap::new();
-            let media = openapiv3::MediaType {
-                schema: Some(openapiv3::ReferenceOr::Item(response_schema)),
-                ..Default::default()
-            };
-            // Todo: It is possible to have application/text or application/json, Figure how to pass these
-            content.insert("application/json".to_string(), media);
-            response.content = content;
-        }
-        // If no response schema, don't add content at all
-    }
-
-    response
-}
-
 // Helper function: Gets status code description
 // Limited to 200, 201, 204 from possible MethodPattern
 fn get_status_description(status_code: u16) -> String {
@@ -552,21 +641,13 @@ fn get_status_description(status_code: u16) -> String {
         .unwrap_or_else(|_| "Unknown".to_string())
 }
 
-// New helper functions for extracting response components
-fn extract_header_type(
-    record_name_type_pairs: &[NameTypePair],
-) -> Option<Vec<(String, AnalysedType)>> {
+// Helper functions for extracting headers, body and status
+
+// Seperate functions because header part might not changes
+fn extract_header_type(record_name_type_pairs: &[NameTypePair]) -> Option<AnalysedType> {
     for field in record_name_type_pairs {
         if field.name == "headers" {
-            if let AnalysedType::Record(header_record) = &field.typ {
-                return Some(
-                    header_record
-                        .fields
-                        .iter()
-                        .map(|f| (f.name.clone(), f.typ.clone()))
-                        .collect(),
-                );
-            }
+            return Some(field.typ.clone());
         }
     }
     None
@@ -590,76 +671,6 @@ fn extract_status_type(record_name_type_pairs: &[NameTypePair]) -> Option<Analys
     None
 }
 
-// Todo: Extract content type from headers
-/*
-fn extract_response_content_type(headers: &[(String, AnalysedType)]) -> Option<String> {
-    for (header_name, _header_type) in headers {
-        if header_name.to_lowercase() == "contenttype" ||
-           header_name.to_lowercase() == "content-type" {
-            return Some("application/json".to_string());
-        }
-    }
-    None
-}
-*/
-
-fn create_default_object_schema() -> openapiv3::Schema {
-    openapiv3::Schema {
-        schema_data: openapiv3::SchemaData {
-            description: Some("Default object response".to_string()),
-            ..Default::default()
-        },
-        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::Object(openapiv3::ObjectType {
-            properties: indexmap::IndexMap::new(),
-            required: Vec::new(),
-            additional_properties: Some(openapiv3::AdditionalProperties::Any(true)),
-            min_properties: None,
-            max_properties: None,
-        })),
-    }
-}
-
-// Refactored determine_response_schema function
-fn determine_response_schema(route: &CompiledRoute) -> Option<openapiv3::Schema> {
-    match &route.binding {
-        GatewayBindingCompiled::Worker(worker_binding)
-        | GatewayBindingCompiled::FileServer(worker_binding) => {
-            if let Some(output_info) = &worker_binding.response_compiled.rib_output {
-                if let AnalysedType::Record(record) = &output_info.analysed_type {
-                    // Extract individual components
-                    let headers_opt = extract_header_type(&record.fields);
-                    let body_opt = extract_body_type(&record.fields);
-                    let status_opt = extract_status_type(&record.fields);
-
-                    // If any structured response fields are present
-                    if headers_opt.is_some() || body_opt.is_some() || status_opt.is_some() {
-                        // Extract content type if headers are present
-                        /* Todo: Figure how to pass application/json or application/text
-                        let _content_type_opt = headers_opt
-                            .as_ref()
-                            .and_then(|headers| extract_response_content_type(headers));
-                        */
-
-                        // Use body if available, otherwise default schema
-                        return Some(
-                            body_opt
-                                .map(|body| create_schema_from_analysed_type(&body))
-                                .unwrap_or_else(create_default_object_schema),
-                        );
-                    } else {
-                        // No structured response fields, use entire record
-                        return Some(create_schema_from_analysed_type(&output_info.analysed_type));
-                    }
-                }
-                // Not a record, use type as-is
-                return Some(create_schema_from_analysed_type(&output_info.analysed_type));
-            }
-        }
-        _ => {}
-    }
-    None
-}
-
 // Helper function: Converts GatewayBindingCompiled to GatewayBindingType for automatic kebab-case serialization
 fn get_binding_type_from_compiled(binding: &GatewayBindingCompiled) -> GatewayBindingType {
     match binding {
@@ -674,41 +685,34 @@ fn get_binding_type_from_compiled(binding: &GatewayBindingCompiled) -> GatewayBi
     }
 }
 
-// Unified binding data extraction - only the fields we actually need
 #[derive(Default)]
 struct ExtractedBindingData<'a> {
     component_id: Option<&'a VersionedComponentId>,
     worker_name: Option<&'a WorkerNameCompiled>,
     response: Option<&'a ResponseMappingCompiled>,
-    invocation_context: Option<&'a InvocationContextCompiled>,
+    //We dont pass Invocation Context, hopefully not needed
     cors_preflight: Option<&'a HttpCors>,
 }
 
 fn extract_binding_data(binding: &GatewayBindingCompiled) -> ExtractedBindingData {
     match binding {
-        GatewayBindingCompiled::Worker(w) => {
-            ExtractedBindingData {
-                component_id: Some(&w.component_id),
-                worker_name: w.worker_name_compiled.as_ref(),
-                response: Some(&w.response_compiled),
-                ..Default::default()
-            }
-        }
-        GatewayBindingCompiled::FileServer(w) => {
-            ExtractedBindingData {
-                component_id: Some(&w.component_id),
-                worker_name: w.worker_name_compiled.as_ref(),
-                response: Some(&w.response_compiled),
-                ..Default::default()
-            }
-        }
-        GatewayBindingCompiled::HttpHandler(h) => {
-            ExtractedBindingData {
-                component_id: Some(&h.component_id),
-                worker_name: h.worker_name_compiled.as_ref(),
-                ..Default::default()
-            }
-        }
+        GatewayBindingCompiled::Worker(w) => ExtractedBindingData {
+            component_id: Some(&w.component_id),
+            worker_name: w.worker_name_compiled.as_ref(),
+            response: Some(&w.response_compiled),
+            ..Default::default()
+        },
+        GatewayBindingCompiled::FileServer(w) => ExtractedBindingData {
+            component_id: Some(&w.component_id),
+            worker_name: w.worker_name_compiled.as_ref(),
+            response: Some(&w.response_compiled),
+            ..Default::default()
+        },
+        GatewayBindingCompiled::HttpHandler(h) => ExtractedBindingData {
+            component_id: Some(&h.component_id),
+            worker_name: h.worker_name_compiled.as_ref(),
+            ..Default::default()
+        },
         GatewayBindingCompiled::Static(StaticBinding::HttpCorsPreflight(cors)) => {
             ExtractedBindingData {
                 cors_preflight: Some(cors),
@@ -862,7 +866,7 @@ fn add_operation_to_path_item(
     Ok(())
 }
 
-// Helper function: Creates a default schema for unknown/unhandled types
+// Helper function: Creates a default schema for unknown/unhandled types1
 // This should never get triggered since we don't support Handle(_)
 fn create_default_schema() -> openapiv3::Schema {
     openapiv3::Schema {
