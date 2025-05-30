@@ -68,7 +68,7 @@ impl ReplState {
         self.dependency = dependency;
     }
 
-    pub fn pop_rib_text(&self) {
+    pub fn remove_last_rib_expression(&self) {
         self.rib_script.write().unwrap().pop();
     }
 

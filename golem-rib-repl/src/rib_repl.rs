@@ -14,6 +14,7 @@
 
 use crate::compiler::compile_rib_script;
 use crate::dependency_manager::RibDependencyManager;
+use crate::eval::eval;
 use crate::invoke::WorkerFunctionInvoke;
 use crate::repl_printer::{DefaultReplResultPrinter, ReplPrinter};
 use crate::repl_state::ReplState;
@@ -21,10 +22,7 @@ use crate::rib_edit::RibEdit;
 use async_trait::async_trait;
 use colored::Colorize;
 use golem_wasm_rpc::ValueAndType;
-use rib::{
-    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, Interpreter, RibByteCode,
-    RibInput,
-};
+use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId};
 use rib::{RibCompilationError, RibFunctionInvoke};
 use rib::{RibFunctionInvokeResult, RibResult, RibRuntimeError};
 use rustyline::error::ReadlineError;
@@ -159,24 +157,25 @@ impl RibRepl {
             let _ = self.editor.save_history(&self.history_file_path);
 
             match compile_rib_script(&self.current_rib_program(), &self.repl_state) {
-                Ok(compilation) => {
+                Ok(compiler_output) => {
                     let helper = self.editor.helper_mut().unwrap();
 
-                    helper.update_progression(&compilation);
+                    helper.update_progression(&compiler_output);
 
-                    // Before evaluation
-                    let result = eval(compilation.rib_byte_code, &self.repl_state).await;
+                    let result = eval(compiler_output.rib_byte_code, &self.repl_state).await;
 
                     match result {
                         Ok(result) => Ok(Some(result)),
                         Err(err) => {
-                            self.remove_rib_text_in_session();
+                            self.repl_state.remove_last_rib_expression();
+
                             Err(RibExecutionError::RibRuntimeError(err))
                         }
                     }
                 }
                 Err(err) => {
-                    self.remove_rib_text_in_session();
+                    self.repl_state.remove_last_rib_expression();
+
                     Err(RibExecutionError::RibCompilationError(err))
                 }
             }
@@ -224,10 +223,6 @@ impl RibRepl {
         self.repl_state.update_rib(rib_text);
     }
 
-    fn remove_rib_text_in_session(&mut self) {
-        self.repl_state.pop_rib_text();
-    }
-
     fn current_rib_program(&self) -> String {
         self.repl_state.current_rib_program()
     }
@@ -260,25 +255,6 @@ pub struct ComponentSource {
 
     /// The full file path to the WebAssembly source file, including the `.wasm` extension.
     pub source_path: PathBuf,
-}
-
-async fn eval(
-    rib_byte_code: RibByteCode,
-    repl_state: &Arc<ReplState>,
-) -> Result<RibResult, RibRuntimeError> {
-    let last_instruction = InstructionId::new(rib_byte_code.len());
-
-    let result = interpreter(repl_state).run(rib_byte_code).await?;
-
-    repl_state.update_last_executed_instruction(last_instruction);
-
-    Ok(result)
-}
-
-pub fn interpreter(repl_state: &Arc<ReplState>) -> Interpreter {
-    let rib_function_invoke = Arc::new(ReplRibFunctionInvoke::new(repl_state.clone()));
-
-    Interpreter::new(RibInput::default(), rib_function_invoke)
 }
 
 fn get_default_history_file() -> PathBuf {
