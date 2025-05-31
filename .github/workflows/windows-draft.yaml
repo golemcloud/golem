@@ -236,8 +236,8 @@ jobs:
         if: runner.os == 'Windows'
         uses: docker/login-action@v3
         with:
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: Push PostgreSQL image to Docker Hub
         if: runner.os == 'Windows'
