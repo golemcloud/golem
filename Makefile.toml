@@ -363,6 +363,15 @@ args = [
     "test", "--package", "golem-component-service-base", "--test", "tests", "--", "--nocapture", "--report-time", "@@split(JUNIT_OPTS, )"
 ]
 
+[tasks.postgres-container-check]
+description = "Quick PostgreSQL container startup check - runs one simple test to verify container works"
+dependencies = ["wit"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+command = "cargo"
+args = [
+    "test", "--package", "golem-component-service-base", "--test", "tests", "postgres::tests::repo_component_delete", "--", "--nocapture", "--report-time", "@@split(JUNIT_OPTS, )"
+]
+
 [tasks.integration-tests-group3]
 description = "Runs worker service integration tests only"
 dependencies = ["wit"]

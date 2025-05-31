@@ -220,7 +220,7 @@ jobs:
 
           # Run the build script with PostgreSQL 15 and Windows LTSC 2022 version
           cmd.exe /c build.cmd pg15 win21H2
-          
+
           Write-Host "--- Listing all Docker images after build.cmd --- "
           docker images
 
@@ -228,7 +228,7 @@ jobs:
           # Tag the locally built image as the one tests expect
           # The build.cmd script now tags it as laz-001/postgres-windows:%pgVer%-%winVer%
           docker tag laz-001/postgres-windows:15.10-ltsc2022 postgres:14.7-alpine
-          
+
           Write-Host "PostgreSQL container built and tagged successfully"
 
       - name: Inspect Docker image and environment
@@ -242,7 +242,7 @@ jobs:
           docker ps -a
 
           # Inspect the PostgreSQL container
-          docker inspect marekistvanekmycronic/postgres-windows
+          #docker inspect laz-001/postgres-windows
 
       - name: Setup Redis (Linux)
         if: runner.os == 'Linux'
@@ -262,7 +262,8 @@ jobs:
           # Start-Process -FilePath "redis\\redis-server.exe" -ArgumentList "--maxmemory 256mb" -NoNewWindow
       - name: Worker Executor integration tests
         continue-on-error: false
-        run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
+        #run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
+        run: cargo make --profile ci postgres-container-check
         timeout-minutes: 40
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
