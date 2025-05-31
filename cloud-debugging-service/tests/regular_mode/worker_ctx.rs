@@ -17,14 +17,6 @@ use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, WitValue};
 use golem_wasm_rpc::{Value, ValueAndType};
 use golem_worker_executor::cloud::CloudGolemTypes;
-use golem_worker_executor::services::worker_fork::WorkerForkService;
-use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
-    UpdateManagement, WorkerCtx,
-};
-use std::collections::HashSet;
-use std::sync::{Arc, RwLock, Weak};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -49,9 +41,17 @@ use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::worker::WorkerService;
 use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
 use golem_worker_executor::services::worker_event::WorkerEventService;
+use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{HasAll, HasConfig, HasOplogService};
 use golem_worker_executor::worker::{RetryDecision, Worker};
+use golem_worker_executor::workerctx::{
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
+    UpdateManagement, WorkerCtx,
+};
+use std::collections::HashSet;
+use std::sync::{Arc, RwLock, Weak};
 use tracing::debug;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};

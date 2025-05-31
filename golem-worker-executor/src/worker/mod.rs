@@ -667,6 +667,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.pending_updates.write().await.pop_front()
     }
 
+    pub async fn peek_pending_update(&self) -> Option<TimestampedUpdateDescription> {
+        self.pending_updates.read().await.front().cloned()
+    }
+
     pub async fn invocation_results(&self) -> HashMap<IdempotencyKey, OplogIndex> {
         HashMap::from_iter(
             self.invocation_results

@@ -782,6 +782,8 @@ impl OplogEntry {
                 | OplogEntry::Exited { .. }
                 | OplogEntry::PendingWorkerInvocation { .. }
                 | OplogEntry::PendingUpdate { .. }
+                | OplogEntry::SuccessfulUpdate { .. }
+                | OplogEntry::SuccessfulUpdateV1 { .. }
                 | OplogEntry::FailedUpdate { .. }
                 | OplogEntry::GrowMemory { .. }
                 | OplogEntry::CreateResource { .. }
