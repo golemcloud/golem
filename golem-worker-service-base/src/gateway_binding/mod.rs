@@ -13,7 +13,7 @@
 // limitations under the License.
 
 pub(crate) use self::http_handler_binding::*;
-pub use self::worker_binding::*; // Make worker binding structures public for tests
+pub use self::worker_binding::*;
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
 use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;

@@ -316,12 +316,10 @@ impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
         Ok(result)
     }
 
-    /// Updates SwaggerUI routes with the actual OpenAPI specification
     pub fn update_swagger_ui_openapi_specs(
         &mut self,
         conversion_context: &BoxConversionContext<'_>,
     ) {
-        // Generate the OpenAPI spec from this compiled definition
         let openapi_spec_json = self.generate_openapi_spec_json(conversion_context).ok();
 
         // Update all SwaggerUI routes with the actual OpenAPI spec
@@ -339,8 +337,6 @@ impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
         &self,
         conversion_context: &BoxConversionContext<'_>,
     ) -> Result<String, String> {
-        //from_compiled_http_api_definition is an async function, because we need to use ConversionContext
-        //to get component-name from component-id
         let openapi = futures::executor::block_on(
             OpenApiHttpApiDefinition::from_compiled_http_api_definition(self, conversion_context),
         )?;

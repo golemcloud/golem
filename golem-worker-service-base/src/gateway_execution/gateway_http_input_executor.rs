@@ -40,7 +40,6 @@ use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSucc
 use crate::gateway_rib_interpreter::WorkerServiceRibInterpreter;
 use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
 use crate::http_invocation_context::{extract_request_attributes, invocation_context_from_request};
-use crate::service::gateway::api_definition::ApiDefinitionService;
 use crate::service::gateway::api_deployment::ApiDeploymentError;
 use async_trait::async_trait;
 use golem_common::model::component::VersionedComponentId;
@@ -49,7 +48,6 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
-use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::headers::TraceContextHeaders;
 use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
@@ -79,8 +77,6 @@ pub struct DefaultGatewayInputExecutor<Namespace> {
     pub api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
     pub gateway_session_store: GatewaySessionStore,
     pub identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
-    pub definition_service:
-        Option<Arc<dyn ApiDefinitionService<EmptyAuthCtx, Namespace> + Sync + Send>>,
 }
 
 impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
@@ -93,9 +89,6 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
         gateway_session_store: GatewaySessionStore,
         identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
-        definition_service: Option<
-            Arc<dyn ApiDefinitionService<EmptyAuthCtx, Namespace> + Sync + Send>,
-        >,
     ) -> Self {
         Self {
             evaluator,
@@ -106,7 +99,6 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
             api_definition_lookup_service,
             gateway_session_store,
             identity_provider,
-            definition_service,
         }
     }
 
@@ -556,15 +548,16 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
             Err(err) => {
                 return poem::Response::builder()
                     .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from_string(err.to_string()));
+                    .body(Body::from_string(err));
             }
         };
 
-        let possible_api_definitions = match self
+        let possible_api_definitions = self
             .api_definition_lookup_service
             .get(&ApiSiteString(authority.clone()))
-            .await
-        {
+            .await;
+
+        let possible_api_definitions = match possible_api_definitions {
             Ok(api_defs) => api_defs,
             Err(api_defs_lookup_error) => {
                 error!(
