@@ -709,11 +709,17 @@ pub enum PublicOplogEntry {
     SetSpanAttribute(SetSpanAttributeParameters),
     /// Change the current persistence level
     ChangePersistenceLevel(ChangePersistenceLevelParameters),
+    /// Begins a transaction operation
     BeginRemoteTransaction(BeginRemoteTransactionParameters),
+    /// Pre-Commit of the transaction, indicating that the transaction will be committed
     PreCommitRemoteTransaction(RemoteTransactionParameters),
+    /// Pre-Rollback of the transaction, indicating that the transaction will be rolled back
     PreRollbackRemoteTransaction(RemoteTransactionParameters),
+    /// Committed transaction operation, indicating that the transaction was committed
     CommitedRemoteTransaction(RemoteTransactionParameters),
+    /// Rolled back transaction operation, indicating that the transaction was rolled back
     RolledBackRemoteTransaction(RemoteTransactionParameters),
+    /// Aborted transaction operation, indicating that the transaction failed
     AbortedRemoteTransaction(RemoteTransactionParameters),
 }
 
