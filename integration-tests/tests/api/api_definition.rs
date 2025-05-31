@@ -470,7 +470,6 @@ async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
 #[tracing::instrument]
 // This test simply validates the export API definition functionality
 async fn test_export_openapi_spec_simple(deps: &EnvBasedTestDependencies) {
-
     let component_id = deps.component("counters").unique().store().await;
 
     // Create an API definition with a specific route
@@ -863,7 +862,6 @@ async fn create_openapi_json_definition(deps: &EnvBasedTestDependencies) {
 #[tracing::instrument]
 // This the full round trip test for API definition, API -> OpenAPI -> API
 async fn test_roundtrip_api_definition(deps: &EnvBasedTestDependencies) {
-
     let component_id = deps.component("counters").unique().store().await;
 
     // 1. Create an API definition request with a specific route
