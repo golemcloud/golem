@@ -13,14 +13,16 @@
 // limitations under the License.
 
 use crate::compiler::compile_rib_script;
-use crate::dependency_manager::{RibComponentMetadata, RibDependencyManager};
+use crate::dependency_manager::RibDependencyManager;
+use crate::eval::eval;
 use crate::invoke::WorkerFunctionInvoke;
 use crate::repl_printer::{DefaultReplResultPrinter, ReplPrinter};
 use crate::repl_state::ReplState;
 use crate::rib_edit::RibEdit;
 use async_trait::async_trait;
 use colored::Colorize;
-use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibByteCode};
+use golem_wasm_rpc::ValueAndType;
+use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId};
 use rib::{RibCompilationError, RibFunctionInvoke};
 use rib::{RibFunctionInvokeResult, RibResult, RibRuntimeError};
 use rustyline::error::ReadlineError;
@@ -35,7 +37,7 @@ pub struct RibRepl {
     history_file_path: PathBuf,
     printer: Box<dyn ReplPrinter>,
     editor: Editor<RibEdit, DefaultHistory>,
-    repl_state: ReplState,
+    repl_state: Arc<ReplState>,
     prompt: String,
 }
 
@@ -116,12 +118,7 @@ impl RibRepl {
             }
         }?;
 
-        let rib_function_invoke = Arc::new(ReplRibFunctionInvoke::new(
-            component_dependency.clone(),
-            config.worker_function_invoke,
-        ));
-
-        let repl_state = ReplState::new(&component_dependency, rib_function_invoke);
+        let repl_state = ReplState::new(&component_dependency, config.worker_function_invoke);
 
         Ok(RibRepl {
             history_file_path,
@@ -129,7 +126,7 @@ impl RibRepl {
                 .printer
                 .unwrap_or_else(|| Box::new(DefaultReplResultPrinter)),
             editor: rl,
-            repl_state,
+            repl_state: Arc::new(repl_state),
             prompt: config.prompt.unwrap_or_else(|| ">>> ".cyan().to_string()),
         })
     }
@@ -159,41 +156,32 @@ impl RibRepl {
             let _ = self.editor.add_history_entry(rib);
             let _ = self.editor.save_history(&self.history_file_path);
 
-            match compile_rib_script(&self.current_rib_program(), &mut self.repl_state) {
-                Ok(compilation) => {
+            match compile_rib_script(&self.current_rib_program(), &self.repl_state) {
+                Ok(compiler_output) => {
                     let helper = self.editor.helper_mut().unwrap();
 
-                    helper.update_progression(&compilation);
+                    helper.update_progression(&compiler_output);
 
-                    // Before evaluation
-                    let result = eval(compilation.rib_byte_code, &mut self.repl_state).await;
+                    let result = eval(compiler_output.rib_byte_code, &self.repl_state).await;
+
                     match result {
                         Ok(result) => Ok(Some(result)),
                         Err(err) => {
-                            self.remove_rib_text_in_session();
+                            self.repl_state.remove_last_rib_expression();
+
                             Err(RibExecutionError::RibRuntimeError(err))
                         }
                     }
                 }
                 Err(err) => {
-                    self.remove_rib_text_in_session();
+                    self.repl_state.remove_last_rib_expression();
+
                     Err(RibExecutionError::RibCompilationError(err))
                 }
             }
         } else {
             Ok(None)
         }
-    }
-
-    /// Dynamically updates the REPL session with a new component dependency.
-    ///
-    /// This method is intended for use in interactive or user-controlled REPL loops,
-    /// allowing runtime replacement of active component metadata.
-    ///
-    /// Note: Currently, only a single component is supported per session. Multi-component
-    /// support is planned but not yet implemented.
-    pub fn update_component_dependency(&mut self, dependency: RibComponentMetadata) {
-        self.repl_state.update_dependency(dependency);
     }
 
     /// Starts the default REPL loop for executing Rib code interactively.
@@ -206,7 +194,7 @@ impl RibRepl {
             let readline = self.read_line();
             match readline {
                 Ok(rib) => {
-                    let result = self.execute_rib(&rib).await;
+                    let result = self.execute_rib(rib.as_str()).await;
 
                     match result {
                         Ok(Some(result)) => {
@@ -233,10 +221,6 @@ impl RibRepl {
 
     fn update_rib(&mut self, rib_text: &str) {
         self.repl_state.update_rib(rib_text);
-    }
-
-    fn remove_rib_text_in_session(&mut self) {
-        self.repl_state.pop_rib_text()
     }
 
     fn current_rib_program(&self) -> String {
@@ -271,13 +255,6 @@ pub struct ComponentSource {
 
     /// The full file path to the WebAssembly source file, including the `.wasm` extension.
     pub source_path: PathBuf,
-}
-
-async fn eval(
-    rib_byte_code: RibByteCode,
-    repl_state: &mut ReplState,
-) -> Result<RibResult, RibRuntimeError> {
-    repl_state.interpreter().run(rib_byte_code).await
 }
 
 fn get_default_history_file() -> PathBuf {
@@ -334,19 +311,23 @@ impl Display for ReplBootstrapError {
 // the `invoke` arguments. It only requires the optional worker name, function name, and arguments.
 // Once multi-component support is added, the trait will be updated to include `component_id`,
 // and we can use it directly instead of `WorkerFunctionInvoke` in the `golem-rib-repl` module.
-struct ReplRibFunctionInvoke {
-    component_dependency: RibComponentMetadata,
-    worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
+pub struct ReplRibFunctionInvoke {
+    repl_state: Arc<ReplState>,
 }
 
 impl ReplRibFunctionInvoke {
-    fn new(
-        component_dependency: RibComponentMetadata,
-        worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
-    ) -> Self {
-        Self {
-            component_dependency,
-            worker_function_invoke,
+    pub fn new(repl_state: Arc<ReplState>) -> Self {
+        Self { repl_state }
+    }
+
+    fn get_cached_result(&self, instruction_id: &InstructionId) -> Option<ValueAndType> {
+        // If the current instruction index is greater than the last played index result,
+        // then we shouldn't use the cache result no matter what.
+        // This check is important because without this, loops end up reusing the cached invocation result
+        if instruction_id.index > self.repl_state.last_executed_instruction().index {
+            None
+        } else {
+            self.repl_state.invocation_results().get(instruction_id)
         }
     }
 }
@@ -355,22 +336,39 @@ impl ReplRibFunctionInvoke {
 impl RibFunctionInvoke for ReplRibFunctionInvoke {
     async fn invoke(
         &self,
+        instruction_id: &InstructionId,
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
     ) -> RibFunctionInvokeResult {
-        let component_id = self.component_dependency.component_id;
-        let component_name = &self.component_dependency.component_name;
+        let component_id = self.repl_state.dependency().component_id;
+        let component_name = &self.repl_state.dependency().component_name;
 
-        self.worker_function_invoke
-            .invoke(
-                component_id,
-                component_name,
-                worker_name.map(|x| x.0),
-                function_name.0.as_str(),
-                args.0,
-            )
-            .await
-            .map_err(|e| e.into())
+        match self.get_cached_result(instruction_id) {
+            Some(result) => Ok(result),
+            None => {
+                let rib_invocation_result = self
+                    .repl_state
+                    .worker_function_invoke()
+                    .invoke(
+                        component_id,
+                        component_name,
+                        worker_name.map(|x| x.0),
+                        function_name.0.as_str(),
+                        args.0,
+                    )
+                    .await;
+
+                match rib_invocation_result {
+                    Ok(result) => {
+                        self.repl_state
+                            .update_cache(instruction_id.clone(), result.clone());
+
+                        Ok(result)
+                    }
+                    Err(err) => Err(err.into()),
+                }
+            }
+        }
     }
 }

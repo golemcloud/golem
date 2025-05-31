@@ -64,15 +64,14 @@ impl Display for RibByteCodeGenerationError {
 }
 
 impl RibByteCode {
-    pub fn diff(&self, previous: &RibByteCode) -> RibByteCode {
-        let mut diff = RibByteCode::default();
-        for (i, instruction) in self.instructions.iter().enumerate() {
-            if i >= previous.instructions.len() {
-                diff.instructions.push(instruction.clone());
-            }
-        }
-        diff
+    pub fn len(&self) -> usize {
+        self.instructions.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.instructions.is_empty()
+    }
+
     // Convert expression to bytecode instructions
     pub fn from_expr(
         inferred_expr: &InferredExpr,

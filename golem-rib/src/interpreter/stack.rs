@@ -58,12 +58,17 @@ impl InterpreterStack {
     }
 
     pub fn pop_sink(&mut self) -> Option<(Vec<ValueAndType>, AnalysedType)> {
-        match self.pop() {
-            Some(RibInterpreterStackValue::Sink(vec, analysed_type)) => {
-                Some((vec.clone(), analysed_type))
+        while let Some(value) = self.pop() {
+            match value {
+                RibInterpreterStackValue::Sink(vec, analysed_type) => {
+                    // We found a sink, return it
+                    return Some((vec.clone(), analysed_type.clone()));
+                }
+                _ => continue, // Keep popping until we find a sink
             }
-            _ => None,
         }
+
+        None
     }
 
     pub fn pop_n(&mut self, n: usize) -> Option<Vec<RibInterpreterStackValue>> {
@@ -146,11 +151,9 @@ impl InterpreterStack {
         self.stack.push(interpreter_result);
     }
 
-    pub fn create_sink(&mut self, analysed_type: &AnalysedType) {
-        self.stack.push(RibInterpreterStackValue::Sink(
-            vec![],
-            analysed_type.clone(),
-        ))
+    pub fn create_sink(&mut self, analysed_type: AnalysedType) {
+        self.stack
+            .push(RibInterpreterStackValue::Sink(vec![], analysed_type))
     }
 
     pub fn push_val(&mut self, element: ValueAndType) {
@@ -158,29 +161,13 @@ impl InterpreterStack {
     }
 
     pub fn push_to_sink(&mut self, value_and_type: ValueAndType) -> RibInterpreterResult<()> {
-        let sink = self.pop();
-        // sink always followed by an iterator
-        let possible_iterator = self.pop().ok_or(empty_stack())?;
+        let (mut list, analysed_type) = self.pop_sink().ok_or(internal_corrupted_state!(
+            "failed to pop a sink from the interpreter stack"
+        ))?;
 
-        if !possible_iterator.is_iterator() {
-            return Err(internal_corrupted_state!(
-                "failed to obtain an iterator from the stack",
-            ));
-        }
-
-        match sink {
-            Some(RibInterpreterStackValue::Sink(mut list, analysed_type)) => {
-                list.push(value_and_type);
-                self.push(possible_iterator);
-                self.push(RibInterpreterStackValue::Sink(list, analysed_type));
-                Ok(())
-            }
-
-            non_sink_value => Err(internal_corrupted_state!(
-                "failed to push values to sink {:?}",
-                non_sink_value
-            )),
-        }
+        list.push(value_and_type);
+        self.push(RibInterpreterStackValue::Sink(list, analysed_type));
+        Ok(())
     }
 
     pub fn push_variant(

@@ -2258,6 +2258,7 @@ struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     invocation_context: InvocationContext,
     current_span_id: SpanId,
     forward_trace_context_headers: bool,
+    set_outgoing_http_idempotency_key: bool,
 
     worker_fork: Arc<dyn WorkerForkService>,
 
@@ -2335,6 +2336,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             invocation_context,
             current_span_id,
             forward_trace_context_headers: true,
+            set_outgoing_http_idempotency_key: true,
             worker_fork,
             read_only_paths,
             files,
