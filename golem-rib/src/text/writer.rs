@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::expr::Expr;
-use crate::{ArmPattern, CallType, MatchArm, Range};
+use crate::{ArmPattern, CallType, InstanceCreationType, MatchArm, Range};
 use std::fmt::Display;
 use std::io::Write;
 
@@ -365,7 +365,19 @@ impl<W: Write> Writer<W> {
                 args,
                 ..
             } => {
-                let function_name = call_type.to_string();
+                let function_name = match call_type {
+                    CallType::Function { function_name, .. } => {
+                        function_name.function.name_pretty()
+                    }
+                    CallType::VariantConstructor(name) => name.to_string(),
+                    CallType::EnumConstructor(name) => name.to_string(),
+                    CallType::InstanceCreation(instance) => match instance {
+                        InstanceCreationType::Worker { .. } => "instance".to_string(),
+                        InstanceCreationType::Resource { resource_name, .. } => {
+                            resource_name.resource_name.to_string()
+                        }
+                    },
+                };
 
                 self.write_str(function_name)?;
 

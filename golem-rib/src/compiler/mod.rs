@@ -209,6 +209,7 @@ mod compiler_error_tests {
         use test_r::test;
 
         use crate::compiler::compiler_error_tests::test_utils;
+        use crate::compiler::compiler_error_tests::test_utils::strip_spaces;
         use crate::{Expr, RibCompiler, RibCompilerConfig};
 
         #[test]
@@ -223,7 +224,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -250,7 +251,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -277,7 +278,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -305,7 +306,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -336,7 +337,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -362,7 +363,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -388,7 +389,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -412,7 +413,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -436,7 +437,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -464,7 +465,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -488,7 +489,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -511,7 +512,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -535,7 +536,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -559,7 +560,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -583,7 +584,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -607,7 +608,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -630,7 +631,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -653,7 +654,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -677,7 +678,7 @@ mod compiler_error_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = test_utils::get_metadata_with_record_input_params();
+            let metadata = test_utils::get_metadata();
 
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
@@ -690,13 +691,157 @@ mod compiler_error_tests {
 
             assert_eq!(error_msg, test_utils::strip_spaces(expected));
         }
+
+        #[test]
+        async fn test_invalid_resource_constructor_call0() {
+            let expr = r#"
+          let worker = instance("my-worker");
+          let x = worker.cart()
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = test_utils::get_metadata();
+
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
+            let error_message = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 3, column 19
+            `cart()`
+            cause: invalid argument size for function `cart`. expected 1 arguments, found 0
+            "#;
+
+            assert_eq!(error_message, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_invalid_resource_constructor_call1() {
+            let expr = r#"
+          let worker = instance("my-worker");
+          let x = worker.cart(1)
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = test_utils::get_metadata();
+
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
+            let error_message = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 3, column 31
+            `1`
+            found within:
+            `cart(1)`
+            cause: type mismatch. expected string, found s32
+            invalid argument to the function `cart`
+            "#;
+
+            assert_eq!(error_message, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_invalid_resource_method_call0() {
+            let expr = r#"
+          let worker = instance("my-worker");
+          let x = worker.cart("foo");
+          x.add-item(1)
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = test_utils::get_metadata();
+
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
+            let error_message = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 4, column 22
+            `1`
+            found within:
+            `add-item(1)`
+            cause: type mismatch. expected record { product-id: string, name: string, price: f32, quantity: u32 }, found s32
+            invalid argument to the function `add-item`
+            "#;
+
+            assert_eq!(error_message, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_invalid_type_parameter0() {
+            let expr = r#"
+          let worker = instance[golem:it2]("my-worker");
+          let x = worker.cart("foo");
+          x.add-item(1)
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = test_utils::get_metadata();
+
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
+            let error_message = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 2, column 24
+            `instance[golem:it2]("my-worker")`
+            cause: failed to create instance: package `golem:it2` not found
+            "#;
+
+            assert_eq!(error_message, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_invalid_type_parameter1() {
+            let expr = r#"
+          let worker = instance[golem:it/api2]("my-worker");
+          let x = worker.cart("foo");
+          x.add-item(1)
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = test_utils::get_metadata();
+
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
+            let error_message = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 2, column 24
+            `instance[golem:it/api2]("my-worker")`
+            cause: failed to create instance: `golem:it/api2` not found
+            "#;
+
+            assert_eq!(error_message, strip_spaces(expected));
+        }
+
+        #[test]
+        async fn test_invalid_type_parameter2() {
+            let expr = r#"
+          let worker = instance[api2]("my-worker");
+          let x = worker.cart("foo");
+          x.add-item(1)
+        "#;
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = test_utils::get_metadata();
+
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler = RibCompiler::new(compiler_config);
+            let error_message = compiler.compile(expr).unwrap_err().to_string();
+
+            let expected = r#"
+            error in the following rib found at line 2, column 24
+            `instance[api2]("my-worker")`
+            cause: failed to create instance: interface `api2` not found
+            "#;
+
+            assert_eq!(error_message, strip_spaces(expected));
+        }
     }
 
     mod test_utils {
-        use golem_wasm_ast::analysis::analysed_type::{list, record, s32, str, tuple, u64};
+        use golem_wasm_ast::analysis::analysed_type::{
+            case, f32, field, handle, list, record, s32, str, tuple, u32, u64, variant,
+        };
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-            NameTypePair,
+            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, NameTypePair,
         };
 
         pub(crate) fn strip_spaces(input: &str) -> String {
@@ -722,8 +867,8 @@ mod compiler_error_tests {
             result.strip_prefix("\n").unwrap_or(&result).to_string()
         }
 
-        pub(crate) fn get_metadata_with_record_input_params() -> Vec<AnalysedExport> {
-            let analysed_export = AnalysedExport::Function(AnalysedFunction {
+        pub(crate) fn get_metadata() -> Vec<AnalysedExport> {
+            let function_export = AnalysedExport::Function(AnalysedFunction {
                 name: "foo".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "arg1".to_string(),
@@ -779,7 +924,127 @@ mod compiler_error_tests {
                 }],
             });
 
-            vec![analysed_export]
+            let resource_export = AnalysedExport::Instance(AnalysedInstance {
+                name: "golem:it/api".to_string(),
+                functions: vec![
+                    AnalysedFunction {
+                        name: "[constructor]cart".to_string(),
+                        parameters: vec![AnalysedFunctionParameter {
+                            name: "cons".to_string(),
+                            typ: str(),
+                        }],
+                        results: vec![AnalysedFunctionResult {
+                            name: None,
+                            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                        }],
+                    },
+                    AnalysedFunction {
+                        name: "[method]cart.add-item".to_string(),
+                        parameters: vec![
+                            AnalysedFunctionParameter {
+                                name: "self".to_string(),
+                                typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                            },
+                            AnalysedFunctionParameter {
+                                name: "item".to_string(),
+                                typ: record(vec![
+                                    field("product-id", str()),
+                                    field("name", str()),
+                                    field("price", f32()),
+                                    field("quantity", u32()),
+                                ]),
+                            },
+                        ],
+                        results: vec![],
+                    },
+                    AnalysedFunction {
+                        name: "[method]cart.remove-item".to_string(),
+                        parameters: vec![
+                            AnalysedFunctionParameter {
+                                name: "self".to_string(),
+                                typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                            },
+                            AnalysedFunctionParameter {
+                                name: "product-id".to_string(),
+                                typ: str(),
+                            },
+                        ],
+                        results: vec![],
+                    },
+                    AnalysedFunction {
+                        name: "[method]cart.update-item-quantity".to_string(),
+                        parameters: vec![
+                            AnalysedFunctionParameter {
+                                name: "self".to_string(),
+                                typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                            },
+                            AnalysedFunctionParameter {
+                                name: "product-id".to_string(),
+                                typ: str(),
+                            },
+                            AnalysedFunctionParameter {
+                                name: "quantity".to_string(),
+                                typ: u32(),
+                            },
+                        ],
+                        results: vec![],
+                    },
+                    AnalysedFunction {
+                        name: "[method]cart.checkout".to_string(),
+                        parameters: vec![AnalysedFunctionParameter {
+                            name: "self".to_string(),
+                            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        }],
+                        results: vec![AnalysedFunctionResult {
+                            name: None,
+                            typ: variant(vec![
+                                case("error", str()),
+                                case("success", record(vec![field("order-id", str())])),
+                            ]),
+                        }],
+                    },
+                    AnalysedFunction {
+                        name: "[method]cart.get-cart-contents".to_string(),
+                        parameters: vec![AnalysedFunctionParameter {
+                            name: "self".to_string(),
+                            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        }],
+                        results: vec![AnalysedFunctionResult {
+                            name: None,
+                            typ: list(record(vec![
+                                field("product-id", str()),
+                                field("name", str()),
+                                field("price", f32()),
+                                field("quantity", u32()),
+                            ])),
+                        }],
+                    },
+                    AnalysedFunction {
+                        name: "[method]cart.merge-with".to_string(),
+                        parameters: vec![
+                            AnalysedFunctionParameter {
+                                name: "self".to_string(),
+                                typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                            },
+                            AnalysedFunctionParameter {
+                                name: "other-cart".to_string(),
+                                typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                            },
+                        ],
+                        results: vec![],
+                    },
+                    AnalysedFunction {
+                        name: "[drop]cart".to_string(),
+                        parameters: vec![AnalysedFunctionParameter {
+                            name: "self".to_string(),
+                            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                        }],
+                        results: vec![],
+                    },
+                ],
+            });
+
+            vec![function_export, resource_export]
         }
     }
 }

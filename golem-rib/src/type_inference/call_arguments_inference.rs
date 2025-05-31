@@ -75,8 +75,37 @@ mod internal {
                     Ok(())
                 }
 
-                _ => Ok(()),
+                InstanceCreationType::Resource { resource_name, .. } => {
+                    let resource_constructor_with_prefix =
+                        format!["[constructor]{}", resource_name.resource_name];
+                    let interface =
+                        match (&resource_name.package_name, &resource_name.interface_name) {
+                            (Some(package_name), Some(interface_name)) => {
+                                Some(format!("{}/{}", package_name, interface_name))
+                            }
+                            (None, Some(interface_name)) => Some(interface_name.to_string()),
+                            _ => None,
+                        };
+
+                    let registry_key = match interface {
+                        None => RegistryKey::FunctionName(resource_constructor_with_prefix),
+                        Some(interface) => RegistryKey::FunctionNameWithInterface {
+                            interface_name: interface.to_string(),
+                            function_name: resource_constructor_with_prefix,
+                        },
+                    };
+
+                    infer_resource_constructor_arguments(
+                        original_expr,
+                        &registry_key,
+                        Some(args),
+                        function_type_registry,
+                    )?;
+
+                    Ok(())
+                }
             },
+
             CallType::Function { function_name, .. } => {
                 let resource_constructor_registry_key =
                     RegistryKey::resource_constructor_registry_key(function_name);
@@ -101,7 +130,7 @@ mod internal {
 
                         infer_args_and_result_type(
                             original_expr,
-                            &FunctionDetails::Fqn(function_name.to_string()),
+                            &FunctionDetails::Fqn(function_name.clone()),
                             function_type_registry,
                             &registry_key,
                             args,
@@ -150,7 +179,7 @@ mod internal {
         infer_resource_constructor_arguments(
             original_expr,
             resource_constructor_registry_key,
-            dynamic_parsed_function_name,
+            dynamic_parsed_function_name.raw_resource_params_mut(),
             function_type_registry,
         )?;
 
@@ -180,9 +209,14 @@ mod internal {
         let resource_method_name_in_metadata =
             dynamic_parsed_function_name.function_name_with_prefix_identifiers();
 
+        let resource_constructor_name = dynamic_parsed_function_name
+            .resource_name_simplified()
+            .unwrap_or_default();
+
         infer_args_and_result_type(
             original_expr,
             &FunctionDetails::ResourceMethodName {
+                resource_name: resource_constructor_name,
                 resource_method_name: resource_method_name_in_metadata,
             },
             function_type_registry,
@@ -195,12 +229,12 @@ mod internal {
     fn infer_resource_constructor_arguments(
         original_expr: &Expr,
         resource_constructor_registry_key: &RegistryKey,
-        dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
+        raw_resource_parameters: Option<&mut [Expr]>,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), FunctionCallError> {
-        let mut constructor_params: &mut Vec<Expr> = &mut vec![];
+        let mut constructor_params: &mut [Expr] = &mut [];
 
-        if let Some(resource_params) = dynamic_parsed_function_name.raw_resource_params_mut() {
+        if let Some(resource_params) = raw_resource_parameters {
             constructor_params = resource_params
         }
 
@@ -244,7 +278,7 @@ mod internal {
                         Ok(())
                     } else {
                         Err(FunctionCallError::ArgumentSizeMisMatch {
-                            function_name: function_name.to_string(),
+                            function_name: function_name.name(),
                             expr: original_expr.clone(),
                             expected: parameter_types.len(),
                             provided: args.len(),
@@ -281,7 +315,7 @@ mod internal {
                         Ok(())
                     } else {
                         Err(FunctionCallError::ArgumentSizeMisMatch {
-                            function_name: function_name.to_string(),
+                            function_name: function_name.name(),
                             expr: original_expr.clone(),
                             expected: parameter_types.len(),
                             provided: args.len(),
@@ -300,10 +334,34 @@ mod internal {
 
     #[derive(Clone)]
     enum FunctionDetails {
-        ResourceConstructorName { resource_constructor_name: String },
-        ResourceMethodName { resource_method_name: String },
-        Fqn(String),
+        ResourceConstructorName {
+            resource_constructor_name: String,
+        },
+        ResourceMethodName {
+            resource_name: String,
+            resource_method_name: String,
+        },
+        Fqn(DynamicParsedFunctionName),
         VariantName(String),
+    }
+
+    impl FunctionDetails {
+        pub fn name(&self) -> String {
+            match self {
+                FunctionDetails::ResourceConstructorName {
+                    resource_constructor_name,
+                } => resource_constructor_name.replace("[constructor]", ""),
+                FunctionDetails::ResourceMethodName {
+                    resource_name,
+                    resource_method_name,
+                } => {
+                    let resource_constructor_prefix = format!("[method]{}.", resource_name);
+                    resource_method_name.replace(&resource_constructor_prefix, "")
+                }
+                FunctionDetails::Fqn(fqn) => fqn.function.name_pretty(),
+                FunctionDetails::VariantName(name) => name.clone(),
+            }
+        }
     }
 
     impl Display for FunctionDetails {
@@ -349,7 +407,7 @@ mod internal {
             Ok(())
         } else {
             Err(FunctionCallError::TypeMisMatch {
-                function_name: function_name.to_string(),
+                function_name: function_name.name(),
                 argument: provided.clone(),
                 error: TypeMismatchError {
                     expr_with_wrong_type: provided.clone(),

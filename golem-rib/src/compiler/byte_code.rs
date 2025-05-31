@@ -1438,7 +1438,7 @@ mod compiler_tests {
 
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 4, column 16\n`golem:it/api.{cart0(user_id).add-item}(\"apple\")`\ncause: invalid function call `[constructor]cart0`\nunknown function\n"
+                "error in the following rib found at line 4, column 16\n`add-item(\"apple\")`\ncause: invalid function call `[constructor]cart0`\nunknown function\n"
             );
         }
 
@@ -1460,7 +1460,7 @@ mod compiler_tests {
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 4, column 16\n`golem:it/api.{cart(user_id).foo}(\"apple\")`\ncause: invalid function call `[method]cart.foo`\nunknown function\n"
+                "error in the following rib found at line 4, column 16\n`foo(\"apple\")`\ncause: invalid function call `[method]cart.foo`\nunknown function\n"
             );
         }
 
@@ -1507,7 +1507,7 @@ mod compiler_tests {
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 3, column 16\n`golem:it/api.{cart(user_id, user_id).add-item}(\"apple\")`\ncause: invalid argument size for function `[constructor]cart`. expected 1 arguments, found 2\n"
+                "error in the following rib found at line 3, column 16\n`add-item(\"apple\")`\ncause: invalid argument size for function `cart`. expected 1 arguments, found 2\n"
             );
         }
 
@@ -1528,7 +1528,7 @@ mod compiler_tests {
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 3, column 16\n`golem:it/api.{cart(user_id).add-item}(\"apple\", \"samsung\")`\ncause: invalid argument size for function `[method]cart.add-item`. expected 1 arguments, found 2\n"
+                "error in the following rib found at line 3, column 16\n`add-item(\"apple\", \"samsung\")`\ncause: invalid argument size for function `add-item`. expected 1 arguments, found 2\n"
             );
         }
 
@@ -1596,7 +1596,7 @@ mod compiler_tests {
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 3, column 54\n`\"apple\"`\nfound within:\n`golem:it/api.{cart(user_id).add-item}(\"apple\")`\ncause: type mismatch. expected record { name: string }, found string\ninvalid argument to the function `[method]cart.add-item`\n"
+                "error in the following rib found at line 3, column 54\n`\"apple\"`\nfound within:\n`add-item(\"apple\")`\ncause: type mismatch. expected record { name: string }, found string\ninvalid argument to the function `add-item`\n"
             );
         }
 
@@ -1616,7 +1616,7 @@ mod compiler_tests {
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 1, column 1\n`{foo: \"bar\"}`\nfound within:\n`golem:it/api.{cart({foo: \"bar\"}).add-item}(\"apple\")`\ncause: type mismatch. expected string, found record { foo: string }\ninvalid argument to the function `[constructor]cart`\n"
+                "error in the following rib found at line 1, column 1\n`{foo: \"bar\"}`\nfound within:\n`add-item(\"apple\")`\ncause: type mismatch. expected string, found record { foo: string }\ninvalid argument to the function `cart`\n"
             );
         }
 
