@@ -112,6 +112,8 @@ use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
 pub mod blobstore;
 mod cli;
 mod clocks;
+pub mod durability;
+mod dynamic_linking;
 mod filesystem;
 pub mod golem;
 pub mod http;
@@ -119,14 +121,11 @@ pub mod io;
 pub mod keyvalue;
 mod logging;
 mod random;
+pub mod rdbms;
+mod replay_state;
 pub mod serialized;
 mod sockets;
 pub mod wasm_rpc;
-
-pub mod durability;
-mod dynamic_linking;
-pub mod rdbms;
-mod replay_state;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -1823,7 +1822,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         Some(final_pending_update)
                                             if final_pending_update == timestamped_update =>
                                         {
-                                            // We failed before the update has succeeded
+                                            // We failed before the update has succeeded. Mark the update as failed and retry
+                                            store
+                                                .as_context()
+                                                .data()
+                                                .durable_ctx()
+                                                .public_state
+                                                .worker()
+                                                .pop_pending_update()
+                                                .await;
+
                                             store
                                                 .as_context_mut()
                                                 .data_mut()
@@ -1834,7 +1842,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                     )),
                                                 )
                                                 .await;
+
                                             debug!("Retrying prepare_instance after failed update attempt");
+
                                             Ok(RetryDecision::Immediate)
                                         }
                                         Some(_) => {
