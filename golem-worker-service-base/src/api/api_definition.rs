@@ -314,16 +314,6 @@ pub struct ResolvedGatewayBindingComponent {
     version: u64,
 }
 
-// Getters for Component Name and Version, Used in OpenAPI Spec conversion
-impl ResolvedGatewayBindingComponent {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-    pub fn version(&self) -> u64 {
-        self.version
-    }
-}
-
 // GatewayBindingData is a user exposed structure of GatewayBinding
 // GatewayBindingData is flattened here only to keep the REST API backward compatibility.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]

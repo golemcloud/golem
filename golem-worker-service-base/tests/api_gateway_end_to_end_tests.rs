@@ -84,7 +84,6 @@ async fn execute(
         Arc::new(internal::TestApiDefinitionLookup::new(compiled)),
         Arc::clone(session_store),
         Arc::new(test_identity_provider.clone()),
-        None,
     );
 
     test_executor.execute_http_request(api_request).await

@@ -61,7 +61,6 @@ impl CustomHttpRequestApi {
             api_definition_lookup_service,
             gateway_session_store,
             identity_provider: Arc::new(DefaultIdentityProvider),
-            definition_service: None,
         });
 
         Self {
