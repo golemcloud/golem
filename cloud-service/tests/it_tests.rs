@@ -244,7 +244,6 @@ async fn create_project_grant(
 
 // TODO: split these into separate, isolated tests
 async fn test_services(config: &CloudServiceConfig) {
-    unsafe { backtrace_on_stack_overflow::enable() };
     let services: Services = Services::new(config).await.unwrap();
 
     // check that default plan gets created
