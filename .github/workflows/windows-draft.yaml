@@ -204,54 +204,19 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Checkout postgres-windows repository
-        uses: actions/checkout@v4
-        with:
-          repository: laz-001/docker-postgres-windows
-          path: docker-postgres-windows # Checkout to a specific path
-
-      - name: Build and tag Windows PostgreSQL image for CI compatibility
+      - name: Setup PostgreSQL Windows container
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Write-Host "Building PostgreSQL container from laz-001/docker-postgres-windows"
+          Write-Host "Pulling PostgreSQL container from Docker Hub"
 
-          # Navigate to the checked-out pgdocker directory
-          cd docker-postgres-windows
+          # Pull the pre-built image from Docker Hub
+          docker pull melogg/postgres-windows:15.10-ltsc2022
 
-          # Run the build script with PostgreSQL 15 and Windows LTSC 2022 version
-          cmd.exe /c build.cmd pg15 win21H2
+          # Tag it as what tests expect
+          docker tag melogg/postgres-windows:15.10-ltsc2022 postgres:14.7-alpine
 
-          Write-Host "--- Listing all Docker images after build.cmd --- "
-          docker images
-
-          Write-Host "--- Attempting to tag --- "
-          # Tag the locally built image as the one tests expect
-          # The build.cmd script now tags it as laz-001/postgres-windows:%pgVer%-%winVer%
-          docker tag laz-001/postgres-windows:15.10-ltsc2022 postgres:14.7-alpine
-
-          Write-Host "PostgreSQL container built and tagged successfully"
-
-      - name: Login to Docker Hub via GitHub
-        if: runner.os == 'Windows'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
-
-      - name: Push PostgreSQL image to Docker Hub
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Write-Host "Pushing PostgreSQL container to Docker Hub"
-
-          # Tag for Docker Hub with melogg name
-          docker tag laz-001/postgres-windows:15.10-ltsc2022 melogg/postgres-windows:15.10-ltsc2022
-
-          # Push the image
-          docker push melogg/postgres-windows:15.10-ltsc2022
-
-          Write-Host "PostgreSQL container pushed successfully"
+          Write-Host "PostgreSQL container pulled and tagged successfully"
 
       - name: Inspect Docker image and environment
         if: runner.os == 'Windows'
@@ -356,29 +321,19 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Checkout postgres-windows repository
-        uses: actions/checkout@v4
-        with:
-          repository: laz-001/docker-postgres-windows
-          path: docker-postgres-windows # Checkout to a specific path
-
-      - name: Build and tag Windows PostgreSQL image for CI compatibility
+      - name: Setup PostgreSQL Windows container
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Write-Host "Building PostgreSQL container from laz-001/docker-postgres-windows"
+          Write-Host "Pulling PostgreSQL container from Docker Hub"
 
-          # Navigate to the checked-out pgdocker directory
-          cd docker-postgres-windows
+          # Pull the pre-built image from Docker Hub
+          docker pull melogg/postgres-windows:15.10-ltsc2022
 
-          # Run the build script with PostgreSQL 15 and Windows LTSC 2022 version
-          cmd.exe /c build.cmd pg15 win21H2
+          # Tag it as what tests expect
+          docker tag melogg/postgres-windows:15.10-ltsc2022 postgres:14.7-alpine
 
-          # Tag the locally built image as the one tests expect
-          # The build.cmd script now tags it as laz-001/postgres-windows:%pgVer%-%winVer%
-          docker tag laz-001/postgres-windows:15.10-ltsc2022 postgres:14.7-alpine
-
-          Write-Host "PostgreSQL container built and tagged successfully"
+          Write-Host "PostgreSQL container pulled and tagged successfully"
       - name: Setup Redis (Linux)
         if: runner.os == 'Linux'
         uses: shogo82148/actions-setup-redis@v1.35.1
