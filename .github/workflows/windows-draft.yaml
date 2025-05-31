@@ -231,6 +231,28 @@ jobs:
 
           Write-Host "PostgreSQL container built and tagged successfully"
 
+      - name: Login to GitHub Container Registry
+        if: runner.os == 'Windows'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push PostgreSQL image to GitHub Container Registry
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Write-Host "Pushing PostgreSQL container to GitHub Container Registry"
+
+          # Tag for GitHub Container Registry with the exact name
+          docker tag laz-001/postgres-windows:15.10-ltsc2022 ghcr.io/${{ github.repository_owner }}/laz-001/postgres-windows:15.10-ltsc2022
+
+          # Push the image
+          docker push ghcr.io/${{ github.repository_owner }}/laz-001/postgres-windows:15.10-ltsc2022
+
+          Write-Host "PostgreSQL container pushed successfully"
+
       - name: Inspect Docker image and environment
         if: runner.os == 'Windows'
         shell: pwsh
