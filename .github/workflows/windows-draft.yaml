@@ -227,8 +227,8 @@ jobs:
 
           Write-Host "--- Attempting to tag --- "
           # Tag the locally built image as the one tests expect
-          # The build.cmd script now tags it as laz-001/postgres-windows:%pgVer%-%winVer%
-          docker tag laz-001/postgres-windows:15.10-ltsc2022 postgres:14.7-alpine
+          # The build.cmd script now tags it as melogg/postgres-windows:%pgVer%-%winVer%
+          docker tag melogg/postgres-windows:15.10-ltsc2022 postgres:14.7-alpine
 
           Write-Host "PostgreSQL container built and tagged successfully"
 
@@ -246,10 +246,10 @@ jobs:
           Write-Host "Pushing PostgreSQL container to Docker Hub"
 
           # Tag for Docker Hub with original name
-          docker tag laz-001/postgres-windows:15.10-ltsc2022 ${{ github.actor }}/laz-001/postgres-windows:15.10-ltsc2022
+          docker tag melogg/postgres-windows:15.10-ltsc2022 melogg/postgres-windows:15.10-ltsc2022
 
           # Push the image
-          docker push ${{ github.actor }}/laz-001/postgres-windows:15.10-ltsc2022
+          docker push melogg/postgres-windows:15.10-ltsc2022
 
           Write-Host "PostgreSQL container pushed successfully"
 
@@ -264,7 +264,7 @@ jobs:
           docker ps -a
 
           # Inspect the PostgreSQL container
-          #docker inspect laz-001/postgres-windows
+          #docker inspect melogg/postgres-windows
 
       - name: Setup Redis (Linux)
         if: runner.os == 'Linux'
@@ -375,8 +375,8 @@ jobs:
           cmd.exe /c build.cmd pg15 win21H2
 
           # Tag the locally built image as the one tests expect
-          # The build.cmd script now tags it as laz-001/postgres-windows:%pgVer%-%winVer%
-          docker tag laz-001/postgres-windows:15.10-ltsc2022 postgres:14.7-alpine
+          # The build.cmd script now tags it as melogg/postgres-windows:%pgVer%-%winVer%
+          docker tag melogg/postgres-windows:15.10-ltsc2022 postgres:14.7-alpine
 
           Write-Host "PostgreSQL container built and tagged successfully"
       - name: Setup Redis (Linux)
