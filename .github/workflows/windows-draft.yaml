@@ -78,7 +78,7 @@ jobs:
           for crate in ${{ matrix.group.crates }}; do
             cargo build -p $crate --all-targets || exit 1
           done
-        timeout-minutes: 90
+        timeout-minutes: 60
 
   unit-tests: # Renamed from unit-tests-and-checks and modified
     env:
@@ -249,9 +249,9 @@ jobs:
           # Start-Process -FilePath "redis\\redis-server.exe" -ArgumentList "--maxmemory 256mb" -NoNewWindow
       - name: Worker Executor integration tests
         continue-on-error: false
-        #run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
-        run: cargo make --profile ci postgres-container-check
-        timeout-minutes: 40
+        run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
+        #run: cargo make --profile ci postgres-container-check
+        timeout-minutes: 60
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
         if: always()
@@ -355,7 +355,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 30
+        timeout-minutes: 60
       - name: Publish Test Report
         uses: mikepenz/action-junit-report@v4
         if: always()
