@@ -218,13 +218,17 @@ jobs:
           # Navigate to the checked-out pgdocker directory
           cd docker-postgres-windows
 
-          # Run the build script (defaults to ltsc2022, EDB_VER needs to be set)
-          cmd.exe /c build.cmd ltsc2022 15.10
+          # Run the build script with PostgreSQL 15 and Windows LTSC 2022 version
+          cmd.exe /c build.cmd pg15 win21H2
+          
+          Write-Host "--- Listing all Docker images after build.cmd --- "
+          docker images
 
+          Write-Host "--- Attempting to tag --- "
           # Tag the locally built image as the one tests expect
           # The build.cmd script now tags it as laz-001/postgres-windows:%pgVer%-%winVer%
           docker tag laz-001/postgres-windows:15.10-ltsc2022 postgres:14.7-alpine
-
+          
           Write-Host "PostgreSQL container built and tagged successfully"
 
       - name: Inspect Docker image and environment
@@ -344,8 +348,8 @@ jobs:
           # Navigate to the checked-out pgdocker directory
           cd docker-postgres-windows
 
-          # Run the build script (defaults to ltsc2022, EDB_VER needs to be set)
-          cmd.exe /c build.cmd ltsc2022 15.10
+          # Run the build script with PostgreSQL 15 and Windows LTSC 2022 version
+          cmd.exe /c build.cmd pg15 win21H2
 
           # Tag the locally built image as the one tests expect
           # The build.cmd script now tags it as laz-001/postgres-windows:%pgVer%-%winVer%
