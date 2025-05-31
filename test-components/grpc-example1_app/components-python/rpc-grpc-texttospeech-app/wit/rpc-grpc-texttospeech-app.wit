@@ -1,0 +1,11 @@
+package rpc-grpc:texttospeech-app;
+
+// See https://component-model.bytecodealliance.org/design/wit.html for more details about the WIT syntax
+
+interface rpc-grpc-texttospeech-app-api {
+  get: func() -> string;
+}
+
+world rpc-grpc-texttospeech-app {
+  export rpc-grpc-texttospeech-app-api;
+}

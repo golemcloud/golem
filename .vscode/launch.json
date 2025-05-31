@@ -1,0 +1,27 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "attach",
+            "name": "Attach",
+            "pid": "${command:pickMyProcess}" // use ${command:pickProcess} to pick other users' processes
+        },
+        {
+            "type": "lldb",
+            "request": "attach",
+            "name": "Attach",
+            "program": "${workspaceFolder}/worker-executor"
+        },
+        {
+            "type": "lldb",
+            "request": "attach",
+            "name": "Attach rust gprc",
+            "program": "/home/balaram/golem-fork/target/debug/deps/integration-b35ffe32a850f2d4"
+        }
+        
+    ]
+}

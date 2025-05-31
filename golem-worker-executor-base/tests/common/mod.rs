@@ -1,6 +1,7 @@
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
+use golem_worker_executor_base::durable_host::grpc::{DynamicGrpc, GrpcEntry};
 use golem_worker_executor_base::services::additional_config::{
     ComponentServiceConfig, ComponentServiceLocalConfig, DefaultAdditionalGolemConfig,
 };
@@ -33,7 +34,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
 
 use golem_worker_executor_base::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, DynamicGrpcClient, GrpcEntry, PublicDurableWorkerState,
+    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor_base::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
@@ -904,8 +905,12 @@ impl HostWasmRpc for TestWorkerCtx {
 }
 
 #[async_trait]
-impl DynamicGrpcClient for TestWorkerCtx {
-    async fn invoke_grpc(
+impl DynamicGrpc for TestWorkerCtx {
+    async fn init(&mut self) -> anyhow::Result<()> {
+        self.durable_ctx.init().await
+    }
+    
+    async fn invoke_and_await_grpc(
         &mut self,
         self_: Resource<GrpcEntry>,
         function_str: String,
@@ -917,7 +922,7 @@ impl DynamicGrpcClient for TestWorkerCtx {
         _call_type: String,
     ) -> anyhow::Result<()> {
         self.durable_ctx
-            .invoke_grpc(
+            .invoke_and_await_grpc(
                 self_,
                 function_str,
                 service_name,

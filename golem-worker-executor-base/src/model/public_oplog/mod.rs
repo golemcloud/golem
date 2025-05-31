@@ -14,6 +14,7 @@
 
 pub mod wit;
 
+use crate::durable_host::grpc::serialized::SerializableRequest;
 use crate::durable_host::http::serialized::{
     SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
 };
@@ -1220,6 +1221,11 @@ fn encode_host_function_request_as_value(
         | "rdbms::postgres::db-transaction::commit"
         | "rdbms::postgres::db-result-stream::get-columns"
         | "rdbms::postgres::db-result-stream::get-next" => no_payload(),
+
+        "golem::rpc::grpc::invoke-and-await-grpc result" => {
+            let payload: SerializableRequest = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
         _ => {
             // For everything else we assume that payload is a serialized ValueAndType
             let payload: ValueAndType = try_deserialize(bytes)?;
@@ -1632,6 +1638,10 @@ fn encode_host_function_response_as_value(
                 SerializableError,
             > = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
+        }
+        "golem::rpc::grpc::invoke-and-await-grpc result" => {
+            let payload: Result<String, SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
         }
         _ => {
             // For everything else we assume that payload is a serialized ValueAndType

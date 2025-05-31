@@ -5,22 +5,17 @@ syntax = "proto3";
 package grpcbin;
 
 service GRPCBin {
-  rpc DummyServerStream(EmptyMessage) returns (stream DummyMessage) {}
+  rpc DummyServerStream(DummyMessage) returns (stream DummyMessage) {}
 
-  // rpc DummyClientStream(stream EmptyMessage) returns (DummyMessage) {}
+  rpc DummyClientStream(stream DummyMessage) returns (DummyMessage) {}
 
-  // rpc DummyBiStream(stream EmptyMessage) returns (stream DummyMessage) {}
+  rpc DummyBiStream(stream DummyMessage) returns (stream DummyMessage) {}
 
-  // rpc DummyUnary(EmptyMessage) returns (DummyMessage) {}
+  rpc DummyUnary(DummyMessage) returns (DummyMessage) {}
+  
+  // handle empty messages
+  rpc EmptyUnary(EmptyMessage) returns (DummyMessage) {}
 
-
-}
-
-message HeadersMessage {
-  message Values {
-    repeated string values = 1;
-  }
-  map<string, Values> Metadata = 1;
 }
 
 message SpecificErrorRequest {
@@ -51,7 +46,7 @@ message DummyMessage {
   repeated int64 f_int64s= 12;
   bytes f_bytes = 13;
   repeated bytes f_bytess = 14;
-  float f_float = 15;
+  float f_float = 15; 
   repeated float f_floats = 16;
   // TODO: timestamp, duration, oneof, any, maps, fieldmask, wrapper type, struct, listvalue, value, nullvalue, deprecated
 }

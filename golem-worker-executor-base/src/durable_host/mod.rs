@@ -62,7 +62,6 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures_util::TryFutureExt;
 use futures_util::TryStreamExt;
-use golem_common::model::component_metadata::GrpcMetadata;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -84,7 +83,6 @@ use golem_common::retries::get_delay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
-use prost_reflect::DynamicMessage;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -94,13 +92,9 @@ use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
 use tempfile::TempDir;
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot;
 use tokio_util::codec::{BytesCodec, FramedRead};
-use tonic::Status;
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, Resource, ResourceAny};
-use wasmtime::component::{Type, Val};
 use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::{
@@ -2549,33 +2543,4 @@ macro_rules! get_oplog_entry {
             }
         }
     };
-}
-
-// Grpc
-
-#[async_trait]
-pub trait DynamicGrpcClient {
-    async fn invoke_grpc(
-        &mut self,
-        resource: Resource<GrpcEntry>,
-        function_str: String,
-        service_name: String,
-        params: &[Val],
-        results: &mut [Val],
-        result_types: &[Type],
-        grpc_metadata: GrpcMetadata,
-        _call_type: String,
-    ) -> anyhow::Result<()>;
-}
-
-pub struct GrpcEntry {
-    pub payload: Box<GrpcEntryPayload>,
-}
-
-pub struct GrpcEntryPayload {
-    // pub span_id: SpanId,
-    pub constructor_params: String,
-    pub rx_stream: Option<tokio::sync::Mutex<tonic::Streaming<DynamicMessage>>>,
-    pub resp_rx: Option<oneshot::Receiver<Result<tonic::Response<DynamicMessage>, Status>>>,
-    pub sender: Option<UnboundedSender<DynamicMessage>>,
 }

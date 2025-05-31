@@ -1,0 +1,12 @@
+package rpc-grpc:chat-app;
+
+// See https://component-model.bytecodealliance.org/design/wit.html for more details about the WIT syntax
+
+interface rpc-grpc-chat-app-api {
+  chat1: func(message: string) -> string;
+  chat2: func(message: string) -> string;
+}
+
+world rpc-grpc-chat-app {
+  export rpc-grpc-chat-app-api;
+}

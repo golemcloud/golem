@@ -1,71 +1,1031 @@
 
-package rpc-grpc:grpcbin;
+package rpc-grpc:google-cloud-tpu-v1;
 
-interface grpcbin {
+interface google-protobuf {
     
-    record headers-message-values {
-        values: list<string>,
+    record file-descriptor-set {
+        file: list<file-descriptor-proto>,
     }
             
-    record headers-message-metadata-entry {
-        key: option<string>,
-        value: option<headers-message-values>,
+    record file-descriptor-proto {
+        name: option<string>,
+        %package: option<string>,
+        dependency: list<string>,
+        public-dependency: list<s32>,
+        weak-dependency: list<s32>,
+        message-type: list<descriptor-proto>,
+        enum-type: list<enum-descriptor-proto>,
+        service: list<service-descriptor-proto>,
+        extension: list<field-descriptor-proto>,
+        options: option<file-options>,
+        source-code-info: option<source-code-info>,
+        syntax: option<string>,
+        edition: option<edition>,
     }
             
-    record headers-message {
-        metadata: list<headers-message-metadata-entry>,
+    record descriptor-proto-extension-range {
+        start: option<s32>,
+        end: option<s32>,
+        options: option<extension-range-options>,
     }
             
-    record specific-error-request {
-        code: option<u32>,
-        reason: option<string>,
+    record descriptor-proto-reserved-range {
+        start: option<s32>,
+        end: option<s32>,
     }
             
-    record empty-message {
+    record descriptor-proto {
+        name: option<string>,
+        field: list<field-descriptor-proto>,
+        extension: list<field-descriptor-proto>,
+        nested-type: list<lazy-descriptor-proto>,
+        enum-type: list<enum-descriptor-proto>,
+        extension-range: list<descriptor-proto-extension-range>,
+        oneof-decl: list<oneof-descriptor-proto>,
+        options: option<message-options>,
+        reserved-range: list<descriptor-proto-reserved-range>,
+        reserved-name: list<string>,
+    }
+            
+    record extension-range-options-declaration {
+        number: option<s32>,
+        full-name: option<string>,
+        %type: option<string>,
+        reserved: option<bool>,
+        repeated: option<bool>,
+    }
+            
+    
+    enum extension-range-options-verification-state {
+        DECLARATION,
+        UNVERIFIED,
+    }
+        
+    record extension-range-options {
+        uninterpreted-option: list<uninterpreted-option>,
+        declaration: list<extension-range-options-declaration>,
+        features: option<feature-set>,
+        verification: option<extension-range-options-verification-state>,
+    }
+            
+    
+    enum field-descriptor-proto-type {
+        TYPE-DOUBLE,
+        TYPE-FLOAT,
+        TYPE-INT64,
+        TYPE-UINT64,
+        TYPE-INT32,
+        TYPE-FIXED64,
+        TYPE-FIXED32,
+        TYPE-BOOL,
+        TYPE-STRING,
+        TYPE-GROUP,
+        TYPE-MESSAGE,
+        TYPE-BYTES,
+        TYPE-UINT32,
+        TYPE-ENUM,
+        TYPE-SFIXED32,
+        TYPE-SFIXED64,
+        TYPE-SINT32,
+        TYPE-SINT64,
+    }
+        
+    
+    enum field-descriptor-proto-label {
+        LABEL-OPTIONAL,
+        LABEL-REPEATED,
+        LABEL-REQUIRED,
+    }
+        
+    record field-descriptor-proto {
+        name: option<string>,
+        number: option<s32>,
+        label: option<field-descriptor-proto-label>,
+        %type: option<field-descriptor-proto-type>,
+        type-name: option<string>,
+        extendee: option<string>,
+        default-value: option<string>,
+        oneof-index: option<s32>,
+        json-name: option<string>,
+        options: option<field-options>,
+        proto3-optional: option<bool>,
+    }
+            
+    record oneof-descriptor-proto {
+        name: option<string>,
+        options: option<oneof-options>,
+    }
+            
+    record enum-descriptor-proto-enum-reserved-range {
+        start: option<s32>,
+        end: option<s32>,
+    }
+            
+    record enum-descriptor-proto {
+        name: option<string>,
+        value: list<enum-value-descriptor-proto>,
+        options: option<enum-options>,
+        reserved-range: list<enum-descriptor-proto-enum-reserved-range>,
+        reserved-name: list<string>,
+    }
+            
+    record enum-value-descriptor-proto {
+        name: option<string>,
+        number: option<s32>,
+        options: option<enum-value-options>,
+    }
+            
+    record service-descriptor-proto {
+        name: option<string>,
+        method: list<method-descriptor-proto>,
+        options: option<service-options>,
+    }
+            
+    record method-descriptor-proto {
+        name: option<string>,
+        input-type: option<string>,
+        output-type: option<string>,
+        options: option<method-options>,
+        client-streaming: option<bool>,
+        server-streaming: option<bool>,
+    }
+            
+    
+    enum file-options-optimize-mode {
+        SPEED,
+        CODE-SIZE,
+        LITE-RUNTIME,
+    }
+        
+    record file-options {
+        java-package: option<string>,
+        java-outer-classname: option<string>,
+        java-multiple-files: option<bool>,
+        java-generate-equals-and-hash: option<bool>,
+        java-string-check-utf8: option<bool>,
+        optimize-for: option<file-options-optimize-mode>,
+        go-package: option<string>,
+        cc-generic-services: option<bool>,
+        java-generic-services: option<bool>,
+        py-generic-services: option<bool>,
+        deprecated: option<bool>,
+        cc-enable-arenas: option<bool>,
+        objc-class-prefix: option<string>,
+        csharp-namespace: option<string>,
+        swift-prefix: option<string>,
+        php-class-prefix: option<string>,
+        php-namespace: option<string>,
+        php-metadata-namespace: option<string>,
+        ruby-package: option<string>,
+        features: option<feature-set>,
+        uninterpreted-option: list<uninterpreted-option>,
+    }
+            
+    record message-options {
+        message-set-wire-format: option<bool>,
+        no-standard-descriptor-accessor: option<bool>,
+        deprecated: option<bool>,
+        map-entry: option<bool>,
+        deprecated-legacy-json-field-conflicts: option<bool>,
+        features: option<feature-set>,
+        uninterpreted-option: list<uninterpreted-option>,
+    }
+            
+    record field-options-edition-default {
+        edition: option<edition>,
+        value: option<string>,
+    }
+            
+    record field-options-feature-support {
+        edition-introduced: option<edition>,
+        edition-deprecated: option<edition>,
+        deprecation-warning: option<string>,
+        edition-removed: option<edition>,
+    }
+            
+    
+    enum field-options-c-type {
+        STRING,
+        CORD,
+        STRING-PIECE,
+    }
+        
+    
+    enum field-options-j-s-type {
+        JS-NORMAL,
+        JS-STRING,
+        JS-NUMBER,
+    }
+        
+    
+    enum field-options-option-retention {
+        RETENTION-UNKNOWN,
+        RETENTION-RUNTIME,
+        RETENTION-SOURCE,
+    }
+        
+    
+    enum field-options-option-target-type {
+        TARGET-TYPE-UNKNOWN,
+        TARGET-TYPE-FILE,
+        TARGET-TYPE-EXTENSION-RANGE,
+        TARGET-TYPE-MESSAGE,
+        TARGET-TYPE-FIELD,
+        TARGET-TYPE-ONEOF,
+        TARGET-TYPE-ENUM,
+        TARGET-TYPE-ENUM-ENTRY,
+        TARGET-TYPE-SERVICE,
+        TARGET-TYPE-METHOD,
+    }
+        
+    record field-options {
+        ctype: option<field-options-c-type>,
+        packed: option<bool>,
+        jstype: option<field-options-j-s-type>,
+        lazy: option<bool>,
+        unverified-lazy: option<bool>,
+        deprecated: option<bool>,
+        weak: option<bool>,
+        debug-redact: option<bool>,
+        retention: option<field-options-option-retention>,
+        targets: list<field-options-option-target-type>,
+        edition-defaults: list<field-options-edition-default>,
+        features: option<feature-set>,
+        feature-support: option<field-options-feature-support>,
+        uninterpreted-option: list<uninterpreted-option>,
+    }
+            
+    record oneof-options {
+        features: option<feature-set>,
+        uninterpreted-option: list<uninterpreted-option>,
+    }
+            
+    record enum-options {
+        allow-alias: option<bool>,
+        deprecated: option<bool>,
+        deprecated-legacy-json-field-conflicts: option<bool>,
+        features: option<feature-set>,
+        uninterpreted-option: list<uninterpreted-option>,
+    }
+            
+    record enum-value-options {
+        deprecated: option<bool>,
+        features: option<feature-set>,
+        debug-redact: option<bool>,
+        feature-support: option<field-options-feature-support>,
+        uninterpreted-option: list<uninterpreted-option>,
+    }
+            
+    record service-options {
+        features: option<feature-set>,
+        deprecated: option<bool>,
+        uninterpreted-option: list<uninterpreted-option>,
+    }
+            
+    
+    enum method-options-idempotency-level {
+        IDEMPOTENCY-UNKNOWN,
+        NO-SIDE-EFFECTS,
+        IDEMPOTENT,
+    }
+        
+    record method-options {
+        deprecated: option<bool>,
+        idempotency-level: option<method-options-idempotency-level>,
+        features: option<feature-set>,
+        uninterpreted-option: list<uninterpreted-option>,
+    }
+            
+    record uninterpreted-option-name-part {
+        name-part: string,
+        is-extension: bool,
+    }
+            
+    record uninterpreted-option {
+        name: list<uninterpreted-option-name-part>,
+        identifier-value: option<string>,
+        positive-int-value: option<u64>,
+        negative-int-value: option<s64>,
+        double-value: option<f64>,
+        string-value: option<list<u8>>,
+        aggregate-value: option<string>,
+    }
+            
+    
+    enum feature-set-field-presence {
+        FIELD-PRESENCE-UNKNOWN,
+        EXPLICIT,
+        IMPLICIT,
+        LEGACY-REQUIRED,
+    }
+        
+    
+    enum feature-set-enum-type {
+        ENUM-TYPE-UNKNOWN,
+        OPEN,
+        CLOSED,
+    }
+        
+    
+    enum feature-set-repeated-field-encoding {
+        REPEATED-FIELD-ENCODING-UNKNOWN,
+        PACKED,
+        EXPANDED,
+    }
+        
+    
+    enum feature-set-utf8-validation {
+        UTF8-VALIDATION-UNKNOWN,
+        VERIFY,
+        NONE,
+    }
+        
+    
+    enum feature-set-message-encoding {
+        MESSAGE-ENCODING-UNKNOWN,
+        LENGTH-PREFIXED,
+        DELIMITED,
+    }
+        
+    
+    enum feature-set-json-format {
+        JSON-FORMAT-UNKNOWN,
+        ALLOW,
+        LEGACY-BEST-EFFORT,
+    }
+        
+    
+    enum feature-set-enforce-naming-style {
+        ENFORCE-NAMING-STYLE-UNKNOWN,
+        STYLE2024,
+        STYLE-LEGACY,
+    }
+        
+    record feature-set {
+        field-presence: option<feature-set-field-presence>,
+        enum-type: option<feature-set-enum-type>,
+        repeated-field-encoding: option<feature-set-repeated-field-encoding>,
+        utf8-validation: option<feature-set-utf8-validation>,
+        message-encoding: option<feature-set-message-encoding>,
+        json-format: option<feature-set-json-format>,
+        enforce-naming-style: option<feature-set-enforce-naming-style>,
+    }
+            
+    record feature-set-defaults-feature-set-edition-default {
+        edition: option<edition>,
+        overridable-features: option<feature-set>,
+        fixed-features: option<feature-set>,
+    }
+            
+    record feature-set-defaults {
+        defaults: list<feature-set-defaults-feature-set-edition-default>,
+        minimum-edition: option<edition>,
+        maximum-edition: option<edition>,
+    }
+            
+    record source-code-info-location {
+        path: list<s32>,
+        span: list<s32>,
+        leading-comments: option<string>,
+        trailing-comments: option<string>,
+        leading-detached-comments: list<string>,
+    }
+            
+    record source-code-info {
+        location: list<source-code-info-location>,
+    }
+            
+    
+    enum generated-code-info-annotation-semantic {
+        NONE,
+        SET,
+        ALIAS,
+    }
+        
+    record generated-code-info-annotation {
+        path: list<s32>,
+        source-file: option<string>,
+        begin: option<s32>,
+        end: option<s32>,
+        semantic: option<generated-code-info-annotation-semantic>,
+    }
+            
+    record generated-code-info {
+        annotation: list<generated-code-info-annotation>,
+    }
+            
+    
+    enum edition {
+        EDITION-UNKNOWN,
+        EDITION-LEGACY,
+        EDITION-PROTO2,
+        EDITION-PROTO3,
+        EDITION-e2023,
+        EDITION-e2024,
+        EDITION-e1-TEST-ONLY,
+        EDITION-e2-TEST-ONLY,
+        EDITION-e99997-TEST-ONLY,
+        EDITION-e99998-TEST-ONLY,
+        EDITION-e99999-TEST-ONLY,
+        EDITION-MAX,
+    }
+        
+    record duration {
+        seconds: option<s64>,
+        nanos: option<s32>,
+    }
+            
+    record any {
+        type-url: option<string>,
+        value: option<list<u8>>,
+    }
+            
+    record empty {
         empty: bool,
     }
             
-    record dummy-message-sub {
-        f-string: option<string>,
+    record timestamp {
+        seconds: option<s64>,
+        nanos: option<s32>,
     }
             
     
-    enum dummy-message-enum {
-        enum1,
+    resource lazy-descriptor-proto {
+        constructor(descriptor-proto: descriptor-proto, );
+        
+        
+        get: func() -> descriptor-proto;
+
+    
+    }
+
+}
+
+interface operations {
+    use rpc-grpc.{ grpc-configuration as rpc-grpc-configuration, grpc-status as rpc-grpc-status, };
+    use google-longrunning.{ get-operation-request as google-longrunning-get-operation-request, list-operations-response as google-longrunning-list-operations-response, operation as google-longrunning-operation, wait-operation-request as google-longrunning-wait-operation-request, cancel-operation-request as google-longrunning-cancel-operation-request, delete-operation-request as google-longrunning-delete-operation-request, list-operations-request as google-longrunning-list-operations-request, };
+    use google-protobuf.{ empty as google-protobuf-empty, };
+    
+    
+    resource operations-resource-unary {
+        constructor(grpc-configuration: rpc-grpc-configuration, );
+        
+        list-operations: func(google-longrunning-list-operations-request: google-longrunning-list-operations-request, ) -> result<google-longrunning-list-operations-response, rpc-grpc-status>;
+
+        get-operation: func(google-longrunning-get-operation-request: google-longrunning-get-operation-request, ) -> result<google-longrunning-operation, rpc-grpc-status>;
+
+        delete-operation: func(google-longrunning-delete-operation-request: google-longrunning-delete-operation-request, ) -> result<google-protobuf-empty, rpc-grpc-status>;
+
+        cancel-operation: func(google-longrunning-cancel-operation-request: google-longrunning-cancel-operation-request, ) -> result<google-protobuf-empty, rpc-grpc-status>;
+
+        wait-operation: func(google-longrunning-wait-operation-request: google-longrunning-wait-operation-request, ) -> result<google-longrunning-operation, rpc-grpc-status>;
+
+            
+    }
+
+}
+
+interface tpu {
+    use rpc-grpc.{ grpc-status as rpc-grpc-status, grpc-configuration as rpc-grpc-configuration, };
+    use google-longrunning.{ operation as google-longrunning-operation, };
+    use google-cloud-tpu-v1.{ list-nodes-request as google-cloud-tpu-v1-list-nodes-request, node as google-cloud-tpu-v1-node, reimage-node-request as google-cloud-tpu-v1-reimage-node-request, list-accelerator-types-response as google-cloud-tpu-v1-list-accelerator-types-response, list-nodes-response as google-cloud-tpu-v1-list-nodes-response, stop-node-request as google-cloud-tpu-v1-stop-node-request, accelerator-type as google-cloud-tpu-v1-accelerator-type, create-node-request as google-cloud-tpu-v1-create-node-request, get-node-request as google-cloud-tpu-v1-get-node-request, start-node-request as google-cloud-tpu-v1-start-node-request, list-tensor-flow-versions-request as google-cloud-tpu-v1-list-tensor-flow-versions-request, get-tensor-flow-version-request as google-cloud-tpu-v1-get-tensor-flow-version-request, list-accelerator-types-request as google-cloud-tpu-v1-list-accelerator-types-request, get-accelerator-type-request as google-cloud-tpu-v1-get-accelerator-type-request, list-tensor-flow-versions-response as google-cloud-tpu-v1-list-tensor-flow-versions-response, delete-node-request as google-cloud-tpu-v1-delete-node-request, tensor-flow-version as google-cloud-tpu-v1-tensor-flow-version, };
+    
+    
+    resource tpu-resource-unary {
+        constructor(grpc-configuration: rpc-grpc-configuration, );
+        
+        list-nodes: func(google-cloud-tpu-v1-list-nodes-request: google-cloud-tpu-v1-list-nodes-request, ) -> result<google-cloud-tpu-v1-list-nodes-response, rpc-grpc-status>;
+
+        get-node: func(google-cloud-tpu-v1-get-node-request: google-cloud-tpu-v1-get-node-request, ) -> result<google-cloud-tpu-v1-node, rpc-grpc-status>;
+
+        create-node: func(google-cloud-tpu-v1-create-node-request: google-cloud-tpu-v1-create-node-request, ) -> result<google-longrunning-operation, rpc-grpc-status>;
+
+        delete-node: func(google-cloud-tpu-v1-delete-node-request: google-cloud-tpu-v1-delete-node-request, ) -> result<google-longrunning-operation, rpc-grpc-status>;
+
+        reimage-node: func(google-cloud-tpu-v1-reimage-node-request: google-cloud-tpu-v1-reimage-node-request, ) -> result<google-longrunning-operation, rpc-grpc-status>;
+
+        stop-node: func(google-cloud-tpu-v1-stop-node-request: google-cloud-tpu-v1-stop-node-request, ) -> result<google-longrunning-operation, rpc-grpc-status>;
+
+        start-node: func(google-cloud-tpu-v1-start-node-request: google-cloud-tpu-v1-start-node-request, ) -> result<google-longrunning-operation, rpc-grpc-status>;
+
+        list-tensor-flow-versions: func(google-cloud-tpu-v1-list-tensor-flow-versions-request: google-cloud-tpu-v1-list-tensor-flow-versions-request, ) -> result<google-cloud-tpu-v1-list-tensor-flow-versions-response, rpc-grpc-status>;
+
+        get-tensor-flow-version: func(google-cloud-tpu-v1-get-tensor-flow-version-request: google-cloud-tpu-v1-get-tensor-flow-version-request, ) -> result<google-cloud-tpu-v1-tensor-flow-version, rpc-grpc-status>;
+
+        list-accelerator-types: func(google-cloud-tpu-v1-list-accelerator-types-request: google-cloud-tpu-v1-list-accelerator-types-request, ) -> result<google-cloud-tpu-v1-list-accelerator-types-response, rpc-grpc-status>;
+
+        get-accelerator-type: func(google-cloud-tpu-v1-get-accelerator-type-request: google-cloud-tpu-v1-get-accelerator-type-request, ) -> result<google-cloud-tpu-v1-accelerator-type, rpc-grpc-status>;
+
+            
+    }
+
+}
+
+interface google-rpc {
+    use google-protobuf.{ any as google-protobuf-any, };
+    
+    record status {
+        code: option<s32>,
+        message: option<string>,
+        details: list<google-protobuf-any>,
+    }
+            
+    
+}
+
+interface google-api {
+    use google-protobuf.{ duration as google-protobuf-duration, };
+    
+    record http {
+        rules: list<http-rule>,
+        fully-decode-reserved-expansion: option<bool>,
+    }
+            
+        
+    variant http-rule-pattern {
+        get(option<string>),
+        put(option<string>),
+        post(option<string>),
+        delete(option<string>),
+        patch(option<string>),
+        custom(option<custom-http-pattern>),
+    }
+    
+    record http-rule {
+        selector: option<string>,
+        get: option<string>,
+        put: option<string>,
+        post: option<string>,
+        delete: option<string>,
+        patch: option<string>,
+        custom: option<custom-http-pattern>,
+        body: option<string>,
+        response-body: option<string>,
+        additional-bindings: list<lazy-http-rule>,
+    }
+            
+    record custom-http-pattern {
+        kind: option<string>,
+        path: option<string>,
+    }
+            
+    
+    enum launch-stage {
+        LAUNCH-STAGE-UNSPECIFIED,
+        UNIMPLEMENTED,
+        PRELAUNCH,
+        EARLY-ACCESS,
+        ALPHA,
+        BETA,
+        GA,
+        DEPRECATED,
     }
         
-    record dummy-message {
-        f-string: option<string>,
-        f-strings: list<string>,
-        f-int32: option<s32>,
-        f-int32s: list<s32>,
-        f-enum: option<dummy-message-enum>,
-        f-enums: list<dummy-message-enum>,
-        f-sub: option<dummy-message-sub>,
-        f-subs: list<dummy-message-sub>,
-        f-bool: option<bool>,
-        f-bools: list<bool>,
-        f-int64: option<s64>,
-        f-int64s: list<s64>,
-        f-bytes: option<list<u8>>,
-        f-bytess: list<list<u8>>,
-        f-float: option<f32>,
-        f-floats: list<f32>,
+    record common-language-settings {
+        reference-docs-uri: option<string>,
+        destinations: list<client-library-destination>,
+        selective-gapic-generation: option<selective-gapic-generation>,
     }
             
-    record index-reply-endpoint {
-        path: option<string>,
+    record client-library-settings {
+        version: option<string>,
+        launch-stage: option<launch-stage>,
+        rest-numeric-enums: option<bool>,
+        java-settings: option<java-settings>,
+        cpp-settings: option<cpp-settings>,
+        php-settings: option<php-settings>,
+        python-settings: option<python-settings>,
+        node-settings: option<node-settings>,
+        dotnet-settings: option<dotnet-settings>,
+        ruby-settings: option<ruby-settings>,
+        go-settings: option<go-settings>,
+    }
+            
+    record publishing {
+        method-settings: list<method-settings>,
+        new-issue-uri: option<string>,
+        documentation-uri: option<string>,
+        api-short-name: option<string>,
+        github-label: option<string>,
+        codeowner-github-teams: list<string>,
+        doc-tag-prefix: option<string>,
+        organization: option<client-library-organization>,
+        library-settings: list<client-library-settings>,
+        proto-reference-documentation-uri: option<string>,
+        rest-reference-documentation-uri: option<string>,
+    }
+            
+    record java-settings-service-class-names-entry {
+        key: option<string>,
+        value: option<string>,
+    }
+            
+    record java-settings {
+        library-package: option<string>,
+        service-class-names: list<java-settings-service-class-names-entry>,
+        common: option<common-language-settings>,
+    }
+            
+    record cpp-settings {
+        common: option<common-language-settings>,
+    }
+            
+    record php-settings {
+        common: option<common-language-settings>,
+    }
+            
+    record python-settings-experimental-features {
+        rest-async-io-enabled: option<bool>,
+        protobuf-pythonic-types-enabled: option<bool>,
+        unversioned-package-disabled: option<bool>,
+    }
+            
+    record python-settings {
+        common: option<common-language-settings>,
+        experimental-features: option<python-settings-experimental-features>,
+    }
+            
+    record node-settings {
+        common: option<common-language-settings>,
+    }
+            
+    record dotnet-settings-renamed-services-entry {
+        key: option<string>,
+        value: option<string>,
+    }
+            
+    record dotnet-settings-renamed-resources-entry {
+        key: option<string>,
+        value: option<string>,
+    }
+            
+    record dotnet-settings {
+        common: option<common-language-settings>,
+        renamed-services: list<dotnet-settings-renamed-services-entry>,
+        renamed-resources: list<dotnet-settings-renamed-resources-entry>,
+        ignored-resources: list<string>,
+        forced-namespace-aliases: list<string>,
+        handwritten-signatures: list<string>,
+    }
+            
+    record ruby-settings {
+        common: option<common-language-settings>,
+    }
+            
+    record go-settings-renamed-services-entry {
+        key: option<string>,
+        value: option<string>,
+    }
+            
+    record go-settings {
+        common: option<common-language-settings>,
+        renamed-services: list<go-settings-renamed-services-entry>,
+    }
+            
+    record method-settings-long-running {
+        initial-poll-delay: option<google-protobuf-duration>,
+        poll-delay-multiplier: option<f32>,
+        max-poll-delay: option<google-protobuf-duration>,
+        total-poll-timeout: option<google-protobuf-duration>,
+    }
+            
+    record method-settings {
+        selector: option<string>,
+        long-running: option<method-settings-long-running>,
+        auto-populated-fields: list<string>,
+    }
+            
+    record selective-gapic-generation {
+        methods: list<string>,
+        generate-omitted-as-internal: option<bool>,
+    }
+            
+    
+    enum client-library-organization {
+        CLIENT-LIBRARY-ORGANIZATION-UNSPECIFIED,
+        CLOUD,
+        ADS,
+        PHOTOS,
+        STREET-VIEW,
+        SHOPPING,
+        GEO,
+        GENERATIVE-AI,
+    }
+        
+    
+    enum client-library-destination {
+        CLIENT-LIBRARY-DESTINATION-UNSPECIFIED,
+        GITHUB,
+        PACKAGE-MANAGER,
+    }
+        
+    
+    enum field-behavior {
+        FIELD-BEHAVIOR-UNSPECIFIED,
+        OPTIONAL,
+        REQUIRED,
+        OUTPUT-ONLY,
+        INPUT-ONLY,
+        IMMUTABLE,
+        UNORDERED-LIST,
+        NON-EMPTY-DEFAULT,
+        IDENTIFIER,
+    }
+        
+    
+    enum resource-descriptor-history {
+        HISTORY-UNSPECIFIED,
+        ORIGINALLY-SINGLE-PATTERN,
+        FUTURE-MULTI-PATTERN,
+    }
+        
+    
+    enum resource-descriptor-style {
+        STYLE-UNSPECIFIED,
+        DECLARATIVE-FRIENDLY,
+    }
+        
+    record resource-descriptor {
+        %type: option<string>,
+        pattern: list<string>,
+        name-field: option<string>,
+        history: option<resource-descriptor-history>,
+        plural: option<string>,
+        singular: option<string>,
+        style: list<resource-descriptor-style>,
+    }
+            
+    record resource-reference {
+        %type: option<string>,
+        child-type: option<string>,
+    }
+            
+    
+    resource lazy-http-rule {
+        constructor(http-rule: http-rule, );
+        
+        
+        get: func() -> http-rule;
+
+    
+    }
+
+}
+
+interface google-cloud-tpu-v1 {
+    use google-protobuf.{ timestamp as google-protobuf-timestamp, };
+    
+    record scheduling-config {
+        preemptible: option<bool>,
+        reserved: option<bool>,
+    }
+            
+    record network-endpoint {
+        ip-address: option<string>,
+        port: option<s32>,
+    }
+            
+    record node-labels-entry {
+        key: option<string>,
+        value: option<string>,
+    }
+            
+    
+    enum node-state {
+        STATE-UNSPECIFIED,
+        CREATING,
+        READY,
+        RESTARTING,
+        REIMAGING,
+        DELETING,
+        REPAIRING,
+        STOPPED,
+        STOPPING,
+        STARTING,
+        PREEMPTED,
+        TERMINATED,
+        HIDING,
+        HIDDEN,
+        UNHIDING,
+        UNKNOWN,
+    }
+        
+    
+    enum node-health {
+        HEALTH-UNSPECIFIED,
+        HEALTHY,
+        DEPRECATED-UNHEALTHY,
+        TIMEOUT,
+        UNHEALTHY-TENSORFLOW,
+        UNHEALTHY-MAINTENANCE,
+    }
+        
+    
+    enum node-api-version {
+        API-VERSION-UNSPECIFIED,
+        V1-ALPHA1,
+        V1,
+        V2-ALPHA1,
+    }
+        
+    record node {
+        name: option<string>,
         description: option<string>,
+        accelerator-type: option<string>,
+        ip-address: option<string>,
+        port: option<string>,
+        state: option<node-state>,
+        health-description: option<string>,
+        tensorflow-version: option<string>,
+        network: option<string>,
+        cidr-block: option<string>,
+        service-account: option<string>,
+        create-time: option<google-protobuf-timestamp>,
+        scheduling-config: option<scheduling-config>,
+        network-endpoints: list<network-endpoint>,
+        health: option<node-health>,
+        labels: list<node-labels-entry>,
+        use-service-networking: option<bool>,
+        api-version: option<node-api-version>,
+        symptoms: list<symptom>,
     }
             
-    record index-reply {
-        description: option<string>,
-        endpoints: list<index-reply-endpoint>,
+    record list-nodes-request {
+        parent: option<string>,
+        page-size: option<s32>,
+        page-token: option<string>,
     }
             
+    record list-nodes-response {
+        nodes: list<node>,
+        next-page-token: option<string>,
+        unreachable: list<string>,
+    }
+            
+    record get-node-request {
+        name: option<string>,
+    }
+            
+    record create-node-request {
+        parent: option<string>,
+        node-id: option<string>,
+        node: option<node>,
+    }
+            
+    record delete-node-request {
+        name: option<string>,
+    }
+            
+    record reimage-node-request {
+        name: option<string>,
+        tensorflow-version: option<string>,
+    }
+            
+    record stop-node-request {
+        name: option<string>,
+    }
+            
+    record start-node-request {
+        name: option<string>,
+    }
+            
+    record tensor-flow-version {
+        name: option<string>,
+        version: option<string>,
+    }
+            
+    record get-tensor-flow-version-request {
+        name: option<string>,
+    }
+            
+    record list-tensor-flow-versions-request {
+        parent: option<string>,
+        page-size: option<s32>,
+        page-token: option<string>,
+        filter: option<string>,
+        order-by: option<string>,
+    }
+            
+    record list-tensor-flow-versions-response {
+        tensorflow-versions: list<tensor-flow-version>,
+        next-page-token: option<string>,
+        unreachable: list<string>,
+    }
+            
+    record accelerator-type {
+        name: option<string>,
+        %type: option<string>,
+    }
+            
+    record get-accelerator-type-request {
+        name: option<string>,
+    }
+            
+    record list-accelerator-types-request {
+        parent: option<string>,
+        page-size: option<s32>,
+        page-token: option<string>,
+        filter: option<string>,
+        order-by: option<string>,
+    }
+            
+    record list-accelerator-types-response {
+        accelerator-types: list<accelerator-type>,
+        next-page-token: option<string>,
+        unreachable: list<string>,
+    }
+            
+    record operation-metadata {
+        create-time: option<google-protobuf-timestamp>,
+        end-time: option<google-protobuf-timestamp>,
+        target: option<string>,
+        verb: option<string>,
+        status-detail: option<string>,
+        cancel-requested: option<bool>,
+        api-version: option<string>,
+    }
+            
+    
+    enum symptom-symptom-type {
+        SYMPTOM-TYPE-UNSPECIFIED,
+        LOW-MEMORY,
+        OUT-OF-MEMORY,
+        EXECUTE-TIMED-OUT,
+        MESH-BUILD-FAIL,
+        HBM-OUT-OF-MEMORY,
+        PROJECT-ABUSE,
+    }
+        
+    record symptom {
+        create-time: option<google-protobuf-timestamp>,
+        symptom-type: option<symptom-symptom-type>,
+        details: option<string>,
+        worker-id: option<string>,
+    }
+            
+    
+}
+
+interface google-longrunning {
+    use google-rpc.{ status as google-rpc-status, };
+    use google-protobuf.{ any as google-protobuf-any, duration as google-protobuf-duration, };
+    
+        
+    variant operation-result {
+        error(option<google-rpc-status>),
+        response(option<google-protobuf-any>),
+    }
+    
+    record operation {
+        name: option<string>,
+        metadata: option<google-protobuf-any>,
+        done: option<bool>,
+        error: option<google-rpc-status>,
+        response: option<google-protobuf-any>,
+    }
+            
+    record get-operation-request {
+        name: option<string>,
+    }
+            
+    record list-operations-request {
+        name: option<string>,
+        filter: option<string>,
+        page-size: option<s32>,
+        page-token: option<string>,
+    }
+            
+    record list-operations-response {
+        operations: list<operation>,
+        next-page-token: option<string>,
+    }
+            
+    record cancel-operation-request {
+        name: option<string>,
+    }
+            
+    record delete-operation-request {
+        name: option<string>,
+    }
+            
+    record wait-operation-request {
+        name: option<string>,
+        timeout: option<google-protobuf-duration>,
+    }
+            
+    record operation-info {
+        response-type: option<string>,
+        metadata-type: option<string>,
+    }
+            
+    
+}
+
+interface rpc-grpc {
+    
     record grpc-configuration {
         url: string,
-        secret-token: string,
+        secret-token: option<string>,
     }
             
     
@@ -98,54 +1058,16 @@ interface grpcbin {
     
 }
 
-interface g-r-p-c-bin {
-    use grpcbin.{ dummy-message, grpc-status, empty-message, grpc-configuration, };
-    
-    
-    resource g-r-p-c-bin-resource-unary {
-        constructor(grpc-configuration: grpc-configuration, );
-        
-        dummy-unary: func(empty-message: empty-message, ) -> result<dummy-message, grpc-status>;
-        
-    }
 
-    resource dummy-server-stream-resource-server-streaming {
-        constructor(grpc-configuration: grpc-configuration, );
-        
-        send: func(message: empty-message, ) -> result<option<bool>, grpc-status>;
-        
-        receive: func() -> result<option<dummy-message>, grpc-status>;
-        
-        finish: func() -> result<bool, grpc-status>;
-        
-    }
 
-    resource dummy-client-stream-resource-client-streaming {
-        constructor(grpc-configuration: grpc-configuration, );
-        
-        send: func(message: empty-message, ) -> result<option<bool>, grpc-status>;
-        
-        finish: func() -> result<dummy-message, grpc-status>;
-        
-    }
-
-    resource dummy-bi-stream-resource-bidirectional-streaming {
-        constructor(grpc-configuration: grpc-configuration, );
-        
-        send: func(message: empty-message, ) -> result<option<bool>, grpc-status>;
-        
-        receive: func() -> result<option<dummy-message>, grpc-status>;
-        
-        finish: func() -> result<bool, grpc-status>;
-        
-    }
-
+world google-cloud-tpu-v1-world {
+    export google-cloud-tpu-v1;
+    export tpu;
+    export google-protobuf;
+    export operations;
+    export google-rpc;
+    export google-api;
+    export google-longrunning;
+    export rpc-grpc;
 }
 
-
-
-world grpcbin-world {
-    export grpcbin;
-    export g-r-p-c-bin;
-}
-            

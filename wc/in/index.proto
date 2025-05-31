@@ -16,13 +16,6 @@ service GRPCBin {
 
 }
 
-message HeadersMessage {
-  message Values {
-    repeated string values = 1;
-  }
-  map<string, Values> Metadata = 1;
-}
-
 message SpecificErrorRequest {
   uint32 code = 1;
   string reason = 2;
@@ -35,7 +28,7 @@ message DummyMessage {
     string f_string = 1;
   }
   enum Enum {
-    enum1 =0;
+    enum_1 =0;
   }
   string f_string = 1;
   repeated string f_strings = 2;

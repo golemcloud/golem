@@ -25,6 +25,7 @@ use golem_wasm_ast::{
     component::Component,
     IgnoreAllButMetadata,
 };
+use golem_wasm_rpc_derive::IntoValue;
 use rib::ParsedFunctionSite;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -207,7 +208,7 @@ impl Display for GrpcTarget {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]

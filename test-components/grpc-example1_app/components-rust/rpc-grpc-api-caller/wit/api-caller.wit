@@ -1,15 +1,17 @@
 package rpc-grpc:api-caller;
 
 interface rpc-grpc-api-caller-api {
-  record input {
-    name : string
-  }
 
   record output {
     name : string
   }
   
-  hello: func() -> output;
+  unary-rpc: func() -> output;
+  client-streaming-rpc: func() -> output;
+  server-streaming-rpc: func() -> output;
+  bidirectional-streaming-rpc: func() -> output;
+  empty-unary-rpc: func() -> output;
+
 }
 
 world rpc-grpc-api-caller {

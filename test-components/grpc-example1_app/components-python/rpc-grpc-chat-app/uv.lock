@@ -1,0 +1,55 @@
+version = 1
+revision = 2
+requires-python = ">=3.12"
+
+[manifest]
+overrides = [{ name = "urllib3", git = "https://github.com/golemcloud/urllib3?rev=17239c144d664fcac3a28462d080fd3db3e5f19e" }]
+
+[[package]]
+name = "componentize-py"
+version = "0.17.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9f/29/2ca1ff34e422667bfe905735a5718466edf56bac907c57a536b6078bf8fb/componentize_py-0.17.0.tar.gz", hash = "sha256:694c5279d55b587c1ac9458b45c4b4cadc2b6dadf24cbfb4b2192d51dbdc2f33", size = 161713, upload-time = "2025-05-16T17:26:23.788Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/98/24/94dc7157189b4b2b63f86d4d47a2281bc01346e66a746080d66e69344b87/componentize_py-0.17.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:5f9b500f43fe7eb4918e2e17833ccef3f6f842d39df8d7f20a00753780347e6c", size = 19383054, upload-time = "2025-05-16T17:25:42.633Z" },
+    { url = "https://files.pythonhosted.org/packages/82/b6/64dcf79cf3eee66495436315ebbb2a81a97c0ed9c49bc8a361afa0b22e39/componentize_py-0.17.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:7a902d5c7756777997ca9a8282fb71d480d04ab84991fc1d058aee37a344e2a8", size = 18914389, upload-time = "2025-05-16T17:25:51.4Z" },
+    { url = "https://files.pythonhosted.org/packages/24/c1/89ee273aa9b6bdbb29829f80c7a6ece17545042e145ff4dfca9a1cdd7f83/componentize_py-0.17.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:15ebfd32389682f28603b157e1cdf7d51c580c41505c8e782771e8d065892c32", size = 19687678, upload-time = "2025-05-16T17:26:03.568Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/46/82379177bc12a6787246a627d2c9914567c671d99e2ad5600196455bcb12/componentize_py-0.17.0-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:f96d10d373fa29efb4e0d82248e968b091b641c1c9333e36c86e70cb2a07a79c", size = 20257476, upload-time = "2025-05-16T17:26:13.378Z" },
+    { url = "https://files.pythonhosted.org/packages/42/64/bf17f2173a61140da9a541970ccde384f3874d251849f4a1017ab2439cf0/componentize_py-0.17.0-cp39-abi3-win_amd64.whl", hash = "sha256:9fb8ab120a9a56818afe9d9760a7eb34c22f7aa11f3f0a73dc4d2c9e513462ee", size = 18253176, upload-time = "2025-05-16T17:26:21.93Z" },
+]
+
+[[package]]
+name = "lib"
+version = "0.1.0"
+source = { directory = "../../common-python" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "componentize-py", specifier = "==0.17.0" }]
+
+[[package]]
+name = "rpc-grpc-chat-app"
+version = "0.1.0"
+source = { virtual = "." }
+
+[package.dev-dependencies]
+dev = [
+    { name = "componentize-py" },
+    { name = "lib" },
+    { name = "urllib3" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "componentize-py", specifier = "==0.17.0" },
+    { name = "lib", directory = "../../common-python" },
+    { name = "urllib3" },
+]
+
+[[package]]
+name = "urllib3"
+version = "2.4.1.dev31"
+source = { git = "https://github.com/golemcloud/urllib3?rev=17239c144d664fcac3a28462d080fd3db3e5f19e#17239c144d664fcac3a28462d080fd3db3e5f19e" }

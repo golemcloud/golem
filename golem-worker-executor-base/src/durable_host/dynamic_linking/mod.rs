@@ -25,14 +25,14 @@ use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{Component, Linker};
 use wasmtime::Engine;
 
-use super::DynamicGrpcClient;
+use super::grpc::DynamicGrpc;
 
-mod common;
+pub mod common;
 mod grpc;
 mod wasm_rpc;
 
 #[async_trait]
-impl<Ctx: WorkerCtx + HostWasmRpc + DynamicGrpcClient + HostFutureInvokeResult> DynamicLinking<Ctx>
+impl<Ctx: WorkerCtx + HostWasmRpc + DynamicGrpc + HostFutureInvokeResult> DynamicLinking<Ctx>
     for DurableWorkerCtx<Ctx>
 {
     fn link(

@@ -30,8 +30,9 @@ use golem_wasm_rpc::golem_rpc_0_2_x::types::{
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{ComponentId, HostWasmRpc, RpcError, Uri, Value, WitValue};
+use golem_worker_executor_base::durable_host::grpc::{DynamicGrpc, GrpcEntry}                                              ;
 use golem_worker_executor_base::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, DynamicGrpcClient, GrpcEntry, PublicDurableWorkerState,
+    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::model::{
@@ -575,8 +576,12 @@ impl HostWasmRpc for Context {
 }
 
 #[async_trait]
-impl DynamicGrpcClient for Context {
-    async fn invoke_grpc(
+impl DynamicGrpc for Context {
+    async fn init(&mut self) -> anyhow::Result<()> {
+        self.durable_ctx.init().await
+    }
+
+    async fn invoke_and_await_grpc(
         &mut self,
         self_: Resource<GrpcEntry>,
         function_str: String,
@@ -588,7 +593,7 @@ impl DynamicGrpcClient for Context {
         _call_type: String,
     ) -> anyhow::Result<()> {
         self.durable_ctx
-            .invoke_grpc(
+            .invoke_and_await_grpc(
                 self_,
                 function_str,
                 service_name,
