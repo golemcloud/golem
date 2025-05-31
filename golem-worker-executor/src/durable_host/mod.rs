@@ -2493,32 +2493,32 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         }
     }
 
-    pub async fn aborted_transaction_function(
-        &mut self,
-        function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
-    ) -> Result<(), GolemError> {
-        if matches!(
-            *function_type,
-            DurableFunctionType::WriteRemoteTransaction(None)
-        ) {
-            if self.is_live() {
-                self.oplog
-                    .add_and_commit_safe(OplogEntry::aborted_remote_transaction(begin_index))
-                    .await
-                    .map_err(GolemError::runtime)?;
-                Ok(())
-            } else {
-                let (_, _) = crate::get_oplog_entry!(
-                    self.replay_state,
-                    OplogEntry::AbortedRemoteTransaction
-                )?;
-                Ok(())
-            }
-        } else {
-            Ok(())
-        }
-    }
+    // pub async fn aborted_transaction_function(
+    //     &mut self,
+    //     function_type: &DurableFunctionType,
+    //     begin_index: OplogIndex,
+    // ) -> Result<(), GolemError> {
+    //     if matches!(
+    //         *function_type,
+    //         DurableFunctionType::WriteRemoteTransaction(None)
+    //     ) {
+    //         if self.is_live() {
+    //             self.oplog
+    //                 .add_and_commit_safe(OplogEntry::aborted_remote_transaction(begin_index))
+    //                 .await
+    //                 .map_err(GolemError::runtime)?;
+    //             Ok(())
+    //         } else {
+    //             let (_, _) = crate::get_oplog_entry!(
+    //                 self.replay_state,
+    //                 OplogEntry::AbortedRemoteTransaction
+    //             )?;
+    //             Ok(())
+    //         }
+    //     } else {
+    //         Ok(())
+    //     }
+    // }
 
     /// In live mode it returns the last oplog index (index of the entry last added).
     /// In replay mode it returns the current replay index (index of the entry last read).

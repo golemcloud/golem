@@ -2575,7 +2575,7 @@ async fn check_transaction<T: RdbmsType + 'static>(
         );
         let transaction_id = transaction_id.unwrap();
         let transaction_status = rdbms
-            .get_transaction_status(&pool_key, &worker_id, &transaction_id)
+            .get_transaction_status(pool_key, worker_id, &transaction_id)
             .await;
         check!(
             transaction_status.is_ok(),
@@ -2599,7 +2599,7 @@ async fn check_transaction<T: RdbmsType + 'static>(
         }
 
         let result = rdbms
-            .cleanup_transaction(&pool_key, &worker_id, &transaction_id)
+            .cleanup_transaction(pool_key, worker_id, &transaction_id)
             .await;
         check!(
             result.is_ok(),
@@ -2608,7 +2608,7 @@ async fn check_transaction<T: RdbmsType + 'static>(
 
         if PostgresType.type_id() != TypeId::of::<T>() {
             let transaction_status = rdbms
-                .get_transaction_status(&pool_key, &worker_id, &transaction_id)
+                .get_transaction_status(pool_key, worker_id, &transaction_id)
                 .await;
             check!(
                 transaction_status.is_ok(),

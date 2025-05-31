@@ -656,7 +656,7 @@ fn postgres_insert_statements(
         insert_tests.push(StatementTest::execute_test(
             postgres_insert_statement(table_name),
             params.clone(),
-            expected.clone(),
+            expected,
         ));
     }
     insert_tests
@@ -1253,7 +1253,7 @@ fn mysql_insert_statements(
         insert_tests.push(StatementTest::execute_test(
             mysql_insert_statement(table_name),
             params.clone(),
-            expected.clone(),
+            expected,
         ));
     }
     insert_tests
