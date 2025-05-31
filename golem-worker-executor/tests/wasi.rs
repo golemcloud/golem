@@ -12,13 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
-
-use std::collections::HashMap;
-use std::sync::atomic::AtomicU8;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
-
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{assert, check};
@@ -38,6 +31,11 @@ use golem_test_framework::dsl::{
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use http::{HeaderMap, StatusCode};
 use serde_json::json;
+use std::collections::HashMap;
+use std::sync::atomic::AtomicU8;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
+use test_r::{inherit_test_dep, test};
 use tokio::spawn;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
@@ -615,6 +613,363 @@ async fn file_write_read(
                 "hello world".to_string()
             )))))]
     );
+}
+
+#[test]
+#[tracing::instrument]
+async fn file_update_1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = {
+        let component_files = executor
+            .add_initial_component_files(
+                &AccountId {
+                    value: "test-account".to_string(),
+                },
+                &[(
+                    "ifs-update/files/foo.txt",
+                    "/foo.txt",
+                    ComponentFilePermissions::ReadOnly,
+                )],
+            )
+            .await;
+
+        executor
+            .component("golem_it_ifs_update")
+            .unique()
+            .with_files(&component_files)
+            .store()
+            .await
+    };
+
+    let worker_id = executor.start_worker(&component_id, "ifs-update-1").await;
+
+    executor
+        .invoke_and_await(
+            &worker_id,
+            "golem-it:ifs-update-exports/golem-it-ifs-update-api.{load-file}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    {
+        let content_before_update = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        check!(content_before_update[0] == Value::String("foo\n".to_string()));
+    }
+
+    {
+        let component_files = executor
+            .add_initial_component_files(
+                &AccountId {
+                    value: "test-account".to_string(),
+                },
+                &[(
+                    "ifs-update/files/bar.txt",
+                    "/foo.txt",
+                    ComponentFilePermissions::ReadOnly,
+                )],
+            )
+            .await;
+
+        let target_version = executor
+            .update_component_with_files(
+                &component_id,
+                "golem_it_ifs_update",
+                Some(&component_files),
+            )
+            .await;
+
+        executor
+            .auto_update_worker(&worker_id, target_version)
+            .await;
+    };
+
+    {
+        let content_after_update = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        check!(content_after_update[0] == Value::String("foo\n".to_string()));
+    }
+
+    executor.simulated_crash(&worker_id).await;
+
+    {
+        let content_after_crash = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        check!(content_after_crash[0] == Value::String("foo\n".to_string()));
+    }
+
+    executor
+        .invoke_and_await(
+            &worker_id,
+            "golem-it:ifs-update-exports/golem-it-ifs-update-api.{load-file}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    {
+        let content_after_reload = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        check!(content_after_reload[0] == Value::String("bar\n".to_string()));
+    }
+
+    executor.simulated_crash(&worker_id).await;
+
+    {
+        let content_after_crash = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        check!(content_after_crash[0] == Value::String("bar\n".to_string()));
+    }
+
+    {
+        let component_files = executor
+            .add_initial_component_files(
+                &AccountId {
+                    value: "test-account".to_string(),
+                },
+                &[(
+                    "ifs-update/files/baz.txt",
+                    "/foo.txt",
+                    ComponentFilePermissions::ReadOnly,
+                )],
+            )
+            .await;
+
+        let target_version = executor
+            .update_component_with_files(
+                &component_id,
+                "golem_it_ifs_update",
+                Some(&component_files),
+            )
+            .await;
+
+        executor
+            .manual_update_worker(&worker_id, target_version)
+            .await;
+    };
+
+    {
+        let content_after_manual_update = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        check!(content_after_manual_update[0] == Value::String("restored".to_string()));
+    }
+
+    executor
+        .invoke_and_await(
+            &worker_id,
+            "golem-it:ifs-update-exports/golem-it-ifs-update-api.{load-file}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    {
+        let content_after_reload = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        check!(content_after_reload[0] == Value::String("baz\n".to_string()));
+    }
+
+    executor.simulated_crash(&worker_id).await;
+
+    {
+        let content_after_crash = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        check!(content_after_crash[0] == Value::String("baz\n".to_string()));
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn file_update_in_the_middle_of_exported_function(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let (sender, mut latch) = tokio::sync::mpsc::channel::<()>(1);
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = {
+        let sender = Arc::new(sender);
+        let first_request = Arc::new(tokio::sync::Mutex::new(true));
+        let start_server = async {
+            let route = Router::new().route(
+                "/",
+                get(async move || {
+                    sender.send(()).await.unwrap();
+                    let mut first_request = first_request.lock().await;
+                    if *first_request {
+                        (*first_request) = false;
+                        tokio::time::sleep(Duration::from_secs(600)).await;
+                    }
+                    "Hello, World!".to_string()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        };
+
+        spawn(start_server.in_current_span())
+    };
+
+    let component_id = {
+        let component_files = executor
+            .add_initial_component_files(
+                &AccountId {
+                    value: "test-account".to_string(),
+                },
+                &[(
+                    "ifs-update-inside-exported-function/files/foo.txt",
+                    "/foo.txt",
+                    ComponentFilePermissions::ReadOnly,
+                )],
+            )
+            .await;
+
+        let env = vec![
+            ("PORT".to_string(), host_http_port.to_string()),
+            ("RUST_BACKTRACE".to_string(), "full".to_string()),
+        ];
+
+        executor
+            .component("golem_it_ifs_update_inside_exported_function")
+            .unique()
+            .with_files(&component_files)
+            .with_env(env)
+            .store()
+            .await
+    };
+
+    let worker_id = executor.start_worker(&component_id, "ifs-update-1").await;
+
+    let idempotency_key = IdempotencyKey::fresh();
+
+    executor
+        .invoke_with_key(
+            &worker_id,
+            &idempotency_key,
+            "golem-it:ifs-update-inside-exported-function-exports/golem-it-ifs-update-inside-exported-function-api.{run}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    latch.recv().await.expect("channel should produce value");
+
+    {
+        let component_files = executor
+            .add_initial_component_files(
+                &AccountId {
+                    value: "test-account".to_string(),
+                },
+                &[(
+                    "ifs-update-inside-exported-function/files/bar.txt",
+                    "/foo.txt",
+                    ComponentFilePermissions::ReadOnly,
+                )],
+            )
+            .await;
+
+        let target_version = executor
+            .update_component_with_files(
+                &component_id,
+                "golem_it_ifs_update_inside_exported_function",
+                Some(&component_files),
+            )
+            .await;
+
+        executor
+            .auto_update_worker(&worker_id, target_version)
+            .await;
+    };
+
+    {
+        let result = executor
+            .invoke_and_await_with_key(
+                &worker_id,
+                &idempotency_key,
+                "golem-it:ifs-update-inside-exported-function-exports/golem-it-ifs-update-inside-exported-function-api.{run}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        check!(
+            result[0]
+                == Value::Tuple(vec![
+                    Value::String("foo\n".to_string()),
+                    Value::String("bar\n".to_string())
+                ])
+        );
+    }
+
+    http_server.abort();
 }
 
 #[test]

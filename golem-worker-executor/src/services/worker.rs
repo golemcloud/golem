@@ -22,14 +22,17 @@ use crate::services::shard::ShardService;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use crate::worker::status::calculate_last_known_status;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord, WorkerStatusRecordExtensions,
+    WorkerStatusRecord,
 };
 use tracing::{debug, warn};
+
+use super::golem_config::GolemConfig;
+use super::{HasConfig, HasOplogService};
 
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
@@ -61,6 +64,7 @@ pub struct DefaultWorkerService {
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
     shard_service: Arc<dyn ShardService>,
     oplog_service: Arc<dyn OplogService>,
+    config: Arc<GolemConfig>,
 }
 
 impl DefaultWorkerService {
@@ -68,11 +72,13 @@ impl DefaultWorkerService {
         key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
         shard_service: Arc<dyn ShardService>,
         oplog_service: Arc<dyn OplogService>,
+        config: Arc<GolemConfig>,
     ) -> Self {
         Self {
             key_value_storage,
             shard_service,
             oplog_service,
+            config,
         }
     }
 
@@ -129,7 +135,7 @@ impl WorkerService for DefaultWorkerService {
             worker_metadata.parent.clone(),
             worker_metadata.last_known_status.component_size,
             worker_metadata.last_known_status.total_linear_memory_size,
-            worker_metadata.last_known_status.active_plugins().clone(),
+            worker_metadata.last_known_status.active_plugins.clone(),
         );
 
         let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
@@ -224,10 +230,10 @@ impl WorkerService for DefaultWorkerService {
                     },
                 };
 
-                let status_value: Option<WorkerStatusRecord> = self
+                let status_value: Option<Result<WorkerStatusRecord, String>> = self
                     .key_value_storage
                     .with_entity("worker", "get", "worker_status")
-                    .get(
+                    .get_attempt_deserialize(
                         KeyValueStorageNamespace::Worker,
                         &Self::status_key(&owned_worker_id.worker_id),
                     )
@@ -236,8 +242,26 @@ impl WorkerService for DefaultWorkerService {
                         panic!("failed to get worker status for {owned_worker_id} from KV storage: {err}")
                     });
 
-                if let Some(status) = status_value {
-                    details.last_known_status = status;
+                match status_value {
+                    Some(Ok(status)) => {
+                        details.last_known_status = status;
+                    }
+                    // We had a status, but it was written in a previous format and is not longer valid -> recompute
+                    Some(Err(_)) => {
+                        let last_known_status = calculate_last_known_status(self, owned_worker_id, &None)
+                            .await
+                            .unwrap_or_else(|err| {
+                                panic!("failed to recalculate last known status {owned_worker_id} from KV storage: {err}")
+                            });
+                        self.update_status(
+                            owned_worker_id,
+                            &last_known_status,
+                            ComponentType::Durable,
+                        )
+                        .await;
+                        details.last_known_status = last_known_status;
+                    }
+                    None => {}
                 }
 
                 Some(details)
@@ -268,18 +292,15 @@ impl WorkerService for DefaultWorkerService {
                         component_version,
                         component_size,
                         total_linear_memory_size: initial_total_linear_memory_size,
-                        extensions: WorkerStatusRecordExtensions::Extension2 {
-                            active_plugins: initial_active_plugins,
-                            deleted_regions: DeletedRegions::new(),
-                        },
+                        active_plugins: initial_active_plugins,
                         ..WorkerStatusRecord::default()
                     },
                 };
 
-                let status_value: Option<WorkerStatusRecord> = self
+                let status_value: Option<Result<WorkerStatusRecord, String>> = self
                     .key_value_storage
                     .with_entity("worker", "get", "worker_status")
-                    .get(
+                    .get_attempt_deserialize(
                         KeyValueStorageNamespace::Worker,
                         &Self::status_key(&owned_worker_id.worker_id),
                     )
@@ -288,8 +309,26 @@ impl WorkerService for DefaultWorkerService {
                         panic!("failed to get worker status for {owned_worker_id} from KV storage: {err}")
                     });
 
-                if let Some(status) = status_value {
-                    details.last_known_status = status;
+                match status_value {
+                    Some(Ok(status)) => {
+                        details.last_known_status = status;
+                    }
+                    // We had a status, but it was written in a previous format and is not longer valid -> recompute
+                    Some(Err(_)) => {
+                        let last_known_status = calculate_last_known_status(self, owned_worker_id, &None)
+                            .await
+                            .unwrap_or_else(|err| {
+                                panic!("failed to recalculate last known status {owned_worker_id} from KV storage: {err}")
+                            });
+                        self.update_status(
+                            owned_worker_id,
+                            &last_known_status,
+                            ComponentType::Durable,
+                        )
+                        .await;
+                        details.last_known_status = last_known_status;
+                    }
+                    None => {}
                 }
 
                 Some(details)
@@ -437,5 +476,17 @@ impl WorkerService for DefaultWorkerService {
                     });
             }
         }
+    }
+}
+
+impl HasOplogService for DefaultWorkerService {
+    fn oplog_service(&self) -> Arc<dyn OplogService> {
+        self.oplog_service.clone()
+    }
+}
+
+impl HasConfig for DefaultWorkerService {
+    fn config(&self) -> Arc<GolemConfig> {
+        self.config.clone()
     }
 }
