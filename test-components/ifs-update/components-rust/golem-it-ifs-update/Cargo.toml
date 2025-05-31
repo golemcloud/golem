@@ -12,7 +12,6 @@ required-features = []
 # To use common shared libs, use the following:
 # common-lib = { path = "../../common-rust/common-lib" }
 
-golem-rust = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

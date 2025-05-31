@@ -50,6 +50,7 @@ exclude = [
     "test-components/http-client",
     "test-components/http-client-2",
     "test-components/ifs-update",
+    "test-components/ifs-update-inside-exported-function",
     "test-components/interruption",
     "test-components/initial-file-read-write",
     "test-components/key-value-service",
