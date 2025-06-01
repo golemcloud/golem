@@ -91,7 +91,7 @@ pub trait CloudServiceInternal: Send + Sync {
 
 #[async_trait]
 pub trait CloudService: CloudServiceInternal {
-    async fn get_default_project(&self) -> ProjectId {
+    async fn get_default_project(&self) -> crate::Result<ProjectId> {
         match self.project_client() {
             ProjectServiceClient::Grpc(mut client) => {
                 let result = client
@@ -99,20 +99,24 @@ pub trait CloudService: CloudServiceInternal {
                     .await?
                     .into_inner()
                     .result
-                    .ok_or_else(|| anyhow!("get_default_project: no result"));
+                    .ok_or_else(|| anyhow!("get_default_project: no result"))?;
 
                 match result {
-                    get_default_project_response::Result::Success(result) => Ok(result.id.unwrap()),
-                    get_default_project_response::Result::Error(error) => Err(error)?
+                    get_default_project_response::Result::Success(result) => Ok(result.id.unwrap().try_into().unwrap()),
+                    get_default_project_response::Result::Error(error) => Err(anyhow!("{error:?}"))
                 }
             }
-            ProjectServiceClient::Http(client) => client.get_default_project().await?.project_id.into()
+            ProjectServiceClient::Http(client) => client.get_default_project().await?.project_id.try_into().unwrap()
         }
     }
 
     fn admin_token(&self) -> Uuid {
         ADMIN_TOKEN.clone()
     }
+
+    fn private_host(&self) -> String;
+    fn private_http_port(&self) -> u16;
+    fn private_grpc_port(&self) -> u16;
 
     fn public_host(&self) -> String {
         self.private_host()

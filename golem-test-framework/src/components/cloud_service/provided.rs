@@ -54,5 +54,17 @@ impl CloudServiceInternal for ProvidedCloudService {
 
 #[async_trait]
 impl CloudService for ProvidedCloudService {
+    fn private_host(&self) -> String {
+        self.host.clone()
+    }
+
+    fn private_http_port(&self) -> u16 {
+        self.http_port
+    }
+
+    fn private_grpc_port(&self) -> u16 {
+        self.grpc_port
+    }
+
     async fn kill(&self) {}
 }

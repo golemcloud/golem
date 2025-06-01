@@ -93,14 +93,38 @@ impl DockerCloudService {
 }
 
 #[async_trait]
-impl CloudServiceInternal for CloudServiceImage {
+impl CloudServiceInternal for DockerCloudService {
     fn project_client(&self) -> ProjectServiceClient {
         self.project_client.clone()
     }
 }
 
 #[async_trait]
-impl CloudService for CloudServiceImage {
+impl CloudService for DockerCloudService {
+    fn private_host(&self) -> String {
+        self.private_host.to_string()
+    }
+
+    fn private_http_port(&self) -> u16 {
+        Self::HTTP_PORT.as_u16()
+    }
+
+    fn private_grpc_port(&self) -> u16 {
+        Self::GRPC_PORT.as_u16()
+    }
+
+    fn public_host(&self) -> String {
+        "localhost".to_string()
+    }
+
+    fn public_http_port(&self) -> u16 {
+        self.public_http_port
+    }
+
+    fn public_grpc_port(&self) -> u16 {
+        self.public_grpc_port
+    }
+
     async fn kill(&self) {
         self.container.kill().await
     }
