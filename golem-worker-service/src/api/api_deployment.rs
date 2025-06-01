@@ -127,15 +127,20 @@ impl ApiDeploymentApi {
     async fn list(
         &self,
         #[oai(name = "project-id")] project_id: Query<ProjectId>,
-        #[oai(name = "api-definition-id")] api_definition_id_query: Query<ApiDefinitionId>,
+        #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<ApiDeployment>>, ApiEndpointError> {
         let project_id = project_id.0;
         let record = recorded_http_api_request!(
             "list_deployments",
-            api_definition_id = api_definition_id_query.0.to_string(),
+            api_definition_id = api_definition_id_query
+                .0
+                .clone()
+                .unwrap_or(ApiDefinitionId("".to_string()))
+                .to_string(),
             project_id = project_id.0.to_string()
         );
+
         let response = self
             .list_internal(project_id, api_definition_id_query.0, token)
             .instrument(record.span.clone())
@@ -147,7 +152,7 @@ impl ApiDeploymentApi {
     async fn list_internal(
         &self,
         project_id: ProjectId,
-        api_definition_id: ApiDefinitionId,
+        api_definition_id: Option<ApiDefinitionId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<ApiDeployment>>, ApiEndpointError> {
         let token = token.secret();
@@ -160,7 +165,7 @@ impl ApiDeploymentApi {
 
         let api_deployments = self
             .deployment_service
-            .get_by_id(&namespace, Some(api_definition_id))
+            .get_by_id(&namespace, api_definition_id)
             .await?;
 
         let values: Vec<ApiDeployment> = api_deployments.into_iter().map(|d| d.into()).collect();
