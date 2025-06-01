@@ -15,9 +15,9 @@
 use crate::dependency_manager::RibComponentMetadata;
 use crate::{RawRibScript, WorkerFunctionInvoke};
 use golem_wasm_rpc::ValueAndType;
-use rib::InstructionId;
+use rib::{InstructionId, RibCompiler};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 pub struct ReplState {
     dependency: RibComponentMetadata,
@@ -25,6 +25,7 @@ pub struct ReplState {
     worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
     invocation_results: InvocationResultCache,
     last_executed_instruction: RwLock<Option<InstructionId>>,
+    rib_compiler: RwLock<RibCompiler>,
 }
 
 impl ReplState {
@@ -56,8 +57,12 @@ impl ReplState {
         *self.last_executed_instruction.write().unwrap() = Some(instruction_id);
     }
 
-    pub fn rib_script(&self) -> RawRibScript {
-        self.rib_script.read().unwrap().clone()
+    pub fn rib_script(&self) -> RwLockReadGuard<RawRibScript> {
+        self.rib_script.read().unwrap()
+    }
+
+    pub fn rib_compiler(&self) -> RwLockReadGuard<RibCompiler> {
+        self.rib_compiler.read().unwrap()
     }
 
     pub fn current_rib_program(&self) -> String {
@@ -79,6 +84,7 @@ impl ReplState {
     pub fn new(
         dependency: &RibComponentMetadata,
         worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
+        rib_compiler: RibCompiler,
     ) -> Self {
         Self {
             dependency: dependency.clone(),
@@ -88,6 +94,7 @@ impl ReplState {
                 results: RwLock::new(HashMap::new()),
             },
             last_executed_instruction: RwLock::new(None),
+            rib_compiler: RwLock::new(rib_compiler),
         }
     }
 }
@@ -102,5 +109,3 @@ impl InvocationResultCache {
         self.results.read().unwrap().get(script_id).cloned()
     }
 }
-
-

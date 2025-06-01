@@ -15,30 +15,30 @@
 #![allow(clippy::large_enum_variant)]
 
 pub use command::*;
+pub use command_registry::*;
 pub use dependency_manager::*;
 pub use invoke::*;
-pub use repl_printer::*;
-pub use rib_repl::*;
 pub use raw::*;
 pub use repl_bootstrap_error::*;
+pub use repl_printer::*;
 pub use rib_execution_error::*;
-pub use command_registry::*;
+pub use rib_repl::*;
 
+mod command;
+mod command_registry;
 mod compiler;
 mod dependency_manager;
 mod eval;
 mod invoke;
+mod raw;
+mod repl_bootstrap_error;
 mod repl_printer;
 mod repl_state;
+mod rib_context;
 mod rib_edit;
+mod rib_execution_error;
 mod rib_repl;
 mod value_generator;
-mod command;
-mod raw;
-mod rib_context;
-mod repl_bootstrap_error;
-mod rib_execution_error;
-mod command_registry;
 
 #[cfg(test)]
 test_r::enable!();

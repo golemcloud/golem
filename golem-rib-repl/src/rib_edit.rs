@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::compiler::{ReplCompilerOutput, InstanceVariables};
+use crate::compiler::{InstanceVariables, ReplCompilerOutput};
 use crate::value_generator::generate_value;
+use crate::CommandRegistry;
 use colored::Colorize;
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeVariant};
 use golem_wasm_rpc::ValueAndType;
@@ -24,7 +25,7 @@ use rustyline::hint::Hinter;
 use rustyline::validate::{ValidationResult, Validator};
 use rustyline::{Context, Helper};
 use std::borrow::Cow;
-use crate::CommandRegistry;
+use std::fmt::format;
 
 #[derive(Default)]
 pub struct RibEdit {
@@ -64,7 +65,6 @@ impl RibEdit {
             ],
             std_function_names: vec!["instance"],
             repl_commands: command_registry.get_commands(),
-
         }
     }
     pub fn update_progression(&mut self, compiler_output: &ReplCompilerOutput) {
@@ -83,11 +83,7 @@ impl RibEdit {
             .unwrap_or(0)
     }
 
-    fn complete_commands(
-        &self,
-        word: &str,
-        start: usize,
-    ) -> Option<(usize, Vec<String>)> {
+    fn complete_commands(&self, word: &str, start: usize) -> Option<(usize, Vec<String>)> {
         let commands = self.repl_commands.clone();
 
         let completions: Vec<String> = commands
@@ -388,8 +384,7 @@ impl Validator for RibEdit {
             return Ok(ValidationResult::Valid(None));
         }
 
-        let expr =
-            Expr::from_text(input.strip_suffix(";").unwrap_or(input));
+        let expr = Expr::from_text(input.strip_suffix(";").unwrap_or(input));
 
         match expr {
             Ok(_) => Ok(ValidationResult::Valid(None)),

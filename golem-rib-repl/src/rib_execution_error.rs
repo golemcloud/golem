@@ -1,11 +1,11 @@
-use std::fmt::{Display, Formatter};
 use rib::{RibCompilationError, RibRuntimeError};
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug)]
 pub enum RibExecutionError {
     RibCompilationError(RibCompilationError),
     RibRuntimeError(RibRuntimeError),
-    Custom(String)
+    Custom(String),
 }
 
 impl std::error::Error for RibExecutionError {}

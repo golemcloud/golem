@@ -82,10 +82,7 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
 
     assert_eq!(result, Some(RibResult::Unit));
 
-    let result = rib_repl
-        .execute(rib2)
-        .await
-        .map_err(|err| err.to_string());
+    let result = rib_repl.execute(rib2).await.map_err(|err| err.to_string());
 
     assert!(result.unwrap_err().contains("function 'add' not found"));
 

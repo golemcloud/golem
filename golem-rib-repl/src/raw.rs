@@ -15,5 +15,4 @@ impl RawRibScript {
     pub fn pop(&mut self) {
         self.rib_statements.pop();
     }
-
 }

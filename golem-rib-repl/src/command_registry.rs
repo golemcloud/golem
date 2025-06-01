@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use crate::rib_context::ReplContext;
+use crate::Command;
 use convert_case::{Case, Casing};
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{CompilerOutput, Expr, RibCompilationError, RibCompiler};
-use crate::{Command};
-use crate::rib_context::ReplContext;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct CommandRegistry {
@@ -19,13 +19,12 @@ impl CommandRegistry {
     }
 
     pub fn get_commands(&self) -> Vec<String> {
-        self.commands.keys()
-            .map(|name| name.to_string())
-            .collect()
+        self.commands.keys().map(|name| name.to_string()).collect()
     }
 
     pub fn register<T>(&mut self, command: T)
-    where T: UntypedCommand + 'static,
+    where
+        T: UntypedCommand + 'static,
     {
         let name = command.name().to_string();
         self.commands.insert(name, Arc::new(command));
@@ -79,26 +78,33 @@ impl Command for TypeInfo {
     type InputParseError = RibCompilationError;
     type ExecutionError = RibCompilationError;
 
-    fn parse(&self, prompt_input: &str, repl_context: &ReplContext) -> Result<Self::Input, Self::InputParseError> {
+    fn parse(
+        &self,
+        prompt_input: &str,
+        repl_context: &ReplContext,
+    ) -> Result<Self::Input, Self::InputParseError> {
         let mut existing_raw_script = repl_context.get_rib_script().clone();
         existing_raw_script.push(prompt_input);
 
         let expr = Expr::from_text(&existing_raw_script.as_text())
             .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
 
-        let compiler = RibCompiler::default();
-
-        let compiler_output: CompilerOutput =
-            compiler.compile(expr)?;
+        let compiler_output: CompilerOutput = repl_context.get_rib_compiler().compile(expr)?;
 
         Ok(compiler_output)
     }
 
-    fn execute(&self, input: Self::Input, _repl_context: &ReplContext) -> Result<Self::Output, Self::ExecutionError> {
-        let result =
-            input.rib_output_type_info.ok_or(RibCompilationError::RibStaticAnalysisError(
+    fn execute(
+        &self,
+        input: Self::Input,
+        _repl_context: &ReplContext,
+    ) -> Result<Self::Output, Self::ExecutionError> {
+        let result = input
+            .rib_output_type_info
+            .ok_or(RibCompilationError::RibStaticAnalysisError(
                 "Rib output type info is not available".to_string(),
-            )).map(|info| info.analysed_type)?;
+            ))
+            .map(|info| info.analysed_type)?;
 
         Ok(result)
     }

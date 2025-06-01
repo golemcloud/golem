@@ -1,7 +1,7 @@
+use crate::invoke::ReplRibFunctionInvoke;
 use crate::repl_state::ReplState;
 use rib::{InstructionId, Interpreter, RibByteCode, RibInput, RibResult, RibRuntimeError};
 use std::sync::Arc;
-use crate::invoke::ReplRibFunctionInvoke;
 
 pub async fn eval(
     rib_byte_code: RibByteCode,

@@ -12,24 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command_registry::UntypedCommand;
 use crate::compiler::compile_rib_script;
 use crate::dependency_manager::RibDependencyManager;
 use crate::eval::eval;
 use crate::invoke::WorkerFunctionInvoke;
 use crate::repl_printer::{DefaultReplResultPrinter, ReplPrinter};
 use crate::repl_state::ReplState;
+use crate::rib_context::ReplContext;
 use crate::rib_edit::RibEdit;
+use crate::{Command, CommandRegistry, ReplBootstrapError, RibExecutionError};
 use colored::Colorize;
-use rib::{RibCompiler, RibResult};
+use rib::{RibCompiler, RibCompilerConfig, RibResult};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
-use std::fmt::{Display};
+use std::fmt::Display;
 use std::path::PathBuf;
 use std::sync::Arc;
-use crate::{Command, CommandRegistry, ReplBootstrapError, RibExecutionError};
-use crate::command_registry::UntypedCommand;
-use crate::rib_context::ReplContext;
 
 /// Config options:
 ///
@@ -71,7 +71,7 @@ impl RibRepl {
     pub async fn bootstrap(config: RibReplConfig) -> Result<RibRepl, ReplBootstrapError> {
         let history_file_path = config.history_file.unwrap_or_else(get_default_history_file);
 
-        let command_registry =  CommandRegistry::built_in();
+        let command_registry = CommandRegistry::built_in();
 
         let helper = RibEdit::init(&command_registry);
 
@@ -121,7 +121,15 @@ impl RibRepl {
             }
         }?;
 
-        let repl_state = ReplState::new(&component_dependency, config.worker_function_invoke);
+        let compiler_config = RibCompilerConfig::new(component_dependency.metadata.clone(), vec![]);
+
+        let initial_compiler = RibCompiler::new(compiler_config);
+
+        let repl_state = ReplState::new(
+            &component_dependency,
+            config.worker_function_invoke,
+            initial_compiler,
+        );
 
         Ok(RibRepl {
             history_file_path,
@@ -148,16 +156,20 @@ impl RibRepl {
     /// This function is exposed for users who want to implement custom REPL loops
     /// or integrate Rib execution into other workflows.
     /// For a built-in REPL loop, see [`Self::run`].
-    pub async fn execute(&mut self, script_or_command: &str) -> Result<Option<RibResult>, RibExecutionError> {
+    pub async fn execute(
+        &mut self,
+        script_or_command: &str,
+    ) -> Result<Option<RibResult>, RibExecutionError> {
         let script_or_command = CommandOrExpr::from_str(script_or_command, &self.command_registry)
             .map_err(|err| RibExecutionError::Custom(err))?;
 
         match script_or_command {
             CommandOrExpr::Command { args, executor } => {
-                let repl_context = ReplContext::new(
-                    self.printer.as_ref(),
-                    self.repl_state.rib_script().clone(),
-                );
+                let script = self.repl_state.rib_script();
+                let rib_compiler = self.repl_state.rib_compiler();
+
+                let repl_context =
+                    ReplContext::new(self.printer.as_ref(), &*script, &*rib_compiler);
 
                 executor.run(args.as_str(), &repl_context);
 
@@ -182,7 +194,8 @@ impl RibRepl {
 
                             rib_edit.update_progression(&compiler_output);
 
-                            let result = eval(compiler_output.rib_byte_code, &self.repl_state).await;
+                            let result =
+                                eval(compiler_output.rib_byte_code, &self.repl_state).await;
 
                             match result {
                                 Ok(result) => Ok(Some(result)),
@@ -216,8 +229,7 @@ impl RibRepl {
             let readline = self.read_line();
             match readline {
                 Ok(rib) => {
-                    let result =
-                        self.execute(rib.as_str()).await;
+                    let result = self.execute(rib.as_str()).await;
 
                     match result {
                         Ok(Some(result)) => {
@@ -245,29 +257,33 @@ impl RibRepl {
         }
     }
 
-
     fn current_rib_program(&self) -> String {
         self.repl_state.current_rib_program()
     }
 }
 
 enum CommandOrExpr {
-    Command { args: String, executor: Arc<dyn UntypedCommand> },
+    Command {
+        args: String,
+        executor: Arc<dyn UntypedCommand>,
+    },
     RawExpr(String),
 }
 
 impl CommandOrExpr {
     pub fn from_str(input: &str, command_registry: &CommandRegistry) -> Result<Self, String> {
         if input.starts_with(":") {
-
             let repl_input = input.split_whitespace().collect::<Vec<&str>>();
 
-            let command_name = repl_input.get(0).map(|x| x.strip_prefix(":").unwrap_or(x).trim()).ok_or(
-                "Expecting a command name after `:`".to_string())?;
+            let command_name = repl_input
+                .get(0)
+                .map(|x| x.strip_prefix(":").unwrap_or(x).trim())
+                .ok_or("Expecting a command name after `:`".to_string())?;
 
             let input_args = repl_input[1..].join(" ");
 
-            let command = command_registry.get_command(command_name)
+            let command = command_registry
+                .get_command(command_name)
                 .map(|command| CommandOrExpr::Command {
                     args: input_args,
                     executor: command,
@@ -298,4 +314,3 @@ fn get_default_history_file() -> PathBuf {
     path.push(".rib_history");
     path
 }
-

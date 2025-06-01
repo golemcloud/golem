@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use crate::repl_state::ReplState;
 use async_trait::async_trait;
 use golem_wasm_rpc::ValueAndType;
+use rib::{
+    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibFunctionInvoke,
+    RibFunctionInvokeResult,
+};
+use std::sync::Arc;
 use uuid::Uuid;
-use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibFunctionInvoke, RibFunctionInvokeResult};
-use crate::repl_state::ReplState;
 
 #[async_trait]
 pub trait WorkerFunctionInvoke {
@@ -30,7 +33,6 @@ pub trait WorkerFunctionInvoke {
         args: Vec<ValueAndType>,
     ) -> anyhow::Result<ValueAndType>;
 }
-
 
 // Note: Currently, the Rib interpreter supports only one component, so the
 // `RibFunctionInvoke` trait in the `golem-rib` module does not include `component_id` in
