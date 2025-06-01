@@ -126,25 +126,26 @@ impl Command for TypeInfo {
 }
 
 
+#[derive(Default)]
 pub struct CommandRegistry {
-    commands: HashMap<String, Box<dyn ErasedCommand>>,
+    commands: HashMap<String, Box<dyn UntypedCommand>>,
 }
 
 impl CommandRegistry {
     pub fn register<T>(&mut self, command: T)
-    where T: ErasedCommand + 'static,
+    where T: UntypedCommand + 'static,
     {
         let name = command.name().to_string();
         self.commands.insert(name, Box::new(command));
     }
 }
 
-trait ErasedCommand {
+trait UntypedCommand {
     fn run(&self, prompt_input: &str, repl_context: &ReplContext);
     fn name(&self) -> &str;
 }
 
-impl<T> ErasedCommand for T
+impl<T> UntypedCommand for T
 where
     T: Command,
     T::Input: 'static,

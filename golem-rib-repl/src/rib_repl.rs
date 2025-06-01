@@ -28,7 +28,7 @@ use rustyline::{Config, Editor};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
-use crate::{ReplBootstrapError, RibExecutionError};
+use crate::{CommandRegistry, ReplBootstrapError, RibExecutionError, TypeInfo};
 
 /// The REPL environment for Rib, providing an interactive shell for executing Rib code.
 pub struct RibRepl {
@@ -37,6 +37,7 @@ pub struct RibRepl {
     editor: Editor<RibEdit, DefaultHistory>,
     repl_state: Arc<ReplState>,
     prompt: String,
+    command_registry: CommandRegistry
 }
 
 /// Config options:
@@ -59,6 +60,7 @@ pub struct RibReplConfig {
     pub printer: Option<Box<dyn ReplPrinter>>,
     pub component_source: Option<ComponentSource>,
     pub prompt: Option<String>,
+    pub command_registry: Option<CommandRegistry>,
 }
 
 impl RibRepl {
@@ -68,7 +70,7 @@ impl RibRepl {
     pub async fn bootstrap(config: RibReplConfig) -> Result<RibRepl, ReplBootstrapError> {
         let history_file_path = config.history_file.unwrap_or_else(get_default_history_file);
 
-        let rib_editor = RibEdit::init();
+        let helper = RibEdit::init();
 
         let mut rl = Editor::<RibEdit, DefaultHistory>::with_history(
             Config::default(),
@@ -76,7 +78,7 @@ impl RibRepl {
         )
         .unwrap();
 
-        rl.set_helper(Some(rib_editor));
+        rl.set_helper(Some(helper));
 
         if history_file_path.exists() {
             if let Err(err) = rl.load_history(&history_file_path) {
@@ -118,6 +120,10 @@ impl RibRepl {
 
         let repl_state = ReplState::new(&component_dependency, config.worker_function_invoke);
 
+        let mut command_registry = config.command_registry.unwrap_or_default();
+
+        command_registry.register(TypeInfo);
+
         Ok(RibRepl {
             history_file_path,
             printer: config
@@ -126,6 +132,7 @@ impl RibRepl {
             editor: rl,
             repl_state: Arc::new(repl_state),
             prompt: config.prompt.unwrap_or_else(|| ">>> ".cyan().to_string()),
+            command_registry
         })
     }
 
