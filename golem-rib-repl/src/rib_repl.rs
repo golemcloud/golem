@@ -20,15 +20,15 @@ use crate::repl_printer::{DefaultReplResultPrinter, ReplPrinter};
 use crate::repl_state::ReplState;
 use crate::rib_edit::RibEdit;
 use colored::Colorize;
-use rib::{RibFunctionInvoke};
 use rib::{RibResult};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
-use std::fmt::{Display, Formatter};
+use std::fmt::{Display};
 use std::path::PathBuf;
 use std::sync::Arc;
-use crate::{CommandRegistry, ReplBootstrapError, RibExecutionError, TypeInfo};
+use crate::{Command, CommandRegistry, ReplBootstrapError, RibExecutionError};
+use crate::command_registry::UntypedCommand;
 
 /// The REPL environment for Rib, providing an interactive shell for executing Rib code.
 pub struct RibRepl {
@@ -120,9 +120,7 @@ impl RibRepl {
 
         let repl_state = ReplState::new(&component_dependency, config.worker_function_invoke);
 
-        let mut command_registry = config.command_registry.unwrap_or_default();
-
-        command_registry.register(TypeInfo);
+        let command_registry =  CommandRegistry::built_in();
 
         Ok(RibRepl {
             history_file_path,
@@ -149,57 +147,69 @@ impl RibRepl {
     /// This function is exposed for users who want to implement custom REPL loops
     /// or integrate Rib execution into other workflows.
     /// For a built-in REPL loop, see [`Self::run`].
-    pub async fn execute_rib(&mut self, rib: &str) -> Result<Option<RibResult>, RibExecutionError> {
-        if !rib.is_empty() {
-            let rib = rib.strip_suffix(";").unwrap_or(rib);
+    pub async fn execute(&mut self, script_or_command: &str) -> Result<Option<RibResult>, RibExecutionError> {
+        let script_or_command = CommandOrExpr::from_str(script_or_command, &self.command_registry)
+            .map_err(|err| RibExecutionError::Custom(err))?;
 
-            self.repl_state.update_rib(rib);
+        match script_or_command {
+            CommandOrExpr::Command { _args, _executor } => {
+                Ok(None)
+            }
+            CommandOrExpr::RawExpr(script) => {
+                // If the script is empty, we do not execute it
+                if !script.is_empty() {
+                    let rib = script.strip_suffix(";").unwrap_or(script.as_str()).trim();
 
-            // Add every rib script into the history (in memory) and save it
-            // regardless of whether it compiles or not
-            // History is never used for any progressive compilation or interpretation
-            let _ = self.editor.add_history_entry(rib);
-            let _ = self.editor.save_history(&self.history_file_path);
+                    self.repl_state.update_rib(rib);
 
-            match compile_rib_script(&self.current_rib_program(), &self.repl_state) {
-                Ok(compiler_output) => {
-                    let rib_edit = self.editor.helper_mut().unwrap();
+                    // Add every rib script into the history (in memory) and save it
+                    // regardless of whether it compiles or not
+                    // History is never used for any progressive compilation or interpretation
+                    let _ = self.editor.add_history_entry(rib);
+                    let _ = self.editor.save_history(&self.history_file_path);
 
-                    rib_edit.update_progression(&compiler_output);
+                    match compile_rib_script(&self.current_rib_program(), &self.repl_state) {
+                        Ok(compiler_output) => {
+                            let rib_edit = self.editor.helper_mut().unwrap();
 
-                    let result = eval(compiler_output.rib_byte_code, &self.repl_state).await;
+                            rib_edit.update_progression(&compiler_output);
 
-                    match result {
-                        Ok(result) => Ok(Some(result)),
+                            let result = eval(compiler_output.rib_byte_code, &self.repl_state).await;
+
+                            match result {
+                                Ok(result) => Ok(Some(result)),
+                                Err(err) => {
+                                    self.repl_state.remove_last_rib_expression();
+
+                                    Err(RibExecutionError::RibRuntimeError(err))
+                                }
+                            }
+                        }
                         Err(err) => {
                             self.repl_state.remove_last_rib_expression();
 
-                            Err(RibExecutionError::RibRuntimeError(err))
+                            Err(RibExecutionError::RibCompilationError(err))
                         }
                     }
-                }
-                Err(err) => {
-                    self.repl_state.remove_last_rib_expression();
-
-                    Err(RibExecutionError::RibCompilationError(err))
+                } else {
+                    Ok(None)
                 }
             }
-        } else {
-            Ok(None)
         }
     }
 
     /// Starts the default REPL loop for executing Rib code interactively.
     ///
     /// This is a convenience method that repeatedly reads user input and executes
-    /// it using [`Self::execute_rib`]. If you need more control over the REPL behavior,
-    /// use [`Self::read_line`] and [`Self::execute_rib`] directly.
+    /// it using [`Self::execute`]. If you need more control over the REPL behavior,
+    /// use [`Self::read_line`] and [`Self::execute`] directly.
     pub async fn run(&mut self) {
         loop {
             let readline = self.read_line();
             match readline {
                 Ok(rib) => {
-                    let result = self.execute_rib(rib.as_str()).await;
+                    let result =
+                        self.execute(rib.as_str()).await;
 
                     match result {
                         Ok(Some(result)) => {
@@ -215,6 +225,9 @@ impl RibRepl {
                             RibExecutionError::RibCompilationError(runtime_error) => {
                                 self.printer.print_rib_compilation_error(&runtime_error);
                             }
+                            RibExecutionError::Custom(custom_error) => {
+                                self.printer.print_custom_error(&custom_error);
+                            }
                         },
                     }
                 }
@@ -227,6 +240,36 @@ impl RibRepl {
 
     fn current_rib_program(&self) -> String {
         self.repl_state.current_rib_program()
+    }
+}
+
+enum CommandOrExpr {
+    Command { args: String, executor: Arc<dyn UntypedCommand> },
+    RawExpr(String),
+}
+
+impl CommandOrExpr {
+    pub fn from_str(input: &str, command_registry: &CommandRegistry) -> Result<Self, String> {
+        if input.starts_with(":") {
+
+            let repl_input = input.split_whitespace().collect::<Vec<&str>>();
+
+            let command_name = repl_input.get(0).map(|x| x.strip_prefix(":").unwrap_or(x).trim()).ok_or(
+                "Expecting a command name after `:`".to_string())?;
+
+            let input_args = repl_input[1..].join(" ");
+
+            let command = command_registry.get_command(command_name)
+                .map(|command| CommandOrExpr::Command {
+                    args: input_args,
+                    executor: command,
+                })
+                .ok_or_else(|| format!("Command '{}' not found", command_name))?;
+
+            Ok(command)
+        } else {
+            Ok(CommandOrExpr::RawExpr(input.trim().to_string()))
+        }
     }
 }
 

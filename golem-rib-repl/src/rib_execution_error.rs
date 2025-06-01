@@ -5,6 +5,7 @@ use rib::{RibCompilationError, RibRuntimeError};
 pub enum RibExecutionError {
     RibCompilationError(RibCompilationError),
     RibRuntimeError(RibRuntimeError),
+    Custom(String)
 }
 
 impl std::error::Error for RibExecutionError {}
@@ -14,6 +15,7 @@ impl Display for RibExecutionError {
         match self {
             RibExecutionError::RibCompilationError(err) => write!(f, "{}", err),
             RibExecutionError::RibRuntimeError(err) => write!(f, "{}", err),
+            RibExecutionError::Custom(msg) => write!(f, "{}", msg),
         }
     }
 }

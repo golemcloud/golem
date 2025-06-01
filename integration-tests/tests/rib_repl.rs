@@ -76,21 +76,21 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
      "#;
 
     let result = rib_repl
-        .execute_rib(rib1)
+        .execute(rib1)
         .await
         .expect("Failed to process command");
 
     assert_eq!(result, Some(RibResult::Unit));
 
     let result = rib_repl
-        .execute_rib(rib2)
+        .execute(rib2)
         .await
         .map_err(|err| err.to_string());
 
     assert!(result.unwrap_err().contains("function 'add' not found"));
 
     let result = rib_repl
-        .execute_rib(rib3)
+        .execute(rib3)
         .await
         .map_err(|err| err.to_string())
         .expect("Failed to process rib");
@@ -109,7 +109,7 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
     );
 
     let result = rib_repl
-        .execute_rib(rib4)
+        .execute(rib4)
         .await
         .map_err(|err| err.to_string())
         .expect("Failed to process rib");
@@ -117,7 +117,7 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
     assert_eq!(result, Some(RibResult::Unit));
 
     let result = rib_repl
-        .execute_rib(rib5)
+        .execute(rib5)
         .await
         .map_err(|err| err.to_string())
         .expect("Failed to process rib");
@@ -186,21 +186,21 @@ async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
      "#;
 
     let result = rib_repl
-        .execute_rib(rib1)
+        .execute(rib1)
         .await
         .expect("Failed to process command");
 
     assert_eq!(result, Some(RibResult::Unit));
 
     let result = rib_repl
-        .execute_rib(rib2)
+        .execute(rib2)
         .await
         .expect("Failed to process command");
 
     assert_eq!(result, Some(RibResult::Unit));
 
     let result = rib_repl
-        .execute_rib(rib3)
+        .execute(rib3)
         .await
         .map_err(|err| err.to_string())
         .expect("Failed to process rib");
@@ -219,7 +219,7 @@ async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
     );
 
     let result = rib_repl
-        .execute_rib(rib4)
+        .execute(rib4)
         .await
         .map_err(|err| err.to_string())
         .expect("Failed to process rib");
@@ -227,7 +227,7 @@ async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
     assert_eq!(result, Some(RibResult::Unit));
 
     let result = rib_repl
-        .execute_rib(rib5)
+        .execute(rib5)
         .await
         .map_err(|err| err.to_string())
         .expect("Failed to process rib");

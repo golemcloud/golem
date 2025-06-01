@@ -23,6 +23,9 @@ pub trait ReplPrinter {
     fn print_bootstrap_error(&self, error: &ReplBootstrapError);
     fn print_rib_runtime_error(&self, error: &RibRuntimeError);
     fn print_wasm_value_type(&self, analysed_type: &AnalysedType);
+    fn print_custom_error(&self, error: &str) {
+        println!("{} {}", "[error]".red(), error.red());
+    }
 }
 
 #[derive(Clone)]

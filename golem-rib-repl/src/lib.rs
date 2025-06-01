@@ -22,6 +22,7 @@ pub use rib_repl::*;
 pub use raw::*;
 pub use repl_bootstrap_error::*;
 pub use rib_execution_error::*;
+pub use command_registry::*;
 
 mod compiler;
 mod dependency_manager;
@@ -37,6 +38,7 @@ mod raw;
 mod rib_context;
 mod repl_bootstrap_error;
 mod rib_execution_error;
+mod command_registry;
 
 #[cfg(test)]
 test_r::enable!();
