@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::{
-    new_component_client, new_plugin_client, ComponentService, ComponentServiceClient,
-    PluginServiceClient,
-};
+use crate::components::cloud_service::new_project_client;
 use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
 use crate::components::rdb::Rdb;
 use crate::config::GolemClientProtocol;
@@ -30,45 +27,38 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{Image, ImageExt};
 use tracing::{info, Level};
 
-use super::ComponentServiceInternal;
+use super::{CloudService, CloudServiceInternal, ProjectServiceClient};
 
-pub struct DockerComponentService {
-    component_directory: PathBuf,
-    container: ContainerHandle<GolemComponentServiceImage>,
+pub struct DockerCloudService {
+    container: ContainerHandle<CloudServiceImage>,
     private_host: String,
     public_http_port: u16,
     public_grpc_port: u16,
-    component_client: ComponentServiceClient,
-    plugin_client: PluginServiceClient,
-    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+    project_client: ProjectServiceClient,
 }
 
-impl DockerComponentService {
+impl DockerCloudService {
     const HTTP_PORT: ContainerPort = ContainerPort::Tcp(8081);
     const GRPC_PORT: ContainerPort = ContainerPort::Tcp(9091);
 
     pub async fn new(
         unique_network_id: &str,
-        component_directory: PathBuf,
-        component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
-        client_protocol: GolemClientProtocol,
-        plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+        client_protocol: GolemClientProtocol
     ) -> Self {
         info!("Starting golem-component-service container");
 
         let env_vars = super::env_vars(
             Self::HTTP_PORT.as_u16(),
             Self::GRPC_PORT.as_u16(),
-            component_compilation_service,
             rdb,
             verbosity,
             true,
         )
         .await;
 
-        let container = GolemComponentServiceImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars)
+        let container = CloudServiceImage::new(Self::GRPC_PORT, Self::HTTP_PORT, env_vars)
             .with_network(network(unique_network_id))
             .start()
             .await
@@ -87,102 +77,57 @@ impl DockerComponentService {
             .expect("Failed to get public gRPC port");
 
         Self {
-            component_directory,
             container: ContainerHandle::new(container),
             private_host,
             public_http_port,
             public_grpc_port,
-            component_client: new_component_client(
+            project_client: new_project_client(
                 client_protocol,
                 "localhost",
                 public_grpc_port,
                 public_http_port,
             )
-            .await,
-            plugin_client: new_plugin_client(
-                client_protocol,
-                "localhost",
-                public_grpc_port,
-                public_http_port,
-            )
-            .await,
-            plugin_wasm_files_service,
+            .await
         }
     }
 }
 
 #[async_trait]
-impl ComponentServiceInternal for DockerComponentService {
-    fn component_client(&self) -> ComponentServiceClient {
-        self.component_client.clone()
-    }
-
-    fn plugin_client(&self) -> PluginServiceClient {
-        self.plugin_client.clone()
-    }
-
-    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
-        self.plugin_wasm_files_service.clone()
+impl CloudServiceInternal for CloudServiceImage {
+    fn project_client(&self) -> ProjectServiceClient {
+        self.project_client.clone()
     }
 }
 
 #[async_trait]
-impl ComponentService for DockerComponentService {
-    fn component_directory(&self) -> &Path {
-        &self.component_directory
-    }
-
-    fn private_host(&self) -> String {
-        self.private_host.to_string()
-    }
-
-    fn private_http_port(&self) -> u16 {
-        Self::HTTP_PORT.as_u16()
-    }
-
-    fn private_grpc_port(&self) -> u16 {
-        Self::GRPC_PORT.as_u16()
-    }
-
-    fn public_host(&self) -> String {
-        "localhost".to_string()
-    }
-
-    fn public_http_port(&self) -> u16 {
-        self.public_http_port
-    }
-
-    fn public_grpc_port(&self) -> u16 {
-        self.public_grpc_port
-    }
-
+impl CloudService for CloudServiceImage {
     async fn kill(&self) {
         self.container.kill().await
     }
 }
 
 #[derive(Debug)]
-struct GolemComponentServiceImage {
+struct CloudServiceImage {
     env_vars: HashMap<String, String>,
     expose_ports: [ContainerPort; 2],
 }
 
-impl GolemComponentServiceImage {
+impl CloudServiceImage {
     pub fn new(
         grpc_port: ContainerPort,
         http_port: ContainerPort,
         env_vars: HashMap<String, String>,
-    ) -> GolemComponentServiceImage {
-        GolemComponentServiceImage {
+    ) -> CloudServiceImage {
+        CloudServiceImage {
             env_vars,
             expose_ports: [grpc_port, http_port],
         }
     }
 }
 
-impl Image for GolemComponentServiceImage {
+impl Image for CloudServiceImage {
     fn name(&self) -> &str {
-        "golemservices/golem-component-service"
+        "golemservices/cloud-service"
     }
 
     fn tag(&self) -> &str {
