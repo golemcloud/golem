@@ -22,3 +22,24 @@ CREATE TABLE api_deployments
     PRIMARY KEY (namespace, site, definition_id, definition_version)
 );
 
+
+CREATE TABLE api_certificates
+(
+    namespace   text      NOT NULL,
+    id          UUID      NOT NULL,
+    domain_name text      NOT NULL,
+    external_id text      NOT NULL,
+    created_at  timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (namespace, id)
+);
+
+CREATE TABLE api_domains
+(
+    namespace    text      NOT NULL,
+    domain_name  text      NOT NULL,
+    name_servers text      NOT NULL,
+    created_at   timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (namespace, domain_name)
+);
+
+

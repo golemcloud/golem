@@ -1,6 +1,6 @@
 CREATE TABLE plugins_copy
 (
-    id   uuid    NOT NULL PRIMARY KEY,
+    id   uuid    NOT NULL,
     name                 text     NOT NULL,
     version              text     NOT NULL,
     description          text     NOT NULL,
@@ -8,6 +8,8 @@ CREATE TABLE plugins_copy
     homepage             text     NOT NULL,
     plugin_type          smallint NOT NULL,
     scope_component_id   uuid REFERENCES components (component_id),
+    scope_project_id     uuid,
+    account_id           text NOT NULL,
     provided_wit_package text,
     json_schema          text,
     validate_url         text,
@@ -15,10 +17,12 @@ CREATE TABLE plugins_copy
     component_id         uuid REFERENCES components (component_id),
     component_version    bigint,
     deleted              boolean  NOT NULL DEFAULT FALSE,
-    blob_storage_key text
+    blob_storage_key text,
+
+    PRIMARY KEY (account_id, id)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS plugins_name_version_unique ON plugins_copy (name, version) WHERE (deleted IS FALSE);
+CREATE UNIQUE INDEX IF NOT EXISTS plugins_account_id_name_version_unique ON plugins_copy (account_id, name, version) WHERE (deleted IS FALSE);
 
 INSERT INTO plugins_copy
 (
@@ -30,6 +34,8 @@ INSERT INTO plugins_copy
     homepage,
     plugin_type,
     scope_component_id,
+    scope_project_id,
+    account_id,
     provided_wit_package,
     json_schema,
     validate_url,
@@ -49,6 +55,8 @@ SELECT
     homepage,
     plugin_type,
     scope_component_id,
+    scope_project_id,
+    account_id,
     provided_wit_package,
     json_schema,
     validate_url,
@@ -67,8 +75,9 @@ CREATE TABLE component_plugin_installation_copy
     parameters        blob    NOT NULL,
     component_id      uuid REFERENCES components (component_id),
     component_version bigint,
+    account_id       text NOT NULL,
 
-    FOREIGN KEY (plugin_id) REFERENCES plugins_copy (id)
+    FOREIGN KEY (account_id, plugin_id) REFERENCES plugins_copy (account_id, id)
 );
 
 INSERT INTO component_plugin_installation_copy
@@ -78,7 +87,8 @@ INSERT INTO component_plugin_installation_copy
     priority,
     parameters,
     component_id,
-    component_version
+    component_version,
+    account_id
 )
 SELECT
     installation_id,
@@ -86,7 +96,8 @@ SELECT
     priority,
     parameters,
     component_id,
-    component_version
+    component_version,
+    account_id
 FROM component_plugin_installation;
 
 DROP TABLE component_plugin_installation;

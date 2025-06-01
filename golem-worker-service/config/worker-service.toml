@@ -343,3 +343,24 @@ multiplier = 10.0
 # max_jitter_factor = 0.15
 # min_delay = "10ms"
 # multiplier = 10.0
+## Generated from default config
+cors_origin_regex = "https://*.golem.cloud"
+workspace = "release"
+
+[cloud_service]
+access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+host = "localhost"
+port = 8080
+
+[cloud_service.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[domain_records]
+domain_allow_list = []
+register_domain_black_list = ["dev-api.golem.cloud", "api.golem.cloud"]
+subdomain_black_list = ["api-gateway", "release", "grafana"]
+

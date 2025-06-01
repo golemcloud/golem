@@ -19,7 +19,6 @@ pub mod error;
 pub mod grpc;
 pub mod metrics;
 pub mod model;
-pub mod oss;
 pub mod preview2;
 pub mod services;
 pub mod storage;

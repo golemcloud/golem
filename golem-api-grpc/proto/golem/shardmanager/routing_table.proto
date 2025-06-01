@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-import "golem/shardmanager/routing_table_entry.proto";
-
 package golem.shardmanager;
+
+import "golem/shardmanager/routing_table_entry.proto";
 
 message RoutingTable {
   uint32 number_of_shards = 1;

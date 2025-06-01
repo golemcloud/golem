@@ -30,7 +30,7 @@ use crate::services::golem_config::{
 };
 use crate::services::plugins::PluginsObservations;
 use async_trait::async_trait;
-use cloud_api_grpc::proto::golem::cloud::project::v1::cloud_project_service_client::CloudProjectServiceClient;
+use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use cloud_common::model::CloudComponentOwner;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
@@ -182,10 +182,10 @@ impl ComponentServiceCloudGrpc {
         account_id: &AccountId,
         project_name: &str,
     ) -> impl Future<Output = Result<Option<ProjectId>, GolemError>> + 'static {
-        use cloud_api_grpc::proto::golem::cloud::project::v1::{
+        use golem_api_grpc::proto::golem::project::v1::{
             get_projects_response, GetProjectsRequest, ProjectError,
         };
-        use cloud_api_grpc::proto::golem::cloud::project::Project as GrpcProject;
+        use golem_api_grpc::proto::golem::project::Project as GrpcProject;
 
         let client = self.project_client.clone();
         let retry_config = self.retry_config.clone();

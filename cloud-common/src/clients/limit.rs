@@ -1,9 +1,9 @@
 use crate::clients::auth::authorised_request;
 use crate::config::RemoteCloudServiceConfig;
 use async_trait::async_trait;
-use cloud_api_grpc::proto::golem::cloud::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
-use cloud_api_grpc::proto::golem::cloud::limit::v1::limits_error::Error;
-use cloud_api_grpc::proto::golem::cloud::limit::v1::{
+use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
+use golem_api_grpc::proto::golem::limit::v1::limits_error::Error;
+use golem_api_grpc::proto::golem::limit::v1::{
     get_resource_limits_response, update_component_limit_response, update_worker_limit_response,
     GetResourceLimitsRequest, UpdateComponentLimitRequest, UpdateWorkerLimitRequest,
 };
@@ -318,7 +318,7 @@ impl SafeDisplay for LimitError {
 
 #[derive(Debug)]
 pub enum LimitClientError {
-    Server(cloud_api_grpc::proto::golem::cloud::limit::v1::LimitsError),
+    Server(golem_api_grpc::proto::golem::limit::v1::LimitsError),
     Connection(Status),
     Transport(tonic::transport::Error),
     Unknown(String),
@@ -349,8 +349,8 @@ impl From<LimitClientError> for LimitError {
     }
 }
 
-impl From<cloud_api_grpc::proto::golem::cloud::limit::v1::LimitsError> for LimitClientError {
-    fn from(value: cloud_api_grpc::proto::golem::cloud::limit::v1::LimitsError) -> Self {
+impl From<golem_api_grpc::proto::golem::limit::v1::LimitsError> for LimitClientError {
+    fn from(value: golem_api_grpc::proto::golem::limit::v1::LimitsError) -> Self {
         Self::Server(value)
     }
 }

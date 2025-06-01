@@ -13,7 +13,6 @@ protobuf = []
 model = []
 
 [dependencies]
-cloud-api-grpc = { path = "../cloud-api-grpc", version = "=0.0.0" }
 golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
 golem-common = { path = "../golem-common", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }

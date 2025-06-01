@@ -53,19 +53,10 @@ pub struct GolemConfig {
     pub component_service: ComponentServiceConfig,
     pub component_cache: ComponentCacheConfig,
     pub project_service: ProjectServiceConfig,
-    pub mode: WorkerExecutorMode,
     pub grpc_address: String,
     pub port: u16,
     pub http_address: String,
     pub http_port: u16,
-}
-
-/// Temporary configuration to choose between the previous OSS and Cloud modes, until the whole
-/// service merge is complete.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum WorkerExecutorMode {
-    Oss,
-    Cloud,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -448,7 +439,6 @@ impl Default for GolemConfig {
             component_service: ComponentServiceConfig::default(),
             component_cache: ComponentCacheConfig::default(),
             project_service: ProjectServiceConfig::default(),
-            mode: WorkerExecutorMode::Oss,
             grpc_address: "0.0.0.0".to_string(),
             port: 9000,
             http_address: "0.0.0.0".to_string(),

@@ -6,8 +6,8 @@ use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
-use cloud_api_grpc::proto::golem::cloud::limit::v1::cloud_limits_service_server::CloudLimitsService;
-use cloud_api_grpc::proto::golem::cloud::limit::v1::{
+use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_server::CloudLimitsService;
+use golem_api_grpc::proto::golem::limit::v1::{
     batch_update_resource_limits_response, get_resource_limits_response, limits_error,
     update_component_limit_response, update_worker_limit_response,
     BatchUpdateResourceLimitsRequest, BatchUpdateResourceLimitsResponse, GetResourceLimitsRequest,

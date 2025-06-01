@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::plugin::{DefaultPluginScope, PluginTypeSpecificDefinition};
+use golem_common::model::plugin::{ PluginTypeSpecificDefinition};
+use cloud_common::model::CloudPluginScope;
 
 #[derive(Debug, Clone)]
 pub struct PluginDefinitionCreation {
@@ -21,7 +22,7 @@ pub struct PluginDefinitionCreation {
     pub description: String,
     pub icon: Vec<u8>,
     pub homepage: String,
-    pub scope: DefaultPluginScope,
+    pub scope: CloudPluginScope,
     pub specs: PluginTypeSpecificDefinition,
 }
 

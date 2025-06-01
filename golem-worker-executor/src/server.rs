@@ -18,9 +18,9 @@ use std::sync::Arc;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_executor::metrics;
 use golem_worker_executor::services::golem_config::{
-    make_config_loader, GolemConfig, WorkerExecutorMode,
+    make_config_loader, GolemConfig,
 };
-use golem_worker_executor::{cloud, oss};
+use golem_worker_executor::{cloud};
 use tokio::task::JoinSet;
 
 fn main() -> Result<(), anyhow::Error> {
@@ -50,14 +50,7 @@ async fn async_main(
 ) -> Result<(), anyhow::Error> {
     let mut join_set = JoinSet::new();
 
-    match &config.mode {
-        WorkerExecutorMode::Oss => {
-            oss::run(config, prometheus, runtime.handle().clone(), &mut join_set).await?;
-        }
-        WorkerExecutorMode::Cloud => {
-            cloud::run(config, prometheus, runtime.handle().clone(), &mut join_set).await?;
-        }
-    };
+    cloud::run(config, prometheus, runtime.handle().clone(), &mut join_set).await?;
 
     while let Some(res) = join_set.join_next().await {
         res??
