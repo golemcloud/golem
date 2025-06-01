@@ -101,8 +101,7 @@ impl RibRepl {
 
                 match dependencies {
                     Ok(dependencies) => {
-                        let mut component_dependencies =
-                            dependencies.component_dependencies;
+                        let mut component_dependencies = dependencies.component_dependencies;
 
                         match &component_dependencies.len() {
                             0 => Err(ReplBootstrapError::NoComponentsFound),
@@ -127,7 +126,10 @@ impl RibRepl {
         let repl_state = ReplState::new(
             component_dependency.clone(),
             config.worker_function_invoke,
-            RibCompiler::new(RibCompilerConfig::new(component_dependency.metadata, vec![])),
+            RibCompiler::new(RibCompilerConfig::new(
+                component_dependency.metadata,
+                vec![],
+            )),
         );
 
         Ok(RibRepl {
@@ -167,8 +169,7 @@ impl RibRepl {
                 let script = self.repl_state.rib_script();
                 let rib_compiler = self.repl_state.rib_compiler();
 
-                let repl_context =
-                    ReplContext::new(self.printer.as_ref(), &script, &rib_compiler);
+                let repl_context = ReplContext::new(self.printer.as_ref(), &script, &rib_compiler);
 
                 executor.run(args.as_str(), &repl_context);
 
@@ -274,7 +275,8 @@ impl CommandOrExpr {
         if input.starts_with(":") {
             let repl_input = input.split_whitespace().collect::<Vec<&str>>();
 
-            let command_name = repl_input.first()
+            let command_name = repl_input
+                .first()
                 .map(|x| x.strip_prefix(":").unwrap_or(x).trim())
                 .ok_or("Expecting a command name after `:`".to_string())?;
 

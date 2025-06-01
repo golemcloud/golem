@@ -20,9 +20,9 @@ pub use invoke::*;
 pub use raw::*;
 pub use repl_bootstrap_error::*;
 pub use repl_printer::*;
+pub use rib_context::*;
 pub use rib_execution_error::*;
 pub use rib_repl::*;
-pub use rib_context::*;
 
 mod command;
 mod compiler;

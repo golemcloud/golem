@@ -26,8 +26,7 @@ pub fn compile_rib_script(
     let expr = Expr::from_text(rib_script)
         .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
 
-    let compiler =
-        repl_state.rib_compiler();
+    let compiler = repl_state.rib_compiler();
 
     let inferred_expr = compiler.infer_types(expr)?;
 

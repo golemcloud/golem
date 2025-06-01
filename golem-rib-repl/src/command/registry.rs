@@ -1,8 +1,7 @@
-
-use std::collections::HashMap;
-use std::sync::Arc;
 use crate::command::builtin::TypeInfo;
 use crate::UntypedCommand;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct CommandRegistry {

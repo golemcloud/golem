@@ -1,6 +1,6 @@
+use crate::{Command, ReplContext};
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{CompilerOutput, Expr, RibCompilationError};
-use crate::{Command, ReplContext};
 
 #[derive(Clone)]
 pub struct TypeInfo;
