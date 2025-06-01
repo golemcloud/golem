@@ -2295,13 +2295,17 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
                 let pre_entry = self
                     .replay_state
-                    .try_get_oplog_entry(|e| e.is_pre_remote_transaction(begin_index))
+                    .lookup_oplog_entry_with_condition(
+                        begin_index,
+                        OplogEntry::is_pre_remote_transaction,
+                        OplogEntry::no_concurrent_side_effect,
+                    )
                     .await;
 
                 let mut restart = false;
 
                 if let Some((_, pre_entry)) = pre_entry {
-                    let end_index = self
+                    let end_entry = self
                         .replay_state
                         .lookup_oplog_entry_with_condition(
                             begin_index,
@@ -2310,33 +2314,43 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         )
                         .await;
 
-                    if end_index.is_none() {
+                    // println!(
+                    //     "begin_transaction_function tx_id {tx_id}, end_entry {} ",
+                    //     end_entry.is_some()
+                    // );
+                    if end_entry.is_none() {
                         let mut aborted = false;
                         if pre_entry.is_pre_commit_remote_transaction(begin_index) {
                             let commited = handler.is_committed(&tx_id).await?;
-                            let end_entry = if commited {
-                                OplogEntry::commited_remote_transaction(begin_index)
+                            if commited {
+                                self.oplog
+                                    .add_and_commit(OplogEntry::commited_remote_transaction(
+                                        begin_index,
+                                    ))
+                                    .await;
                             } else {
                                 aborted = true;
-                                OplogEntry::aborted_remote_transaction(begin_index)
-                            };
-                            self.replay_state.switch_to_live();
-                            self.oplog.add_and_commit(end_entry).await;
+                            }
                         } else if pre_entry.is_pre_rollback_remote_transaction(begin_index) {
                             let rolled_back = handler.is_rolled_back(&tx_id).await?;
-                            let end_entry = if rolled_back {
-                                OplogEntry::rolled_back_remote_transaction(begin_index)
+                            if rolled_back {
+                                self.oplog
+                                    .add_and_commit(OplogEntry::rolled_back_remote_transaction(
+                                        begin_index,
+                                    ))
+                                    .await;
                             } else {
                                 aborted = true;
-                                OplogEntry::aborted_remote_transaction(begin_index)
-                            };
-                            self.replay_state.switch_to_live();
-                            self.oplog.add_and_commit(end_entry).await;
+                            }
                         }
 
                         let _ = handler.cleanup(&tx_id).await;
 
                         if aborted {
+                            self.replay_state.switch_to_live();
+                            self.oplog
+                                .add_and_commit(OplogEntry::aborted_remote_transaction(begin_index))
+                                .await;
                             let deleted_region = OplogRegion {
                                 start: begin_index.next(), // need to keep the BeginAtomicRegion entry
                                 end: self.replay_state.replay_target().next(), // skipping the Jump entry too
@@ -2347,6 +2361,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                             self.oplog
                                 .add_and_commit(OplogEntry::jump(deleted_region))
                                 .await;
+                            // println!(
+                            //     "begin_transaction_function tx_id {tx_id}, aborted - restarting"
+                            // );
                             restart = true;
                         }
                     }
@@ -2367,6 +2384,10 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                     self.oplog
                         .add_and_commit(OplogEntry::jump(deleted_region))
                         .await;
+
+                    // println!(
+                    //     "begin_transaction_function tx_id {tx_id}, pre not found - restarting"
+                    // );
                     restart = true;
                 }
 

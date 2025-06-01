@@ -289,9 +289,17 @@ async fn rdbms_postgres_crud(
     )
     .await;
 
-    workers_resume_test(&executor, worker_ids1.clone()).await;
+    let worker_id = worker_ids1[0].clone();
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog_json = serde_json::to_string(&oplog);
+    check!(oplog_json.is_ok());
 
-    workers_resume_test(&executor, worker_ids3.clone()).await;
+    workers_interrupt_test(&executor, worker_ids1.clone()).await;
+    workers_interrupt_test(&executor, worker_ids3.clone()).await;
+
+    drop(executor);
+
+    let executor = start(deps, &context).await.unwrap();
 
     rdbms_workers_test::<PostgresType>(
         &executor,
@@ -299,6 +307,8 @@ async fn rdbms_postgres_crud(
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
     .await;
+
+    drop(executor);
 }
 
 #[test]
@@ -411,6 +421,7 @@ async fn postgres_transaction_recovery_test(
     postgres: &DockerPostgresRdb,
     fail_on_oplog_entry: &str,
     commit: bool,
+    expected_restart: bool,
 ) {
     let db_address = postgres.public_connection_string();
     let context = TestContext::new(last_unique_id);
@@ -522,9 +533,14 @@ async fn postgres_transaction_recovery_test(
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
+
     // println!("{}", oplog_json.unwrap());
 
-    check_transaction_oplog_entries::<PostgresType>(oplog, Some(1), Some(1));
+    check_transaction_oplog_entries::<PostgresType>(
+        oplog,
+        Some(1),
+        if expected_restart { Some(1) } else { None },
+    );
 
     drop(executor);
 }
@@ -543,6 +559,7 @@ async fn rdbms_postgres_commit_recovery(
         postgres,
         "CommitedRemoteTransaction",
         true,
+        false,
     )
     .await;
 }
@@ -560,6 +577,7 @@ async fn rdbms_postgres_pre_commit_recovery(
         deps,
         postgres,
         "PreCommitRemoteTransaction",
+        true,
         true,
     )
     .await;
@@ -579,6 +597,7 @@ async fn rdbms_postgres_rollback_recovery(
         postgres,
         "RolledBackRemoteTransaction",
         false,
+        false,
     )
     .await;
 }
@@ -597,6 +616,7 @@ async fn rdbms_postgres_pre_rollback_recovery(
         postgres,
         "PreRollbackRemoteTransaction",
         false,
+        true,
     )
     .await;
 }
@@ -893,9 +913,20 @@ async fn rdbms_mysql_crud(
     )
     .await;
 
-    workers_resume_test(&executor, worker_ids1.clone()).await;
+    // workers_resume_test(&executor, worker_ids1.clone()).await;
+    //
+    // workers_resume_test(&executor, worker_ids3.clone()).await;
 
-    workers_resume_test(&executor, worker_ids3.clone()).await;
+    let worker_id = worker_ids1[0].clone();
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog_json = serde_json::to_string(&oplog);
+    check!(oplog_json.is_ok());
+
+    workers_interrupt_test(&executor, worker_ids1.clone()).await;
+    workers_interrupt_test(&executor, worker_ids3.clone()).await;
+
+    drop(executor);
+    let executor = start(deps, &context).await.unwrap();
 
     rdbms_workers_test::<MysqlType>(
         &executor,
@@ -1013,6 +1044,7 @@ async fn mysql_transaction_recovery_test(
     mysql: &DockerMysqlRdb,
     fail_on_oplog_entry: &str,
     commit: bool,
+    expected_restart: bool,
 ) {
     let db_address = mysql.public_connection_string();
     let context = TestContext::new(last_unique_id);
@@ -1123,7 +1155,11 @@ async fn mysql_transaction_recovery_test(
     check!(oplog_json.is_ok());
     // println!("{}", oplog_json.unwrap());
 
-    check_transaction_oplog_entries::<MysqlType>(oplog, Some(1), Some(1));
+    check_transaction_oplog_entries::<MysqlType>(
+        oplog,
+        Some(1),
+        if expected_restart { Some(1) } else { None },
+    );
 
     drop(executor);
 }
@@ -1142,6 +1178,7 @@ async fn rdbms_mysql_commit_recovery(
         mysql,
         "CommitedRemoteTransaction",
         true,
+        false,
     )
     .await;
 }
@@ -1159,6 +1196,7 @@ async fn rdbms_mysql_pre_commit_recovery(
         deps,
         mysql,
         "PreCommitRemoteTransaction",
+        true,
         true,
     )
     .await;
@@ -1178,6 +1216,7 @@ async fn rdbms_mysql_rollback_recovery(
         mysql,
         "RolledBackRemoteTransaction",
         false,
+        false,
     )
     .await;
 }
@@ -1196,6 +1235,7 @@ async fn rdbms_mysql_pre_rollback_recovery(
         mysql,
         "PreRollbackRemoteTransaction",
         false,
+        true,
     )
     .await;
 }
@@ -1559,6 +1599,43 @@ async fn start_workers<T: RdbmsType>(
     worker_ids
 }
 
+async fn workers_interrupt_test(executor: &TestWorkerExecutor, worker_ids: Vec<WorkerId>) {
+    let mut workers_results: HashMap<WorkerId, WorkerStatus> = HashMap::new();
+
+    let mut fibers = JoinSet::new();
+
+    for worker_id in worker_ids {
+        let worker_id_clone = worker_id.clone();
+        let executor_clone = executor.clone();
+        let _ = fibers.spawn(
+            async move {
+                executor_clone.interrupt(&worker_id_clone).await;
+
+                let metadata = executor_clone
+                    .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
+                    .await;
+
+                let status = metadata.last_known_status.status;
+
+                (worker_id_clone, status)
+            }
+            .in_current_span(),
+        );
+    }
+
+    while let Some(res) = fibers.join_next().await {
+        let (worker_id, status) = res.unwrap();
+        workers_results.insert(worker_id, status);
+    }
+
+    for (worker_id, status) in workers_results {
+        check!(
+            status == WorkerStatus::Idle,
+            "status for worker {worker_id} is Idle"
+        );
+    }
+}
+
 async fn workers_resume_test(executor: &TestWorkerExecutor, worker_ids: Vec<WorkerId>) {
     let mut workers_results: HashMap<WorkerId, WorkerStatus> = HashMap::new();
 
@@ -1571,10 +1648,15 @@ async fn workers_resume_test(executor: &TestWorkerExecutor, worker_ids: Vec<Work
             async move {
                 executor_clone.interrupt(&worker_id_clone).await;
                 executor_clone.resume(&worker_id_clone, false).await;
+                let _result = executor_clone
+                    .invoke_and_await(&worker_id_clone, "golem:it/api.{check}", vec![])
+                    .await
+                    .unwrap();
                 let metadata = executor_clone
                     .wait_for_status(&worker_id_clone, WorkerStatus::Idle, Duration::from_secs(3))
                     .await;
                 let status = metadata.last_known_status.status;
+
                 (worker_id_clone, status)
             }
             .in_current_span(),

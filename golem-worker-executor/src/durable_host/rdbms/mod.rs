@@ -552,21 +552,18 @@ where
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
 
     let pre_result = if ctx.durable_execution_state().is_live {
-        let result = db_transaction_pre_rollback(ctx, entry).await;
-        match result {
-            Ok(_) => {
-                ctx.state
-                    .pre_rollback_transaction_function(
-                        &DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
-                    )
-                    .await?;
-                Ok(())
-            }
-            Err(error) => Err(error),
-        }
+        db_transaction_pre_rollback(ctx, entry).await
     } else {
         Ok(())
     };
+
+    if pre_result.is_ok() {
+        ctx.state
+            .pre_rollback_transaction_function(&DurableFunctionType::WriteRemoteTransaction(Some(
+                begin_oplog_idx,
+            )))
+            .await?;
+    }
 
     match pre_result {
         Ok(_) => {
@@ -612,21 +609,18 @@ where
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
 
     let pre_result = if ctx.durable_execution_state().is_live {
-        let result = db_transaction_pre_commit(ctx, entry).await;
-        match result {
-            Ok(_) => {
-                ctx.state
-                    .pre_commit_transaction_function(&DurableFunctionType::WriteRemoteTransaction(
-                        Some(begin_oplog_idx),
-                    ))
-                    .await?;
-                Ok(())
-            }
-            Err(error) => Err(error),
-        }
+        db_transaction_pre_commit(ctx, entry).await
     } else {
         Ok(())
     };
+
+    if pre_result.is_ok() {
+        ctx.state
+            .pre_commit_transaction_function(&DurableFunctionType::WriteRemoteTransaction(Some(
+                begin_oplog_idx,
+            )))
+            .await?;
+    }
 
     match pre_result {
         Ok(_) => {
