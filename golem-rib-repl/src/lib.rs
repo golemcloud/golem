@@ -15,7 +15,6 @@
 #![allow(clippy::large_enum_variant)]
 
 pub use command::*;
-pub use command_registry::*;
 pub use dependency_manager::*;
 pub use invoke::*;
 pub use raw::*;
@@ -23,9 +22,9 @@ pub use repl_bootstrap_error::*;
 pub use repl_printer::*;
 pub use rib_execution_error::*;
 pub use rib_repl::*;
+pub use rib_context::*;
 
 mod command;
-mod command_registry;
 mod compiler;
 mod dependency_manager;
 mod eval;

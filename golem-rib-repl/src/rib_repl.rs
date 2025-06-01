@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command_registry::UntypedCommand;
 use crate::compiler::compile_rib_script;
 use crate::dependency_manager::RibDependencyManager;
 use crate::eval::eval;
@@ -21,13 +20,12 @@ use crate::repl_printer::{DefaultReplResultPrinter, ReplPrinter};
 use crate::repl_state::ReplState;
 use crate::rib_context::ReplContext;
 use crate::rib_edit::RibEdit;
-use crate::{Command, CommandRegistry, ReplBootstrapError, RibExecutionError};
+use crate::{CommandRegistry, ReplBootstrapError, RibExecutionError, UntypedCommand};
 use colored::Colorize;
 use rib::{RibCompiler, RibCompilerConfig, RibResult};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
-use std::fmt::Display;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -161,7 +159,7 @@ impl RibRepl {
         script_or_command: &str,
     ) -> Result<Option<RibResult>, RibExecutionError> {
         let script_or_command = CommandOrExpr::from_str(script_or_command, &self.command_registry)
-            .map_err(|err| RibExecutionError::Custom(err))?;
+            .map_err(RibExecutionError::Custom)?;
 
         match script_or_command {
             CommandOrExpr::Command { args, executor } => {
@@ -169,7 +167,7 @@ impl RibRepl {
                 let rib_compiler = self.repl_state.rib_compiler();
 
                 let repl_context =
-                    ReplContext::new(self.printer.as_ref(), &*script, &*rib_compiler);
+                    ReplContext::new(self.printer.as_ref(), &script, &rib_compiler);
 
                 executor.run(args.as_str(), &repl_context);
 
@@ -275,8 +273,7 @@ impl CommandOrExpr {
         if input.starts_with(":") {
             let repl_input = input.split_whitespace().collect::<Vec<&str>>();
 
-            let command_name = repl_input
-                .get(0)
+            let command_name = repl_input.first()
                 .map(|x| x.strip_prefix(":").unwrap_or(x).trim())
                 .ok_or("Expecting a command name after `:`".to_string())?;
 

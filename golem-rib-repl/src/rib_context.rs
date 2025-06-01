@@ -27,10 +27,10 @@ impl<'a> ReplContext<'a> {
     }
 
     pub fn get_rib_script(&self) -> &RawRibScript {
-        &self.rib_script
+        self.rib_script
     }
 
     pub fn get_rib_compiler(&self) -> &RibCompiler {
-        &self.compiler
+        self.compiler
     }
 }

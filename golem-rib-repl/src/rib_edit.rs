@@ -25,7 +25,6 @@ use rustyline::hint::Hinter;
 use rustyline::validate::{ValidationResult, Validator};
 use rustyline::{Context, Helper};
 use std::borrow::Cow;
-use std::fmt::format;
 
 #[derive(Default)]
 pub struct RibEdit {

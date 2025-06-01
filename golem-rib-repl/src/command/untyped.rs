@@ -1,0 +1,33 @@
+use convert_case::{Case, Casing};
+use crate::Command;
+use crate::rib_context::ReplContext;
+
+pub trait UntypedCommand {
+    fn run(&self, prompt_input: &str, repl_context: &ReplContext);
+    fn name(&self) -> String;
+}
+
+impl<T: Clone> UntypedCommand for T
+where
+    T: Command,
+    T::Input: 'static,
+    T::Output: 'static,
+    T::InputParseError: 'static,
+    T::ExecutionError: 'static,
+{
+    fn run(&self, prompt_input: &str, repl_context: &ReplContext) {
+        match self.parse(prompt_input, repl_context) {
+            Ok(input) => match self.execute(input, repl_context) {
+                Ok(output) => self.print_output(&output, repl_context),
+                Err(e) => self.print_execution_error(&e, repl_context),
+            },
+            Err(e) => self.print_input_parse_error(&e, repl_context),
+        }
+    }
+
+    fn name(&self) -> String {
+        let full = std::any::type_name::<T>();
+        let last = full.rsplit("::").next().unwrap_or(full);
+        last.to_case(Case::Kebab)
+    }
+}
