@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::dependency_manager::RibComponentMetadata;
-use crate::WorkerFunctionInvoke;
+use crate::{RawRibScript, WorkerFunctionInvoke};
 use golem_wasm_rpc::ValueAndType;
 use rib::InstructionId;
 use std::collections::HashMap;
@@ -64,10 +64,6 @@ impl ReplState {
         self.rib_script.write().unwrap().push(rib);
     }
 
-    pub fn update_dependency(&mut self, dependency: RibComponentMetadata) {
-        self.dependency = dependency;
-    }
-
     pub fn remove_last_rib_expression(&self) {
         self.rib_script.write().unwrap().pop();
     }
@@ -103,21 +99,4 @@ impl InvocationResultCache {
     }
 }
 
-#[derive(Default)]
-pub struct RawRibScript {
-    value: Vec<String>,
-}
 
-impl RawRibScript {
-    pub fn push(&mut self, rib: &str) {
-        self.value.push(rib.to_string());
-    }
-
-    pub fn pop(&mut self) {
-        self.value.pop();
-    }
-
-    pub fn as_text(&self) -> String {
-        self.value.join(";\n")
-    }
-}

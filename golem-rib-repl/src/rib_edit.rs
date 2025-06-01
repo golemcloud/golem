@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::compiler::{CompilerOutput, InstanceVariables};
+use crate::compiler::{ReplCompilerOutput, InstanceVariables};
 use crate::value_generator::generate_value;
 use colored::Colorize;
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeVariant};
@@ -27,7 +27,7 @@ use std::borrow::Cow;
 
 #[derive(Default)]
 pub struct RibEdit {
-    pub compiler_output: Option<CompilerOutput>,
+    pub compiler_output: Option<ReplCompilerOutput>,
     pub key_words: Vec<&'static str>,
     pub std_function_names: Vec<&'static str>,
 }
@@ -63,7 +63,7 @@ impl RibEdit {
             std_function_names: vec!["instance"],
         }
     }
-    pub fn update_progression(&mut self, compiler_output: &CompilerOutput) {
+    pub fn update_progression(&mut self, compiler_output: &ReplCompilerOutput) {
         self.compiler_output = Some(compiler_output.clone());
     }
 

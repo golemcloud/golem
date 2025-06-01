@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::rib_repl::ReplBootstrapError;
+use crate::ReplBootstrapError;
 use colored::Colorize;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{RibCompilationError, RibResult, RibRuntimeError};

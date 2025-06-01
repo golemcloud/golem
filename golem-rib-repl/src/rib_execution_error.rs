@@ -1,0 +1,19 @@
+use std::fmt::{Display, Formatter};
+use rib::{RibCompilationError, RibRuntimeError};
+
+#[derive(Debug)]
+pub enum RibExecutionError {
+    RibCompilationError(RibCompilationError),
+    RibRuntimeError(RibRuntimeError),
+}
+
+impl std::error::Error for RibExecutionError {}
+
+impl Display for RibExecutionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RibExecutionError::RibCompilationError(err) => write!(f, "{}", err),
+            RibExecutionError::RibRuntimeError(err) => write!(f, "{}", err),
+        }
+    }
+}

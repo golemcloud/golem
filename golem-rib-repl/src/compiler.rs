@@ -22,7 +22,7 @@ use std::sync::Arc;
 pub fn compile_rib_script(
     rib_script: &str,
     repl_state: &Arc<ReplState>,
-) -> Result<CompilerOutput, RibCompilationError> {
+) -> Result<ReplCompilerOutput, RibCompilationError> {
     let expr = Expr::from_text(rib_script)
         .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
 
@@ -43,7 +43,7 @@ pub fn compile_rib_script(
     let byte_code = RibByteCode::from_expr(&inferred_expr)
         .map_err(RibCompilationError::ByteCodeGenerationFail)?;
 
-    Ok(CompilerOutput {
+    Ok(ReplCompilerOutput {
         rib_byte_code: byte_code,
         instance_variables,
         identifiers,
@@ -53,7 +53,7 @@ pub fn compile_rib_script(
 }
 
 #[derive(Clone)]
-pub struct CompilerOutput {
+pub struct ReplCompilerOutput {
     pub rib_byte_code: RibByteCode,
     pub instance_variables: InstanceVariables,
     pub identifiers: Vec<VariableId>,

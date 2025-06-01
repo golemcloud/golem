@@ -19,18 +19,16 @@ use crate::invoke::WorkerFunctionInvoke;
 use crate::repl_printer::{DefaultReplResultPrinter, ReplPrinter};
 use crate::repl_state::ReplState;
 use crate::rib_edit::RibEdit;
-use async_trait::async_trait;
 use colored::Colorize;
-use golem_wasm_rpc::ValueAndType;
-use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId};
-use rib::{RibCompilationError, RibFunctionInvoke};
-use rib::{RibFunctionInvokeResult, RibResult, RibRuntimeError};
+use rib::{RibFunctionInvoke};
+use rib::{RibResult};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
+use crate::{ReplBootstrapError, RibExecutionError};
 
 /// The REPL environment for Rib, providing an interactive shell for executing Rib code.
 pub struct RibRepl {
@@ -148,7 +146,7 @@ impl RibRepl {
         if !rib.is_empty() {
             let rib = rib.strip_suffix(";").unwrap_or(rib);
 
-            self.update_rib(rib);
+            self.repl_state.update_rib(rib);
 
             // Add every rib script into the history (in memory) and save it
             // regardless of whether it compiles or not
@@ -158,9 +156,9 @@ impl RibRepl {
 
             match compile_rib_script(&self.current_rib_program(), &self.repl_state) {
                 Ok(compiler_output) => {
-                    let helper = self.editor.helper_mut().unwrap();
+                    let rib_edit = self.editor.helper_mut().unwrap();
 
-                    helper.update_progression(&compiler_output);
+                    rib_edit.update_progression(&compiler_output);
 
                     let result = eval(compiler_output.rib_byte_code, &self.repl_state).await;
 
@@ -219,29 +217,9 @@ impl RibRepl {
         }
     }
 
-    fn update_rib(&mut self, rib_text: &str) {
-        self.repl_state.update_rib(rib_text);
-    }
 
     fn current_rib_program(&self) -> String {
         self.repl_state.current_rib_program()
-    }
-}
-
-#[derive(Debug)]
-pub enum RibExecutionError {
-    RibCompilationError(RibCompilationError),
-    RibRuntimeError(RibRuntimeError),
-}
-
-impl std::error::Error for RibExecutionError {}
-
-impl Display for RibExecutionError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RibExecutionError::RibCompilationError(err) => write!(f, "{}", err),
-            RibExecutionError::RibRuntimeError(err) => write!(f, "{}", err),
-        }
     }
 }
 
@@ -263,112 +241,3 @@ fn get_default_history_file() -> PathBuf {
     path
 }
 
-/// Represents errors that can occur during the bootstrap phase of the Rib REPL environment.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ReplBootstrapError {
-    /// Multiple components were found, but the REPL requires a single component context.
-    ///
-    /// To resolve this, either:
-    /// - Ensure the context includes only one component, or
-    /// - Explicitly specify the component to load when starting the REPL.
-    ///
-    /// In the future, Rib will support multiple components
-    MultipleComponentsFound(String),
-
-    /// No components were found in the given context.
-    NoComponentsFound,
-
-    /// Failed to load a specified component.
-    ComponentLoadError(String),
-
-    /// Failed to read from or write to the REPL history file.
-    ReplHistoryFileError(String),
-}
-
-impl std::error::Error for ReplBootstrapError {}
-
-impl Display for ReplBootstrapError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ReplBootstrapError::MultipleComponentsFound(msg) => {
-                write!(f, "Multiple components found: {}", msg)
-            }
-            ReplBootstrapError::NoComponentsFound => {
-                write!(f, "No components found in the given context")
-            }
-            ReplBootstrapError::ComponentLoadError(msg) => {
-                write!(f, "Failed to load component: {}", msg)
-            }
-            ReplBootstrapError::ReplHistoryFileError(msg) => {
-                write!(f, "Failed to read/write REPL history file: {}", msg)
-            }
-        }
-    }
-}
-
-// Note: Currently, the Rib interpreter supports only one component, so the
-// `RibFunctionInvoke` trait in the `golem-rib` module does not include `component_id` in
-// the `invoke` arguments. It only requires the optional worker name, function name, and arguments.
-// Once multi-component support is added, the trait will be updated to include `component_id`,
-// and we can use it directly instead of `WorkerFunctionInvoke` in the `golem-rib-repl` module.
-pub struct ReplRibFunctionInvoke {
-    repl_state: Arc<ReplState>,
-}
-
-impl ReplRibFunctionInvoke {
-    pub fn new(repl_state: Arc<ReplState>) -> Self {
-        Self { repl_state }
-    }
-
-    fn get_cached_result(&self, instruction_id: &InstructionId) -> Option<ValueAndType> {
-        // If the current instruction index is greater than the last played index result,
-        // then we shouldn't use the cache result no matter what.
-        // This check is important because without this, loops end up reusing the cached invocation result
-        if instruction_id.index > self.repl_state.last_executed_instruction().index {
-            None
-        } else {
-            self.repl_state.invocation_results().get(instruction_id)
-        }
-    }
-}
-
-#[async_trait]
-impl RibFunctionInvoke for ReplRibFunctionInvoke {
-    async fn invoke(
-        &self,
-        instruction_id: &InstructionId,
-        worker_name: Option<EvaluatedWorkerName>,
-        function_name: EvaluatedFqFn,
-        args: EvaluatedFnArgs,
-    ) -> RibFunctionInvokeResult {
-        let component_id = self.repl_state.dependency().component_id;
-        let component_name = &self.repl_state.dependency().component_name;
-
-        match self.get_cached_result(instruction_id) {
-            Some(result) => Ok(result),
-            None => {
-                let rib_invocation_result = self
-                    .repl_state
-                    .worker_function_invoke()
-                    .invoke(
-                        component_id,
-                        component_name,
-                        worker_name.map(|x| x.0),
-                        function_name.0.as_str(),
-                        args.0,
-                    )
-                    .await;
-
-                match rib_invocation_result {
-                    Ok(result) => {
-                        self.repl_state
-                            .update_cache(instruction_id.clone(), result.clone());
-
-                        Ok(result)
-                    }
-                    Err(err) => Err(err.into()),
-                }
-            }
-        }
-    }
-}
