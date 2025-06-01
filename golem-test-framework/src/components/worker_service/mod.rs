@@ -106,6 +106,8 @@ use tracing::Level;
 use url::Url;
 use uuid::Uuid;
 
+use super::cloud_service::CloudService;
+
 pub mod docker;
 pub mod forwarding;
 pub mod k8s;
@@ -113,9 +115,9 @@ pub mod provided;
 pub mod spawned;
 
 #[derive(Clone)]
-pub enum CloudServiceClient {
-    Grpc(CloudAuthServiceClient<Channel>),
-    Http(Arc<CloudServiceHttpClientLive>),
+pub enum WorkerServiceClient {
+    Grpc(WorkerServiceGrpcClient<Channel>),
+    Http(Arc<WorkerServiceHttpClientLive>),
 }
 
 #[derive(Clone)]
@@ -143,6 +145,7 @@ pub trait WorkerServiceInternal: Send + Sync {
     fn api_deployment_client(&self) -> ApiDeploymentServiceClient;
     fn api_security_client(&self) -> ApiSecurityServiceClient;
     fn component_service(&self) -> &Arc<dyn ComponentService>;
+    fn cloud_service(&self) -> Arc<dyn CloudService>;
 }
 
 #[async_trait]
@@ -957,30 +960,33 @@ pub trait WorkerService: WorkerServiceInternal {
                     }
                 }
             }
-            ApiDefinitionServiceClient::Http(client) => match request.api_definition.unwrap() {
-                create_api_definition_request::ApiDefinition::Definition(request) => {
-                    match client
-                        .create_definition_json(
-                            &grpc_api_definition_request_to_http(request, self.component_service())
-                                .await,
-                        )
+            ApiDefinitionServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+                match request.api_definition.unwrap() {
+                    create_api_definition_request::ApiDefinition::Definition(request) => {
+                        match client
+                            .create_definition_json(
+                                &default_project.0,
+                                &grpc_api_definition_request_to_http(request, self.component_service()).await,
+                            )
+                            .await
+                        {
+                            Ok(result) => {
+                                Ok(http_api_definition_to_grpc(result, self.component_service()).await)
+                            }
+                            Err(error) => Err(anyhow!("{error:?}")),
+                        }
+                    }
+                    create_api_definition_request::ApiDefinition::Openapi(open_api) => match client
+                        .import_open_api_yaml(&default_project.0, &serde_yaml::from_str(&open_api)?)
                         .await
                     {
                         Ok(result) => {
                             Ok(http_api_definition_to_grpc(result, self.component_service()).await)
                         }
                         Err(error) => Err(anyhow!("{error:?}")),
-                    }
+                    },
                 }
-                create_api_definition_request::ApiDefinition::Openapi(open_api) => match client
-                    .import_open_api_yaml(&serde_yaml::from_str(&open_api)?)
-                    .await
-                {
-                    Ok(result) => {
-                        Ok(http_api_definition_to_grpc(result, self.component_service()).await)
-                    }
-                    Err(error) => Err(anyhow!("{error:?}")),
-                },
             },
         }
     }
@@ -1004,33 +1010,36 @@ pub trait WorkerService: WorkerServiceInternal {
                     }
                 }
             }
-            ApiDefinitionServiceClient::Http(client) => match request.api_definition.unwrap() {
-                update_api_definition_request::ApiDefinition::Definition(request) => {
-                    match client
-                        .update_definition_yaml(
-                            &request.id.clone().unwrap().value,
-                            &request.clone().version,
-                            &grpc_api_definition_request_to_http(
-                                ApiDefinitionRequest {
-                                    id: request.id,
-                                    version: request.version,
-                                    draft: request.draft,
-                                    definition: request.definition,
-                                },
-                                self.component_service(),
+            ApiDefinitionServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+                match request.api_definition.unwrap() {
+                    update_api_definition_request::ApiDefinition::Definition(request) => {
+                        match client.update_definition_yaml(
+                                &default_project,
+                                &request.id.clone().unwrap().value,
+                                &request.clone().version,
+                                &grpc_api_definition_request_to_http(
+                                    ApiDefinitionRequest {
+                                        id: request.id,
+                                        version: request.version,
+                                        draft: request.draft,
+                                        definition: request.definition,
+                                    },
+                                    self.component_service(),
+                                )
+                                .await,
                             )
-                            .await,
-                        )
-                        .await
-                    {
-                        Ok(result) => {
-                            Ok(http_api_definition_to_grpc(result, self.component_service()).await)
+                            .await
+                        {
+                            Ok(result) => {
+                                Ok(http_api_definition_to_grpc(result, self.component_service()).await)
+                            }
+                            Err(error) => Err(anyhow!("{error:?}")),
                         }
-                        Err(error) => Err(anyhow!("{error:?}")),
                     }
-                }
-                update_api_definition_request::ApiDefinition::Openapi(_) => {
-                    todo!() // TODO: see worker-service-base for how this is interpreted
+                    update_api_definition_request::ApiDefinition::Openapi(_) => {
+                        todo!() // TODO: see worker-service-base for how this is interpreted
+                    }
                 }
             },
         }
@@ -1052,8 +1061,13 @@ pub trait WorkerService: WorkerServiceInternal {
                 get_api_definition_response::Result::Error(error) => Err(anyhow!("{error:?}")),
             },
             ApiDefinitionServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
                 match client
-                    .get_definition(&request.api_definition_id.unwrap().value, &request.version)
+                    .get_definition(
+                        &default_project,
+                        &request.api_definition_id.unwrap().value,
+                        &request.version
+                    )
                     .await
                 {
                     Ok(definition) => {
@@ -1085,8 +1099,10 @@ pub trait WorkerService: WorkerServiceInternal {
                 }
             },
             ApiDefinitionServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+
                 match client
-                    .list_definitions(request.api_definition_id.map(|id| id.value).as_deref())
+                    .list_definitions(&default_project.0, request.api_definition_id.map(|id| id.value).as_deref())
                     .await
                 {
                     Ok(result) => Ok(join_all(result.into_iter().map(async |def| {
@@ -1111,12 +1127,15 @@ pub trait WorkerService: WorkerServiceInternal {
                 get_all_api_definitions_response::Result::Success(result) => Ok(result.definitions),
                 get_all_api_definitions_response::Result::Error(error) => Err(anyhow!("{error:?}")),
             },
-            ApiDefinitionServiceClient::Http(client) => match client.list_definitions(None).await {
-                Ok(result) => Ok(join_all(result.into_iter().map(async |def| {
-                    http_api_definition_to_grpc(def, self.component_service()).await
-                }))
-                .await),
-                Err(error) => Err(anyhow!("{error:?}")),
+            ApiDefinitionServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+                match client.list_definitions(&default_project.0, None).await {
+                    Ok(result) => Ok(join_all(result.into_iter().map(async |def| {
+                        http_api_definition_to_grpc(def, self.component_service()).await
+                    }))
+                    .await),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
             },
         }
     }
@@ -1139,8 +1158,9 @@ pub trait WorkerService: WorkerServiceInternal {
                 }
             }
             ApiDefinitionServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
                 match client
-                    .delete_definition(&request.api_definition_id.unwrap().value, &request.version)
+                    .delete_definition(&default_project, &request.api_definition_id.unwrap().value, &request.version)
                     .await
                 {
                     Ok(_) => Ok(()),
@@ -1166,10 +1186,13 @@ pub trait WorkerService: WorkerServiceInternal {
     async fn get_api_deployment(&self, site: &str) -> crate::Result<ApiDeployment> {
         match self.api_deployment_client() {
             ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("get_api_deployment"),
-            ApiDeploymentServiceClient::Http(client) => client
-                .get_deployment(site)
-                .await
-                .map_err(|error| anyhow!("{error:?}")),
+            ApiDeploymentServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+                client
+                    .get_deployment(&default_project, site)
+                    .await
+                    .map_err(|error| anyhow!("{error:?}"))
+            }
         }
     }
 
@@ -1179,10 +1202,14 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<Vec<ApiDeployment>> {
         match self.api_deployment_client() {
             ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("list_api_deployments"),
-            ApiDeploymentServiceClient::Http(client) => client
-                .list_deployments(api_definition_id)
-                .await
-                .map_err(|error| anyhow!("{error:?}")),
+            ApiDeploymentServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await.unwrap();
+
+                client
+                    .list_deployments(&default_project.0, api_definition_id)
+                    .await
+                    .map_err(|error| anyhow!("{error:?}"))
+            }
         }
     }
 
@@ -1190,7 +1217,8 @@ pub trait WorkerService: WorkerServiceInternal {
         match self.api_deployment_client() {
             ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("delete_api_deployment"),
             ApiDeploymentServiceClient::Http(client) => {
-                match client.delete_deployment(site).await {
+                let default_project = self.cloud_service().get_default_project().await?;
+                match client.delete_deployment(&default_project.0, site).await {
                     Ok(_) => Ok(()),
                     Err(error) => Err(anyhow!("{error:?}")),
                 }
@@ -1206,10 +1234,14 @@ pub trait WorkerService: WorkerServiceInternal {
             ApiSecurityServiceClient::Grpc => {
                 not_available_on_grpc_api("create_api_security_scheme")
             }
-            ApiSecurityServiceClient::Http(client) => client
-                .create(&request)
-                .await
-                .map_err(|error| anyhow!("{error:?}")),
+            ApiSecurityServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+
+                client
+                    .create(&default_project.0, &request)
+                    .await
+                    .map_err(|error| anyhow!("{error:?}")),
+            }
         }
     }
 
