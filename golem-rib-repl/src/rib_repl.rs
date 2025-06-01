@@ -20,7 +20,7 @@ use crate::repl_printer::{DefaultReplResultPrinter, ReplPrinter};
 use crate::repl_state::ReplState;
 use crate::rib_edit::RibEdit;
 use colored::Colorize;
-use rib::{RibResult};
+use rib::{RibCompiler, RibResult};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
@@ -29,16 +29,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use crate::{Command, CommandRegistry, ReplBootstrapError, RibExecutionError};
 use crate::command_registry::UntypedCommand;
-
-/// The REPL environment for Rib, providing an interactive shell for executing Rib code.
-pub struct RibRepl {
-    history_file_path: PathBuf,
-    printer: Box<dyn ReplPrinter>,
-    editor: Editor<RibEdit, DefaultHistory>,
-    repl_state: Arc<ReplState>,
-    prompt: String,
-    command_registry: CommandRegistry
-}
+use crate::rib_context::ReplContext;
 
 /// Config options:
 ///
@@ -63,6 +54,16 @@ pub struct RibReplConfig {
     pub command_registry: Option<CommandRegistry>,
 }
 
+/// The REPL environment for Rib, providing an interactive shell for executing Rib code.
+pub struct RibRepl {
+    history_file_path: PathBuf,
+    printer: Box<dyn ReplPrinter>,
+    editor: Editor<RibEdit, DefaultHistory>,
+    repl_state: Arc<ReplState>,
+    prompt: String,
+    command_registry: CommandRegistry,
+}
+
 impl RibRepl {
     /// Bootstraps and initializes the Rib REPL environment and returns a `RibRepl` instance,
     /// which can be used to `run` the REPL.
@@ -70,7 +71,9 @@ impl RibRepl {
     pub async fn bootstrap(config: RibReplConfig) -> Result<RibRepl, ReplBootstrapError> {
         let history_file_path = config.history_file.unwrap_or_else(get_default_history_file);
 
-        let helper = RibEdit::init();
+        let command_registry =  CommandRegistry::built_in();
+
+        let helper = RibEdit::init(&command_registry);
 
         let mut rl = Editor::<RibEdit, DefaultHistory>::with_history(
             Config::default(),
@@ -120,8 +123,6 @@ impl RibRepl {
 
         let repl_state = ReplState::new(&component_dependency, config.worker_function_invoke);
 
-        let command_registry =  CommandRegistry::built_in();
-
         Ok(RibRepl {
             history_file_path,
             printer: config
@@ -130,7 +131,7 @@ impl RibRepl {
             editor: rl,
             repl_state: Arc::new(repl_state),
             prompt: config.prompt.unwrap_or_else(|| ">>> ".cyan().to_string()),
-            command_registry
+            command_registry,
         })
     }
 
@@ -152,7 +153,14 @@ impl RibRepl {
             .map_err(|err| RibExecutionError::Custom(err))?;
 
         match script_or_command {
-            CommandOrExpr::Command { _args, _executor } => {
+            CommandOrExpr::Command { args, executor } => {
+                let repl_context = ReplContext::new(
+                    self.printer.as_ref(),
+                    self.repl_state.rib_script().clone(),
+                );
+
+                executor.run(args.as_str(), &repl_context);
+
                 Ok(None)
             }
             CommandOrExpr::RawExpr(script) => {

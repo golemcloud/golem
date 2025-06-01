@@ -24,12 +24,14 @@ use rustyline::hint::Hinter;
 use rustyline::validate::{ValidationResult, Validator};
 use rustyline::{Context, Helper};
 use std::borrow::Cow;
+use crate::CommandRegistry;
 
 #[derive(Default)]
 pub struct RibEdit {
     pub compiler_output: Option<ReplCompilerOutput>,
     pub key_words: Vec<&'static str>,
     pub std_function_names: Vec<&'static str>,
+    pub repl_commands: Vec<String>,
 }
 
 impl RibEdit {
@@ -53,7 +55,7 @@ impl RibEdit {
         self.compiler_output.as_ref().map(|output| &output.enums)
     }
 
-    pub fn init() -> RibEdit {
+    pub fn init(command_registry: &CommandRegistry) -> RibEdit {
         RibEdit {
             compiler_output: None,
             key_words: vec![
@@ -61,6 +63,8 @@ impl RibEdit {
                 "none", "ok", "err",
             ],
             std_function_names: vec!["instance"],
+            repl_commands: command_registry.get_commands(),
+
         }
     }
     pub fn update_progression(&mut self, compiler_output: &ReplCompilerOutput) {
@@ -77,6 +81,25 @@ impl RibEdit {
                 (!is_token_char).then(|| pos + c.len_utf8())
             })
             .unwrap_or(0)
+    }
+
+    fn complete_commands(
+        &self,
+        word: &str,
+        start: usize,
+    ) -> Option<(usize, Vec<String>)> {
+        let commands = self.repl_commands.clone();
+
+        let completions: Vec<String> = commands
+            .into_iter()
+            .filter(|cmd| cmd.starts_with(word))
+            .collect();
+
+        if completions.is_empty() {
+            None
+        } else {
+            Some((start, completions))
+        }
     }
 
     fn complete_method_calls(
@@ -270,6 +293,11 @@ impl Completer for RibEdit {
             return Ok((new_start, completions));
         }
 
+        if let Some((new_start, new_completions)) = self.complete_commands(word, start) {
+            completions.extend(new_completions);
+            return Ok((new_start, completions));
+        }
+
         if let Some((new_start, new_completions)) = self.complete_variants(word, start, end_pos)? {
             completions.extend(new_completions);
             return Ok((new_start, completions));
@@ -355,7 +383,13 @@ impl Validator for RibEdit {
         context: &mut rustyline::validate::ValidationContext,
     ) -> rustyline::Result<ValidationResult> {
         let input = context.input();
-        let expr = Expr::from_text(input.strip_suffix(";").unwrap_or(input));
+
+        if input.starts_with(":") {
+            return Ok(ValidationResult::Valid(None));
+        }
+
+        let expr =
+            Expr::from_text(input.strip_suffix(";").unwrap_or(input));
 
         match expr {
             Ok(_) => Ok(ValidationResult::Valid(None)),

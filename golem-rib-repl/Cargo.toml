@@ -24,6 +24,7 @@ golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 colored = { workspace = true }
+convert_case = { workspace = true }
 dirs = { workspace = true }
 prometheus = { workspace = true }
 rustyline = { workspace = true }

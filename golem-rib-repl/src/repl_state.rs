@@ -56,6 +56,10 @@ impl ReplState {
         *self.last_executed_instruction.write().unwrap() = Some(instruction_id);
     }
 
+    pub fn rib_script(&self) -> RawRibScript {
+        self.rib_script.read().unwrap().clone()
+    }
+
     pub fn current_rib_program(&self) -> String {
         self.rib_script.read().unwrap().as_text()
     }

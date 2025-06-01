@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use convert_case::{Case, Casing};
 use golem_wasm_ast::analysis::AnalysedType;
-use rib::{CompilerOutput, Expr, RibCompilationError};
+use rib::{CompilerOutput, Expr, RibCompilationError, RibCompiler};
 use crate::{Command};
 use crate::rib_context::ReplContext;
 
@@ -16,6 +17,13 @@ impl CommandRegistry {
         registry.register(TypeInfo);
         registry
     }
+
+    pub fn get_commands(&self) -> Vec<String> {
+        self.commands.keys()
+            .map(|name| name.to_string())
+            .collect()
+    }
+
     pub fn register<T>(&mut self, command: T)
     where T: UntypedCommand + 'static,
     {
@@ -34,7 +42,7 @@ impl CommandRegistry {
 
 pub trait UntypedCommand {
     fn run(&self, prompt_input: &str, repl_context: &ReplContext);
-    fn name(&self) -> &str;
+    fn name(&self) -> String;
 }
 
 impl<T: Clone> UntypedCommand for T
@@ -55,8 +63,10 @@ where
         }
     }
 
-    fn name(&self) -> &str {
-        std::any::type_name::<T>()
+    fn name(&self) -> String {
+        let full = std::any::type_name::<T>();
+        let last = full.rsplit("::").next().unwrap_or(full);
+        last.to_case(Case::Kebab)
     }
 }
 
@@ -76,8 +86,10 @@ impl Command for TypeInfo {
         let expr = Expr::from_text(&existing_raw_script.as_text())
             .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
 
+        let compiler = RibCompiler::default();
+
         let compiler_output: CompilerOutput =
-            repl_context.get_compiler().compile(expr)?;
+            compiler.compile(expr)?;
 
         Ok(compiler_output)
     }
