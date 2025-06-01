@@ -2322,26 +2322,16 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         let mut aborted = false;
                         if pre_entry.is_pre_commit_remote_transaction(begin_index) {
                             let commited = handler.is_committed(&tx_id).await?;
-                            if commited {
-                                self.oplog
-                                    .add_and_commit(OplogEntry::commited_remote_transaction(
-                                        begin_index,
-                                    ))
-                                    .await;
-                            } else {
-                                aborted = true;
-                            }
+                            // println!(
+                            //     "begin_transaction_function tx_id {tx_id}, pre commit - commited: {commited}",
+                            // );
+                            aborted = !commited;
                         } else if pre_entry.is_pre_rollback_remote_transaction(begin_index) {
                             let rolled_back = handler.is_rolled_back(&tx_id).await?;
-                            if rolled_back {
-                                self.oplog
-                                    .add_and_commit(OplogEntry::rolled_back_remote_transaction(
-                                        begin_index,
-                                    ))
-                                    .await;
-                            } else {
-                                aborted = true;
-                            }
+                            // println!(
+                            //     "begin_transaction_function tx_id {tx_id}, pre rollback - rolled_back: {rolled_back}",
+                            // );
+                            aborted = !rolled_back;
                         }
 
                         let _ = handler.cleanup(&tx_id).await;

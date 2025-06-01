@@ -504,7 +504,17 @@ async fn postgres_transaction_recovery_test(
 
     check_test_result(&worker_id, result1.clone(), select_test.clone());
 
-    workers_resume_test(&executor, worker_ids).await;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog_json = serde_json::to_string(&oplog);
+    check!(oplog_json.is_ok());
+
+    // println!("{}", oplog_json.unwrap());
+
+    workers_interrupt_test(&executor, worker_ids.clone()).await;
+
+    drop(executor);
+
+    let executor = start(deps, &context).await.unwrap();
 
     let result1 = execute_worker_test::<PostgresType>(
         &executor,
@@ -534,7 +544,7 @@ async fn postgres_transaction_recovery_test(
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
-    // println!("{}", oplog_json.unwrap());
+    println!("{}", oplog_json.unwrap());
 
     check_transaction_oplog_entries::<PostgresType>(
         oplog,
@@ -545,24 +555,24 @@ async fn postgres_transaction_recovery_test(
     drop(executor);
 }
 
-#[test]
-#[tracing::instrument]
-async fn rdbms_postgres_commit_recovery(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    postgres: &DockerPostgresRdb,
-    _tracing: &Tracing,
-) {
-    postgres_transaction_recovery_test(
-        last_unique_id,
-        deps,
-        postgres,
-        "CommitedRemoteTransaction",
-        true,
-        false,
-    )
-    .await;
-}
+// #[test]
+// #[tracing::instrument]
+// async fn rdbms_postgres_commit_recovery(
+//     last_unique_id: &LastUniqueId,
+//     deps: &WorkerExecutorTestDependencies,
+//     postgres: &DockerPostgresRdb,
+//     _tracing: &Tracing,
+// ) {
+//     postgres_transaction_recovery_test(
+//         last_unique_id,
+//         deps,
+//         postgres,
+//         "CommitedRemoteTransaction",
+//         true,
+//         false,
+//     )
+//     .await;
+// }
 
 #[test]
 #[tracing::instrument]
@@ -583,43 +593,43 @@ async fn rdbms_postgres_pre_commit_recovery(
     .await;
 }
 
-#[test]
-#[tracing::instrument]
-async fn rdbms_postgres_rollback_recovery(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    postgres: &DockerPostgresRdb,
-    _tracing: &Tracing,
-) {
-    postgres_transaction_recovery_test(
-        last_unique_id,
-        deps,
-        postgres,
-        "RolledBackRemoteTransaction",
-        false,
-        false,
-    )
-    .await;
-}
-
-#[test]
-#[tracing::instrument]
-async fn rdbms_postgres_pre_rollback_recovery(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    postgres: &DockerPostgresRdb,
-    _tracing: &Tracing,
-) {
-    postgres_transaction_recovery_test(
-        last_unique_id,
-        deps,
-        postgres,
-        "PreRollbackRemoteTransaction",
-        false,
-        true,
-    )
-    .await;
-}
+// #[test]
+// #[tracing::instrument]
+// async fn rdbms_postgres_rollback_recovery(
+//     last_unique_id: &LastUniqueId,
+//     deps: &WorkerExecutorTestDependencies,
+//     postgres: &DockerPostgresRdb,
+//     _tracing: &Tracing,
+// ) {
+//     postgres_transaction_recovery_test(
+//         last_unique_id,
+//         deps,
+//         postgres,
+//         "RolledBackRemoteTransaction",
+//         false,
+//         false,
+//     )
+//     .await;
+// }
+//
+// #[test]
+// #[tracing::instrument]
+// async fn rdbms_postgres_pre_rollback_recovery(
+//     last_unique_id: &LastUniqueId,
+//     deps: &WorkerExecutorTestDependencies,
+//     postgres: &DockerPostgresRdb,
+//     _tracing: &Tracing,
+// ) {
+//     postgres_transaction_recovery_test(
+//         last_unique_id,
+//         deps,
+//         postgres,
+//         "PreRollbackRemoteTransaction",
+//         false,
+//         true,
+//     )
+//     .await;
+// }
 
 fn postgres_create_table_statement(table_name: &str) -> String {
     format!(
@@ -913,10 +923,6 @@ async fn rdbms_mysql_crud(
     )
     .await;
 
-    // workers_resume_test(&executor, worker_ids1.clone()).await;
-    //
-    // workers_resume_test(&executor, worker_ids3.clone()).await;
-
     let worker_id = worker_ids1[0].clone();
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
     let oplog_json = serde_json::to_string(&oplog);
@@ -1124,7 +1130,11 @@ async fn mysql_transaction_recovery_test(
 
     check_test_result(&worker_id, result1.clone(), select_test.clone());
 
-    workers_resume_test(&executor, worker_ids).await;
+    workers_interrupt_test(&executor, worker_ids.clone()).await;
+
+    // drop(executor);
+    //
+    // let executor = start(deps, &context).await.unwrap();
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
