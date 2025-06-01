@@ -1015,7 +1015,7 @@ pub trait WorkerService: WorkerServiceInternal {
                 match request.api_definition.unwrap() {
                     update_api_definition_request::ApiDefinition::Definition(request) => {
                         match client.update_definition_yaml(
-                                &default_project,
+                                &default_project.0,
                                 &request.id.clone().unwrap().value,
                                 &request.clone().version,
                                 &grpc_api_definition_request_to_http(
@@ -1064,7 +1064,7 @@ pub trait WorkerService: WorkerServiceInternal {
                 let default_project = self.cloud_service().get_default_project().await?;
                 match client
                     .get_definition(
-                        &default_project,
+                        &default_project.0,
                         &request.api_definition_id.unwrap().value,
                         &request.version
                     )
@@ -1160,7 +1160,7 @@ pub trait WorkerService: WorkerServiceInternal {
             ApiDefinitionServiceClient::Http(client) => {
                 let default_project = self.cloud_service().get_default_project().await?;
                 match client
-                    .delete_definition(&default_project, &request.api_definition_id.unwrap().value, &request.version)
+                    .delete_definition(&default_project.0, &request.api_definition_id.unwrap().value, &request.version)
                     .await
                 {
                     Ok(_) => Ok(()),
@@ -1189,7 +1189,7 @@ pub trait WorkerService: WorkerServiceInternal {
             ApiDeploymentServiceClient::Http(client) => {
                 let default_project = self.cloud_service().get_default_project().await?;
                 client
-                    .get_deployment(&default_project, site)
+                    .get_deployment(&default_project.0, site)
                     .await
                     .map_err(|error| anyhow!("{error:?}"))
             }
@@ -1240,7 +1240,7 @@ pub trait WorkerService: WorkerServiceInternal {
                 client
                     .create(&default_project.0, &request)
                     .await
-                    .map_err(|error| anyhow!("{error:?}")),
+                    .map_err(|error| anyhow!("{error:?}"))
             }
         }
     }
@@ -1251,10 +1251,14 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<SecuritySchemeData> {
         match self.api_security_client() {
             ApiSecurityServiceClient::Grpc => not_available_on_grpc_api("get_api_security_scheme"),
-            ApiSecurityServiceClient::Http(client) => client
-                .get(security_scheme_id)
-                .await
-                .map_err(|error| anyhow!("{error:?}")),
+            ApiSecurityServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+
+                client
+                    .get(&default_project.0, security_scheme_id)
+                    .await
+                    .map_err(|error| anyhow!("{error:?}"))
+            }
         }
     }
 
@@ -1285,7 +1289,9 @@ pub trait WorkerService: WorkerServiceInternal {
         match self.api_deployment_client() {
             ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("undeploy_api"),
             ApiDeploymentServiceClient::Http(client) => {
-                match client.undeploy_api(site, id, version).await {
+                let default_project = self.cloud_service().get_default_project().await?;
+
+                match client.undeploy_api(&default_project.0, site, id, version).await {
                     Ok(_) => Ok(()),
                     Err(error) => Err(anyhow!("{error:?}")),
                 }

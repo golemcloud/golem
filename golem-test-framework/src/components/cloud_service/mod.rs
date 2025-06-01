@@ -106,7 +106,7 @@ pub trait CloudService: CloudServiceInternal {
                     get_default_project_response::Result::Error(error) => Err(anyhow!("{error:?}"))
                 }
             }
-            ProjectServiceClient::Http(client) => client.get_default_project().await?.project_id.try_into().unwrap()
+            ProjectServiceClient::Http(client) => Ok(ProjectId(client.get_default_project().await?.project_id))
         }
     }
 
