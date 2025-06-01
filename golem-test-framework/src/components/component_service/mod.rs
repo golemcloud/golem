@@ -43,6 +43,7 @@ use golem_client::api::ComponentClient as ComponentServiceHttpClient;
 use golem_client::api::ComponentClientLive as ComponentServiceHttpClientLive;
 use golem_client::api::PluginClient as PluginServiceHttpClient;
 use golem_client::api::PluginClientLive as PluginServiceHttpClientLive;
+use golem_client::model::ComponentQuery;
 use golem_client::Context;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::PluginTypeSpecificDefinition;
@@ -188,7 +189,7 @@ pub trait ComponentService: ComponentServiceInternal {
                     panic!("get_components: project id is not supported")
                 }
                 match client
-                    .get_components(request.component_name.as_deref())
+                    .get_components(None, request.component_name.as_deref())
                     .await
                 {
                     Ok(components) => {
@@ -316,7 +317,7 @@ pub trait ComponentService: ComponentServiceInternal {
                     }
                 }
                 ComponentServiceClient::Http(client) => {
-                    match client.get_components(Some(name)).await {
+                    match client.get_components(None, Some(name)).await {
                         Ok(result) => {
                             debug!("Response from get_components (HTTP) was {result:?}");
                             let max = result
@@ -490,9 +491,9 @@ pub trait ComponentService: ComponentServiceInternal {
 
                 match client
                     .create_component(
-                        name,
-                        Some(&component_type),
+                        &ComponentQuery { project_id: None, component_name: name.to_string() },
                         file,
+                        Some(&component_type),
                         to_http_file_permissions(files).as_ref(),
                         archive_file,
                         to_http_dynamic_linking(Some(dynamic_linking)).as_ref(),
@@ -750,7 +751,7 @@ pub trait ComponentService: ComponentServiceInternal {
 
                         client
                             .create_plugin(
-                                &golem_client::model::PluginDefinitionCreationDefaultPluginScope {
+                                &golem_client::model::PluginDefinitionCreationCloudPluginScope {
                                     name: definition.name,
                                     version: definition.version,
                                     description: definition.description,

@@ -38,7 +38,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         &[
             ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
             ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
-            ("CloudPluginScope", "crate::CloudPluginScope"),
+            ("CloudPluginScope", "cloud_common::model::CloudPluginScope"),
             (
                 "ComponentMetadata",
                 "golem_common::model::component_metadata::ComponentMetadata",

@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::auth::{AuthServiceError, BaseAuthService, CloudAuthService};
 use cloud_common::model::ProjectAction;
-use golem_worker_executor::services::config::CloudComponentServiceConfig;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
     get_component_metadata_response, GetLatestComponentRequest,

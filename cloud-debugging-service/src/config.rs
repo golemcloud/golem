@@ -1,7 +1,4 @@
 use cloud_common::config::RemoteCloudServiceConfig;
-use golem_worker_executor::services::config::{
-    CloudComponentCacheConfig, CloudComponentServiceConfig,
-};
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
@@ -12,7 +9,7 @@ use golem_worker_executor::services::golem_config::{
     KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, PluginServiceConfig,
     ProjectServiceConfig, RdbmsConfig, ResourceLimitsConfig, SchedulerConfig,
     ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SuspendConfig,
-    WorkerExecutorMode, WorkerServiceGrpcConfig,
+    WorkerServiceGrpcConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -73,7 +70,6 @@ impl DebugConfig {
             component_service: ComponentServiceConfig::Grpc(self.component_service),
             component_cache: self.component_cache,
             project_service: Default::default(),
-            mode: WorkerExecutorMode::Cloud,
             grpc_address: self.grpc_address,
             port: self.port,
             http_address: self.http_address,

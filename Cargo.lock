@@ -3344,6 +3344,7 @@ dependencies = [
  "async-trait",
  "bytes 1.10.1",
  "chrono",
+ "cloud-common",
  "golem-common",
  "golem-openapi-client-generator",
  "golem-wasm-ast",
