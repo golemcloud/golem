@@ -72,8 +72,7 @@ pub struct RibCompiler {
 
 impl RibCompiler {
     pub fn new(config: RibCompilerConfig) -> RibCompiler {
-        let type_registry =
-            FunctionTypeRegistry::from_export_metadata(&config.component_metadata);
+        let type_registry = FunctionTypeRegistry::from_export_metadata(&config.component_metadata);
 
         let input_spec = config.input_spec;
 
@@ -83,10 +82,8 @@ impl RibCompiler {
         }
     }
 
-
     pub fn with_component_metadata(&mut self, component_metadata: Vec<AnalysedExport>) {
-        let type_registry =
-            FunctionTypeRegistry::from_export_metadata(&component_metadata);
+        let type_registry = FunctionTypeRegistry::from_export_metadata(&component_metadata);
 
         self.function_type_registry = type_registry;
     }
@@ -96,11 +93,9 @@ impl RibCompiler {
     }
 
     pub fn infer_types(&self, expr: Expr) -> Result<InferredExpr, RibCompilationError> {
-        InferredExpr::from_expr(expr, &self.function_type_registry, &self.input_spec).map_err(
-            RibCompilationError::RibTypeError
-        )
+        InferredExpr::from_expr(expr, &self.function_type_registry, &self.input_spec)
+            .map_err(RibCompilationError::RibTypeError)
     }
-
 
     pub fn compile(&self, expr: Expr) -> Result<CompilerOutput, RibCompilationError> {
         let inferred_expr = self.infer_types(expr)?;
@@ -153,7 +148,6 @@ impl RibCompiler {
     pub fn get_enums(&self) -> Vec<TypeEnum> {
         self.function_type_registry.get_enums()
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq)]

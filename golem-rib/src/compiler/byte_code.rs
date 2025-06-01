@@ -918,7 +918,9 @@ mod compiler_tests {
     use test_r::test;
 
     use super::*;
-    use crate::{ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
+    use crate::{
+        ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, RibCompiler, VariableId,
+    };
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
@@ -943,11 +945,15 @@ mod compiler_tests {
     #[test]
     fn test_instructions_for_identifier() {
         let inferred_input_type = InferredType::string();
+
         let variable_id = VariableId::local("request", 0);
-        let empty_registry = FunctionTypeRegistry::empty();
+
         let expr = Expr::identifier_with_variable_id(variable_id.clone(), None)
             .with_inferred_type(inferred_input_type);
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -968,8 +974,9 @@ mod compiler_tests {
 
         let expr = Expr::let_binding_with_variable_id(variable_id.clone(), literal, None);
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -988,15 +995,19 @@ mod compiler_tests {
     #[test]
     fn test_instructions_equal_to() {
         let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::f32());
+
         let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::u32());
 
         let expr = Expr::equal_to(number_f32, number_u32);
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let value_and_type1 = 1.0f32.into_value_and_type();
+
         let value_and_type2 = 1u32.into_value_and_type();
 
         let instruction_set = vec![
@@ -1015,15 +1026,19 @@ mod compiler_tests {
     #[test]
     fn test_instructions_greater_than() {
         let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::f32());
+
         let number_u32 = Expr::number_inferred(BigDecimal::from(2), None, InferredType::u32());
 
         let expr = Expr::greater_than(number_f32, number_u32);
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let value_and_type1 = 1.0f32.into_value_and_type();
+
         let value_and_type2 = 2u32.into_value_and_type();
 
         let instruction_set = vec![
@@ -1042,15 +1057,19 @@ mod compiler_tests {
     #[test]
     fn test_instructions_less_than() {
         let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::f32());
+
         let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::u32());
 
         let expr = Expr::less_than(number_f32, number_u32);
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let value_and_type1 = 1.0f32.into_value_and_type();
+
         let value_and_type2 = 1u32.into_value_and_type();
 
         let instruction_set = vec![
@@ -1069,15 +1088,19 @@ mod compiler_tests {
     #[test]
     fn test_instructions_greater_than_or_equal_to() {
         let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::f32());
+
         let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::u32());
 
         let expr = Expr::greater_than_or_equal_to(number_f32, number_u32);
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let value_and_type1 = 1.0f32.into_value_and_type();
+
         let value_and_type2 = 1u32.into_value_and_type();
 
         let instruction_set = vec![
@@ -1096,15 +1119,19 @@ mod compiler_tests {
     #[test]
     fn test_instructions_less_than_or_equal_to() {
         let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::f32());
+
         let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::u32());
 
         let expr = Expr::less_than_or_equal_to(number_f32, number_u32);
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let value_and_type1 = 1.0f32.into_value_and_type();
+
         let value_and_type2 = 1u32.into_value_and_type();
 
         let instruction_set = vec![
@@ -1131,12 +1158,14 @@ mod compiler_tests {
             (String::from("bar_key"), InferredType::string()),
         ]));
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let bar_value = "bar_value".into_value_and_type();
+
         let foo_value = "foo_value".into_value_and_type();
 
         let instruction_set = vec![
@@ -1169,8 +1198,9 @@ mod compiler_tests {
     fn test_instructions_for_multiple() {
         let expr = Expr::expr_block(vec![Expr::literal("foo"), Expr::literal("bar")]);
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1189,14 +1219,17 @@ mod compiler_tests {
     #[test]
     fn test_instructions_if_conditional() {
         let if_expr = Expr::literal("pred").with_inferred_type(InferredType::bool());
+
         let then_expr = Expr::literal("then");
+
         let else_expr = Expr::literal("else");
 
         let expr =
             Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::string());
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1220,7 +1253,9 @@ mod compiler_tests {
     #[test]
     fn test_instructions_for_nested_if_else() {
         let if_expr = Expr::literal("if-pred1").with_inferred_type(InferredType::bool());
+
         let then_expr = Expr::literal("then1").with_inferred_type(InferredType::string());
+
         let else_expr = Expr::cond(
             Expr::literal("else-pred2").with_inferred_type(InferredType::bool()),
             Expr::literal("else-then2"),
@@ -1231,8 +1266,9 @@ mod compiler_tests {
         let expr =
             Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::string());
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1274,12 +1310,14 @@ mod compiler_tests {
         let expr =
             Expr::select_field(record, "bar_key", None).with_inferred_type(InferredType::string());
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let bar_value = "bar_value".into_value_and_type();
+
         let foo_value = "foo_value".into_value_and_type();
 
         let instruction_set = vec![
@@ -1317,8 +1355,9 @@ mod compiler_tests {
         let expr = Expr::select_index(sequence, Expr::number(BigDecimal::from(1)))
             .with_inferred_type(InferredType::string());
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1433,7 +1472,9 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
+
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
 
             assert_eq!(
@@ -1455,6 +1496,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1481,6 +1523,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1502,6 +1545,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1523,6 +1567,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1545,6 +1590,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1570,6 +1616,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1591,6 +1638,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1611,6 +1659,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1633,6 +1682,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
