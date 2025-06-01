@@ -39,6 +39,7 @@ use golem_api_grpc::proto::golem::apidefinition::{
     static_binding, ApiDefinition, ApiDefinitionId, CorsPreflight, GatewayBinding,
     GatewayBindingType, HttpApiDefinition, HttpMethod, HttpRoute, StaticBinding,
 };
+use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::CloudAuthServiceClient;
 use golem_api_grpc::proto::golem::common::{
     AccountId, Empty, FilterComparator, PluginInstallationId, StringFilterComparator,
 };
@@ -112,9 +113,9 @@ pub mod provided;
 pub mod spawned;
 
 #[derive(Clone)]
-pub enum WorkerServiceClient {
-    Grpc(WorkerServiceGrpcClient<Channel>),
-    Http(Arc<WorkerServiceHttpClientLive>),
+pub enum CloudServiceClient {
+    Grpc(CloudAuthServiceClient<Channel>),
+    Http(Arc<CloudServiceHttpClientLive>),
 }
 
 #[derive(Clone)]

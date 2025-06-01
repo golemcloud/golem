@@ -77,15 +77,9 @@ pub mod provided;
 pub mod spawned;
 
 #[derive(Clone)]
-pub enum ComponentServiceClient {
+pub enum ProjectServiceClient {
     Grpc(ComponentServiceGrpcClient<Channel>),
     Http(Arc<ComponentServiceHttpClientLive>),
-}
-
-#[derive(Clone)]
-pub enum PluginServiceClient {
-    Grpc(PluginServiceGrpcClient<Channel>),
-    Http(Arc<PluginServiceHttpClientLive>),
 }
 
 #[async_trait]
