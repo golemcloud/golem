@@ -26,19 +26,18 @@ pub fn compile_rib_script(
     let expr = Expr::from_text(rib_script)
         .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
 
-    let function_registry =
-        FunctionTypeRegistry::from_export_metadata(&repl_state.dependency().metadata);
+    let compiler =
+        repl_state.rib_compiler();
 
-    let inferred_expr = InferredExpr::from_expr(expr, &function_registry, &vec![])
-        .map_err(RibCompilationError::RibTypeError)?;
+    let inferred_expr = compiler.infer_types(expr)?;
 
     let instance_variables = fetch_instance_variables(&inferred_expr);
 
     let identifiers = get_identifiers(&inferred_expr);
 
-    let variants = function_registry.get_variants();
+    let variants = compiler.get_variants();
 
-    let enums = function_registry.get_enums();
+    let enums = compiler.get_enums();
 
     let byte_code = RibByteCode::from_expr(&inferred_expr)
         .map_err(RibCompilationError::ByteCodeGenerationFail)?;

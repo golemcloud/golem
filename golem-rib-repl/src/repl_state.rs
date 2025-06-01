@@ -20,6 +20,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 pub struct ReplState {
+    // https://github.com/golemcloud/golem/issues/1608 will avoid having to keep
+    // dependency separately in the ReplState
     dependency: RibComponentMetadata,
     rib_script: RwLock<RawRibScript>,
     worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
@@ -82,12 +84,12 @@ impl ReplState {
     }
 
     pub fn new(
-        dependency: &RibComponentMetadata,
+        dependency: RibComponentMetadata,
         worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
         rib_compiler: RibCompiler,
     ) -> Self {
         Self {
-            dependency: dependency.clone(),
+            dependency,
             rib_script: RwLock::new(RawRibScript::default()),
             worker_function_invoke,
             invocation_results: InvocationResultCache {

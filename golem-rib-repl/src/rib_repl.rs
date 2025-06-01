@@ -101,7 +101,8 @@ impl RibRepl {
 
                 match dependencies {
                     Ok(dependencies) => {
-                        let mut component_dependencies = dependencies.component_dependencies;
+                        let mut component_dependencies =
+                            dependencies.component_dependencies;
 
                         match &component_dependencies.len() {
                             0 => Err(ReplBootstrapError::NoComponentsFound),
@@ -119,14 +120,14 @@ impl RibRepl {
             }
         }?;
 
-        let compiler_config = RibCompilerConfig::new(component_dependency.metadata.clone(), vec![]);
+        let component_dependency = component_dependency;
 
-        let initial_compiler = RibCompiler::new(compiler_config);
-
+        // Once https://github.com/golemcloud/golem/issues/1608 is resolved,
+        // component dependency will not be required in the REPL state
         let repl_state = ReplState::new(
-            &component_dependency,
+            component_dependency.clone(),
             config.worker_function_invoke,
-            initial_compiler,
+            RibCompiler::new(RibCompilerConfig::new(component_dependency.metadata, vec![])),
         );
 
         Ok(RibRepl {

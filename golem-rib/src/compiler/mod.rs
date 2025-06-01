@@ -14,7 +14,7 @@
 
 pub use byte_code::*;
 pub use compiler_output::*;
-use golem_wasm_ast::analysis::AnalysedExport;
+use golem_wasm_ast::analysis::{AnalysedExport, TypeEnum, TypeVariant};
 pub use ir::*;
 use std::error::Error;
 use std::fmt::Display;
@@ -66,29 +66,47 @@ impl RibCompilerConfig {
 
 #[derive(Default)]
 pub struct RibCompiler {
-    config: RibCompilerConfig,
+    function_type_registry: FunctionTypeRegistry,
+    input_spec: Vec<GlobalVariableTypeSpec>,
 }
 
 impl RibCompiler {
     pub fn new(config: RibCompilerConfig) -> RibCompiler {
-        RibCompiler { config }
+        let type_registry =
+            FunctionTypeRegistry::from_export_metadata(&config.component_metadata);
+
+        let input_spec = config.input_spec;
+
+        RibCompiler {
+            function_type_registry: type_registry,
+            input_spec,
+        }
     }
 
+
     pub fn with_component_metadata(&mut self, component_metadata: Vec<AnalysedExport>) {
-        self.config.component_metadata = component_metadata
+        let type_registry =
+            FunctionTypeRegistry::from_export_metadata(&component_metadata);
+
+        self.function_type_registry = type_registry;
     }
 
     pub fn with_global_variables(&mut self, global_variables: Vec<GlobalVariableTypeSpec>) {
-        self.config.input_spec = global_variables
+        self.input_spec = global_variables;
     }
 
+    pub fn infer_types(&self, expr: Expr) -> Result<InferredExpr, RibCompilationError> {
+        InferredExpr::from_expr(expr, &self.function_type_registry, &self.input_spec).map_err(
+            RibCompilationError::RibTypeError
+        )
+    }
+
+
     pub fn compile(&self, expr: Expr) -> Result<CompilerOutput, RibCompilationError> {
-        let type_registry =
-            FunctionTypeRegistry::from_export_metadata(&self.config.component_metadata);
-        let inferred_expr = InferredExpr::from_expr(expr, &type_registry, &self.config.input_spec)?;
+        let inferred_expr = self.infer_types(expr)?;
 
         let function_calls_identified =
-            WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
+            WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &self.function_type_registry)?;
 
         // The types that are tagged as global input in the script
         let global_input_type_info = RibInputTypeInfo::from_expr(&inferred_expr)?;
@@ -96,7 +114,6 @@ impl RibCompiler {
 
         // allowed_global_variables
         let allowed_global_variables: Vec<String> = self
-            .config
             .input_spec
             .iter()
             .map(|x| x.variable())
@@ -128,6 +145,15 @@ impl RibCompiler {
             rib_output_type_info: Some(output_type_info),
         })
     }
+
+    pub fn get_variants(&self) -> Vec<TypeVariant> {
+        self.function_type_registry.get_variants()
+    }
+
+    pub fn get_enums(&self) -> Vec<TypeEnum> {
+        self.function_type_registry.get_enums()
+    }
+
 }
 
 #[derive(Debug, Clone, PartialEq)]
