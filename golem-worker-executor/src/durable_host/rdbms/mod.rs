@@ -408,7 +408,16 @@ where
         .delete::<RdbmsResultStreamEntry<T>>(entry)?;
 
     if entry.transaction_handle.is_none() {
-        end_durable_function_if_open(ctx, handle).await?;
+        let begin_oplog_idx = ctx.state.open_function_table.get(&handle).cloned();
+        if let Some(begin_oplog_idx) = begin_oplog_idx {
+            ctx.end_durable_function(
+                &DurableFunctionType::WriteRemoteBatched(None),
+                begin_oplog_idx,
+                false,
+            )
+            .await?;
+            ctx.state.open_function_table.remove(&handle);
+        }
     } else {
         ctx.state.open_function_table.remove(&handle);
     }
@@ -547,7 +556,7 @@ where
     E: From<RdbmsError>,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
-    let interface = get_db_transaction_interface::<T>();
+    // let interface = get_db_transaction_interface::<T>();
     let handle = entry.rep();
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
 
@@ -567,22 +576,22 @@ where
 
     match pre_result {
         Ok(_) => {
-            let durability = Durability::<(), SerializableError>::new(
-                ctx,
-                interface.leak(),
-                "rollback",
-                DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
-            )
-            .await?;
-
-            let result = if durability.is_live() {
-                let result = db_transaction_rollback(ctx, entry).await;
-                durability.persist(ctx, (), result).await
+            let result = if ctx.durable_execution_state().is_live {
+                db_transaction_rollback(ctx, entry).await
             } else {
-                durability.replay(ctx).await
+                Ok(())
             };
 
-            rolled_back_durable_transaction_if_open(ctx, handle).await?;
+            if result.is_ok() {
+                ctx.state
+                    .rolled_back_transaction_function(
+                        &DurableFunctionType::WriteRemoteTransaction(None),
+                        begin_oplog_idx,
+                    )
+                    .await?;
+            }
+
+            ctx.state.open_function_table.remove(&handle);
 
             if ctx.durable_execution_state().is_live {
                 let _ = db_transaction_cleanup(ctx, entry).await;
@@ -604,7 +613,6 @@ where
     E: From<RdbmsError>,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
-    let interface = get_db_transaction_interface::<T>();
     let handle = entry.rep();
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
 
@@ -624,22 +632,22 @@ where
 
     match pre_result {
         Ok(_) => {
-            let durability = Durability::<(), SerializableError>::new(
-                ctx,
-                interface.leak(),
-                "commit",
-                DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
-            )
-            .await?;
-
-            let result = if durability.is_live() {
-                let result = db_transaction_commit(ctx, entry).await;
-                durability.persist(ctx, (), result).await
+            let result = if ctx.durable_execution_state().is_live {
+                db_transaction_commit(ctx, entry).await
             } else {
-                durability.replay(ctx).await
+                Ok(())
             };
 
-            commited_durable_transaction_if_open(ctx, handle).await?;
+            if result.is_ok() {
+                ctx.state
+                    .commited_transaction_function(
+                        &DurableFunctionType::WriteRemoteTransaction(None),
+                        begin_oplog_idx,
+                    )
+                    .await?;
+            }
+
+            ctx.state.open_function_table.remove(&handle);
 
             if ctx.durable_execution_state().is_live {
                 let _ = db_transaction_cleanup(ctx, entry).await;
@@ -685,10 +693,19 @@ where
                     &transaction.transaction_id(),
                 )
                 .await;
+
+            let begin_oplog_idx = ctx.state.open_function_table.get(&handle).cloned();
+            if let Some(begin_oplog_idx) = begin_oplog_idx {
+                ctx.state
+                    .rolled_back_transaction_function(
+                        &DurableFunctionType::WriteRemoteTransaction(None),
+                        begin_oplog_idx,
+                    )
+                    .await?;
+                ctx.state.open_function_table.remove(&handle);
+            }
         }
     }
-
-    rolled_back_durable_transaction_if_open(ctx, handle).await?;
 
     Ok(())
 }
@@ -1233,75 +1250,6 @@ where
         result.push(v);
     }
     Ok(result)
-}
-
-async fn end_durable_function_if_open<Ctx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    handle: u32,
-) -> anyhow::Result<Option<OplogIndex>>
-where
-    Ctx: WorkerCtx,
-{
-    let begin_oplog_idx = ctx.state.open_function_table.get(&handle).cloned();
-    if let Some(begin_oplog_idx) = begin_oplog_idx {
-        ctx.end_durable_function(
-            &DurableFunctionType::WriteRemoteBatched(None),
-            begin_oplog_idx,
-            false,
-        )
-        .await?;
-        ctx.state.open_function_table.remove(&handle);
-
-        Ok(Some(begin_oplog_idx))
-    } else {
-        Ok(None)
-    }
-}
-
-async fn commited_durable_transaction_if_open<Ctx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    handle: u32,
-) -> anyhow::Result<Option<OplogIndex>>
-where
-    Ctx: WorkerCtx,
-{
-    let begin_oplog_idx = ctx.state.open_function_table.get(&handle).cloned();
-    if let Some(begin_oplog_idx) = begin_oplog_idx {
-        ctx.state
-            .commited_transaction_function(
-                &DurableFunctionType::WriteRemoteTransaction(None),
-                begin_oplog_idx,
-            )
-            .await?;
-        ctx.state.open_function_table.remove(&handle);
-
-        Ok(Some(begin_oplog_idx))
-    } else {
-        Ok(None)
-    }
-}
-
-async fn rolled_back_durable_transaction_if_open<Ctx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    handle: u32,
-) -> anyhow::Result<Option<OplogIndex>>
-where
-    Ctx: WorkerCtx,
-{
-    let begin_oplog_idx = ctx.state.open_function_table.get(&handle).cloned();
-    if let Some(begin_oplog_idx) = begin_oplog_idx {
-        ctx.state
-            .rolled_back_transaction_function(
-                &DurableFunctionType::WriteRemoteTransaction(None),
-                begin_oplog_idx,
-            )
-            .await?;
-        ctx.state.open_function_table.remove(&handle);
-
-        Ok(Some(begin_oplog_idx))
-    } else {
-        Ok(None)
-    }
 }
 
 fn get_begin_oplog_index<Ctx: WorkerCtx>(
