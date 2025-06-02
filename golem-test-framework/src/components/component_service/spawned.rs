@@ -112,10 +112,17 @@ impl SpawnedComponentService {
                 "localhost",
                 grpc_port,
                 http_port,
+                &cloud_service,
             )
             .await,
-            plugin_client: new_plugin_client(client_protocol, "localhost", grpc_port, http_port)
-                .await,
+            plugin_client: new_plugin_client(
+                client_protocol,
+                "localhost",
+                grpc_port,
+                http_port,
+                &cloud_service,
+            )
+            .await,
             plugin_wasm_files_service,
             cloud_service,
         }

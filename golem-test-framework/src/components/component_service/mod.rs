@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::cloud_service::CloudService;
-use super::ADMIN_TOKEN;
 use crate::components::rdb::Rdb;
 use crate::components::{
     new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder,
@@ -1027,13 +1026,17 @@ async fn new_component_grpc_client(
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-fn new_component_http_client(host: &str, http_port: u16) -> Arc<ComponentServiceHttpClientLive> {
+fn new_component_http_client(
+    host: &str,
+    http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
+) -> Arc<ComponentServiceHttpClientLive> {
     Arc::new(ComponentServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
-            security_token: Security::Bearer(ADMIN_TOKEN.to_string()),
+            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
         },
     })
 }
@@ -1043,13 +1046,14 @@ async fn new_component_client(
     host: &str,
     grpc_port: u16,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
 ) -> ComponentServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => {
             ComponentServiceClient::Grpc(new_component_grpc_client(host, grpc_port).await)
         }
         GolemClientProtocol::Http => {
-            ComponentServiceClient::Http(new_component_http_client(host, http_port))
+            ComponentServiceClient::Http(new_component_http_client(host, http_port, cloud_service))
         }
     }
 }
@@ -1062,13 +1066,17 @@ async fn new_plugin_grpc_client(host: &str, grpc_port: u16) -> PluginServiceGrpc
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-fn new_plugin_http_client(host: &str, http_port: u16) -> Arc<PluginServiceHttpClientLive> {
+fn new_plugin_http_client(
+    host: &str,
+    http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
+) -> Arc<PluginServiceHttpClientLive> {
     Arc::new(PluginServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
-            security_token: Security::Empty,
+            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
         },
     })
 }
@@ -1078,13 +1086,14 @@ async fn new_plugin_client(
     host: &str,
     grpc_port: u16,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
 ) -> PluginServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => {
             PluginServiceClient::Grpc(new_plugin_grpc_client(host, grpc_port).await)
         }
         GolemClientProtocol::Http => {
-            PluginServiceClient::Http(new_plugin_http_client(host, http_port))
+            PluginServiceClient::Http(new_plugin_http_client(host, http_port, cloud_service))
         }
     }
 }

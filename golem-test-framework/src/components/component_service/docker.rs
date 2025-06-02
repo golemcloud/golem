@@ -101,6 +101,7 @@ impl DockerComponentService {
                 "localhost",
                 public_grpc_port,
                 public_http_port,
+                &cloud_service,
             )
             .await,
             plugin_client: new_plugin_client(
@@ -108,6 +109,7 @@ impl DockerComponentService {
                 "localhost",
                 public_grpc_port,
                 public_http_port,
+                &cloud_service,
             )
             .await,
             plugin_wasm_files_service,

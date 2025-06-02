@@ -116,9 +116,20 @@ min_delay = "100ms"
 multiplier = 3.0
 
 [project_service]
-type = "Disabled"
+type = "Grpc"
 
 [project_service.config]
+access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+connect_timeout = "30s"
+host = "localhost"
+port = 9091
+
+[project_service.config.retries]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
 
 [public_worker_api]
 access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
@@ -349,9 +360,20 @@ without_time = false
 # multiplier = 3.0
 # 
 # [project_service]
-# type = "Disabled"
+# type = "Grpc"
 # 
 # [project_service.config]
+# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# connect_timeout = "30s"
+# host = "localhost"
+# port = 9091
+# 
+# [project_service.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [public_worker_api]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
@@ -542,9 +564,20 @@ without_time = false
 # multiplier = 3.0
 # 
 # [project_service]
-# type = "Disabled"
+# type = "Grpc"
 # 
 # [project_service.config]
+# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# connect_timeout = "30s"
+# host = "localhost"
+# port = 9091
+# 
+# [project_service.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [public_worker_api]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"

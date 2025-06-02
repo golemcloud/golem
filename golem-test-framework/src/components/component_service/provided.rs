@@ -53,9 +53,22 @@ impl ProvidedComponentService {
             host: host.clone(),
             http_port,
             grpc_port,
-            component_client: new_component_client(client_protocol, &host, grpc_port, http_port)
-                .await,
-            plugin_client: new_plugin_client(client_protocol, &host, grpc_port, http_port).await,
+            component_client: new_component_client(
+                client_protocol,
+                &host,
+                grpc_port,
+                http_port,
+                &cloud_service,
+            )
+            .await,
+            plugin_client: new_plugin_client(
+                client_protocol,
+                &host,
+                grpc_port,
+                http_port,
+                &cloud_service,
+            )
+            .await,
             plugin_wasm_files_service,
             cloud_service,
         }

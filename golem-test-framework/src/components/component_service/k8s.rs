@@ -205,6 +205,7 @@ impl K8sComponentService {
                 &grpc_routing.hostname,
                 grpc_routing.port,
                 http_routing.port,
+                &cloud_service,
             )
             .await,
             plugin_client: new_plugin_client(
@@ -212,6 +213,7 @@ impl K8sComponentService {
                 &grpc_routing.hostname,
                 grpc_routing.port,
                 http_routing.port,
+                &cloud_service,
             )
             .await,
             plugin_wasm_files_service,

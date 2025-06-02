@@ -473,15 +473,12 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         }
     }
 
-    //   left: ["-1/ff34cdec-65e3-4960-aa86-6316f93ffe40/worker1/golem:it/api.{initialize-cart}", "-1/ff34cdec-65e3-4960-aa86-6316f93ffe40/worker1/golem:it/api.{add-item}", "-1/ff34cdec-65e3-4960-aa86-6316f93ffe40/worker1/golem:it/api.{add-item}", "-1/ff34cdec-65e3-4960-aa86-6316f93ffe40/worker1/golem:it/api.{add-item}", "-1/ff34cdec-65e3-4960-aa86-6316f93ffe40/worker1/golem:it/api.{update-item-quantity}"]
-    //  right: ["-1/ff34cdec-65e3-4ad4-aa86-6316f93fff11/worker1/golem:it/api.{initialize-cart}", "-1/ff34cdec-65e3-4ad4-aa86-6316f93fff11/worker1/golem:it/api.{add-item}", "-1/ff34cdec-65e3-4ad4-aa86-6316f93fff11/worker1/golem:it/api.{add-item}", "-1/ff34cdec-65e3-4ad4-aa86-6316f93fff11/worker1/golem:it/api.{add-item}", "-1/ff34cdec-65e3-4ad4-aa86-6316f93fff11/worker1/golem:it/api.{update-item-quantity}"]
-
     let expected = vec![
-        format!("-1/{component_id}/worker1/golem:it/api.{{initialize-cart}}"),
-        format!("-1/{component_id}/worker1/golem:it/api.{{add-item}}"),
-        format!("-1/{component_id}/worker1/golem:it/api.{{add-item}}"),
-        format!("-1/{component_id}/worker1/golem:it/api.{{add-item}}"),
-        format!("-1/{component_id}/worker1/golem:it/api.{{update-item-quantity}}"),
+        format!("root/{component_id}/worker1/golem:it/api.{{initialize-cart}}"),
+        format!("root/{component_id}/worker1/golem:it/api.{{add-item}}"),
+        format!("root/{component_id}/worker1/golem:it/api.{{add-item}}"),
+        format!("root/{component_id}/worker1/golem:it/api.{{add-item}}"),
+        format!("root/{component_id}/worker1/golem:it/api.{{update-item-quantity}}"),
     ];
     assert_eq!(invocations, expected);
 }
