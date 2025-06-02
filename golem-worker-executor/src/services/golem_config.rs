@@ -320,7 +320,7 @@ pub struct RdbmsPoolConfig {
 #[serde(tag = "type", content = "config")]
 pub enum ResourceLimitsConfig {
     Grpc(ResourceLimitsGrpcConfig),
-    Disabled,
+    Disabled(ResourceLimitsDisabledConfig),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -342,6 +342,9 @@ impl ResourceLimitsGrpcConfig {
         build_uri("resource limits", &self.host, self.port)
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResourceLimitsDisabledConfig {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentCacheConfig {

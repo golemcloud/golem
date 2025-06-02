@@ -315,11 +315,8 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let source_oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
 
-    let oplog_index_of_function_completed_g1001 = OplogIndex::from_u64(11);
-
-    // Minus 1 as oplog index starts from 1
     let log_record = source_oplog
-        .get(u64::from(oplog_index_of_function_completed_g1001) as usize - 1)
+        .last()
         .expect("Expect at least one entry in source oplog");
 
     assert!(matches!(
@@ -331,7 +328,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .fork_worker(
             &source_worker_id,
             &target_worker_id,
-            oplog_index_of_function_completed_g1001,
+            OplogIndex::from_u64(source_oplog.len() as u64),
         )
         .await;
 
@@ -365,8 +362,8 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .search_oplog(&target_worker_id, "G1001 AND NOT pending")
         .await;
 
-    assert_eq!(result1.len(), 4); //  two invocations for G1002 and two log messages preceded
-    assert_eq!(result2.len(), 2); //  two invocations for G1001 which was in the original source oplog
+    assert_eq!(result1.len(), 6); //  three invocations for G1002 and three log messages
+    assert_eq!(result2.len(), 2); //  one invocation and one log for G1001 which was in the original source oplog
 }
 
 #[test]

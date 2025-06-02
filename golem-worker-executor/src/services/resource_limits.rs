@@ -372,7 +372,7 @@ pub fn configured(config: &ResourceLimitsConfig) -> Arc<dyn ResourceLimits + Sen
             config.retries.clone(),
             config.batch_update_interval,
         ),
-        ResourceLimitsConfig::Disabled => ResourceLimitsDisabled::new(),
+        ResourceLimitsConfig::Disabled(_) => ResourceLimitsDisabled::new(),
     }
 }
 

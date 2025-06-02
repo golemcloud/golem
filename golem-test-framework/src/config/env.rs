@@ -348,7 +348,7 @@ impl EnvBasedTestDependencies {
     async fn make_component_compilation_service(
         config: Arc<EnvBasedTestDependenciesConfig>,
         component_service: Arc<dyn ComponentService + Send + Sync>,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Arc<dyn ComponentCompilationService + Send + Sync> {
         if config.golem_docker_services {
             Arc::new(
@@ -499,9 +499,12 @@ impl EnvBasedTestDependencies {
         )
         .await;
 
-        let component_compilation_service =
-            Self::make_component_compilation_service(config.clone(), component_service.clone(), cloud_service.clone())
-                .await;
+        let component_compilation_service = Self::make_component_compilation_service(
+            config.clone(),
+            component_service.clone(),
+            cloud_service.clone(),
+        )
+        .await;
 
         let shard_manager = Self::make_shard_manager(config.clone(), redis.clone()).await;
 

@@ -10,7 +10,9 @@ use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
-use golem_worker_executor::services::golem_config::{GolemConfig, ResourceLimitsConfig};
+use golem_worker_executor::services::golem_config::{
+    GolemConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
+};
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::OplogService;
@@ -102,7 +104,9 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         plugins: Arc<dyn Plugins<CloudGolemTypes>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
-        let resource_limits = resource_limits::configured(&ResourceLimitsConfig::Disabled);
+        let resource_limits = resource_limits::configured(&ResourceLimitsConfig::Disabled(
+            ResourceLimitsDisabledConfig {},
+        ));
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),

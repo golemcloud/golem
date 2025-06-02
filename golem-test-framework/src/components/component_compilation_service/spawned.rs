@@ -45,7 +45,7 @@ impl SpawnedComponentCompilationService {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting golem-component-compilation-service process");
 
@@ -55,7 +55,16 @@ impl SpawnedComponentCompilationService {
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(super::env_vars(http_port, grpc_port, component_service, &cloud_service, verbosity).await)
+            .envs(
+                super::env_vars(
+                    http_port,
+                    grpc_port,
+                    component_service,
+                    &cloud_service,
+                    verbosity,
+                )
+                .await,
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

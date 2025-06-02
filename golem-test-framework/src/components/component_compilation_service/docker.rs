@@ -41,7 +41,7 @@ impl DockerComponentCompilationService {
         unique_network_id: &str,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         verbosity: Level,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting golem-component-compilation-service container");
 

@@ -24,6 +24,7 @@ use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
+use cloud_common::clients::auth::authorised_request;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient as ComponentServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient as PluginServiceGrpcClient;
@@ -70,7 +71,6 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::{debug, info, Level};
 use url::Url;
-use cloud_common::clients::auth::authorised_request;
 
 pub mod docker;
 pub mod filesystem;
@@ -108,9 +108,7 @@ pub trait ComponentServiceInternal: Send + Sync {
                     &self.cloud_service().admin_token(),
                 );
 
-                let response = client
-                    .get_plugin(request)
-                    .await?;
+                let response = client.get_plugin(request).await?;
                 let converted = response.into_inner().result.and_then(|r| match r {
                     get_plugin_response::Result::Success(result) => result
                         .plugin
@@ -182,10 +180,7 @@ pub trait ComponentService: ComponentServiceInternal {
     async fn get_components(&self, request: GetComponentsRequest) -> crate::Result<Vec<Component>> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
-                let request = authorised_request(
-                    request,
-                    &self.cloud_service().admin_token(),
-                );
+                let request = authorised_request(request, &self.cloud_service().admin_token());
 
                 match client
                     .get_components(request)
@@ -224,10 +219,7 @@ pub trait ComponentService: ComponentServiceInternal {
     ) -> crate::Result<Vec<Component>> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
-                let request = authorised_request(
-                    request,
-                    &self.cloud_service().admin_token(),
-                );
+                let request = authorised_request(request, &self.cloud_service().admin_token());
 
                 match client
                     .get_component_metadata_all_versions(request)
@@ -267,10 +259,7 @@ pub trait ComponentService: ComponentServiceInternal {
     ) -> crate::Result<Component> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
-                let request = authorised_request(
-                    request,
-                    &self.cloud_service().admin_token(),
-                );
+                let request = authorised_request(request, &self.cloud_service().admin_token());
 
                 match client
                     .get_latest_component_metadata(request)
@@ -753,10 +742,7 @@ pub trait ComponentService: ComponentServiceInternal {
                     &self.cloud_service().admin_token(),
                 );
 
-                let response = client
-                    .create_plugin(request)
-                    .await?
-                    .into_inner();
+                let response = client.create_plugin(request).await?.into_inner();
                 match response.result {
                     None => Err(anyhow!(
                         "Missing response from golem-component-service for create-plugin"
@@ -881,10 +867,7 @@ pub trait ComponentService: ComponentServiceInternal {
                     &self.cloud_service().admin_token(),
                 );
 
-                let response = client
-                    .delete_plugin(request)
-                    .await?
-                    .into_inner();
+                let response = client.delete_plugin(request).await?.into_inner();
                 match response.result {
                     None => Err(anyhow!(
                         "Missing response from golem-component-service for create-plugin"
@@ -929,10 +912,7 @@ pub trait ComponentService: ComponentServiceInternal {
                     &self.cloud_service().admin_token(),
                 );
 
-                let response = client
-                    .install_plugin(request)
-                    .await?
-                    .into_inner();
+                let response = client.install_plugin(request).await?.into_inner();
 
                 match response.result {
                     None => Err(anyhow!(
@@ -982,7 +962,6 @@ pub trait ComponentService: ComponentServiceInternal {
     ) -> crate::Result<u64> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
-
                 let request = authorised_request(
                     golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest {
                         component_id: Some(component_id.clone().into()),
@@ -991,10 +970,7 @@ pub trait ComponentService: ComponentServiceInternal {
                     &self.cloud_service().admin_token(),
                 );
 
-                let response = client
-                    .download_component(request)
-                    .await?
-                    .into_inner();
+                let response = client.download_component(request).await?.into_inner();
 
                 let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
                 let bytes = chunks

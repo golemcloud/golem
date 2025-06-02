@@ -51,7 +51,7 @@ pub struct K8sComponentService {
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-    cloud_service: Arc<dyn CloudService>
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl K8sComponentService {
@@ -215,7 +215,7 @@ impl K8sComponentService {
             )
             .await,
             plugin_wasm_files_service,
-            cloud_service
+            cloud_service,
         }
     }
 }

@@ -53,7 +53,7 @@ impl K8sComponentCompilationService {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting Golem Component Compilation Service pod");
 

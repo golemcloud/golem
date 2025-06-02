@@ -34,7 +34,7 @@ pub struct ProvidedComponentService {
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-    cloud_service: Arc<dyn CloudService>
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl ProvidedComponentService {
@@ -45,7 +45,7 @@ impl ProvidedComponentService {
         grpc_port: u16,
         client_protocol: GolemClientProtocol,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Using already running golem-component-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {
@@ -57,7 +57,7 @@ impl ProvidedComponentService {
                 .await,
             plugin_client: new_plugin_client(client_protocol, &host, grpc_port, http_port).await,
             plugin_wasm_files_service,
-            cloud_service
+            cloud_service,
         }
     }
 }
