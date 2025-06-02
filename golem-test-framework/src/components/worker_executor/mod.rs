@@ -135,7 +135,7 @@ async fn env_vars(
             component_service.private_grpc_port().to_string(),
         )
         .with(
-            "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
+            "GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN",
             cloud_service.admin_token().to_string(),
         )
         .with_str(

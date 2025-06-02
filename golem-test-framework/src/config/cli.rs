@@ -412,6 +412,7 @@ impl CliTestDependencies {
                     &unique_network_id,
                     component_service.clone(),
                     params_clone.service_verbosity(),
+                    cloud_service.clone(),
                 )
                 .await,
             );
@@ -575,6 +576,7 @@ impl CliTestDependencies {
                     params.service_verbosity(),
                     out_level,
                     Level::ERROR,
+                    cloud_service.clone(),
                 )
                 .await,
             );
@@ -729,6 +731,7 @@ impl CliTestDependencies {
                 component_service.clone(),
                 timeout,
                 None,
+                cloud_service.clone(),
             )
             .await,
         );
@@ -891,6 +894,7 @@ impl CliTestDependencies {
                     component_service.clone(),
                     timeout,
                     service_annotations.clone(),
+                    cloud_service.clone(),
                 )
                 .await,
             );

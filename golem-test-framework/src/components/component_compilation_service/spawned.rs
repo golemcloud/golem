@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_compilation_service::{
     wait_for_startup, ComponentCompilationService,
 };
@@ -44,29 +45,7 @@ impl SpawnedComponentCompilationService {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
-    ) -> Self {
-        Self::new_base(
-            executable,
-            working_directory,
-            http_port,
-            grpc_port,
-            component_service,
-            verbosity,
-            out_level,
-            err_level,
-        )
-        .await
-    }
-
-    pub async fn new_base(
-        executable: &Path,
-        working_directory: &Path,
-        http_port: u16,
-        grpc_port: u16,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        verbosity: Level,
-        out_level: Level,
-        err_level: Level,
+        cloud_service: Arc<dyn CloudService>
     ) -> Self {
         info!("Starting golem-component-compilation-service process");
 
@@ -76,7 +55,7 @@ impl SpawnedComponentCompilationService {
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(super::env_vars(http_port, grpc_port, component_service, verbosity).await)
+            .envs(super::env_vars(http_port, grpc_port, component_service, &cloud_service, verbosity).await)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
