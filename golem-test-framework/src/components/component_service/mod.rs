@@ -50,7 +50,7 @@ use golem_client::{Context, Security};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::PluginTypeSpecificDefinition;
 use golem_common::model::{
-    AccountId, ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion,
+    ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion,
     InitialComponentFile, PluginId, PluginInstallationId,
 };
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -805,7 +805,10 @@ pub trait ComponentService: ComponentServiceInternal {
                         // TODO: This round trip trough the blob storage is redundant, but ensure the same api works both grpc and http. Improve this
                         let data = self
                             .plugin_wasm_files_service()
-                            .get(&AccountId::placeholder(), &def.blob_storage_key)
+                            .get(
+                                &self.cloud_service().admin_account_id(),
+                                &def.blob_storage_key,
+                            )
                             .await
                             .map_err(|e| anyhow!(e))?
                             .ok_or(anyhow!("plugin wasm file not found in blob storage"))?;
@@ -826,7 +829,10 @@ pub trait ComponentService: ComponentServiceInternal {
                         // TODO: This round trip trough the blob storage is redundant, but ensure the same api works both grpc and http. Improve this
                         let data = self
                             .plugin_wasm_files_service()
-                            .get(&AccountId::placeholder(), &def.blob_storage_key)
+                            .get(
+                                &self.cloud_service().admin_account_id(),
+                                &def.blob_storage_key,
+                            )
                             .await
                             .map_err(|e| anyhow!(e))?
                             .expect("plugin wasm file not found in blob storage");
