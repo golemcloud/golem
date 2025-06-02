@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ADMIN_TOKEN;
+use super::{ADMIN_TOKEN, PLACEHOLDER_PROJECT};
 use crate::components::rdb::Rdb;
 use crate::components::{
     new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder,
@@ -170,17 +170,17 @@ async fn env_vars(
         .build()
 }
 
-pub struct DisabledCloudService;
+pub struct StubCloudService;
 
 #[async_trait]
-impl CloudServiceInternal for DisabledCloudService {
+impl CloudServiceInternal for StubCloudService {
     fn project_client(&self) -> ProjectServiceClient {
         panic!("no cloud service running");
     }
 }
 
 #[async_trait]
-impl CloudService for DisabledCloudService {
+impl CloudService for StubCloudService {
     fn private_host(&self) -> String {
         panic!("no cloud service running");
     }
@@ -189,6 +189,10 @@ impl CloudService for DisabledCloudService {
     }
     fn private_grpc_port(&self) -> u16 {
         panic!("no cloud service running");
+    }
+
+    async fn get_default_project(&self) -> crate::Result<ProjectId> {
+        Ok(ProjectId(PLACEHOLDER_PROJECT))
     }
 
     async fn kill(&self) {}

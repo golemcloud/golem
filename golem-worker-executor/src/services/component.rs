@@ -24,7 +24,6 @@ use crate::services::compiled_component::CompiledComponentService;
 use async_lock::{RwLock, Semaphore};
 use async_trait::async_trait;
 use cloud_common::model::CloudComponentOwner;
-use futures_util::TryStreamExt;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::component_metadata::{DynamicLinkedInstance, LinearMemory};
 use golem_common::model::plugin::PluginInstallation;
@@ -32,7 +31,6 @@ use golem_common::model::{
     AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile,
 };
 use golem_common::testing::LocalFileSystemComponentMetadata;
-use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::Deserialize;
 use tokio::task::spawn_blocking;

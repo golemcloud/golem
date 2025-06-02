@@ -25,8 +25,8 @@ use golem_worker_executor::error::GolemError;
 use golem_worker_executor::services::golem_config::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
     ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
-    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, ProjectServiceConfig,
+    ProjectServiceDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
 };
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -318,7 +318,6 @@ pub async fn start_limited(
         }),
         port: 0,
         http_port: 0,
-
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
         ),
@@ -332,6 +331,7 @@ pub async fn start_limited(
         component_service: ComponentServiceConfig::Local(ComponentServiceLocalConfig {
             root: Path::new("data/components").to_path_buf(),
         }),
+        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {}),
         ..Default::default()
     };
 

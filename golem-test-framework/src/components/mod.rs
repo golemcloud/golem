@@ -44,6 +44,9 @@ pub mod worker_service;
 
 pub const ADMIN_TOKEN: uuid::Uuid = uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1");
 
+pub const PLACEHOLDER_ACCOUNT: uuid::Uuid = uuid!("91879a4b-6c62-4dd1-91fe-9dcd29ebe178");
+pub const PLACEHOLDER_PROJECT: uuid::Uuid = uuid!("6dfe5ca7-ab78-46b2-a98d-41098bb29c98");
+
 pub struct ChildProcessLogger {
     _out_handle: JoinHandle<()>,
     _err_handle: JoinHandle<()>,

@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ComponentServiceInternal;
 use crate::components::cloud_service::CloudService;
 use crate::components::component_service::{
     AddComponentError, ComponentService, ComponentServiceClient, PluginServiceClient,
 };
+use crate::components::{PLACEHOLDER_ACCOUNT, PLACEHOLDER_PROJECT};
 use anyhow::Context;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::{Component, ComponentMetadata, VersionedComponentId};
@@ -35,11 +37,7 @@ use std::time::SystemTime;
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use super::ComponentServiceInternal;
-
 const WASMS_DIRNAME: &str = "wasms";
-const ACCOUNT_ID: uuid::Uuid = uuid::uuid!("d7ec111a-47aa-4167-9de1-26403ad85bfc");
-const PROJECT_ID: uuid::Uuid = uuid::uuid!("1adb7923-199f-40fa-99ff-f617b5c1163a");
 
 pub struct FileSystemComponentService {
     root: PathBuf,
@@ -123,9 +121,9 @@ impl FileSystemComponentService {
 
         let metadata = LocalFileSystemComponentMetadata {
             account_id: AccountId {
-                value: ACCOUNT_ID.to_string(),
+                value: PLACEHOLDER_ACCOUNT.to_string(),
             },
-            project_id: ProjectId(PROJECT_ID),
+            project_id: ProjectId(PLACEHOLDER_PROJECT),
             component_id: component_id.clone(),
             component_name: component_name.to_string(),
             version: component_version,

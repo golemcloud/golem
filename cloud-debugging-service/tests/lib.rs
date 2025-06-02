@@ -7,7 +7,7 @@ use golem_service_base::service::initial_component_files::InitialComponentFilesS
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_test_framework::components::cloud_service::{CloudService, DisabledCloudService};
+use golem_test_framework::components::cloud_service::{CloudService, StubCloudService};
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 use golem_test_framework::components::component_service::ComponentService;
@@ -27,8 +27,9 @@ use golem_test_framework::config::TestDependencies;
 use golem_worker_executor::services::golem_config::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentCacheConfig,
     ComponentServiceConfig, ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
-    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, WorkerServiceGrpcConfig,
+    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, ProjectServiceConfig,
+    ProjectServiceDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+    WorkerServiceGrpcConfig,
 };
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -115,6 +116,7 @@ pub fn get_golem_config(
             connect_timeout: Duration::from_secs(120),
         },
         memory: MemoryConfig::default(),
+        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {}),
         ..Default::default()
     }
 }
@@ -288,7 +290,7 @@ impl RegularWorkerExecutorTestDependencies {
             Arc::new(ForwardingWorkerService::new(
                 worker_executor.clone(),
                 self.component_service(),
-                Arc::new(DisabledCloudService),
+                Arc::new(StubCloudService),
             ));
 
         RegularWorkerExecutorPerTestDependencies {

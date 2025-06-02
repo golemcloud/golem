@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_test_framework::components::cloud_service::{CloudService, DisabledCloudService};
+use golem_test_framework::components::cloud_service::{CloudService, StubCloudService};
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
@@ -257,7 +257,7 @@ impl WorkerExecutorTestDependencies {
             Arc::new(ForwardingWorkerService::new(
                 worker_executor.clone(),
                 self.component_service(),
-                Arc::new(DisabledCloudService),
+                Arc::new(StubCloudService),
             ));
         WorkerExecutorPerTestDependencies {
             redis,
