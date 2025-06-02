@@ -713,7 +713,7 @@ impl<T: GolemTypes> DebugService for DebugServiceDefault<T> {
 #[cfg(test)]
 mod tests {
     use axum::body::Bytes;
-    use golem_worker_executor::DefaultGolemTypes;
+    use golem_worker_executor::cloud::CloudGolemTypes;
     use std::fmt::{Debug, Formatter};
     use std::time::Duration;
     use test_r::test;
@@ -729,12 +729,13 @@ mod tests {
         let target_oplog_index = OplogIndex::from_u64(1);
         let original_last_oplog_index = OplogIndex::from_u64(10);
 
-        let result = DebugServiceDefault::<DefaultGolemTypes>::get_target_oplog_index_at_invocation_boundary(
-            Arc::new(TestOplog::new(5)),
-            target_oplog_index,
-            original_last_oplog_index,
-        )
-        .await;
+        let result =
+            DebugServiceDefault::<CloudGolemTypes>::get_target_oplog_index_at_invocation_boundary(
+                Arc::new(TestOplog::new(5)),
+                target_oplog_index,
+                original_last_oplog_index,
+            )
+            .await;
 
         assert_eq!(result, Ok(OplogIndex::from_u64(5)));
     }
@@ -744,12 +745,13 @@ mod tests {
         let target_oplog_index = OplogIndex::from_u64(1);
         let original_last_oplog_index = OplogIndex::from_u64(10);
 
-        let result = DebugServiceDefault::<DefaultGolemTypes>::get_target_oplog_index_at_invocation_boundary(
-            Arc::new(TestOplog::new(11)),
-            target_oplog_index,
-            original_last_oplog_index,
-        )
-        .await;
+        let result =
+            DebugServiceDefault::<CloudGolemTypes>::get_target_oplog_index_at_invocation_boundary(
+                Arc::new(TestOplog::new(11)),
+                target_oplog_index,
+                original_last_oplog_index,
+            )
+            .await;
 
         assert!(result.is_err());
     }

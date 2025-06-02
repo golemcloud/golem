@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use bytes::Bytes;
+use cloud_common::model::{CloudComponentOwner, CloudPluginScope};
 use golem_component_service_base::model::plugin::{
     AppPluginCreation, LibraryPluginCreation, PluginDefinitionCreation, PluginTypeSpecificCreation,
     PluginWasmFileReference,
@@ -26,13 +27,14 @@ use http::StatusCode;
 use test_r::{inherit_test_dep, test, test_dep};
 
 use crate::all::repo::sqlite::SqliteDb;
-use crate::all::repo::{constraint_data, get_component_data};
+use crate::all::repo::{constraint_data, get_component_data, test_component_owner};
 use crate::Tracing;
 use async_trait::async_trait;
-use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
+use cloud_common::model::CloudPluginOwner;
+use golem_common::model::component::ComponentOwner;
 use golem_common::model::plugin::{
-    ComponentTransformerDefinition, DefaultPluginOwner, DefaultPluginScope,
-    OplogProcessorDefinition, PluginInstallation, PluginInstallationCreation,
+    ComponentTransformerDefinition, OplogProcessorDefinition, PluginInstallation,
+    PluginInstallationCreation,
 };
 use golem_common::model::{
     ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentId,
@@ -77,16 +79,14 @@ async fn db_pool() -> SqliteDb {
 }
 
 #[test_dep]
-fn sqlite_component_repo(db: &SqliteDb) -> Arc<dyn ComponentRepo<DefaultComponentOwner>> {
+fn sqlite_component_repo(db: &SqliteDb) -> Arc<dyn ComponentRepo<CloudComponentOwner>> {
     Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
         db.pool.clone(),
     )))
 }
 
 #[test_dep]
-fn sqlite_plugin_repo(
-    db: &SqliteDb,
-) -> Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope>> {
+fn sqlite_plugin_repo(db: &SqliteDb) -> Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope>> {
     Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db.pool.clone())))
 }
 
@@ -144,21 +144,21 @@ impl<Owner: ComponentOwner> TransformerPluginCaller<Owner> for FailingTransforme
 }
 
 #[test_dep]
-fn transformer_plugin_caller() -> Arc<dyn TransformerPluginCaller<DefaultComponentOwner>> {
+fn transformer_plugin_caller() -> Arc<dyn TransformerPluginCaller<CloudComponentOwner>> {
     Arc::new(FailingTransformerPluginCaller)
 }
 
 #[test_dep]
-fn lazy_component_service(_tracing: &Tracing) -> Arc<LazyComponentService<DefaultComponentOwner>> {
+fn lazy_component_service(_tracing: &Tracing) -> Arc<LazyComponentService<CloudComponentOwner>> {
     Arc::new(LazyComponentService::new())
 }
 
 #[test_dep]
 fn plugin_service(
-    plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope>>,
+    plugin_repo: &Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope>>,
     library_plugin_files_service: &Arc<PluginWasmFilesService>,
-    component_service: &Arc<LazyComponentService<DefaultComponentOwner>>,
-) -> Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>> {
+    component_service: &Arc<LazyComponentService<CloudComponentOwner>>,
+) -> Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>> {
     Arc::new(PluginServiceDefault::new(
         plugin_repo.clone(),
         library_plugin_files_service.clone(),
@@ -168,16 +168,16 @@ fn plugin_service(
 
 #[test_dep]
 async fn component_service(
-    lazy_component_service: &Arc<LazyComponentService<DefaultComponentOwner>>,
-    component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner>>,
+    lazy_component_service: &Arc<LazyComponentService<CloudComponentOwner>>,
+    component_repo: &Arc<dyn ComponentRepo<CloudComponentOwner>>,
     object_store: &Arc<dyn ComponentObjectStore>,
     component_compilation_service: &Arc<dyn ComponentCompilationService>,
     initial_component_files_service: &Arc<InitialComponentFilesService>,
-    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+    plugin_service: &Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>,
     plugin_wasm_files_service: &Arc<PluginWasmFilesService>,
-    transformer_plugin_caller: &Arc<dyn TransformerPluginCaller<DefaultComponentOwner>>,
+    transformer_plugin_caller: &Arc<dyn TransformerPluginCaller<CloudComponentOwner>>,
     _tracing: &Tracing,
-) -> Arc<dyn ComponentService<DefaultComponentOwner>> {
+) -> Arc<dyn ComponentService<CloudComponentOwner>> {
     lazy_component_service
         .set_implementation(ComponentServiceDefault::new(
             component_repo.clone(),
@@ -196,7 +196,7 @@ const COMPONENT_ARCHIVE: &str = "../test-components/cli-project-yaml/data.zip";
 
 #[test]
 #[tracing::instrument]
-async fn test_services(component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>) {
+async fn test_services(component_service: &Arc<dyn ComponentService<CloudComponentOwner>>) {
     let component_name1 = ComponentName("shopping-cart-services".to_string());
     let component_name2 = ComponentName("rust-echo-services".to_string());
 
@@ -209,7 +209,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
             None,
             vec![],
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
@@ -224,20 +224,20 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
             None,
             vec![],
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
         .unwrap();
 
     let component1_result = component_service
-        .get_by_version(&component1.versioned_component_id, &DefaultComponentOwner)
+        .get_by_version(&component1.versioned_component_id, &test_component_owner())
         .await
         .unwrap();
     assert!(component1_result.is_some());
 
     let component2_result = component_service
-        .get_by_version(&component2.versioned_component_id, &DefaultComponentOwner)
+        .get_by_version(&component2.versioned_component_id, &test_component_owner())
         .await
         .unwrap();
     assert!(component2_result.is_some());
@@ -246,7 +246,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
     let component1_result = component_service
         .get_latest_version(
             &component1.versioned_component_id.component_id,
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await
         .unwrap();
@@ -256,7 +256,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
     let component1_result = component_service
         .get(
             &component1.versioned_component_id.component_id,
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await
         .unwrap();
@@ -264,7 +264,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
 
     // Create constraints
     let component_constraints = constraint_data::get_shopping_cart_component_constraint1(
-        &DefaultComponentOwner,
+        &test_component_owner(),
         &component1.versioned_component_id.component_id,
     );
 
@@ -278,7 +278,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
     let component1_constrained = component_service
         .get_component_constraint(
             &component1.versioned_component_id.component_id,
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await
         .unwrap();
@@ -287,7 +287,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
 
     // Update Constraint
     let component_constraints = constraint_data::get_shopping_cart_component_constraint2(
-        &DefaultComponentOwner,
+        &test_component_owner(),
         &component1.versioned_component_id.component_id,
     );
 
@@ -305,7 +305,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
             None,
             None,
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
@@ -324,7 +324,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
                     version_type: VersionType::Latest,
                 },
             ],
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await
         .unwrap();
@@ -361,7 +361,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
                     version_type: VersionType::Latest,
                 },
             ],
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await
         .unwrap();
@@ -389,7 +389,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
     let component1_result = component_service
         .get_latest_version(
             &component1.versioned_component_id.component_id,
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await
         .unwrap();
@@ -399,7 +399,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
     let component1_result = component_service
         .get(
             &component1.versioned_component_id.component_id,
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await
         .unwrap();
@@ -410,20 +410,20 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
         .await
         .unwrap();
     assert!(component1_result.is_some());
-    assert_eq!(component1_result.unwrap(), DefaultComponentOwner);
+    assert_eq!(component1_result.unwrap(), test_component_owner());
 
     let component2_result = component_service
         .get_owner(&component2.versioned_component_id.component_id)
         .await
         .unwrap();
     assert!(component2_result.is_some());
-    assert_eq!(component2_result.unwrap(), DefaultComponentOwner);
+    assert_eq!(component2_result.unwrap(), test_component_owner());
 
     let component1_result = component_service
         .download(
             &component1v2.versioned_component_id.component_id,
             Some(component1v2.versioned_component_id.version),
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await
         .unwrap();
@@ -433,7 +433,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
         .download(
             &component2.versioned_component_id.component_id,
             None,
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await
         .unwrap();
@@ -443,7 +443,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
         .download(
             &component1v2.versioned_component_id.component_id,
             Some(component1v2.versioned_component_id.version),
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await;
     assert!(component1_result.is_ok());
@@ -452,7 +452,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
         .download(
             &component1v2.versioned_component_id.component_id,
             Some(10000000),
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await;
     assert!(component1_result.is_err());
@@ -461,13 +461,13 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
         .download(
             &component1v2.versioned_component_id.component_id,
             None,
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await;
     assert!(component2_result.is_ok());
 
     let component1_result = component_service
-        .find_id_by_name(&component1.component_name, &DefaultComponentOwner)
+        .find_id_by_name(&component1.component_name, &test_component_owner())
         .await
         .unwrap();
     assert_eq!(
@@ -476,7 +476,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
     );
 
     let component2_result = component_service
-        .find_id_by_name(&component2.component_name, &DefaultComponentOwner)
+        .find_id_by_name(&component2.component_name, &test_component_owner())
         .await
         .unwrap();
     assert_eq!(
@@ -487,7 +487,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
     let component1_result = component_service
         .find_by_name(
             Some(component1.component_name.clone()),
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await
         .unwrap();
@@ -499,14 +499,14 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
     let component2_result = component_service
         .find_by_name(
             Some(component2.component_name.clone()),
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await
         .unwrap();
     assert_eq!(component2_result, vec![component2.clone()]);
 
     let component_result = component_service
-        .find_by_name(None, &DefaultComponentOwner)
+        .find_by_name(None, &test_component_owner())
         .await
         .unwrap();
 
@@ -517,7 +517,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
     component_service
         .delete(
             &component1v2.versioned_component_id.component_id,
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await
         .unwrap();
@@ -525,7 +525,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
     let component1_result = component_service
         .get(
             &component1.versioned_component_id.component_id,
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await
         .unwrap();
@@ -535,7 +535,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
         .download(
             &component1v2.versioned_component_id.component_id,
             Some(component1v2.versioned_component_id.version),
-            &DefaultComponentOwner,
+            &test_component_owner(),
         )
         .await;
     assert!(component1_result.is_err());
@@ -544,7 +544,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<DefaultCompo
 #[test]
 #[tracing::instrument]
 async fn test_initial_component_file_upload(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
+    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
 ) {
     let data = get_component_data("shopping-cart");
 
@@ -569,14 +569,14 @@ async fn test_initial_component_file_upload(
             }),
             vec![],
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
         .unwrap();
 
     let result = component_service
-        .get_by_version(&component.versioned_component_id, &DefaultComponentOwner)
+        .get_by_version(&component.versioned_component_id, &test_component_owner())
         .await
         .unwrap();
 
@@ -602,7 +602,7 @@ async fn test_initial_component_file_upload(
 #[test]
 #[tracing::instrument]
 async fn test_initial_component_file_data_sharing(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
+    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
 ) {
     let data = get_component_data("shopping-cart");
 
@@ -624,7 +624,7 @@ async fn test_initial_component_file_data_sharing(
             }),
             vec![],
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
@@ -646,7 +646,7 @@ async fn test_initial_component_file_data_sharing(
                 }],
             }),
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
@@ -672,7 +672,7 @@ async fn test_initial_component_file_data_sharing(
 #[test]
 #[tracing::instrument]
 async fn test_component_constraint_incompatible_updates(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
+    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
 ) {
     let component_name = ComponentName("shopping-cart-constraint-incompatible-updates".to_string());
 
@@ -686,7 +686,7 @@ async fn test_component_constraint_incompatible_updates(
             None,
             vec![],
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
@@ -695,10 +695,10 @@ async fn test_component_constraint_incompatible_updates(
     let component_id = ComponentId::new_v4();
 
     let missing_function_constraint =
-        constraint_data::get_random_constraint(&DefaultComponentOwner, &component_id);
+        constraint_data::get_random_constraint(&test_component_owner(), &component_id);
 
     let incompatible_constraint =
-        constraint_data::get_incompatible_constraint(&DefaultComponentOwner, &component_id);
+        constraint_data::get_incompatible_constraint(&test_component_owner(), &component_id);
 
     // Create a constraint with an unknown function (for the purpose of test), and this will act as an existing constraint of component
     component_service
@@ -720,7 +720,7 @@ async fn test_component_constraint_incompatible_updates(
             None,
             None,
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
@@ -752,8 +752,8 @@ async fn test_component_constraint_incompatible_updates(
 #[test]
 #[tracing::instrument]
 async fn test_component_oplog_process_plugin_creation(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
-    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
+    plugin_service: &Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>,
 ) {
     let plugin_component_name =
         ComponentName("oplog-processor-oplog-processor-plugin-creation".to_string());
@@ -769,7 +769,7 @@ async fn test_component_oplog_process_plugin_creation(
             None,
             vec![],
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
@@ -782,7 +782,7 @@ async fn test_component_oplog_process_plugin_creation(
 
     let created_plugin = plugin_service
         .create_plugin(
-            &DefaultPluginOwner,
+            &test_component_owner().into(),
             PluginDefinitionCreation {
                 name: plugin_name.to_string(),
                 version: plugin_version.to_string(),
@@ -793,7 +793,7 @@ async fn test_component_oplog_process_plugin_creation(
                     component_id: created_plugin_component.versioned_component_id.component_id,
                     component_version: created_plugin_component.versioned_component_id.version,
                 }),
-                scope: DefaultPluginScope::Global(Empty {}),
+                scope: CloudPluginScope::Global(Empty {}),
             },
         )
         .await
@@ -809,7 +809,7 @@ async fn test_component_oplog_process_plugin_creation(
             None,
             vec![],
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
@@ -818,7 +818,7 @@ async fn test_component_oplog_process_plugin_creation(
     // install oplog processer plugin to the shopping cart
     component_service
         .create_plugin_installation_for_component(
-            &DefaultComponentOwner,
+            &test_component_owner(),
             &created_component.versioned_component_id.component_id,
             PluginInstallationCreation {
                 name: plugin_name.to_string(),
@@ -850,8 +850,8 @@ async fn test_component_oplog_process_plugin_creation(
 #[test]
 #[tracing::instrument]
 async fn test_component_oplog_process_plugin_creation_invalid_plugin(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
-    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
+    plugin_service: &Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>,
 ) {
     let plugin_component_name =
         ComponentName("oplog-processor-oplog-processor-plugin-creation-invalid-plugin".to_string());
@@ -866,7 +866,7 @@ async fn test_component_oplog_process_plugin_creation_invalid_plugin(
             None,
             vec![],
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
@@ -878,7 +878,7 @@ async fn test_component_oplog_process_plugin_creation_invalid_plugin(
 
     let result = plugin_service
         .create_plugin(
-            &DefaultPluginOwner,
+            &test_component_owner().into(),
             PluginDefinitionCreation {
                 name: plugin_name.to_string(),
                 version: plugin_version.to_string(),
@@ -889,7 +889,7 @@ async fn test_component_oplog_process_plugin_creation_invalid_plugin(
                     component_id: created_plugin_component.versioned_component_id.component_id,
                     component_version: created_plugin_component.versioned_component_id.version,
                 }),
-                scope: DefaultPluginScope::Global(Empty {}),
+                scope: CloudPluginScope::Global(Empty {}),
             },
         )
         .await;
@@ -904,8 +904,8 @@ async fn test_component_oplog_process_plugin_creation_invalid_plugin(
 #[tracing::instrument]
 // happy path is tested in integration tests using a real web server.
 async fn test_failing_component_transformer_plugin(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
-    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
+    plugin_service: &Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>,
 ) {
     let plugin_component_name =
         ComponentName("failing-component-transformer-component".to_string());
@@ -920,7 +920,7 @@ async fn test_failing_component_transformer_plugin(
             None,
             vec![],
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
@@ -932,7 +932,7 @@ async fn test_failing_component_transformer_plugin(
 
     plugin_service
         .create_plugin(
-            &DefaultPluginOwner,
+            &test_component_owner().into(),
             PluginDefinitionCreation {
                 name: plugin_name.to_string(),
                 version: plugin_version.to_string(),
@@ -947,7 +947,7 @@ async fn test_failing_component_transformer_plugin(
                         transform_url: "http://localhost:9000/transform".to_string(),
                     },
                 ),
-                scope: DefaultPluginScope::Global(Empty {}),
+                scope: CloudPluginScope::Global(Empty {}),
             },
         )
         .await
@@ -955,7 +955,7 @@ async fn test_failing_component_transformer_plugin(
 
     let result = component_service
         .create_plugin_installation_for_component(
-            &DefaultComponentOwner,
+            &test_component_owner(),
             &created_component.versioned_component_id.component_id,
             PluginInstallationCreation {
                 name: plugin_name.to_string(),
@@ -977,8 +977,8 @@ async fn test_failing_component_transformer_plugin(
 #[test]
 #[tracing::instrument]
 async fn test_library_plugin_creation(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
-    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
+    plugin_service: &Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>,
 ) {
     let plugin_component_name = ComponentName("library-plugin-creation-app".to_string());
 
@@ -992,7 +992,7 @@ async fn test_library_plugin_creation(
             None,
             vec![],
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
@@ -1009,7 +1009,7 @@ async fn test_library_plugin_creation(
 
     plugin_service
         .create_plugin(
-            &DefaultPluginOwner,
+            &test_component_owner().into(),
             PluginDefinitionCreation {
                 name: plugin_name.to_string(),
                 version: plugin_version.to_string(),
@@ -1019,7 +1019,7 @@ async fn test_library_plugin_creation(
                 specs: PluginTypeSpecificCreation::Library(LibraryPluginCreation {
                     data: PluginWasmFileReference::Data(Box::new(library_plugin_stream)),
                 }),
-                scope: DefaultPluginScope::Global(Empty {}),
+                scope: CloudPluginScope::Global(Empty {}),
             },
         )
         .await
@@ -1027,7 +1027,7 @@ async fn test_library_plugin_creation(
 
     component_service
         .create_plugin_installation_for_component(
-            &DefaultComponentOwner,
+            &test_component_owner(),
             &created_component.versioned_component_id.component_id,
             PluginInstallationCreation {
                 name: plugin_name.to_string(),
@@ -1064,8 +1064,8 @@ async fn test_library_plugin_creation(
 #[test]
 #[tracing::instrument]
 async fn test_app_plugin_creation(
-    component_service: &Arc<dyn ComponentService<DefaultComponentOwner>>,
-    plugin_service: &Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope>>,
+    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
+    plugin_service: &Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>,
 ) {
     let plugin_component_name = ComponentName("app-plugin-creation-library".to_string());
 
@@ -1079,7 +1079,7 @@ async fn test_app_plugin_creation(
             None,
             vec![],
             HashMap::new(),
-            &DefaultComponentOwner,
+            &test_component_owner(),
             HashMap::new(),
         )
         .await
@@ -1096,7 +1096,7 @@ async fn test_app_plugin_creation(
 
     plugin_service
         .create_plugin(
-            &DefaultPluginOwner,
+            &test_component_owner().into(),
             PluginDefinitionCreation {
                 name: plugin_name.to_string(),
                 version: plugin_version.to_string(),
@@ -1106,7 +1106,7 @@ async fn test_app_plugin_creation(
                 specs: PluginTypeSpecificCreation::App(AppPluginCreation {
                     data: PluginWasmFileReference::Data(Box::new(app_plugin_stream)),
                 }),
-                scope: DefaultPluginScope::Global(Empty {}),
+                scope: CloudPluginScope::Global(Empty {}),
             },
         )
         .await
@@ -1114,7 +1114,7 @@ async fn test_app_plugin_creation(
 
     component_service
         .create_plugin_installation_for_component(
-            &DefaultComponentOwner,
+            &test_component_owner(),
             &created_component.versioned_component_id.component_id,
             PluginInstallationCreation {
                 name: plugin_name.to_string(),

@@ -3505,6 +3505,7 @@ dependencies = [
  "bincode",
  "bytes 1.10.1",
  "chrono",
+ "cloud-common",
  "conditional-trait-gen",
  "futures",
  "golem-api-grpc",

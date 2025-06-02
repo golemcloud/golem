@@ -24,6 +24,7 @@ use golem_common::model::{
     component_metadata::{LinearMemory, RawComponentMetadata},
     ComponentId, ComponentType, ComponentVersion, InitialComponentFile,
 };
+use golem_common::model::{AccountId, ProjectId};
 use golem_common::testing::LocalFileSystemComponentMetadata;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_wasm_ast::analysis::AnalysedExport;
@@ -37,6 +38,8 @@ use uuid::Uuid;
 use super::ComponentServiceInternal;
 
 const WASMS_DIRNAME: &str = "wasms";
+const ACCOUNT_ID: uuid::Uuid = uuid::uuid!("d7ec111a-47aa-4167-9de1-26403ad85bfc");
+const PROJECT_ID: uuid::Uuid = uuid::uuid!("1adb7923-199f-40fa-99ff-f617b5c1163a");
 
 pub struct FileSystemComponentService {
     root: PathBuf,
@@ -119,6 +122,10 @@ impl FileSystemComponentService {
             .len();
 
         let metadata = LocalFileSystemComponentMetadata {
+            account_id: AccountId {
+                value: ACCOUNT_ID.to_string(),
+            },
+            project_id: ProjectId(PROJECT_ID),
             component_id: component_id.clone(),
             component_name: component_name.to_string(),
             version: component_version,

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::{ComponentId, ComponentVersion};
-use crate::model::plugin::{DefaultPluginOwner, PluginOwner};
+use crate::model::plugin::PluginOwner;
 use crate::model::{AccountId, PoemTypeRequirements};
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
@@ -51,46 +51,6 @@ pub trait ComponentOwner:
     type PluginOwner: PluginOwner + From<Self>;
 
     fn account_id(&self) -> AccountId;
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct DefaultComponentOwner;
-
-impl Display for DefaultComponentOwner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "default")
-    }
-}
-
-impl FromStr for DefaultComponentOwner {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "default" {
-            Ok(DefaultComponentOwner)
-        } else {
-            Err("Failed to parse empty namespace".to_string())
-        }
-    }
-}
-
-impl From<DefaultComponentOwner> for DefaultPluginOwner {
-    fn from(_value: DefaultComponentOwner) -> Self {
-        DefaultPluginOwner
-    }
-}
-
-impl ComponentOwner for DefaultComponentOwner {
-    #[cfg(feature = "sql")]
-    type Row = crate::repo::component::DefaultComponentOwnerRow;
-    type PluginOwner = DefaultPluginOwner;
-
-    fn account_id(&self) -> AccountId {
-        AccountId::placeholder()
-    }
 }
 
 #[derive(

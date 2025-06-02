@@ -69,10 +69,8 @@ use async_trait::async_trait;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::golem_version;
-use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
-use golem_common::model::plugin::{
-    DefaultPluginOwner, DefaultPluginScope, PluginOwner, PluginScope,
-};
+use golem_common::model::component::ComponentOwner;
+use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_common::redis::RedisPool;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -607,13 +605,4 @@ pub trait GolemTypes: 'static {
 
     type PluginOwner: PluginOwner;
     type PluginScope: PluginScope;
-}
-
-pub struct DefaultGolemTypes;
-
-impl GolemTypes for DefaultGolemTypes {
-    type ComponentOwner = DefaultComponentOwner;
-
-    type PluginOwner = DefaultPluginOwner;
-    type PluginScope = DefaultPluginScope;
 }

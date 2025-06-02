@@ -23,7 +23,9 @@ use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
 use crate::metrics::component::record_compilation_time;
 use crate::services::compiled_component;
 use crate::services::compiled_component::CompiledComponentService;
-use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::component::{
+    ComponentMetadata, ComponentService, ComponentServiceLocalFileSystem,
+};
 use crate::services::golem_config::{
     CompiledComponentServiceConfig, ComponentCacheConfig, ComponentServiceConfig,
     ProjectServiceConfig,
@@ -88,7 +90,16 @@ pub fn configured(
                 plugin_observations,
             ))
         }
-        _ => panic!("Unsupported cloud component and project service configuration. Currently only gRPC is supported for both")
+        (ComponentServiceConfig::Local(config), ProjectServiceConfig::Disabled(_)) => {
+            info!("Using local component server at {:?}", config.root);
+            Arc::new(ComponentServiceLocalFileSystem::new(
+                &config.root,
+                cache_config.max_capacity,
+                cache_config.time_to_idle,
+                compiled_component_service,
+            ))
+        }
+        _ => panic!("Unsupported cloud component and project service configuration"),
     }
 }
 

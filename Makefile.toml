@@ -846,14 +846,8 @@ git diff --exit-code \
     golem-worker-service/config/worker-service.sample.env \
     golem-worker-executor/config/worker-executor.toml \
     golem-worker-executor/config/worker-executor.sample.env \
-    cloud-shard-manager/config/shard-manager.toml \
-    cloud-shard-manager/config/shard-manager.sample.env \
-    cloud-component-compilation-service/config/component-compilation-service.toml \
-    cloud-component-compilation-service/config/component-compilation-service.sample.env \
-    cloud-component-service/config/component-service.toml \
-    cloud-component-service/config/component-service.sample.env \
-    cloud-worker-service/config/worker-service.toml \
-    cloud-worker-service/config/worker-service.sample.env \
+    cloud-debugging-service/config/debug-worker-executor.toml \
+    cloud-debugging-service/config/debug-worker-executor.sample.env \
     cloud-service/config/cloud-service.toml \
     cloud-service/config/cloud-service.sample.env
 '''

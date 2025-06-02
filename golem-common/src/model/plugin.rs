@@ -1,11 +1,9 @@
 use super::{PluginId, PoemMultipartTypeRequirements};
 use crate::model::{
-    AccountId, ComponentId, ComponentVersion, Empty, PluginInstallationId, PoemTypeRequirements,
+    AccountId, ComponentId, ComponentVersion, PluginInstallationId, PoemTypeRequirements,
 };
 use async_trait::async_trait;
-use serde::de::{MapAccess, Visitor};
-use serde::ser::SerializeStruct;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
@@ -16,80 +14,6 @@ use std::str::FromStr;
 #[serde(rename_all = "camelCase")]
 pub struct ComponentPluginScope {
     pub component_id: ComponentId,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-pub enum DefaultPluginScope {
-    Global(Empty),
-    Component(ComponentPluginScope),
-}
-
-impl DefaultPluginScope {
-    pub fn global() -> Self {
-        DefaultPluginScope::Global(Empty {})
-    }
-
-    pub fn component(component_id: ComponentId) -> Self {
-        DefaultPluginScope::Component(ComponentPluginScope { component_id })
-    }
-
-    pub fn valid_in_component(&self, component_id: &ComponentId) -> bool {
-        match self {
-            DefaultPluginScope::Global(_) => true,
-            DefaultPluginScope::Component(scope) => &scope.component_id == component_id,
-        }
-    }
-}
-
-impl Default for DefaultPluginScope {
-    fn default() -> Self {
-        DefaultPluginScope::global()
-    }
-}
-
-impl Display for DefaultPluginScope {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DefaultPluginScope::Global(_) => write!(f, "global"),
-            DefaultPluginScope::Component(scope) => write!(f, "component:{}", scope.component_id),
-        }
-    }
-}
-
-#[cfg(feature = "poem")]
-impl poem_openapi::types::ParseFromParameter for DefaultPluginScope {
-    fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
-        if value == "global" {
-            Ok(Self::global())
-        } else if let Some(id_part) = value.strip_prefix("component:") {
-            let component_id = ComponentId::try_from(id_part);
-            match component_id {
-                Ok(component_id) => Ok(Self::component(component_id)),
-                Err(err) => Err(poem_openapi::types::ParseError::<Self>::custom(err)),
-            }
-        } else {
-            Err(poem_openapi::types::ParseError::<Self>::custom("Unexpected representation of plugin scope - must be 'global' or 'component:<component_id>'".to_string()))
-        }
-    }
-}
-
-#[cfg(feature = "poem")]
-impl poem_openapi::types::ParseFromMultipartField for DefaultPluginScope {
-    async fn parse_from_multipart(
-        field: Option<poem::web::Field>,
-    ) -> poem_openapi::types::ParseResult<Self> {
-        use poem_openapi::types::ParseFromParameter;
-        match field {
-            Some(field) => {
-                let s = field.text().await?;
-                Self::parse_from_parameter(&s)
-            }
-            None => Err(poem_openapi::types::ParseError::expected_input()),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,74 +132,6 @@ pub trait PluginOwner:
         + 'static;
 
     fn account_id(&self) -> AccountId;
-}
-
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct DefaultPluginOwner;
-
-impl Display for DefaultPluginOwner {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "default")
-    }
-}
-
-impl FromStr for DefaultPluginOwner {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "default" {
-            Ok(DefaultPluginOwner)
-        } else {
-            Err("Failed to parse empty namespace".to_string())
-        }
-    }
-}
-
-impl PluginOwner for DefaultPluginOwner {
-    #[cfg(feature = "sql")]
-    type Row = crate::repo::plugin::DefaultPluginOwnerRow;
-
-    fn account_id(&self) -> AccountId {
-        AccountId::placeholder()
-    }
-}
-
-impl Serialize for DefaultPluginOwner {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let s = serializer.serialize_struct("DefaultPluginOwner", 0)?;
-        s.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for DefaultPluginOwner {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct UnitVisitor;
-
-        impl<'de> Visitor<'de> for UnitVisitor {
-            type Value = DefaultPluginOwner;
-
-            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-                formatter.write_str("struct DefaultPluginOwner")
-            }
-
-            fn visit_map<A>(self, _map: A) -> Result<Self::Value, A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                Ok(DefaultPluginOwner)
-            }
-        }
-
-        deserializer.deserialize_struct("DefaultPluginOwner", &[], UnitVisitor)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -399,21 +255,6 @@ pub trait PluginScope:
 
     /// Gets all the plugin scopes valid for this given scope
     async fn accessible_scopes(&self, context: Self::RequestContext) -> Result<Vec<Self>, String>;
-}
-
-#[async_trait]
-impl PluginScope for DefaultPluginScope {
-    #[cfg(feature = "sql")]
-    type Row = crate::repo::plugin::DefaultPluginScopeRow;
-
-    type RequestContext = ();
-
-    async fn accessible_scopes(&self, _context: ()) -> Result<Vec<Self>, String> {
-        Ok(match self {
-            DefaultPluginScope::Global(_) => vec![self.clone()],
-            DefaultPluginScope::Component(_) => vec![Self::global(), self.clone()],
-        })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -614,20 +455,5 @@ mod protobuf {
                 blob_storage_key: PluginWasmFileKey(value.blob_storage_key),
             })
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::model::plugin::DefaultPluginOwner;
-    use poem_openapi::types::ToJSON;
-    use test_r::test;
-
-    #[test]
-    fn default_plugin_owner_serialization_poem_serde_equivalence() {
-        let owner = DefaultPluginOwner;
-        let serialized = owner.to_json_string();
-        let deserialized: DefaultPluginOwner = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(owner, deserialized);
     }
 }
