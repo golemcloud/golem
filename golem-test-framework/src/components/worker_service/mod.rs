@@ -86,7 +86,7 @@ use golem_client::api::WorkerClientLive as WorkerServiceHttpClientLive;
 use golem_client::model::{
     ApiDeployment, ApiDeploymentRequest, GatewayBindingComponent, SecuritySchemeData,
 };
-use golem_client::Context;
+use golem_client::{Context, Security};
 use golem_common::model::WorkerEvent;
 use golem_wasm_rpc::protobuf::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -145,7 +145,7 @@ pub trait WorkerServiceInternal: Send + Sync {
     fn api_deployment_client(&self) -> ApiDeploymentServiceClient;
     fn api_security_client(&self) -> ApiSecurityServiceClient;
     fn component_service(&self) -> &Arc<dyn ComponentService>;
-    fn cloud_service(&self) -> Arc<dyn CloudService>;
+    fn cloud_service(&self) -> &Arc<dyn CloudService>;
 }
 
 #[async_trait]
@@ -1313,12 +1313,17 @@ async fn new_worker_grpc_client(host: &str, grpc_port: u16) -> WorkerServiceGrpc
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-fn new_worker_http_client(host: &str, http_port: u16) -> Arc<WorkerServiceHttpClientLive> {
+fn new_worker_http_client(
+    host: &str,
+    http_port: u16,
+    cloud_service: &Arc<dyn CloudService>
+) -> Arc<WorkerServiceHttpClientLive> {
     Arc::new(WorkerServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
+            security_token: Security::Bearer(cloud_service.admin_token().to_string())
         },
     })
 }
@@ -1328,13 +1333,14 @@ async fn new_worker_client(
     host: &str,
     grpc_port: u16,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>
 ) -> WorkerServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => {
             WorkerServiceClient::Grpc(new_worker_grpc_client(host, grpc_port).await)
         }
         GolemClientProtocol::Http => {
-            WorkerServiceClient::Http(new_worker_http_client(host, http_port))
+            WorkerServiceClient::Http(new_worker_http_client(host, http_port, cloud_service))
         }
     }
 }
@@ -1358,12 +1364,14 @@ async fn new_api_definition_grpc_client(
 fn new_api_definition_http_client(
     host: &str,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>
 ) -> Arc<ApiDefinitionServiceHttpClientLive> {
     Arc::new(ApiDefinitionServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
+            security_token: Security::Bearer(cloud_service.admin_token().to_string())
         },
     })
 }
@@ -1373,13 +1381,14 @@ async fn new_api_definition_client(
     host: &str,
     grpc_port: u16,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>
 ) -> ApiDefinitionServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => {
             ApiDefinitionServiceClient::Grpc(new_api_definition_grpc_client(host, grpc_port).await)
         }
         GolemClientProtocol::Http => {
-            ApiDefinitionServiceClient::Http(new_api_definition_http_client(host, http_port))
+            ApiDefinitionServiceClient::Http(new_api_definition_http_client(host, http_port, cloud_service))
         }
     }
 }
@@ -1387,12 +1396,14 @@ async fn new_api_definition_client(
 fn new_api_deployment_http_client(
     host: &str,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>
 ) -> Arc<ApiDeploymentServiceHttpClientLive> {
     Arc::new(ApiDeploymentServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
+            security_token: Security::Bearer(cloud_service.admin_token().to_string())
         },
     })
 }
@@ -1400,13 +1411,13 @@ fn new_api_deployment_http_client(
 async fn new_api_deployment_client(
     protocol: GolemClientProtocol,
     host: &str,
-    _grpc_port: u16,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>
 ) -> ApiDeploymentServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => ApiDeploymentServiceClient::Grpc,
         GolemClientProtocol::Http => {
-            ApiDeploymentServiceClient::Http(new_api_deployment_http_client(host, http_port))
+            ApiDeploymentServiceClient::Http(new_api_deployment_http_client(host, http_port, cloud_service))
         }
     }
 }
@@ -1414,12 +1425,14 @@ async fn new_api_deployment_client(
 fn new_api_security_http_client(
     host: &str,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>
 ) -> Arc<ApiSecurityServiceHttpClientLive> {
     Arc::new(ApiSecurityServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
+            security_token: Security::Bearer(cloud_service.admin_token().to_string())
         },
     })
 }
@@ -1427,13 +1440,13 @@ fn new_api_security_http_client(
 async fn new_api_security_client(
     protocol: GolemClientProtocol,
     host: &str,
-    _grpc_port: u16,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>
 ) -> ApiSecurityServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => ApiSecurityServiceClient::Grpc,
         GolemClientProtocol::Http => {
-            ApiSecurityServiceClient::Http(new_api_security_http_client(host, http_port))
+            ApiSecurityServiceClient::Http(new_api_security_http_client(host, http_port, cloud_service))
         }
     }
 }

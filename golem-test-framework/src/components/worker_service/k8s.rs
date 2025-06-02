@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
@@ -53,6 +54,7 @@ pub struct K8sWorkerService {
     api_deployment_client: ApiDeploymentServiceClient,
     api_security_client: ApiSecurityServiceClient,
     component_service: Arc<dyn ComponentService>,
+    cloud_service: Arc<dyn CloudService>
 }
 
 impl K8sWorkerService {
@@ -71,6 +73,7 @@ impl K8sWorkerService {
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
         client_protocol: GolemClientProtocol,
+        cloud_service: Arc<dyn CloudService>
     ) -> Self {
         info!("Starting Golem Worker Service pod");
 
@@ -216,6 +219,7 @@ impl K8sWorkerService {
                 &grpc_routing.hostname,
                 grpc_routing.port,
                 http_routing.port,
+                &cloud_service
             )
             .await,
             api_definition_client: new_api_definition_client(
@@ -223,23 +227,25 @@ impl K8sWorkerService {
                 &grpc_routing.hostname,
                 grpc_routing.port,
                 http_routing.port,
+                &cloud_service
             )
             .await,
             api_deployment_client: new_api_deployment_client(
                 client_protocol,
                 &grpc_routing.hostname,
-                grpc_routing.port,
                 http_routing.port,
+                &cloud_service
             )
             .await,
             api_security_client: new_api_security_client(
                 client_protocol,
                 &grpc_routing.hostname,
-                grpc_routing.port,
                 http_routing.port,
+                &cloud_service
             )
             .await,
-            component_service: component_service.clone(),
+            component_service,
+            cloud_service
         }
     }
 }
@@ -267,6 +273,10 @@ impl WorkerServiceInternal for K8sWorkerService {
 
     fn component_service(&self) -> &Arc<dyn ComponentService> {
         &self.component_service
+    }
+
+    fn cloud_service(&self) -> &Arc<dyn CloudService> {
+        &self.cloud_service
     }
 }
 

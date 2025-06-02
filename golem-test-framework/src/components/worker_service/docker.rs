@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
 use crate::components::rdb::Rdb;
@@ -45,6 +46,7 @@ pub struct DockerWorkerService {
     api_deployment_client: ApiDeploymentServiceClient,
     api_security_client: ApiSecurityServiceClient,
     component_service: Arc<dyn ComponentService>,
+    cloud_service: Arc<dyn CloudService>
 }
 
 impl DockerWorkerService {
@@ -59,6 +61,7 @@ impl DockerWorkerService {
         rdb: Arc<dyn Rdb + Send + Sync>,
         verbosity: Level,
         client_protocol: GolemClientProtocol,
+        cloud_service: Arc<dyn CloudService>
     ) -> Self {
         info!("Starting golem-worker-service container");
 
@@ -114,6 +117,7 @@ impl DockerWorkerService {
                 "localhost",
                 public_grpc_port,
                 public_http_port,
+                &cloud_service
             )
             .await,
             api_definition_client: new_api_definition_client(
@@ -121,23 +125,25 @@ impl DockerWorkerService {
                 "localhost",
                 public_grpc_port,
                 public_http_port,
+                &cloud_service
             )
             .await,
             api_deployment_client: new_api_deployment_client(
                 client_protocol,
                 "localhost",
-                public_grpc_port,
                 public_http_port,
+                &cloud_service
             )
             .await,
             api_security_client: new_api_security_client(
                 client_protocol,
                 "localhost",
-                public_grpc_port,
                 public_http_port,
+                &cloud_service
             )
             .await,
-            component_service: component_service.clone(),
+            component_service,
+            cloud_service
         }
     }
 }
@@ -165,6 +171,10 @@ impl WorkerServiceInternal for DockerWorkerService {
 
     fn component_service(&self) -> &Arc<dyn ComponentService> {
         &self.component_service
+    }
+
+    fn cloud_service(&self) -> &Arc<dyn CloudService> {
+        &self.cloud_service
     }
 }
 

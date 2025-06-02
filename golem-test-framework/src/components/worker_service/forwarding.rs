@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_service::{
@@ -52,16 +53,19 @@ use super::WorkerServiceInternal;
 pub struct ForwardingWorkerService {
     worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
     component_service: Arc<dyn ComponentService>,
+    cloud_service: Arc<dyn CloudService>
 }
 
 impl ForwardingWorkerService {
     pub fn new(
         worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService>,
+        cloud_service: Arc<dyn CloudService>
     ) -> Self {
         Self {
             worker_executor,
             component_service,
+            cloud_service
         }
     }
 
@@ -101,6 +105,10 @@ impl WorkerServiceInternal for ForwardingWorkerService {
 
     fn component_service(&self) -> &Arc<dyn ComponentService> {
         &self.component_service
+    }
+
+    fn cloud_service(&self) -> &Arc<dyn CloudService> {
+        &self.cloud_service
     }
 }
 
