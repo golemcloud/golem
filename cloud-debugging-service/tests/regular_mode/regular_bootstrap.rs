@@ -64,8 +64,9 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         plugin_observations: Arc<dyn PluginsObservations>,
     ) -> Arc<dyn ComponentService<CloudGolemTypes>> {
-        component::configured(
+        golem_worker_executor::services::cloud::component::configured(
             &get_component_service_config(),
+            &golem_config.project_service,
             &get_component_cache_config(),
             &golem_config.compiled_component_service,
             blob_storage,

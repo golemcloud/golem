@@ -358,4 +358,8 @@ impl TestDependencies for RegularWorkerExecutorTestDependencies {
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
     }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        panic!("Not supported")
+    }
 }

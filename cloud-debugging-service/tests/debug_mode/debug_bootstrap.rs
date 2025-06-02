@@ -11,6 +11,7 @@ use cloud_debugging_service::oplog::debug_oplog_service::DebugOplogService;
 use cloud_debugging_service::{create_debug_wasmtime_linker, run_debug_server};
 use golem_service_base::storage::blob::BlobStorage;
 use golem_test_framework::components::worker_executor::provided::ProvidedWorkerExecutor;
+use golem_worker_executor::cloud::CloudGolemTypes;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
@@ -58,12 +59,12 @@ impl TestDebuggingServerBootStrap {
 }
 
 #[async_trait]
-impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap {
+impl Bootstrap<DebugContext<CloudGolemTypes>> for TestDebuggingServerBootStrap {
     fn create_active_workers(
         &self,
         golem_config: &GolemConfig,
-    ) -> Arc<ActiveWorkers<DebugContext<DefaultGolemTypes>>> {
-        Arc::new(ActiveWorkers::<DebugContext<DefaultGolemTypes>>::new(
+    ) -> Arc<ActiveWorkers<DebugContext<CloudGolemTypes>>> {
+        Arc::new(ActiveWorkers::<DebugContext<CloudGolemTypes>>::new(
             &golem_config.memory,
         ))
     }
@@ -72,7 +73,7 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
         &self,
         golem_config: &GolemConfig,
     ) -> (
-        Arc<dyn Plugins<DefaultGolemTypes>>,
+        Arc<dyn Plugins<CloudGolemTypes>>,
         Arc<dyn PluginsObservations>,
     ) {
         let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(&golem_config.plugin_service);
@@ -84,9 +85,10 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         plugin_observations: Arc<dyn PluginsObservations>,
-    ) -> Arc<dyn ComponentService<DefaultGolemTypes>> {
-        component::configured(
+    ) -> Arc<dyn ComponentService<CloudGolemTypes>> {
+        golem_worker_executor::services::cloud::component::configured(
             &get_component_service_config(),
+            &golem_config.project_service,
             &get_component_cache_config(),
             &golem_config.compiled_component_service,
             blob_storage,
@@ -96,8 +98,8 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
 
     async fn run_grpc_server(
         &self,
-        service_dependencies: All<DebugContext<DefaultGolemTypes>>,
-        _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext<DefaultGolemTypes>>>,
+        service_dependencies: All<DebugContext<CloudGolemTypes>>,
+        _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext<CloudGolemTypes>>>,
         join_set: &mut JoinSet<Result<(), Error>>,
     ) -> anyhow::Result<u16> {
         run_debug_server(service_dependencies, join_set).await
@@ -105,11 +107,11 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
 
     async fn create_services(
         &self,
-        active_workers: Arc<ActiveWorkers<DebugContext<DefaultGolemTypes>>>,
+        active_workers: Arc<ActiveWorkers<DebugContext<CloudGolemTypes>>>,
         engine: Arc<Engine>,
-        linker: Arc<Linker<DebugContext<DefaultGolemTypes>>>,
+        linker: Arc<Linker<DebugContext<CloudGolemTypes>>>,
         runtime: Handle,
-        component_service: Arc<dyn ComponentService<DefaultGolemTypes>>,
+        component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
         shard_manager_service: Arc<dyn ShardManagerService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -120,15 +122,15 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn rdbms::RdbmsService>,
-        worker_activator: Arc<dyn WorkerActivator<DebugContext<DefaultGolemTypes>>>,
+        worker_activator: Arc<dyn WorkerActivator<DebugContext<CloudGolemTypes>>>,
         oplog_service: Arc<dyn OplogService>,
         scheduler_service: Arc<dyn SchedulerService>,
         _worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
+        plugins: Arc<dyn Plugins<CloudGolemTypes>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
-    ) -> anyhow::Result<All<DebugContext<DefaultGolemTypes>>> {
+    ) -> anyhow::Result<All<DebugContext<CloudGolemTypes>>> {
         let auth_service: Arc<dyn AuthService> = Arc::new(TestAuthService);
 
         // The bootstrap of debug server uses a worker proxy which bypasses the worker service
@@ -250,7 +252,7 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
     fn create_wasmtime_linker(
         &self,
         engine: &Engine,
-    ) -> anyhow::Result<Linker<DebugContext<DefaultGolemTypes>>> {
+    ) -> anyhow::Result<Linker<DebugContext<CloudGolemTypes>>> {
         create_debug_wasmtime_linker(engine)
     }
 }
