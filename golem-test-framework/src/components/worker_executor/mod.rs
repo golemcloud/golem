@@ -123,6 +123,10 @@ async fn env_vars(
             cloud_service.admin_token().to_string(),
         )
         .with_str(
+            "GOLEM__COMPONENT_SERVICE__TYPE",
+            "Grpc"
+        )
+        .with_str(
             "GOLEM__COMPONENT_SERVICE__CONFIG__HOST",
             &component_service.private_host(),
         )
@@ -133,6 +137,10 @@ async fn env_vars(
         .with(
             "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
             cloud_service.admin_token().to_string(),
+        )
+        .with_str(
+            "GOLEM__PLUGIN_SERVICE__TYPE",
+            "Grpc"
         )
         .with_str(
             "GOLEM__PLUGIN_SERVICE__CONFIG__HOST",
@@ -172,12 +180,36 @@ async fn env_vars(
             "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER",
             "2",
         )
+        .with_str(
+            "GOLEM__RESOURCE_LIMITS__CONFIG__TYPE",
+            "Grpc",
+        )
+        .with(
+            "GOLEM__RESOURCE_LIMITS__CONFIG__HOST",
+            cloud_service.private_host(),
+        )
         .with(
             "GOLEM__RESOURCE_LIMITS__CONFIG__PORT",
             cloud_service.private_grpc_port().to_string(),
         )
         .with(
             "GOLEM__RESOURCE_LIMITS__CONFIG__ACCESS_TOKEN",
+            cloud_service.admin_token().to_string(),
+        )
+        .with_str(
+            "GOLEM__PROJECT_SERVICE__TYPE",
+            "Grpc",
+        )
+        .with(
+            "GOLEM__PROJECT_SERVICE__CONFIG__HOST",
+            cloud_service.private_host(),
+        )
+        .with(
+            "GOLEM__PROJECT_SERVICE__CONFIG__PORT",
+            cloud_service.private_grpc_port().to_string(),
+        )
+        .with(
+            "GOLEM__PROJECT_SERVICE__CONFIG__ACCESS_TOKEN",
             cloud_service.admin_token().to_string(),
         )
         .with("GOLEM__PORT", grpc_port.to_string())

@@ -66,9 +66,12 @@ pub fn configured(
     plugin_observations: Arc<dyn PluginsObservations + Send + Sync>,
 ) -> Arc<dyn ComponentService<CloudGolemTypes> + Send + Sync> {
     let compiled_component_service = compiled_component::configured(compiled_config, blob_storage);
+    info!("config: {:?}", config);
+    info!("project_service_config: {:?}", project_service_config);
     match (config, project_service_config) {
         (ComponentServiceConfig::Grpc(config), ProjectServiceConfig::Grpc(project_config)) => {
             info!("Using component API at {}", config.url());
+            info!("Using token {}", config.access_token);
             Arc::new(ComponentServiceCloudGrpc::new(
                 config.uri(),
                 project_config.uri(),

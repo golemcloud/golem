@@ -354,6 +354,7 @@ pub struct ComponentCacheConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
 pub enum ProjectServiceConfig {
     Grpc(ProjectServiceGrpcConfig),
     Disabled(ProjectServiceDisabledConfig),
@@ -696,7 +697,7 @@ impl Default for ComponentServiceGrpcConfig {
 
 impl Default for ProjectServiceConfig {
     fn default() -> Self {
-        Self::Disabled(ProjectServiceDisabledConfig {})
+        Self::Grpc(ProjectServiceGrpcConfig::default())
     }
 }
 

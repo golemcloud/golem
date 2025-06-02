@@ -822,14 +822,6 @@ export RUST_BACKTRACE=1
 ./target/debug/golem-worker-service --dump-config-default-env-var > golem-worker-service/config/worker-service.sample.env
 ./target/debug/worker-executor --dump-config-default-toml > golem-worker-executor/config/worker-executor.toml
 ./target/debug/worker-executor --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
-./target/debug/cloud-shard-manager --dump-config-default-toml > cloud-shard-manager/config/shard-manager.toml
-./target/debug/cloud-shard-manager --dump-config-default-env-var > cloud-shard-manager/config/shard-manager.sample.env
-./target/debug/cloud-component-compilation-service --dump-config-default-toml > cloud-component-compilation-service/config/component-compilation-service.toml
-./target/debug/cloud-component-compilation-service --dump-config-default-env-var > cloud-component-compilation-service/config/component-compilation-service.sample.env
-./target/debug/cloud-component-service --dump-config-default-toml > cloud-component-service/config/component-service.toml
-./target/debug/cloud-component-service --dump-config-default-env-var > cloud-component-service/config/component-service.sample.env
-./target/debug/cloud-worker-service --dump-config-default-toml > cloud-worker-service/config/worker-service.toml
-./target/debug/cloud-worker-service --dump-config-default-env-var > cloud-worker-service/config/worker-service.sample.env
 ./target/debug/cloud-debugging-service --dump-config-default-toml > cloud-debugging-service/config/debug-worker-executor.toml
 ./target/debug/cloud-debugging-service --dump-config-default-env-var > cloud-debugging-service/config/debug-worker-executor.sample.env
 ./target/debug/cloud-service --dump-config-default-toml > cloud-service/config/cloud-service.toml

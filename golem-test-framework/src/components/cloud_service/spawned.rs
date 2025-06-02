@@ -46,7 +46,7 @@ impl SpawnedCloudService {
         err_level: Level,
         client_protocol: GolemClientProtocol,
     ) -> Self {
-        info!("Starting cloud-serfvice process");
+        info!("Starting cloud-service process");
 
         if !executable.exists() {
             panic!("Expected to have precompiled cloud-service at {executable:?}");

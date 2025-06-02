@@ -2,7 +2,6 @@
 grpc_address = "0.0.0.0"
 http_address = "0.0.0.0"
 http_port = 8082
-mode = "Oss"
 port = 9000
 tracing_file_name_with_port = true
 
@@ -116,7 +115,10 @@ max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
-[project_service.Disabled]
+[project_service]
+type = "Disabled"
+
+[project_service.config]
 
 [public_worker_api]
 access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
@@ -217,7 +219,6 @@ without_time = false
 # grpc_address = "0.0.0.0"
 # http_address = "0.0.0.0"
 # http_port = 8082
-# mode = "Oss"
 # port = 9000
 # tracing_file_name_with_port = true
 # 
@@ -347,7 +348,10 @@ without_time = false
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
-# [project_service.Disabled]
+# [project_service]
+# type = "Disabled"
+# 
+# [project_service.config]
 # 
 # [public_worker_api]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
@@ -438,7 +442,6 @@ without_time = false
 # grpc_address = "0.0.0.0"
 # http_address = "0.0.0.0"
 # http_port = 8082
-# mode = "Oss"
 # port = 9000
 # tracing_file_name_with_port = true
 # 
@@ -538,7 +541,10 @@ without_time = false
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
-# [project_service.Disabled]
+# [project_service]
+# type = "Disabled"
+# 
+# [project_service.config]
 # 
 # [public_worker_api]
 # access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
