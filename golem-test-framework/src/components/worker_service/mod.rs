@@ -1477,6 +1477,7 @@ async fn env_vars(
     rdb: &Arc<dyn Rdb + Send + Sync>,
     verbosity: Level,
     rdb_private_connection: bool,
+    cloud_service: &Arc<dyn CloudService>
 ) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
@@ -1492,9 +1493,9 @@ async fn env_vars(
             "GOLEM__COMPONENT_SERVICE__PORT",
             component_service.private_grpc_port().to_string(),
         )
-        .with_str(
+        .with(
             "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
-            "5C832D93-FF85-4A8F-9803-513950FDFDB1",
+            cloud_service.admin_token().to_string(),
         )
         .with_str("ENVIRONMENT", "local")
         .with_str("GOLEM__ENVIRONMENT", "ittest")
@@ -1506,6 +1507,18 @@ async fn env_vars(
         .with(
             "GOLEM__CUSTOM_REQUEST_PORT",
             custom_request_port.to_string(),
+        )
+        .with(
+            "GOLEM__CLOUD_SERVICE__HOST",
+            cloud_service.private_host(),
+        )
+        .with(
+            "GOLEM__CLOUD_SERVICE__PORT",
+            cloud_service.private_grpc_port().to_string(),
+        )
+        .with(
+            "GOLEM__CLOUD_SERVICE__ACCESS_TOKEN",
+            cloud_service.admin_token().to_string(),
         )
         .with("GOLEM__WORKER_GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__PORT", http_port.to_string())

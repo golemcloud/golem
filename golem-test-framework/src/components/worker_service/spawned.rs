@@ -82,6 +82,7 @@ impl SpawnedWorkerService {
                     &rdb,
                     verbosity,
                     false,
+                    &cloud_service
                 )
                 .await,
             )

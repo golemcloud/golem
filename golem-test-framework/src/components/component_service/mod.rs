@@ -68,6 +68,7 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::{debug, info, Level};
 use url::Url;
+use super::cloud_service::CloudService;
 use super::ADMIN_TOKEN;
 
 pub mod docker;
@@ -1073,6 +1074,7 @@ async fn env_vars(
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     verbosity: Level,
     private_rdb_connection: bool,
+    cloud_service: &Arc<dyn CloudService>
 ) -> HashMap<String, String> {
     let mut builder = EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__COMPONENT_STORE__TYPE", "Local")
@@ -1085,6 +1087,18 @@ async fn env_vars(
         .with_str(
             "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
             "/tmp/ittest-local-object-store/golem",
+        )
+        .with(
+            "GOLEM__CLOUD_SERVICE__HOST",
+            cloud_service.private_host(),
+        )
+        .with(
+            "GOLEM__CLOUD_SERVICE__PORT",
+            cloud_service.private_grpc_port().to_string(),
+        )
+        .with(
+            "GOLEM__CLOUD_SERVICE__ACCESS_TOKEN",
+            cloud_service.admin_token().to_string(),
         )
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())

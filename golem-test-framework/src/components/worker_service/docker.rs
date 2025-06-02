@@ -74,6 +74,7 @@ impl DockerWorkerService {
             &rdb,
             verbosity,
             true,
+            &cloud_service
         )
         .await;
 

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::{
     new_component_client, new_plugin_client, ComponentService, ComponentServiceClient,
     PluginServiceClient,
@@ -55,6 +56,7 @@ impl DockerComponentService {
         verbosity: Level,
         client_protocol: GolemClientProtocol,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+        cloud_service: Arc<dyn CloudService>
     ) -> Self {
         info!("Starting golem-component-service container");
 
@@ -65,6 +67,7 @@ impl DockerComponentService {
             rdb,
             verbosity,
             true,
+            &cloud_service
         )
         .await;
 

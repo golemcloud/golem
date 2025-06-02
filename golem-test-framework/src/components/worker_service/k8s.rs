@@ -86,6 +86,7 @@ impl K8sWorkerService {
             &rdb,
             verbosity,
             true,
+            &cloud_service
         )
         .await;
 
