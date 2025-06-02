@@ -51,25 +51,6 @@ impl K8sShardManager {
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
-        Self::new_base(
-            namespace,
-            routing_type,
-            verbosity,
-            redis,
-            timeout,
-            service_annotations,
-        )
-        .await
-    }
-
-    pub async fn new_base(
-        namespace: &K8sNamespace,
-        routing_type: &K8sRoutingType,
-        verbosity: Level,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        timeout: Duration,
-        service_annotations: Option<std::collections::BTreeMap<String, String>>,
-    ) -> Self {
         info!("Starting Golem Shard Manager pod");
 
         let env_vars =

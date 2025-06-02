@@ -12,16 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_compilation_service::{
-    wait_for_startup, ComponentCompilationService,
-};
+use crate::components::cloud_service::{new_project_client, wait_for_startup};
 use crate::components::component_service::ComponentService;
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
 };
+use crate::components::rdb::Rdb;
+use crate::config::GolemClientProtocol;
 use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
+use golem_client::api::ProjectClient;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};
@@ -31,37 +32,45 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{info, Level};
 
-pub struct K8sComponentCompilationService {
+use super::{CloudService, CloudServiceInternal, ProjectServiceClient};
+
+pub struct K8sCloudService {
     namespace: K8sNamespace,
     local_host: String,
-    local_port: u16,
+    local_grpc_port: u16,
+    local_http_port: u16,
     pod: Arc<Mutex<Option<K8sPod>>>,
     service: Arc<Mutex<Option<K8sService>>>,
-    routing: Arc<Mutex<Option<K8sRouting>>>,
+    grpc_routing: Arc<Mutex<Option<K8sRouting>>>,
+    http_routing: Arc<Mutex<Option<K8sRouting>>>,
+    project_client: ProjectServiceClient
 }
 
-impl K8sComponentCompilationService {
+impl K8sCloudService {
     pub const GRPC_PORT: u16 = 9094;
     pub const HTTP_PORT: u16 = 8083;
-    pub const NAME: &'static str = "golem-component-compilation-service";
+    pub const NAME: &'static str = "cloud-service";
 
     pub async fn new(
         namespace: &K8sNamespace,
         routing_type: &K8sRoutingType,
         verbosity: Level,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
+        client_protocol: GolemClientProtocol,
     ) -> Self {
-        info!("Starting Golem Component Compilation Service pod");
+        info!("Starting Cloud Service pod");
 
         let env_vars = super::env_vars(
             Self::HTTP_PORT,
             Self::GRPC_PORT,
-            component_service,
+            rdb,
             verbosity,
+            true,
         )
         .await;
+
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))
@@ -103,7 +112,7 @@ impl K8sComponentCompilationService {
                 ],
                 "containers": [{
                     "name": "service",
-                    "image": format!("golemservices/golem-component-compilation-service:latest"),
+                    "image": format!("golemservices/cloud-service:latest"),
                     "env": env_vars
                 }]
             }
@@ -154,27 +163,49 @@ impl K8sComponentCompilationService {
 
         let Routing {
             hostname: local_host,
-            port: local_port,
-            routing: managed_routing,
+            port: grpc_port,
+            routing: grpc_routing,
         } = Routing::create(Self::NAME, Self::GRPC_PORT, namespace, routing_type).await;
 
-        wait_for_startup(&local_host, local_port, timeout).await;
+        let Routing {
+            port: http_port,
+            routing: http_routing,
+            ..
+        } = Routing::create(Self::NAME, Self::HTTP_PORT, namespace, routing_type).await;
+
+        wait_for_startup(
+            client_protocol,
+            &local_host,
+            grpc_port,
+            http_port,
+            timeout,
+        )
+        .await;
 
         info!("Golem Component Compilation Service pod started");
 
         Self {
             namespace: namespace.clone(),
-            local_host,
-            local_port,
+            local_grpc_port: grpc_port,
+            local_http_port: http_port,
             pod: Arc::new(Mutex::new(Some(managed_pod))),
             service: Arc::new(Mutex::new(Some(managed_service))),
-            routing: Arc::new(Mutex::new(Some(managed_routing))),
+            grpc_routing: Arc::new(Mutex::new(Some(grpc_routing))),
+            http_routing: Arc::new(Mutex::new(Some(http_routing))),
+            project_client: new_project_client(client_protocol, &local_host, grpc_port, http_port).await,
+            local_host
         }
     }
 }
 
 #[async_trait]
-impl ComponentCompilationService for K8sComponentCompilationService {
+impl CloudServiceInternal for K8sCloudService {
+    fn project_client(&self) -> ProjectServiceClient {
+        self.project_client.clone()
+    }
+}
+
+impl CloudService for K8sCloudService {
     fn private_host(&self) -> String {
         format!("{}.{}.svc.cluster.local", Self::NAME, &self.namespace.0)
     }

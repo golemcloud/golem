@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::components::cloud_service::docker::DockerCloudService;
+use crate::components::cloud_service::provided::ProvidedCloudService;
 use crate::components::cloud_service::spawned::SpawnedCloudService;
 use crate::components::cloud_service::{self, CloudService};
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
@@ -238,6 +239,12 @@ pub enum TestMode {
         #[arg(long, default_value = "9100")]
         worker_executor_grpc_port: u16,
         #[arg(long, default_value = "9100")]
+        cloud_service_host: String,
+        #[arg(long, default_value = "localhost")]
+        cloud_service_http_port: u16,
+        #[arg(long, default_value = "8085")]
+        cloud_service_grpc_port: u16,
+        #[arg(long, default_value = "9095")]
         blob_storage_path: PathBuf,
     },
     #[command()]
@@ -282,6 +289,10 @@ pub enum TestMode {
         #[arg(long, default_value = "9100")]
         worker_executor_base_grpc_port: u16,
         #[arg(long, default_value = "false")]
+        cloud_service_http_port: u16,
+        #[arg(long, default_value = "8085")]
+        cloud_service_grpc_port: u16,
+        #[arg(long, default_value = "9095")]
         mute_child: bool,
     },
     #[command()]
@@ -975,6 +986,9 @@ impl CliTestDependencies {
                 worker_executor_host,
                 worker_executor_http_port,
                 worker_executor_grpc_port,
+                cloud_service_host,
+                cloud_service_http_port,
+                cloud_service_grpc_port,
                 blob_storage_path,
             } => {
                 let blob_storage = Arc::new(
@@ -990,20 +1004,31 @@ impl CliTestDependencies {
 
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
                     Arc::new(ProvidedPostgresRdb::new(postgres.clone()));
+
                 let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(ProvidedRedis::new(
                     redis_host.clone(),
                     *redis_port,
                     redis_prefix.clone(),
                 ));
+
                 let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
                     SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
                 );
+
+                let cloud_service: Arc<dyn CloudService> = Arc::new(ProvidedCloudService::new(
+                    cloud_service_host.clone(),
+                    *cloud_service_http_port,
+                    *cloud_service_grpc_port,
+                    params.golem_client_protocol
+                ).await);
+
                 let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> =
                     Arc::new(ProvidedShardManager::new(
                         shard_manager_host.clone(),
                         *shard_manager_http_port,
                         *shard_manager_grpc_port,
                     ));
+
                 let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
                     ProvidedComponentService::new(
                         params.component_directory.clone().into(),
@@ -1015,14 +1040,15 @@ impl CliTestDependencies {
                     )
                     .await,
                 );
-                let component_compilation_service: Arc<
-                    dyn ComponentCompilationService + Send + Sync + 'static,
-                > = Arc::new(ProvidedComponentCompilationService::new(
-                    component_compilation_service_host.clone(),
-                    *component_compilation_service_http_port,
-                    *component_compilation_service_grpc_port,
-                ));
-                let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
+
+                let component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> =
+                    Arc::new(ProvidedComponentCompilationService::new(
+                        component_compilation_service_host.clone(),
+                        *component_compilation_service_http_port,
+                        *component_compilation_service_grpc_port,
+                    ));
+
+                let worker_service: Arc<dyn WorkerService> = Arc::new(
                     ProvidedWorkerService::new(
                         worker_service_host.clone(),
                         *worker_service_http_port,
@@ -1030,6 +1056,7 @@ impl CliTestDependencies {
                         *worker_service_custom_request_port,
                         params.golem_client_protocol,
                         component_service.clone(),
+                        cloud_service.clone()
                     )
                     .await,
                 );
@@ -1087,6 +1114,8 @@ impl CliTestDependencies {
                 worker_service_custom_request_port,
                 worker_executor_base_http_port,
                 worker_executor_base_grpc_port,
+                cloud_service_http_port,
+                cloud_service_grpc_port,
                 mute_child,
             } => {
                 Self::make_spawned(
@@ -1108,6 +1137,8 @@ impl CliTestDependencies {
                     *worker_service_custom_request_port,
                     *worker_executor_base_http_port,
                     *worker_executor_base_grpc_port,
+                    *cloud_service_http_port,
+                    *cloud_service_grpc_port,
                     *mute_child,
                 )
                 .await

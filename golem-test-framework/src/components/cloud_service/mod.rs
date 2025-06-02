@@ -77,6 +77,7 @@ use golem_common::model::ProjectId;
 pub mod docker;
 pub mod provided;
 pub mod spawned;
+pub mod k8s;
 
 #[derive(Clone)]
 pub enum ProjectServiceClient {

@@ -180,6 +180,7 @@ pub struct EnvBasedTestDependencies {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_temp_directory: Arc<TempDir>,
+    cloud_service: Arc<dyn CloudService>
 }
 
 impl Debug for EnvBasedTestDependencies {
@@ -537,6 +538,7 @@ impl EnvBasedTestDependencies {
             component_temp_directory: Arc::new(
                 TempDir::new().expect("Failed to create temporary directory"),
             ),
+            cloud_service
         }
     }
 }
