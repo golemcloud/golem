@@ -387,8 +387,7 @@ impl Validator for RibEdit {
 
         // Note that this is not compiling or parsing the entire Rib program, but syntax checking
         // the single statement
-        let expr =
-            Expr::from_text(input.strip_suffix(";").unwrap_or(input));
+        let expr = Expr::from_text(input.strip_suffix(";").unwrap_or(input));
 
         match expr {
             Ok(_) => Ok(ValidationResult::Valid(None)),
@@ -430,7 +429,12 @@ impl Highlighter for RibEdit {
                         highlighted.push_str(&highlight_command(&word, self));
                     } else {
                         // Highlight code identifiers, instance variables, and keywords
-                        highlighted.push_str(&highlight_code(&word, self, identifiers, instance_vars));
+                        highlighted.push_str(&highlight_code(
+                            &word,
+                            self,
+                            identifiers,
+                            instance_vars,
+                        ));
                     }
                     word.clear();
                 }
@@ -446,10 +450,7 @@ impl Highlighter for RibEdit {
     }
 }
 
-fn highlight_command(
-    word: &str,
-    context: &RibEdit,
-) -> String {
+fn highlight_command(word: &str, context: &RibEdit) -> String {
     if context.repl_commands.contains(&word.to_string()) {
         return word.yellow().to_string();
     }

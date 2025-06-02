@@ -1,10 +1,10 @@
-use std::sync::RwLockReadGuard;
-use rustyline::Editor;
-use rustyline::history::DefaultHistory;
-use crate::{RawRibScript, ReplPrinter};
-use rib::RibCompiler;
 use crate::repl_state::ReplState;
 use crate::rib_edit::RibEdit;
+use crate::{RawRibScript, ReplPrinter};
+use rib::RibCompiler;
+use rustyline::history::DefaultHistory;
+use rustyline::Editor;
+use std::sync::RwLockReadGuard;
 
 // A projection of internal repl_state that could be useful
 // for advanced customisation of REPL commands.
@@ -50,5 +50,4 @@ impl<'a> ReplContext<'a> {
     pub fn get_rib_compiler(&self) -> RwLockReadGuard<RibCompiler> {
         self.repl_state.rib_compiler()
     }
-
 }

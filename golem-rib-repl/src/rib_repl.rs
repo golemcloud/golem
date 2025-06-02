@@ -118,8 +118,6 @@ impl RibRepl {
             }
         }?;
 
-        let component_dependency = component_dependency;
-
         // Once https://github.com/golemcloud/golem/issues/1608 is resolved,
         // component dependency will not be required in the REPL state
         let repl_state = ReplState::new(
@@ -138,7 +136,9 @@ impl RibRepl {
                 .unwrap_or_else(|| Box::new(DefaultReplResultPrinter)),
             editor: rl,
             repl_state: Arc::new(repl_state),
-            prompt: config.prompt.unwrap_or_else(|| ">>> ".truecolor(192, 192, 192).to_string()),
+            prompt: config
+                .prompt
+                .unwrap_or_else(|| ">>> ".truecolor(192, 192, 192).to_string()),
             command_registry,
         })
     }
@@ -183,7 +183,9 @@ impl RibRepl {
                     // regardless of whether it compiles or not
                     // History is never used for any progressive compilation or interpretation
                     let _ = self.editor.add_history_entry(rib);
-                    let _ = self.editor.save_history(self.repl_state.history_file_path());
+                    let _ = self
+                        .editor
+                        .save_history(self.repl_state.history_file_path());
 
                     match compile_rib_script(&self.current_rib_program(), &self.repl_state) {
                         Ok(compiler_output) => {

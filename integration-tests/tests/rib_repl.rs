@@ -46,6 +46,7 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
             source_path: deps.component_directory().join("shopping-cart.wasm"),
         }),
         prompt: None,
+        command_registry: None,
     })
     .await
     .expect("Failed to bootstrap REPL");
@@ -153,6 +154,7 @@ async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
                 .join("shopping-cart-resource.wasm"),
         }),
         prompt: None,
+        command_registry: None,
     })
     .await
     .expect("Failed to bootstrap REPL");

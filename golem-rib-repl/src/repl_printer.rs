@@ -14,10 +14,9 @@
 
 use crate::ReplBootstrapError;
 use colored::Colorize;
+use golem_wasm_ast::analysis::AnalysedType;
 use rib::*;
 use std::collections::BTreeMap;
-use colored::*;
-use golem_wasm_ast::analysis::AnalysedType;
 
 pub trait ReplPrinter {
     fn print_rib_result(&self, result: &RibResult);
@@ -148,7 +147,10 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
     let mut output = String::new();
 
     // Group entries by package and interface
-    let mut hierarchy: BTreeMap<Option<PackageName>, BTreeMap<Option<InterfaceName>, HierarchyNode>> = BTreeMap::new();
+    let mut hierarchy: BTreeMap<
+        Option<PackageName>,
+        BTreeMap<Option<InterfaceName>, HierarchyNode>,
+    > = BTreeMap::new();
 
     for (name, ftype) in &dict.name_and_types {
         match name {
@@ -194,7 +196,9 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
                 output.push_str(&format!(
                     "{} {}\n",
                     "📦 Package:".bold().bright_yellow(),
-                    format!("{}::{}", pkg.namespace, pkg.package_name).bold().truecolor(180, 180, 180)
+                    format!("{}::{}", pkg.namespace, pkg.package_name)
+                        .bold()
+                        .truecolor(180, 180, 180)
                 ));
             }
             None => {
@@ -203,29 +207,20 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
         }
 
         for (iface, node) in interfaces {
-            match iface {
-                Some(iface) => {
-                    output.push_str(&format!(
-                        "  {} {}\n",
-                        "📄 Interface:".bold().bright_cyan(),
-                        iface.name.bold().truecolor(180, 180, 180)
-                    ));
-                }
-                None => {}
+            if let Some(iface) = iface {
+                output.push_str(&format!(
+                    "  {} {}\n",
+                    "📄 Interface:".bold().bright_cyan(),
+                    iface.name.bold().truecolor(180, 180, 180)
+                ));
             }
 
-            if node.functions.len() > 0 {
-                output.push_str(&format!(
-                    "    {}\n",
-                    "🔧 Functions:".bold().bright_green(),
-                ));
+            if !node.functions.is_empty() {
+                output.push_str(&format!("    {}\n", "🔧 Functions:".bold().bright_green(),));
             }
 
             for (fname, ftype) in &node.functions {
-                output.push_str(&format!(
-                    "        {}\n",
-                    format!(" {}", fname.bright_magenta())
-                ));
+                output.push_str(&format!("         {}\n", fname.bright_magenta()));
                 output.push_str(&format!(
                     "           ↳ {}: {}\n",
                     "Args".blue(),
@@ -252,21 +247,14 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
                         format_type_list(&ftype.parameter_types).truecolor(180, 180, 180)
                     ));
 
-                    output.push_str(&format!(
-                        "      {} \n",
-                        "🔧 Methods:".bold().bright_green(),
-                    ));
+                    output.push_str(&format!("      {} \n", "🔧 Methods:".bold().bright_green(),));
 
                     for (mname, mtype) in &res.methods {
-                        output.push_str(&format!(
-                            "         {}\n",
-                            format!("  {}",  mname.bright_magenta())
-                        ));
+                        output.push_str(&format!("           {}\n", mname.bright_magenta()));
 
-                        let parameter_types =
-                            &mtype.parameter_types;
+                        let parameter_types = &mtype.parameter_types;
 
-                        let formatted = if parameter_types.len() > 0 {
+                        let formatted = if !parameter_types.is_empty() {
                             format_type_list(&parameter_types[1..]).truecolor(180, 180, 180)
                         } else {
                             format_type_list(&[]).truecolor(180, 180, 180)
@@ -284,8 +272,6 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
                             format_type_list(&mtype.return_type).truecolor(180, 180, 180)
                         ));
                     }
-
-
                 }
             }
         }
@@ -300,9 +286,7 @@ fn format_type_list(types: &[InferredType]) -> String {
     } else {
         types
             .iter()
-            .map(|t| {
-                wasm_wave::wasm::DisplayType(&AnalysedType::try_from(t).unwrap()).to_string()
-            })
+            .map(|t| wasm_wave::wasm::DisplayType(&AnalysedType::try_from(t).unwrap()).to_string())
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -319,4 +303,3 @@ struct ResourceNode<'a> {
     constructor: Option<&'a FunctionType>,
     methods: Vec<(String, &'a FunctionType)>,
 }
-

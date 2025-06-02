@@ -1,9 +1,12 @@
 use crate::{Command, ReplContext};
+use crossterm::cursor::MoveTo;
+use crossterm::{
+    execute,
+    terminal::{Clear as TermClear, ClearType},
+};
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{CompilerOutput, Expr, FunctionDictionary, RibCompilationError};
-use crossterm::{execute, terminal::{ClearType, Clear as TermClear}};
-use std::io::{stdout};
-use crossterm::cursor::MoveTo;
+use std::io::stdout;
 
 #[derive(Clone)]
 pub struct TypeInfo;
@@ -19,14 +22,12 @@ impl Command for TypeInfo {
         prompt_input: &str,
         repl_context: &ReplContext,
     ) -> Result<Self::Input, Self::InputParseError> {
-
         if prompt_input.is_empty() {
             return Err(RibCompilationError::InvalidSyntax(
                 "Input cannot be empty".to_string(),
             ));
         }
-        let  existing_raw_script =
-            repl_context.get_new_rib_script(prompt_input);
+        let existing_raw_script = repl_context.get_new_rib_script(prompt_input);
 
         let expr = Expr::from_text(&existing_raw_script.as_text())
             .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
@@ -39,8 +40,7 @@ impl Command for TypeInfo {
         input: Self::Input,
         repl_context: &mut ReplContext,
     ) -> Result<Self::Output, Self::ExecutionError> {
-        let compiler_output: CompilerOutput =
-            repl_context.get_rib_compiler().compile(input)?;
+        let compiler_output: CompilerOutput = repl_context.get_rib_compiler().compile(input)?;
 
         let result = compiler_output
             .rib_output_type_info
@@ -67,7 +67,6 @@ impl Command for TypeInfo {
         printer.print_rib_compilation_error(error);
     }
 }
-
 
 #[derive(Clone)]
 pub struct Clear;
@@ -102,7 +101,8 @@ impl Command for Clear {
         printer.print_custom_message("Rib REPL has been cleared");
     }
 
-    fn print_input_parse_error(&self, _error: &Self::InputParseError, _repl_context: &ReplContext) {}
+    fn print_input_parse_error(&self, _error: &Self::InputParseError, _repl_context: &ReplContext) {
+    }
 
     fn print_execution_error(&self, _error: &Self::ExecutionError, _repl_context: &ReplContext) {}
 }
@@ -139,9 +139,12 @@ impl Command for Exports {
         printer.print_exports(output);
     }
 
-    fn print_input_parse_error(&self, _error: &Self::InputParseError, repl_context: &ReplContext){}
+    fn print_input_parse_error(&self, _error: &Self::InputParseError, _repl_context: &ReplContext) {
+    }
 
     fn print_execution_error(&self, error: &Self::ExecutionError, repl_context: &ReplContext) {
-        repl_context.get_printer().print_rib_compilation_error(error)
+        repl_context
+            .get_printer()
+            .print_rib_compilation_error(error)
     }
 }
