@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::{
     AddComponentError, ComponentService, ComponentServiceClient, PluginServiceClient,
 };
@@ -218,6 +219,10 @@ impl ComponentServiceInternal for FileSystemComponentService {
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
+    }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        panic!("No real cloud service running")
     }
 }
 

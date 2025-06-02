@@ -70,6 +70,7 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::{debug, info, Level};
 use url::Url;
+use cloud_common::clients::auth::authorised_request;
 
 pub mod docker;
 pub mod filesystem;
@@ -91,6 +92,7 @@ pub enum PluginServiceClient {
 
 #[async_trait]
 pub trait ComponentServiceInternal: Send + Sync {
+    fn cloud_service(&self) -> Arc<dyn CloudService>;
     fn component_client(&self) -> ComponentServiceClient;
     fn plugin_client(&self) -> PluginServiceClient;
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService>;
@@ -98,11 +100,16 @@ pub trait ComponentServiceInternal: Send + Sync {
     async fn get_plugin_id(&self, name: &str, version: &str) -> crate::Result<Option<PluginId>> {
         match self.plugin_client() {
             PluginServiceClient::Grpc(mut client) => {
-                let response = client
-                    .get_plugin(GetPluginRequest {
+                let request = authorised_request(
+                    GetPluginRequest {
                         name: name.to_string(),
                         version: version.to_string(),
-                    })
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
+                let response = client
+                    .get_plugin(request)
                     .await?;
                 let converted = response.into_inner().result.and_then(|r| match r {
                     get_plugin_response::Result::Success(result) => result
@@ -175,6 +182,11 @@ pub trait ComponentService: ComponentServiceInternal {
     async fn get_components(&self, request: GetComponentsRequest) -> crate::Result<Vec<Component>> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
+                let request = authorised_request(
+                    request,
+                    &self.cloud_service().admin_token(),
+                );
+
                 match client
                     .get_components(request)
                     .await?
@@ -212,6 +224,11 @@ pub trait ComponentService: ComponentServiceInternal {
     ) -> crate::Result<Vec<Component>> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
+                let request = authorised_request(
+                    request,
+                    &self.cloud_service().admin_token(),
+                );
+
                 match client
                     .get_component_metadata_all_versions(request)
                     .await?
@@ -250,6 +267,11 @@ pub trait ComponentService: ComponentServiceInternal {
     ) -> crate::Result<Component> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
+                let request = authorised_request(
+                    request,
+                    &self.cloud_service().admin_token(),
+                );
+
                 match client
                     .get_latest_component_metadata(request)
                     .await?
@@ -289,11 +311,16 @@ pub trait ComponentService: ComponentServiceInternal {
         loop {
             let latest_component: Option<Component> = match self.component_client() {
                 ComponentServiceClient::Grpc(mut client) => {
-                    match client
-                        .get_components(GetComponentsRequest {
+                    let request = authorised_request(
+                        GetComponentsRequest {
                             project_id: None,
                             component_name: Some(name.to_string()),
-                        })
+                        },
+                        &self.cloud_service().admin_token(),
+                    );
+
+                    match client
+                        .get_components(request)
                         .await
                         .expect("Failed to call get-components")
                         .into_inner()
@@ -446,8 +473,13 @@ pub trait ComponentService: ComponentServiceInternal {
                         });
                     }
                 }
+                let request = authorised_request(
+                    tokio_stream::iter(chunks),
+                    &self.cloud_service().admin_token(),
+                );
+
                 let response = client
-                    .create_component(tokio_stream::iter(chunks))
+                    .create_component(request)
                     .await
                     .map_err(|status| {
                         AddComponentError::Other(format!(
@@ -594,11 +626,17 @@ pub trait ComponentService: ComponentServiceInternal {
                         });
                     }
                 }
+                let request = authorised_request(
+                    tokio_stream::iter(chunks),
+                    &self.cloud_service().admin_token(),
+                );
+
                 let response = client
-                    .update_component(tokio_stream::iter(chunks))
+                    .update_component(request)
                     .await
                     .expect("Failed to update component")
                     .into_inner();
+
                 match response.result {
                     None => {
                         panic!("Missing response from golem-component-service for create-component")
@@ -665,10 +703,15 @@ pub trait ComponentService: ComponentServiceInternal {
     async fn get_latest_version(&self, component_id: &ComponentId) -> u64 {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
-                let response = client
-                    .get_latest_component_metadata(GetLatestComponentRequest {
+                let request = authorised_request(
+                    GetLatestComponentRequest {
                         component_id: Some(component_id.clone().into()),
-                    })
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
+                let response = client
+                    .get_latest_component_metadata(request)
                     .await
                     .expect("Failed to get latest component metadata (GRPC)")
                     .into_inner();
@@ -703,10 +746,15 @@ pub trait ComponentService: ComponentServiceInternal {
     async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()> {
         match self.plugin_client() {
             PluginServiceClient::Grpc(mut client) => {
-                let response = client
-                    .create_plugin(CreatePluginRequest {
+                let request = authorised_request(
+                    CreatePluginRequest {
                         plugin: Some(definition.into()),
-                    })
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
+                let response = client
+                    .create_plugin(request)
                     .await?
                     .into_inner();
                 match response.result {
@@ -825,11 +873,16 @@ pub trait ComponentService: ComponentServiceInternal {
     async fn delete_plugin(&self, name: &str, version: &str) -> crate::Result<()> {
         match self.plugin_client() {
             PluginServiceClient::Grpc(mut client) => {
-                let response = client
-                    .delete_plugin(DeletePluginRequest {
+                let request = authorised_request(
+                    DeletePluginRequest {
                         name: name.to_string(),
                         version: version.to_string(),
-                    })
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
+                let response = client
+                    .delete_plugin(request)
                     .await?
                     .into_inner();
                 match response.result {
@@ -865,16 +918,19 @@ pub trait ComponentService: ComponentServiceInternal {
     ) -> crate::Result<PluginInstallationId> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
+                let request = authorised_request(
+                    golem_api_grpc::proto::golem::component::v1::InstallPluginRequest {
+                        component_id: Some(component_id.clone().into()),
+                        name: plugin_name.to_string(),
+                        version: plugin_version.to_string(),
+                        priority,
+                        parameters,
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
                 let response = client
-                    .install_plugin(
-                        golem_api_grpc::proto::golem::component::v1::InstallPluginRequest {
-                            component_id: Some(component_id.clone().into()),
-                            name: plugin_name.to_string(),
-                            version: plugin_version.to_string(),
-                            priority,
-                            parameters,
-                        },
-                    )
+                    .install_plugin(request)
                     .await?
                     .into_inner();
 
@@ -926,13 +982,17 @@ pub trait ComponentService: ComponentServiceInternal {
     ) -> crate::Result<u64> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
+
+                let request = authorised_request(
+                    golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest {
+                        component_id: Some(component_id.clone().into()),
+                        version: Some(component_version),
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
                 let response = client
-                    .download_component(
-                        golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest {
-                            component_id: Some(component_id.clone().into()),
-                            version: Some(component_version),
-                        },
-                    )
+                    .download_component(request)
                     .await?
                     .into_inner();
 

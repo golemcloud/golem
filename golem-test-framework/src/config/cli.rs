@@ -393,7 +393,7 @@ impl CliTestDependencies {
             DockerComponentService::new(
                 &unique_network_id,
                 PathBuf::from(&params.component_directory),
-                Some((
+                (!compilation_service_disabled).then(|| (
                     DockerComponentCompilationService::NAME,
                     DockerComponentCompilationService::GRPC_PORT.as_u16(),
                 )),
@@ -1050,6 +1050,7 @@ impl CliTestDependencies {
                         *component_service_grpc_port,
                         params.golem_client_protocol,
                         plugin_wasm_files_service.clone(),
+                        cloud_service.clone()
                     )
                     .await,
                 );

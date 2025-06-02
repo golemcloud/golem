@@ -40,6 +40,7 @@ pub struct SpawnedComponentService {
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+    cloud_service: Arc<dyn CloudService>
 }
 
 impl SpawnedComponentService {
@@ -116,6 +117,7 @@ impl SpawnedComponentService {
             plugin_client: new_plugin_client(client_protocol, "localhost", grpc_port, http_port)
                 .await,
             plugin_wasm_files_service,
+            cloud_service
         }
     }
 }
@@ -132,6 +134,10 @@ impl ComponentServiceInternal for SpawnedComponentService {
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
+    }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        self.cloud_service.clone()
     }
 }
 

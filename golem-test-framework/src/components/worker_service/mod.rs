@@ -1517,8 +1517,7 @@ async fn env_vars(
             "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
             cloud_service.admin_token().to_string(),
         )
-        .with_str("ENVIRONMENT", "local")
-        .with_str("GOLEM__ENVIRONMENT", "ittest")
+        .with_str("GOLEM__ENVIRONMENT", "local")
         .with("GOLEM__ROUTING_TABLE__HOST", shard_manager.private_host())
         .with(
             "GOLEM__ROUTING_TABLE__PORT",
