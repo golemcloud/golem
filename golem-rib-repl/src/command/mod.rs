@@ -53,7 +53,7 @@ pub trait Command {
     fn execute(
         &self,
         input: Self::Input,
-        repl_context: &ReplContext,
+        repl_context: &mut ReplContext,
     ) -> Result<Self::Output, Self::ExecutionError>;
 
     /// Prints the output produced by the command after successful execution.

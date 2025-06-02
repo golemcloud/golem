@@ -54,7 +54,6 @@ pub struct RibReplConfig {
 
 /// The REPL environment for Rib, providing an interactive shell for executing Rib code.
 pub struct RibRepl {
-    history_file_path: PathBuf,
     printer: Box<dyn ReplPrinter>,
     editor: Editor<RibEdit, DefaultHistory>,
     repl_state: Arc<ReplState>,
@@ -130,10 +129,10 @@ impl RibRepl {
                 component_dependency.metadata,
                 vec![],
             )),
+            history_file_path.clone(),
         );
 
         Ok(RibRepl {
-            history_file_path,
             printer: config
                 .printer
                 .unwrap_or_else(|| Box::new(DefaultReplResultPrinter)),
@@ -166,10 +165,10 @@ impl RibRepl {
 
         match script_or_command {
             CommandOrExpr::Command { args, executor } => {
-                let repl_context =
-                    ReplContext::new(self.printer.as_ref(), &self.repl_state);
+                let mut repl_context =
+                    ReplContext::new(self.printer.as_ref(), &self.repl_state, &mut self.editor);
 
-                executor.run(args.as_str(), &repl_context);
+                executor.run(args.as_str(), &mut repl_context);
 
                 Ok(None)
             }
@@ -184,7 +183,7 @@ impl RibRepl {
                     // regardless of whether it compiles or not
                     // History is never used for any progressive compilation or interpretation
                     let _ = self.editor.add_history_entry(rib);
-                    let _ = self.editor.save_history(&self.history_file_path);
+                    let _ = self.editor.save_history(self.repl_state.history_file_path());
 
                     match compile_rib_script(&self.current_rib_program(), &self.repl_state) {
                         Ok(compiler_output) => {

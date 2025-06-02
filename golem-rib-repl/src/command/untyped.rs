@@ -3,7 +3,7 @@ use crate::Command;
 use convert_case::{Case, Casing};
 
 pub trait UntypedCommand {
-    fn run(&self, prompt_input: &str, repl_context: &ReplContext);
+    fn run(&self, prompt_input: &str, repl_context: &mut ReplContext);
     fn name(&self) -> String;
 }
 
@@ -15,7 +15,7 @@ where
     T::InputParseError: 'static,
     T::ExecutionError: 'static,
 {
-    fn run(&self, prompt_input: &str, repl_context: &ReplContext) {
+    fn run(&self, prompt_input: &str, repl_context: &mut ReplContext) {
         match self.parse(prompt_input, repl_context) {
             Ok(input) => match self.execute(input, repl_context) {
                 Ok(output) => self.print_output(&output, repl_context),

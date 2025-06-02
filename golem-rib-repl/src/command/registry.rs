@@ -1,4 +1,4 @@
-use crate::command::builtin::{Clear, TypeInfo};
+use crate::command::builtin::{Clear, ClearHistory, TypeInfo};
 use crate::UntypedCommand;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,6 +13,7 @@ impl CommandRegistry {
         let mut registry = Self::default();
         registry.register(TypeInfo);
         registry.register(Clear);
+        registry.register(ClearHistory);
         registry
     }
 

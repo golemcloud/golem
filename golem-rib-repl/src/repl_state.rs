@@ -17,6 +17,7 @@ use crate::{RawRibScript, WorkerFunctionInvoke};
 use golem_wasm_rpc::ValueAndType;
 use rib::{InstructionId, RibCompiler};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 pub struct ReplState {
@@ -28,6 +29,7 @@ pub struct ReplState {
     invocation_results: InvocationResultCache,
     last_executed_instruction: RwLock<Option<InstructionId>>,
     rib_compiler: RwLock<RibCompiler>,
+    history_file_path: PathBuf,
 }
 
 impl ReplState {
@@ -53,6 +55,10 @@ impl ReplState {
             .unwrap()
             .clone()
             .unwrap_or(InstructionId { index: 0 })
+    }
+
+    pub fn history_file_path(&self) -> &PathBuf {
+        &self.history_file_path
     }
 
     pub fn update_last_executed_instruction(&self, instruction_id: InstructionId) {
@@ -93,6 +99,7 @@ impl ReplState {
         dependency: RibComponentMetadata,
         worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
         rib_compiler: RibCompiler,
+        history_file: PathBuf,
     ) -> Self {
         Self {
             dependency,
@@ -103,6 +110,7 @@ impl ReplState {
             },
             last_executed_instruction: RwLock::new(None),
             rib_compiler: RwLock::new(rib_compiler),
+            history_file_path: history_file,
         }
     }
 }

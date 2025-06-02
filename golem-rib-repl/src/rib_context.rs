@@ -1,23 +1,29 @@
 use std::sync::RwLockReadGuard;
+use rustyline::Editor;
+use rustyline::history::DefaultHistory;
 use crate::{RawRibScript, ReplPrinter};
 use rib::RibCompiler;
 use crate::repl_state::ReplState;
+use crate::rib_edit::RibEdit;
 
 // A projection of internal repl_state that could be useful
 // for advanced customisation of REPL commands.
 pub struct ReplContext<'a> {
     printer: &'a dyn ReplPrinter,
     repl_state: &'a ReplState,
+    editor: &'a mut Editor<RibEdit, DefaultHistory>,
 }
 
 impl<'a> ReplContext<'a> {
     pub(crate) fn new(
         printer: &'a dyn ReplPrinter,
         repl_state: &'a ReplState,
+        editor: &'a mut Editor<RibEdit, DefaultHistory>,
     ) -> Self {
         Self {
             printer,
             repl_state,
+            editor,
         }
     }
 
@@ -27,6 +33,10 @@ impl<'a> ReplContext<'a> {
 
     pub fn clear(&self) {
         self.repl_state.clear()
+    }
+
+    pub fn clear_history(&mut self) {
+        self.editor.clear_history().unwrap();
     }
 
     pub fn get_new_rib_script(&self, rib: &str) -> RawRibScript {
