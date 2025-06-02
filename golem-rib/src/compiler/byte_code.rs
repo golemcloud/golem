@@ -147,12 +147,12 @@ mod internal {
         InferredType, InstructionId, Range, RibByteCodeGenerationError, RibIR, TypeInternal,
         VariableId, WorkerNamePresence,
     };
-    use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
+    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeFlags};
     use std::collections::HashSet;
 
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::type_inference::{GetTypeHint, TypeHint};
-    use golem_wasm_ast::analysis::analysed_type::{bool, tuple};
+    use golem_wasm_ast::analysis::analysed_type::{bool, record, str, tuple};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
 
@@ -427,15 +427,15 @@ mod internal {
             } => {
                 // If the call type is an instance creation (worker creation),
                 // this will push worker name expression.
-                for expr in args.iter().rev() {
-                    stack.push(ExprState::from_expr(expr));
-                }
-
                 match call_type {
                     CallType::Function {
                         function_name,
                         worker,
                     } => {
+                        for expr in args.iter().rev() {
+                            stack.push(ExprState::from_expr(expr));
+                        }
+
                         let function_result_type = if inferred_type.is_unit() {
                             AnalysedTypeWithUnit::Unit
                         } else {
@@ -584,27 +584,102 @@ mod internal {
                     CallType::InstanceCreation(instance_creation_type) => {
                         match instance_creation_type {
                             InstanceCreationType::Worker { worker_name } => {
-                                if worker_name.is_none() {
-                                    // This would imply returning a instance representing ephemeral
-                                    // worker it simply returns an empty tuple. This is a corner case
-                                    // that a rib script hardly achieves anything from it,
-                                    // but we need to handle it
-                                    stack.push(ExprState::Instruction(RibIR::PushLit(
-                                        ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])),
-                                    )));
+                                for expr in args.iter().rev() {
+                                    stack.push(ExprState::from_expr(expr));
+                                }
+
+                                match worker_name {
+                                    // worker name is already in stack due to args
+                                    Some(worker) => {
+                                        stack.push(ExprState::from_ir(RibIR::PushLit(
+                                            ValueAndType::new(
+                                                Value::Record(vec![Value::String(
+                                                    worker.to_string(),
+                                                )]),
+                                                record(vec![NameTypePair {
+                                                    name: "worker".to_string(),
+                                                    typ: str(),
+                                                }]),
+                                            ),
+                                        )));
+                                    }
+                                    None => {
+                                        // This would imply returning a instance representing ephemeral
+                                        // worker it simply returns an empty tuple. This is a corner case
+                                        // that a rib script hardly achieves anything from it,
+                                        // but we need to handle it
+                                        stack.push(ExprState::from_ir(RibIR::PushLit(
+                                            ValueAndType::new(
+                                                Value::Record(vec![Value::String(
+                                                    "<ephemeral>".to_string(),
+                                                )]),
+                                                record(vec![NameTypePair {
+                                                    name: "worker".to_string(),
+                                                    typ: str(),
+                                                }]),
+                                            ),
+                                        )));
+                                    }
                                 }
                             }
-                            InstanceCreationType::Resource { .. } => {}
+
+                            InstanceCreationType::Resource {
+                                worker_name,
+                                resource_name,
+                                ..
+                            } => {
+                                for expr in args.iter().rev() {
+                                    stack.push(ExprState::from_expr(expr));
+                                }
+
+                                let arg_exprs = args
+                                    .iter()
+                                    .map(|x| Value::String(x.to_string()))
+                                    .collect::<Vec<_>>();
+
+                                stack.push(ExprState::from_ir(RibIR::PushLit(ValueAndType::new(
+                                    Value::Record(vec![
+                                        Value::String(resource_name.resource_name.clone()),
+                                        worker_name.as_ref().map_or(
+                                            Value::String("<ephemeral>".to_string()),
+                                            |w| Value::String(w.to_string()),
+                                        ),
+                                        Value::Tuple(arg_exprs),
+                                    ]),
+                                    record(vec![
+                                        NameTypePair {
+                                            name: "resource".to_string(),
+                                            typ: str(),
+                                        },
+                                        NameTypePair {
+                                            name: "worker".to_string(),
+                                            typ: str(),
+                                        },
+                                        NameTypePair {
+                                            name: "args".to_string(),
+                                            typ: tuple(vec![str(); args.len()]),
+                                        },
+                                    ]),
+                                ))));
+                            }
                         }
                     }
 
                     CallType::VariantConstructor(variant_name) => {
+                        for expr in args.iter().rev() {
+                            stack.push(ExprState::from_expr(expr));
+                        }
+
                         instructions.push(RibIR::PushVariant(
                             variant_name.clone(),
                             convert_to_analysed_type(expr, inferred_type)?,
                         ));
                     }
                     CallType::EnumConstructor(enum_name) => {
+                        for expr in args.iter().rev() {
+                            stack.push(ExprState::from_expr(expr));
+                        }
+
                         instructions.push(RibIR::PushEnum(
                             enum_name.clone(),
                             convert_to_analysed_type(expr, inferred_type)?,

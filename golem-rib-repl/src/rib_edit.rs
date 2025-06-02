@@ -281,6 +281,13 @@ impl Completer for RibEdit {
 
         let word = &line[start..end_pos];
 
+        if line.starts_with(":") {
+            if let Some((new_start, new_completions)) = self.complete_commands(word, start) {
+                completions.extend(new_completions);
+                return Ok((new_start, completions));
+            }
+        }
+
         if let Some((new_start, new_completions)) =
             Self::complete_method_calls(word, instance_variables, start, end_pos)?
         {
@@ -288,10 +295,7 @@ impl Completer for RibEdit {
             return Ok((new_start, completions));
         }
 
-        if let Some((new_start, new_completions)) = self.complete_commands(word, start) {
-            completions.extend(new_completions);
-            return Ok((new_start, completions));
-        }
+
 
         if let Some((new_start, new_completions)) = self.complete_variants(word, start, end_pos)? {
             completions.extend(new_completions);
