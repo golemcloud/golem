@@ -82,7 +82,9 @@ pub trait CloudService: CloudServiceInternal {
     }
 
     fn admin_account_id(&self) -> AccountId {
-        AccountId { value: ADMIN_ACCOUNT_ID.to_string() }
+        AccountId {
+            value: ADMIN_ACCOUNT_ID.to_string(),
+        }
     }
 
     fn private_host(&self) -> String;

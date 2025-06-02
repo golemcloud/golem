@@ -24,7 +24,7 @@ use golem_common::model::plugin::{
     OplogProcessorDefinition, PluginTypeSpecificDefinition,
 };
 use golem_common::model::{Empty, ScanCursor};
-use golem_test_framework::config::EnvBasedTestDependencies;
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_test_framework::model::PluginDefinitionCreation;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
@@ -473,12 +473,14 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         }
     }
 
+    let account_id = deps.cloud_service().admin_account_id();
+
     let expected = vec![
-        format!("root/{component_id}/worker1/golem:it/api.{{initialize-cart}}"),
-        format!("root/{component_id}/worker1/golem:it/api.{{add-item}}"),
-        format!("root/{component_id}/worker1/golem:it/api.{{add-item}}"),
-        format!("root/{component_id}/worker1/golem:it/api.{{add-item}}"),
-        format!("root/{component_id}/worker1/golem:it/api.{{update-item-quantity}}"),
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{initialize-cart}}"),
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{update-item-quantity}}"),
     ];
     assert_eq!(invocations, expected);
 }
