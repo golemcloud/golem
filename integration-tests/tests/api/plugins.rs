@@ -489,7 +489,12 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.component("app_and_library_app").unique().store().await;
 
-    let plugin_wasm_key = deps.add_plugin_wasm("app_and_library_library").await;
+    let plugin_wasm_key = deps
+        .add_plugin_wasm(
+            &deps.cloud_service().admin_account_id(),
+            "app_and_library_library",
+        )
+        .await;
 
     deps.create_plugin(PluginDefinitionCreation {
         name: "library-plugin-1".to_string(),
@@ -529,7 +534,12 @@ async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .store()
         .await;
 
-    let plugin_wasm_key = deps.add_plugin_wasm("app_and_library_app").await;
+    let plugin_wasm_key = deps
+        .add_plugin_wasm(
+            &deps.cloud_service().admin_account_id(),
+            "app_and_library_app",
+        )
+        .await;
 
     deps.create_plugin(PluginDefinitionCreation {
         name: "app-plugin-1".to_string(),
@@ -566,7 +576,12 @@ async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.component("app_and_library_app").unique().store().await;
 
-    let plugin_wasm_key = deps.add_plugin_wasm("app_and_library_library").await;
+    let plugin_wasm_key = deps
+        .add_plugin_wasm(
+            &deps.cloud_service().admin_account_id(),
+            "app_and_library_library",
+        )
+        .await;
 
     let plugin_definition = PluginDefinitionCreation {
         name: "library-plugin-2".to_string(),
@@ -608,7 +623,12 @@ async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.component("app_and_library_app").unique().store().await;
 
-    let plugin_wasm_key = deps.add_plugin_wasm("app_and_library_library").await;
+    let plugin_wasm_key = deps
+        .add_plugin_wasm(
+            &deps.cloud_service().admin_account_id(),
+            "app_and_library_library",
+        )
+        .await;
 
     let plugin_definition = PluginDefinitionCreation {
         name: "library-plugin-3".to_string(),
