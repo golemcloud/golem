@@ -1,32 +1,36 @@
 # Golem development
 
-To work on **Golem** you need to install the following tools:
 
-- Latest **stable** rust compiler
-  - use [rustup](https://rustup.rs/)
-  - then run `rustup update stable`
-  - and `rustup default stable`
-- Install the `wasm32-wasip1` target
-  - `rustup target add wasm32-wasip1`
-- Install [cargo-make](https://github.com/sagiegurari/cargo-make)
-  - `cargo install --force cargo-make`
-- The [prost crate](https://crates.io/crates/prost) requires `protoc` to be installed.
+## Prerequisites
+
+To work on **Golem** you need to install (via package installers or manually) the following tools:
+
+- [rustup](https://rustup.rs/)
+- [Protobuf](https://github.com/protocolbuffers/protobuf#protobuf-compiler-installation)
+  - The [prost crate](https://crates.io/crates/prost) requires `protoc`
   - Requires **version 28** or later
-  - `brew install protobuf` on OSX
-  - Otherwise follow the [official instructions](https://github.com/protocolbuffers/protobuf#protobuf-compiler-installation)
+- For integration tests  
+  - [redis](https://redis.io/downloads/)
+  - [docker](https://www.docker.com)
+- To be able to run all services with `cargo-make run` with a merged log view:
+  - [lnav](https://lnav.org)
+  - [nginx](https://nginx.org)
 
-To be able to run all integration tests:
-  - Install redis
-    - `brew install redis` on OSX
-  - Install [docker](https://www.docker.com) (for running PostgreSQL container in tests)
+### OSX
+```sh
+brew install rustup protobuf redis docker lnav nginx
+```
 
-To be able to run all services with `cargo-make run` with a merged log view:
-- Install [lnav](https://lnav.org)
-  - `brew install lnav` on OSX
-- Install [nginx](https://nginx.org)
-  - `brew install nginx` on OSX
+## Rust Installation
+```sh
+# latest **stable** rust compiler
+rustup update stable
+rustup default stable
+rustup target add wasm32-wasip1
+cargo install --force cargo-make
+```
 
-Everything else is managed by `cargo-make`.
+Everything else is managed by [cargo-make](https://github.com/sagiegurari/cargo-make).
 
 ## Development workflow
 
