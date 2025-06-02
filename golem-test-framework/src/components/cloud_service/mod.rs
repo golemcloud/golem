@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ADMIN_TOKEN, PLACEHOLDER_PROJECT};
+use super::{ADMIN_ACCOUNT_ID, ADMIN_TOKEN, PLACEHOLDER_PROJECT};
 use crate::components::rdb::Rdb;
 use crate::components::{
     new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder,
@@ -26,7 +26,7 @@ use golem_api_grpc::proto::golem::project::v1::{
 };
 use golem_client::api::ProjectClient;
 use golem_client::{Context, Security};
-use golem_common::model::ProjectId;
+use golem_common::model::{AccountId, ProjectId};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -79,6 +79,10 @@ pub trait CloudService: CloudServiceInternal {
 
     fn admin_token(&self) -> Uuid {
         ADMIN_TOKEN
+    }
+
+    fn admin_account_id(&self) -> AccountId {
+        AccountId { value: ADMIN_ACCOUNT_ID.to_string() }
     }
 
     fn private_host(&self) -> String;
@@ -163,6 +167,7 @@ async fn env_vars(
     private_rdb_connection: bool,
 ) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
+        .with("GOLEM__ACCOUNTS__ROOT__ID", ADMIN_ACCOUNT_ID.to_string())
         .with("GOLEM__ACCOUNTS__ROOT__TOKEN", ADMIN_TOKEN.to_string())
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())

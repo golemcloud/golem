@@ -35,7 +35,7 @@ use golem_common::model::{
     TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription,
     WorkerStatus,
 };
-use golem_test_framework::config::EnvBasedTestDependencies;
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_wasm_ast::analysis::analysed_type;
 use rand::seq::IteratorRandom;
 use serde_json::json;
@@ -1603,7 +1603,7 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
 async fn worker_use_initial_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_files = deps
         .add_initial_component_files(
-            &AccountId::placeholder(),
+            &deps.cloud_service().admin_account_id(),
             &[
                 (
                     "initial-file-read-write/files/foo.txt",
@@ -1653,7 +1653,7 @@ async fn worker_use_initial_files(deps: &EnvBasedTestDependencies, _tracing: &Tr
 async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_files = deps
         .add_initial_component_files(
-            &AccountId::placeholder(),
+            &deps.cloud_service().admin_account_id(),
             &[
                 (
                     "initial-file-read-write/files/foo.txt",
@@ -1731,7 +1731,7 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
 async fn worker_read_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_files = deps
         .add_initial_component_files(
-            &AccountId::placeholder(),
+            &deps.cloud_service().admin_account_id(),
             &[
                 (
                     "initial-file-read-write/files/foo.txt",
@@ -1783,7 +1783,7 @@ async fn worker_initial_files_after_automatic_worker_update(
 ) {
     let component_files_1 = deps
         .add_initial_component_files(
-            &AccountId::placeholder(),
+            &deps.cloud_service().admin_account_id(),
             &[
                 (
                     "initial-file-read-write/files/foo.txt",
@@ -1817,7 +1817,7 @@ async fn worker_initial_files_after_automatic_worker_update(
 
     let component_files_2 = deps
         .add_initial_component_files(
-            &AccountId::placeholder(),
+            &deps.cloud_service().admin_account_id(),
             &[
                 (
                     "initial-file-read-write/files/foo.txt",
