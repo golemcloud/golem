@@ -27,6 +27,7 @@ pub use text::*;
 pub use type_checker::*;
 pub use type_inference::*;
 pub use type_registry::*;
+pub use type_parameter::*;
 pub use variable_id::*;
 
 mod call_type;

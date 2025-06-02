@@ -1,6 +1,6 @@
 use crate::{Command, ReplContext};
 use golem_wasm_ast::analysis::AnalysedType;
-use rib::{CompilerOutput, Expr, RibCompilationError};
+use rib::{CompilerOutput, Expr, FunctionDictionary, RibCompilationError};
 use crossterm::{execute, terminal::{ClearType, Clear as TermClear}};
 use std::io::{stdout};
 use crossterm::cursor::MoveTo;
@@ -105,4 +105,43 @@ impl Command for Clear {
     fn print_input_parse_error(&self, _error: &Self::InputParseError, _repl_context: &ReplContext) {}
 
     fn print_execution_error(&self, _error: &Self::ExecutionError, _repl_context: &ReplContext) {}
+}
+
+#[derive(Clone)]
+pub struct Exports;
+
+impl Command for Exports {
+    type Input = ();
+    type Output = FunctionDictionary;
+    type InputParseError = ();
+    type ExecutionError = RibCompilationError;
+
+    fn parse(
+        &self,
+        _prompt_input: &str,
+        _repl_context: &ReplContext,
+    ) -> Result<Self::Input, Self::InputParseError> {
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        _input: Self::Input,
+        repl_context: &mut ReplContext,
+    ) -> Result<Self::Output, Self::ExecutionError> {
+        let compiler = repl_context.get_rib_compiler();
+        let exports = compiler.get_exports()?;
+        Ok(exports)
+    }
+
+    fn print_output(&self, output: &Self::Output, repl_context: &ReplContext) {
+        let printer = repl_context.get_printer();
+        printer.print_exports(output);
+    }
+
+    fn print_input_parse_error(&self, _error: &Self::InputParseError, repl_context: &ReplContext){}
+
+    fn print_execution_error(&self, error: &Self::ExecutionError, repl_context: &ReplContext) {
+        repl_context.get_printer().print_rib_compilation_error(error)
+    }
 }

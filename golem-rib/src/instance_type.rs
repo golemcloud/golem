@@ -14,7 +14,7 @@ use golem_api_grpc::proto::golem::rib::{
     ResourceMethodDictionary as ProtoResourceMethodDictionary,
 };
 use golem_wasm_ast::analysis::AnalysedType;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::ops::Deref;
@@ -447,6 +447,7 @@ impl FunctionDictionary {
     }
 }
 
+
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct ResourceMethodDictionary {
     pub map: Vec<(FullyQualifiedResourceMethod, FunctionType)>,
@@ -641,10 +642,10 @@ pub struct FullyQualifiedFunctionName {
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FullyQualifiedResourceMethod {
-    package_name: Option<PackageName>,
-    interface_name: Option<InterfaceName>,
-    resource_name: String,
-    method_name: String,
+    pub package_name: Option<PackageName>,
+    pub interface_name: Option<InterfaceName>,
+    pub resource_name: String,
+    pub method_name: String,
 }
 
 impl FullyQualifiedResourceMethod {
@@ -713,8 +714,8 @@ impl Display for FullyQualifiedFunctionName {
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FunctionType {
-    parameter_types: Vec<InferredType>,
-    return_type: Vec<InferredType>,
+    pub parameter_types: Vec<InferredType>,
+    pub return_type: Vec<InferredType>,
 }
 
 impl FunctionType {

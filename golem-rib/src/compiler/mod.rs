@@ -23,7 +23,7 @@ pub use worker_functions_in_rib::*;
 
 use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{Expr, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo};
+use crate::{Expr, FunctionDictionary, GlobalVariableTypeSpec, InferredExpr, InstanceType, RibInputTypeInfo, RibOutputTypeInfo};
 
 mod byte_code;
 mod compiler_output;
@@ -95,6 +95,13 @@ impl RibCompiler {
     pub fn infer_types(&self, expr: Expr) -> Result<InferredExpr, RibCompilationError> {
         InferredExpr::from_expr(expr, &self.function_type_registry, &self.input_spec)
             .map_err(RibCompilationError::RibTypeError)
+    }
+
+    // Currently supports only 1 component and hence really only one InstanceType
+    pub fn get_exports(&self) -> Result<FunctionDictionary, RibCompilationError> {
+        FunctionDictionary::from_function_type_registry(&self.function_type_registry)
+            .map_err(|e| RibCompilationError::RibStaticAnalysisError(e.to_string()))
+
     }
 
     pub fn compile(&self, expr: Expr) -> Result<CompilerOutput, RibCompilationError> {

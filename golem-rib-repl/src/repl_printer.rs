@@ -14,8 +14,10 @@
 
 use crate::ReplBootstrapError;
 use colored::Colorize;
+use rib::*;
+use std::collections::BTreeMap;
+use colored::*;
 use golem_wasm_ast::analysis::AnalysedType;
-use rib::{RibCompilationError, RibResult, RibRuntimeError};
 
 pub trait ReplPrinter {
     fn print_rib_result(&self, result: &RibResult);
@@ -28,6 +30,10 @@ pub trait ReplPrinter {
     }
     fn print_custom_message(&self, message: &str) {
         println!("{} {}", "[message]".yellow(), message.cyan());
+    }
+
+    fn print_exports(&self, exports: &FunctionDictionary) {
+        print_function_dictionary(exports)
     }
 }
 
@@ -137,3 +143,162 @@ impl ReplPrinter for DefaultReplResultPrinter {
         );
     }
 }
+
+pub fn print_function_dictionary(dict: &FunctionDictionary) {
+    let mut output = String::new();
+
+    // Group entries by package and interface
+    let mut hierarchy: BTreeMap<Option<PackageName>, BTreeMap<Option<InterfaceName>, HierarchyNode>> = BTreeMap::new();
+
+    for (name, ftype) in &dict.name_and_types {
+        match name {
+            FunctionName::Function(func) => {
+                let node = hierarchy
+                    .entry(func.package_name.clone())
+                    .or_default()
+                    .entry(func.interface_name.clone())
+                    .or_default();
+                node.functions.push((func.function_name.clone(), ftype));
+            }
+
+            FunctionName::ResourceConstructor(ctor) => {
+                let node = hierarchy
+                    .entry(ctor.package_name.clone())
+                    .or_default()
+                    .entry(ctor.interface_name.clone())
+                    .or_default();
+                node.resources
+                    .entry(ctor.resource_name.clone())
+                    .or_default()
+                    .constructor = Some(ftype);
+            }
+
+            FunctionName::ResourceMethod(method) => {
+                let node = hierarchy
+                    .entry(method.package_name.clone())
+                    .or_default()
+                    .entry(method.interface_name.clone())
+                    .or_default();
+                node.resources
+                    .entry(method.resource_name.clone())
+                    .or_default()
+                    .methods
+                    .push((method.method_name.clone(), ftype));
+            }
+        }
+    }
+
+    for (pkg, interfaces) in hierarchy {
+        match pkg {
+            Some(pkg) => {
+                output.push_str(&format!(
+                    "{} {}\n",
+                    "📦 Package:".bold().blue(),
+                    format!("{}::{}", pkg.namespace, pkg.package_name).bold()
+                ));
+            }
+            None => {
+                output.push_str(&format!("{}\n", "📦 Global Scope".bold().blue()));
+            }
+        }
+
+        for (iface, node) in interfaces {
+            match iface {
+                Some(iface) => {
+                    output.push_str(&format!(
+                        "  {} {}\n",
+                        "📄 Interface:".bold().cyan(),
+                        iface.name.bold()
+                    ));
+                }
+                None => {}
+            }
+
+            for (fname, ftype) in &node.functions {
+                output.push_str(&format!(
+                    "    {} {}\n",
+                    "🔧 Function:".bold().green(),
+                    fname
+                ));
+                output.push_str(&format!(
+                    "      ↳ {}: {}\n",
+                    "Args".italic(),
+                    format_type_list(&ftype.parameter_types)
+                ));
+                output.push_str(&format!(
+                    "      ↳ {}: {}\n",
+                    "Returns".italic(),
+                    format_type_list(&ftype.return_type)
+                ));
+            }
+
+            for (res_name, res) in &node.resources {
+                output.push_str(&format!(
+                    "    {} {}\n",
+                    "🏗️ Resource:".bold().yellow(),
+                    res_name
+                ));
+
+                if let Some(ftype) = res.constructor {
+                    output.push_str(&format!(
+                        "      ↳ {}: {}\n",
+                        "Args".italic(),
+                        format_type_list(&ftype.parameter_types)
+                    ));
+                    output.push_str(&format!(
+                        "      ↳ {}: {}\n",
+                        "Returns".italic(),
+                        format_type_list(&ftype.return_type)
+                    ));
+                }
+
+                for (mname, mtype) in &res.methods {
+                    output.push_str(&format!(
+                        "      {} {}\n",
+                        "🔧 Method:".bold().green(),
+                        mname
+                    ));
+                    output.push_str(&format!(
+                        "        ↳ {}: {}\n",
+                        "Args".italic(),
+                        format_type_list(&mtype.parameter_types)
+                    ));
+                    output.push_str(&format!(
+                        "        ↳ {}: {}\n",
+                        "Returns".italic(),
+                        format_type_list(&mtype.return_type)
+                    ));
+                }
+            }
+        }
+    }
+
+    println!("{output}");
+}
+
+fn format_type_list(types: &[InferredType]) -> String {
+    if types.is_empty() {
+        "()".to_string()
+    } else {
+        types
+            .iter()
+            .map(|t| {
+                wasm_wave::wasm::DisplayType(&AnalysedType::try_from(t).unwrap()).to_string()
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+#[derive(Default)]
+struct HierarchyNode<'a> {
+    functions: Vec<(String, &'a FunctionType)>,
+    resources: BTreeMap<String, ResourceNode<'a>>,
+}
+
+#[derive(Default)]
+struct ResourceNode<'a> {
+    constructor: Option<&'a FunctionType>,
+    methods: Vec<(String, &'a FunctionType)>,
+}
+
