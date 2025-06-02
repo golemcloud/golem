@@ -91,7 +91,8 @@ impl Command for Clear {
         _input: Self::Input,
         repl_context: &mut ReplContext,
     ) -> Result<Self::Output, Self::ExecutionError> {
-        repl_context.clear();
+        repl_context.clear_state();
+        repl_context.clear_history();
         execute!(stdout(), TermClear(ClearType::All), MoveTo(0, 0)).unwrap();
         Ok(())
     }
@@ -99,42 +100,6 @@ impl Command for Clear {
     fn print_output(&self, _output: &Self::Output, repl_context: &ReplContext) {
         let printer = repl_context.get_printer();
         printer.print_custom_message("Rib REPL has been cleared");
-    }
-
-    fn print_input_parse_error(&self, _error: &Self::InputParseError, _repl_context: &ReplContext) {}
-
-    fn print_execution_error(&self, _error: &Self::ExecutionError, _repl_context: &ReplContext) {}
-}
-
-#[derive(Clone)]
-pub struct ClearHistory;
-
-impl Command for ClearHistory {
-    type Input = ();
-    type Output = ();
-    type InputParseError = ();
-    type ExecutionError = ();
-
-    fn parse(
-        &self,
-        _prompt_input: &str,
-        _repl_context: &ReplContext,
-    ) -> Result<Self::Input, Self::InputParseError> {
-        Ok(())
-    }
-
-    fn execute(
-        &self,
-        _input: Self::Input,
-        repl_context: &mut ReplContext,
-    ) -> Result<Self::Output, Self::ExecutionError> {
-        repl_context.clear_history();
-        Ok(())
-    }
-
-    fn print_output(&self, _output: &Self::Output, repl_context: &ReplContext) {
-        let printer = repl_context.get_printer();
-        printer.print_custom_message("Rib REPL history has been cleared. To clear complete REPL state, use clear command");
     }
 
     fn print_input_parse_error(&self, _error: &Self::InputParseError, _repl_context: &ReplContext) {}

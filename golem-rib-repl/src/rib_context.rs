@@ -31,7 +31,7 @@ impl<'a> ReplContext<'a> {
         self.printer
     }
 
-    pub fn clear(&self) {
+    pub fn clear_state(&self) {
         self.repl_state.clear()
     }
 
