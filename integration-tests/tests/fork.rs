@@ -534,6 +534,8 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         worker_name: target_worker_name,
     };
 
+    let oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
+
     // We fork the worker post the completion and see if oplog corresponding to environment value
     // has the same value as foo. As far as the fork cut off point is post the completion, there
     // shouldn't be any divergence for worker information even if forked worker name
@@ -542,15 +544,11 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         .fork_worker(
             &source_worker_id,
             &target_worker_id,
-            OplogIndex::from_u64(7),
+            OplogIndex::from_u64(oplog.len() as u64),
         )
         .await;
 
-    let result = deps
-        .get_oplog(&target_worker_id, OplogIndex::from_u64(7))
-        .await;
-
-    let entry = result.last().unwrap().clone();
+    let entry = oplog.last().unwrap().clone();
 
     match entry {
         PublicOplogEntry::ExportedFunctionCompleted(parameters) => {
