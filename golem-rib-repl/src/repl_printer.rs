@@ -193,12 +193,12 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
             Some(pkg) => {
                 output.push_str(&format!(
                     "{} {}\n",
-                    "📦 Package:".bold().blue(),
-                    format!("{}::{}", pkg.namespace, pkg.package_name).bold()
+                    "📦 Package:".bold().bright_yellow(),
+                    format!("{}::{}", pkg.namespace, pkg.package_name).bold().truecolor(180, 180, 180)
                 ));
             }
             None => {
-                output.push_str(&format!("{}\n", "📦 Global Scope".bold().blue()));
+                output.push_str(&format!("{}\n", "📦 Global Scope".bold().bright_yellow()));
             }
         }
 
@@ -207,67 +207,85 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
                 Some(iface) => {
                     output.push_str(&format!(
                         "  {} {}\n",
-                        "📄 Interface:".bold().cyan(),
-                        iface.name.bold()
+                        "📄 Interface:".bold().bright_cyan(),
+                        iface.name.bold().truecolor(180, 180, 180)
                     ));
                 }
                 None => {}
             }
 
+            if node.functions.len() > 0 {
+                output.push_str(&format!(
+                    "    {}\n",
+                    "🔧 Functions:".bold().bright_green(),
+                ));
+            }
+
             for (fname, ftype) in &node.functions {
                 output.push_str(&format!(
-                    "    {} {}\n",
-                    "🔧 Function:".bold().green(),
-                    fname
+                    "        {}\n",
+                    format!(" {}", fname.bright_magenta())
                 ));
                 output.push_str(&format!(
-                    "      ↳ {}: {}\n",
-                    "Args".italic(),
-                    format_type_list(&ftype.parameter_types)
+                    "           ↳ {}: {}\n",
+                    "Args".blue(),
+                    format_type_list(&ftype.parameter_types).truecolor(180, 180, 180)
                 ));
                 output.push_str(&format!(
-                    "      ↳ {}: {}\n",
-                    "Returns".italic(),
-                    format_type_list(&ftype.return_type)
+                    "           ↳ {}: {}\n",
+                    "Returns".blue(),
+                    format_type_list(&ftype.return_type).truecolor(180, 180, 180)
                 ));
             }
 
             for (res_name, res) in &node.resources {
                 output.push_str(&format!(
                     "    {} {}\n",
-                    "🏗️ Resource:".bold().yellow(),
-                    res_name
+                    "🧩️ Resource:".bold().bright_yellow(),
+                    res_name.truecolor(180, 180, 180)
                 ));
 
                 if let Some(ftype) = res.constructor {
                     output.push_str(&format!(
                         "      ↳ {}: {}\n",
-                        "Args".italic(),
-                        format_type_list(&ftype.parameter_types)
+                        "Args".blue(),
+                        format_type_list(&ftype.parameter_types).truecolor(180, 180, 180)
                     ));
-                    output.push_str(&format!(
-                        "      ↳ {}: {}\n",
-                        "Returns".italic(),
-                        format_type_list(&ftype.return_type)
-                    ));
-                }
 
-                for (mname, mtype) in &res.methods {
                     output.push_str(&format!(
-                        "      {} {}\n",
-                        "🔧 Method:".bold().green(),
-                        mname
+                        "      {} \n",
+                        "🔧 Methods:".bold().bright_green(),
                     ));
-                    output.push_str(&format!(
-                        "        ↳ {}: {}\n",
-                        "Args".italic(),
-                        format_type_list(&mtype.parameter_types)
-                    ));
-                    output.push_str(&format!(
-                        "        ↳ {}: {}\n",
-                        "Returns".italic(),
-                        format_type_list(&mtype.return_type)
-                    ));
+
+                    for (mname, mtype) in &res.methods {
+                        output.push_str(&format!(
+                            "         {}\n",
+                            format!("  {}",  mname.bright_magenta())
+                        ));
+
+                        let parameter_types =
+                            &mtype.parameter_types;
+
+                        let formatted = if parameter_types.len() > 0 {
+                            format_type_list(&parameter_types[1..]).truecolor(180, 180, 180)
+                        } else {
+                            format_type_list(&[]).truecolor(180, 180, 180)
+                        };
+
+                        output.push_str(&format!(
+                            "             ↳ {}: {}\n",
+                            "Args".blue(),
+                            formatted
+                        ));
+
+                        output.push_str(&format!(
+                            "             ↳ {}: {}\n",
+                            "Returns".blue(),
+                            format_type_list(&mtype.return_type).truecolor(180, 180, 180)
+                        ));
+                    }
+
+
                 }
             }
         }
