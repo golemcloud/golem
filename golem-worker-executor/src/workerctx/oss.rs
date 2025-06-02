@@ -418,7 +418,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.worker_proxy()
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync> {
+    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types>> {
         self.durable_ctx.component_service()
     }
 

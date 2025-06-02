@@ -4750,6 +4750,7 @@ dependencies = [
  "axum",
  "bytes 1.10.1",
  "clap",
+ "cloud-common",
  "golem-api-grpc",
  "golem-client",
  "golem-common",

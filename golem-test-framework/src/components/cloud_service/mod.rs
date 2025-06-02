@@ -203,3 +203,27 @@ async fn env_vars(
         .with_all(rdb.info().env("cloud_service", private_rdb_connection))
         .build()
 }
+
+pub struct DisabledCloudService;
+
+#[async_trait]
+impl CloudServiceInternal for DisabledCloudService {
+    fn project_client(&self) -> ProjectServiceClient {
+        panic!("no cloud service running");
+    }
+}
+
+#[async_trait]
+impl CloudService for DisabledCloudService {
+    fn private_host(&self) -> String {
+        panic!("no cloud service running");
+    }
+    fn private_http_port(&self) -> u16 {
+        panic!("no cloud service running");
+    }
+    fn private_grpc_port(&self) -> u16 {
+        panic!("no cloud service running");
+    }
+
+    async fn kill(&self) {}
+}

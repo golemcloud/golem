@@ -129,7 +129,7 @@ pub fn configured(
     compiled_config: &CompiledComponentServiceConfig,
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     plugin_observations: Arc<dyn PluginsObservations + Send + Sync>,
-) -> Arc<dyn ComponentService<DefaultGolemTypes> + Send + Sync> {
+) -> Arc<dyn ComponentService<DefaultGolemTypes>> {
     let compiled_component_service = compiled_component::configured(compiled_config, blob_storage);
     match config {
         ComponentServiceConfig::Grpc(config) => {

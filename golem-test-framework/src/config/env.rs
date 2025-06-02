@@ -598,6 +598,10 @@ impl TestDependencies for EnvBasedTestDependencies {
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
     }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        self.cloud_service.clone()
+    }
 }
 
 fn opt_env_var(name: &str) -> Option<String> {

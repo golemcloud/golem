@@ -7,6 +7,7 @@ use golem_service_base::service::initial_component_files::InitialComponentFilesS
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
+use golem_test_framework::components::cloud_service::{CloudService, DisabledCloudService};
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 use golem_test_framework::components::component_service::ComponentService;
@@ -198,6 +199,10 @@ impl TestDependencies for RegularWorkerExecutorPerTestDependencies {
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
     }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        panic!("Not supported")
+    }
 }
 
 pub struct RegularWorkerExecutorTestDependencies {
@@ -208,7 +213,7 @@ pub struct RegularWorkerExecutorTestDependencies {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
-    component_temp_directory: Arc<TempDir>,
+    component_temp_directory: Arc<TempDir>
 }
 
 impl Debug for RegularWorkerExecutorTestDependencies {
@@ -240,7 +245,8 @@ impl RegularWorkerExecutorTestDependencies {
 
         let component_directory =
             Path::new("../cloud-debugging-service/test-components").to_path_buf();
-        let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+
+        let component_service: Arc<dyn ComponentService + Send + Sync> = Arc::new(
             FileSystemComponentService::new(
                 Path::new("data/components"),
                 plugin_wasm_files_service.clone(),
@@ -272,13 +278,14 @@ impl RegularWorkerExecutorTestDependencies {
             self.redis.public_port(),
             redis_prefix.to_string(),
         ));
+
         // Connecting to the worker executor started in-process
         let worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static> = Arc::new(
             ProvidedWorkerExecutor::new("localhost".to_string(), http_port, grpc_port, true),
         );
 
         let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
-            ForwardingWorkerService::new(worker_executor.clone(), self.component_service()),
+            ForwardingWorkerService::new(worker_executor.clone(), self.component_service(), Arc::new(DisabledCloudService)),
         );
 
         RegularWorkerExecutorPerTestDependencies {

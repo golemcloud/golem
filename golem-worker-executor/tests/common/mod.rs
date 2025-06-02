@@ -1,6 +1,8 @@
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
+use golem_test_framework::components::cloud_service::CloudService;
+use golem_worker_executor::cloud::CloudGolemTypes;
 use std::collections::HashSet;
 
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -205,23 +207,23 @@ impl Clone for TestWorkerExecutor {
 
 #[async_trait]
 impl TestDependencies for TestWorkerExecutor {
-    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
+    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync> {
         self.deps.rdb()
     }
 
-    fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static> {
+    fn redis(&self) -> Arc<dyn Redis + Send + Sync> {
         self.deps.redis()
     }
 
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
         self.deps.blob_storage()
     }
 
-    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync> {
         self.deps.redis_monitor()
     }
 
-    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static> {
+    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync> {
         self.deps.shard_manager()
     }
 
@@ -241,17 +243,17 @@ impl TestDependencies for TestWorkerExecutor {
 
     fn component_compilation_service(
         &self,
-    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+    ) -> Arc<dyn ComponentCompilationService + Send + Sync> {
         self.deps.component_compilation_service()
     }
 
     fn worker_service(
         &self,
-    ) -> Arc<dyn golem_test_framework::components::worker_service::WorkerService + 'static> {
+    ) -> Arc<dyn golem_test_framework::components::worker_service::WorkerService> {
         self.deps.worker_service()
     }
 
-    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync> {
         self.deps.worker_executor_cluster()
     }
 
@@ -261,6 +263,10 @@ impl TestDependencies for TestWorkerExecutor {
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.deps.plugin_wasm_files_service()
+    }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        self.deps.cloud_service()
     }
 }
 
@@ -646,12 +652,12 @@ struct ServerBootstrap {}
 
 #[async_trait]
 impl WorkerCtx for TestWorkerCtx {
-    type Types = DefaultGolemTypes;
+    type Types = CloudGolemTypes;
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
-        component_metadata: ComponentMetadata<DefaultGolemTypes>,
+        component_metadata: ComponentMetadata<CloudGolemTypes>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -666,13 +672,13 @@ impl WorkerCtx for TestWorkerCtx {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
-        component_service: Arc<dyn ComponentService<DefaultGolemTypes>>,
+        component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
+        plugins: Arc<dyn Plugins<CloudGolemTypes>>,
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
     ) -> Result<Self, GolemError> {
@@ -728,7 +734,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_worker_id()
     }
 
-    fn component_metadata(&self) -> &ComponentMetadata<DefaultGolemTypes> {
+    fn component_metadata(&self) -> &ComponentMetadata<CloudGolemTypes> {
         self.durable_ctx.component_metadata()
     }
 
@@ -744,7 +750,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.worker_proxy()
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync> {
+    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types>> {
         self.durable_ctx.component_service()
     }
 
@@ -920,7 +926,7 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
         engine: &Engine,
         linker: &mut Linker<TestWorkerCtx>,
         component: &Component,
-        component_metadata: &ComponentMetadata<DefaultGolemTypes>,
+        component_metadata: &ComponentMetadata<CloudGolemTypes>,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -979,10 +985,11 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         &self,
         golem_config: &GolemConfig,
     ) -> (
-        Arc<dyn Plugins<DefaultGolemTypes>>,
+        Arc<dyn Plugins<CloudGolemTypes>>,
         Arc<dyn PluginsObservations>,
     ) {
-        plugins::default_configured(&golem_config.plugin_service)
+        let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(&golem_config.plugin_service);
+        (plugins.clone(), plugins)
     }
 
     fn create_component_service(
@@ -990,7 +997,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         plugin_observations: Arc<dyn PluginsObservations>,
-    ) -> Arc<dyn ComponentService<DefaultGolemTypes>> {
+    ) -> Arc<dyn ComponentService<CloudGolemTypes>> {
         component::configured(
             &golem_config.component_service,
             &golem_config.component_cache,
@@ -1006,7 +1013,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<TestWorkerCtx>>,
         runtime: Handle,
-        component_service: Arc<dyn ComponentService<DefaultGolemTypes>>,
+        component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
         shard_manager_service: Arc<dyn ShardManagerService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -1023,7 +1030,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
+        plugins: Arc<dyn Plugins<CloudGolemTypes>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(&golem_config.resource_limits);

@@ -1172,23 +1172,23 @@ impl CliTestDependencies {
 
 #[async_trait]
 impl TestDependencies for CliTestDependencies {
-    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
+    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync> {
         self.rdb.clone()
     }
 
-    fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static> {
+    fn redis(&self) -> Arc<dyn Redis + Send + Sync> {
         self.redis.clone()
     }
 
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
         self.blob_storage.clone()
     }
 
-    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync> {
         self.redis_monitor.clone()
     }
 
-    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static> {
+    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync> {
         self.shard_manager.clone()
     }
 
@@ -1206,15 +1206,15 @@ impl TestDependencies for CliTestDependencies {
 
     fn component_compilation_service(
         &self,
-    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+    ) -> Arc<dyn ComponentCompilationService + Send + Sync> {
         self.component_compilation_service.clone()
     }
 
-    fn worker_service(&self) -> Arc<dyn WorkerService + 'static> {
+    fn worker_service(&self) -> Arc<dyn WorkerService> {
         self.worker_service.clone()
     }
 
-    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync> {
         self.worker_executor_cluster.clone()
     }
 
@@ -1224,6 +1224,10 @@ impl TestDependencies for CliTestDependencies {
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
+    }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        self.cloud_service.clone()
     }
 }
 

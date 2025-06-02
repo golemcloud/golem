@@ -75,7 +75,8 @@ impl Bootstrap<DebugContext<DefaultGolemTypes>> for TestDebuggingServerBootStrap
         Arc<dyn Plugins<DefaultGolemTypes>>,
         Arc<dyn PluginsObservations>,
     ) {
-        plugins::default_configured(&golem_config.plugin_service)
+        let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(&golem_config.plugin_service);
+        (plugins.clone(), plugins)
     }
 
     fn create_component_service(

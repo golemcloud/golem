@@ -177,7 +177,7 @@ pub trait WorkerCtx:
     /// in the cluster
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy>;
 
-    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync>;
+    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types>>;
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService>;
 

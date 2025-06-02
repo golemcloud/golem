@@ -632,7 +632,7 @@ impl<T: GolemTypes> WorkerCtx for DebugContext<T> {
             .await
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync> {
+    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types>> {
         self.durable_ctx().component_service()
     }
 }

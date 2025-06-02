@@ -6,16 +6,16 @@ use chrono::Utc;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::auth::{AuthServiceError, BaseAuthService};
 use cloud_common::model::{ProjectAction, TokenSecret};
-use cloud_worker_service::model::{ApiDomain, Certificate, CertificateRequest, DomainRequest};
-use cloud_worker_service::repo::api_certificate::{ApiCertificateRepo, DbApiCertificateRepo};
-use cloud_worker_service::repo::api_domain::{ApiDomainRepo, DbApiDomainRepo};
-use cloud_worker_service::service::api_certificate::{
+use golem_worker_service::model::{ApiDomain, Certificate, CertificateRequest, DomainRequest};
+use golem_worker_service::repo::api_certificate::{ApiCertificateRepo, DbApiCertificateRepo};
+use golem_worker_service::repo::api_domain::{ApiDomainRepo, DbApiDomainRepo};
+use golem_worker_service::service::api_certificate::{
     CertificateManager, CertificateService, CertificateServiceDefault, InMemoryCertificateManager,
 };
-use cloud_worker_service::service::api_domain::{
+use golem_worker_service::service::api_domain::{
     ApiDomainService, ApiDomainServiceDefault, InMemoryRegisterDomain, RegisterDomain,
 };
-use cloud_worker_service::service::auth::AuthService;
+use golem_worker_service::service::auth::AuthService;
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_service_base::db;
