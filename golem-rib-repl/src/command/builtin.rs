@@ -19,15 +19,15 @@ impl Command for TypeInfo {
 
     fn parse(
         &self,
-        prompt_input: &str,
+        input: &str,
         repl_context: &ReplContext,
     ) -> Result<Self::Input, Self::InputParseError> {
-        if prompt_input.is_empty() {
+        if input.is_empty() {
             return Err(RibCompilationError::InvalidSyntax(
                 "Input cannot be empty".to_string(),
             ));
         }
-        let existing_raw_script = repl_context.get_new_rib_script(prompt_input);
+        let existing_raw_script = repl_context.get_new_rib_script(input);
 
         let expr = Expr::from_text(&existing_raw_script.as_text())
             .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
@@ -79,7 +79,7 @@ impl Command for Clear {
 
     fn parse(
         &self,
-        _prompt_input: &str,
+        _input: &str,
         _repl_context: &ReplContext,
     ) -> Result<Self::Input, Self::InputParseError> {
         Ok(())
@@ -118,7 +118,7 @@ impl Command for Exports {
 
     fn parse(
         &self,
-        _prompt_input: &str,
+        _input: &str,
         _repl_context: &ReplContext,
     ) -> Result<Self::Input, Self::InputParseError> {
         Ok(())

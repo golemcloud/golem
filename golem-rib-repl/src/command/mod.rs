@@ -41,7 +41,7 @@ pub trait Command {
     //
     fn parse(
         &self,
-        prompt_input: &str,
+        input: &str,
         repl_context: &ReplContext,
     ) -> Result<Self::Input, Self::InputParseError>;
 
