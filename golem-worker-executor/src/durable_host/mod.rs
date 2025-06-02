@@ -2282,6 +2282,30 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                 let (begin_index, begin_entry) =
                     crate::get_oplog_entry!(self.replay_state, OplogEntry::BeginRemoteTransaction)?;
 
+                let pre_entry = self
+                    .replay_state
+                    .lookup_oplog_entry_with_condition(
+                        begin_index,
+                        OplogEntry::is_pre_remote_transaction,
+                        OplogEntry::no_concurrent_side_effect,
+                    )
+                    .await;
+
+                let jumped = self
+                    .replay_state
+                    .is_in_skipped_region(begin_index.next())
+                    .await;
+
+                let begin_entry = if jumped {
+                    let (_, entry) = crate::get_oplog_entry!(
+                        self.replay_state,
+                        OplogEntry::BeginRemoteTransaction
+                    )?;
+                    entry
+                } else {
+                    begin_entry
+                };
+
                 let tx_id = try_match!(
                     begin_entry,
                     OplogEntry::BeginRemoteTransaction {
@@ -2293,18 +2317,9 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
                 let (tx_id, tx) = handler.create_replay(&tx_id).await?;
 
-                let pre_entry = self
-                    .replay_state
-                    .lookup_oplog_entry_with_condition(
-                        begin_index,
-                        OplogEntry::is_pre_remote_transaction,
-                        OplogEntry::no_concurrent_side_effect,
-                    )
-                    .await;
-
                 let mut restart = false;
 
-                if let Some((_, pre_entry)) = pre_entry {
+                if let Some((pre_index, pre_entry)) = pre_entry {
                     let end_entry = self
                         .replay_state
                         .lookup_oplog_entry_with_condition(
@@ -2315,8 +2330,8 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         .await;
 
                     // println!(
-                    //     "begin_transaction_function tx_id {tx_id}, end_entry {} ",
-                    //     end_entry.is_some()
+                    //     "begin_transaction_function tx_id {tx_id}, pre_index {pre_index} end_entry {} jumped {jumped}",
+                    //     end_entry.clone().map(|(i, _)| i.to_string()).unwrap_or("None".to_string())
                     // );
                     if end_entry.is_none() {
                         let mut aborted = false;
@@ -2387,7 +2402,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
                         .await
                         .map_err(GolemError::runtime)?;
-                    let begin_index = self.oplog.current_oplog_index().await;
+                    // let begin_index = self.oplog.current_oplog_index().await;
                     Ok((begin_index, tx))
                 } else {
                     Ok((begin_index, tx))
