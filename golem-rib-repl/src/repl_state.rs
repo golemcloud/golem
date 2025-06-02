@@ -59,6 +59,12 @@ impl ReplState {
         *self.last_executed_instruction.write().unwrap() = Some(instruction_id);
     }
 
+    pub fn clear(&self) {
+        *self.rib_script.write().unwrap() = RawRibScript::default();
+        *self.invocation_results.results.write().unwrap() = HashMap::new();
+        *self.last_executed_instruction.write().unwrap() = None;
+    }
+
     pub fn rib_script(&self) -> RwLockReadGuard<RawRibScript> {
         self.rib_script.read().unwrap()
     }

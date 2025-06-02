@@ -26,6 +26,9 @@ pub trait ReplPrinter {
     fn print_custom_error(&self, error: &str) {
         println!("{} {}", "[error]".red(), error.red());
     }
+    fn print_custom_message(&self, message: &str) {
+        println!("{} {}", "[message]".yellow(), message.cyan());
+    }
 }
 
 #[derive(Clone)]

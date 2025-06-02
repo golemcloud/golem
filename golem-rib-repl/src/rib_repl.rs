@@ -166,10 +166,8 @@ impl RibRepl {
 
         match script_or_command {
             CommandOrExpr::Command { args, executor } => {
-                let script = self.repl_state.rib_script();
-                let rib_compiler = self.repl_state.rib_compiler();
-
-                let repl_context = ReplContext::new(self.printer.as_ref(), &script, &rib_compiler);
+                let repl_context =
+                    ReplContext::new(self.printer.as_ref(), &self.repl_state);
 
                 executor.run(args.as_str(), &repl_context);
 

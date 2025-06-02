@@ -1,4 +1,4 @@
-use crate::command::builtin::TypeInfo;
+use crate::command::builtin::{Clear, TypeInfo};
 use crate::UntypedCommand;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -9,9 +9,10 @@ pub struct CommandRegistry {
 }
 
 impl CommandRegistry {
-    pub fn built_in() -> Self {
+    pub(crate) fn built_in() -> Self {
         let mut registry = Self::default();
         registry.register(TypeInfo);
+        registry.register(Clear);
         registry
     }
 
