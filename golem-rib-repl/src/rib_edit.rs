@@ -295,8 +295,6 @@ impl Completer for RibEdit {
             return Ok((new_start, completions));
         }
 
-
-
         if let Some((new_start, new_completions)) = self.complete_variants(word, start, end_pos)? {
             completions.extend(new_completions);
             return Ok((new_start, completions));
