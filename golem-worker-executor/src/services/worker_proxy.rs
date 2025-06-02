@@ -54,7 +54,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
-    ) -> Result<TypeAnnotatedValue, WorkerProxyError>;
+    ) -> Result<Option<TypeAnnotatedValue>, WorkerProxyError>;
 
     async fn invoke(
         &self,
@@ -222,7 +222,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
-    ) -> Result<TypeAnnotatedValue, WorkerProxyError> {
+    ) -> Result<Option<TypeAnnotatedValue>, WorkerProxyError> {
         debug!(
             "Invoking remote worker function {function_name} with parameters {function_params:?}"
         );
@@ -262,17 +262,16 @@ impl WorkerProxy for RemoteWorkerProxy {
 
         match response.result {
             Some(invoke_and_await_typed_response::Result::Success(result)) => {
-                let result =
-                    result
-                        .result
-                        .ok_or(WorkerProxyError::InternalError(GolemError::unknown(
-                            "Missing result value in the worker API response".to_string(),
-                        )))?;
                 let result = result
-                    .type_annotated_value
-                    .ok_or(WorkerProxyError::InternalError(GolemError::unknown(
-                        "Missing type_annotated_value in the worker API response".to_string(),
-                    )))?;
+                    .result
+                    .map(|tav| {
+                        tav.type_annotated_value
+                            .ok_or(WorkerProxyError::InternalError(GolemError::unknown(
+                                "Missing type_annotated_value in the worker API response"
+                                    .to_string(),
+                            )))
+                    })
+                    .transpose()?;
                 Ok(result)
             }
             Some(invoke_and_await_typed_response::Result::Error(error)) => Err(error.into()),

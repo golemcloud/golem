@@ -438,13 +438,13 @@ impl ReplayState {
     // TODO: can we rewrite this on top of get_oplog_entry?
     pub async fn get_oplog_entry_exported_function_completed(
         &mut self,
-    ) -> Result<Option<TypeAnnotatedValue>, GolemError> {
+    ) -> Result<Option<Option<TypeAnnotatedValue>>, GolemError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
                 match &oplog_entry {
                     OplogEntry::ExportedFunctionCompleted { .. } => {
-                        let response: TypeAnnotatedValue = self
+                        let response: Option<TypeAnnotatedValue> = self
                             .oplog
                             .get_payload_of_entry(&oplog_entry)
                             .await

@@ -43,7 +43,7 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
-use crate::worker::function_result_interpreter::interpret_function_results;
+use crate::worker::function_result_interpreter::interpret_function_result;
 use crate::worker::invocation::{
     find_first_available_function, invoke_observed_and_traced, InvokeResult,
 };
@@ -616,10 +616,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                             ))
                                         }
                                         Ok(InvokeResult::Succeeded { output, .. }) => {
-                                            if output.len() == 1 {
-                                                match &output[0] {
+                                            if let Some(output) = output {
+                                                match output {
                                                         Value::Result(Err(Some(boxed_error_value))) => {
-                                                            match &**boxed_error_value {
+                                                            match &*boxed_error_value {
                                                                 Value::String(error) =>
                                                                     Some(format!("Manual update failed to load snapshot: {error}")),
                                                                 _ =>
@@ -1020,7 +1020,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: TypeAnnotatedValue,
+        output: Option<TypeAnnotatedValue>,
     ) -> Result<(), GolemError> {
         let is_live_after = self.state.is_live();
 
@@ -1532,10 +1532,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                     Ok(value) => {
                                         if let Some(value) = value {
                                             let result =
-                                                interpret_function_results(output, value.results)
+                                                interpret_function_result(output, value.result)
                                                     .map_err(|e| GolemError::ValueMismatch {
-                                                    details: e.join(", "),
-                                                })?;
+                                                        details: e.join(", "),
+                                                    })?;
                                             if let Err(err) = store
                                                 .as_context_mut()
                                                 .data_mut()

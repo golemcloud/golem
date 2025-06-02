@@ -195,18 +195,19 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
             })
         }
 
-        let mut results: Vec<AnalysedFunctionResult> = Vec::new();
-        if let Some(tpe) = &func_type.result {
-            results.push(AnalysedFunctionResult {
-                name: None,
-                typ: self.analyse_component_val_type(tpe)?,
-            });
-        }
+        let result: Option<AnalysedFunctionResult> = func_type
+            .result
+            .as_ref()
+            .map(|tpe| {
+                self.analyse_component_val_type(tpe)
+                    .map(|typ| AnalysedFunctionResult { typ })
+            })
+            .transpose()?;
 
         Ok(AnalysedFunction {
             name,
             parameters: params,
-            results,
+            result,
         })
     }
 

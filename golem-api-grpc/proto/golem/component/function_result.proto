@@ -5,6 +5,5 @@ package golem.component;
 import "wasm/ast/type.proto";
 
 message FunctionResult {
-  optional string name = 1;
   wasm.ast.Type typ = 2;
 }

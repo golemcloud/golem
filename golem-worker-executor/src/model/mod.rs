@@ -347,7 +347,7 @@ pub enum LookupResult {
     New,
     Pending,
     Interrupted,
-    Complete(Result<TypeAnnotatedValue, GolemError>),
+    Complete(Result<Option<TypeAnnotatedValue>, GolemError>),
 }
 
 #[derive(Clone, Debug)]

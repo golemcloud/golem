@@ -17,7 +17,7 @@ use crate::model::{InterruptKind, ListDirectoryResult, ReadFileResult, TrapType}
 use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
-use crate::worker::function_result_interpreter::interpret_function_results;
+use crate::worker::function_result_interpreter::interpret_function_result;
 use crate::worker::invocation::{
     find_first_available_function, invoke_observed_and_traced, InvokeResult,
 };
@@ -553,7 +553,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         &mut self,
         full_function_name: String,
         function_input: &Vec<Value>,
-        output: Vec<Value>,
+        output: Option<Value>,
         consumed_fuel: i64,
     ) -> CommandOutcome {
         let component_metadata = self.store.as_context().data().component_metadata();
@@ -563,7 +563,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         match function_results {
             Ok(Some(export_function)) => {
-                let function_results = export_function.results.into_iter().collect();
+                let function_results = export_function.result.clone();
 
                 match self
                     .exported_function_invocation_finished_with_type(
@@ -614,11 +614,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         &mut self,
         full_function_name: String,
         function_input: &Vec<Value>,
-        output: Vec<Value>,
+        output: Option<Value>,
         consumed_fuel: i64,
-        function_results: Vec<AnalysedFunctionResult>,
+        function_result: Option<AnalysedFunctionResult>,
     ) -> Result<CommandOutcome, GolemError> {
-        let result = interpret_function_results(output, function_results).map_err(|e| {
+        let result = interpret_function_result(output, function_result).map_err(|e| {
             GolemError::ValueMismatch {
                 details: e.join(", "),
             }
@@ -854,21 +854,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     /// Attempts to interpret the save snapshot result as a byte vector
-    fn decode_snapshot_result(values: Vec<Value>) -> Option<Vec<u8>> {
-        if values.len() == 1 {
-            if let Value::List(bytes) = &values[0] {
-                let mut result = Vec::new();
-                for value in bytes {
-                    if let Value::U8(byte) = value {
-                        result.push(*byte);
-                    } else {
-                        return None;
-                    }
+    fn decode_snapshot_result(value: Option<Value>) -> Option<Vec<u8>> {
+        if let Some(Value::List(bytes)) = value {
+            let mut result = Vec::new();
+            for value in bytes {
+                if let Value::U8(byte) = value {
+                    result.push(byte);
+                } else {
+                    return None;
                 }
-                Some(result)
-            } else {
-                None
             }
+            Some(result)
         } else {
             None
         }

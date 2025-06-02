@@ -31,7 +31,7 @@ pub enum SerializableInvokeResultV1 {
 pub enum SerializableInvokeResult {
     Failed(SerializableError),
     Pending,
-    Completed(Result<TypeAnnotatedValue, RpcError>),
+    Completed(Result<Option<TypeAnnotatedValue>, RpcError>),
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]

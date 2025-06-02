@@ -38,6 +38,7 @@ use golem_common::model::{
     WorkerId,
 };
 use golem_common::serialization::try_deserialize;
+use golem_wasm_ast::analysis::{analysed_type, AnalysedType, TypeTuple};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult, Pollable,
     Uri,
@@ -133,14 +134,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)
                 .await?;
 
-        let durability = Durability::<TypeAnnotatedValue, SerializableError>::new(
+        let durability = Durability::<Option<TypeAnnotatedValue>, SerializableError>::new(
             self,
             "golem::rpc::wasm-rpc",
             "invoke-and-await result",
             DurableFunctionType::WriteRemote,
         )
         .await?;
-        let result: Result<WitValue, RpcError> = if durability.is_live() {
+        let result: Result<Option<WitValue>, RpcError> = if durability.is_live() {
             let input = SerializableInvokeRequest {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
@@ -175,8 +176,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .persist_serializable(self, input, result.clone().map_err(|err| (&err).into()))
                 .await?;
             result.and_then(|tav| {
-                tav.try_into()
-                    .map_err(|s: String| RpcError::ProtocolError { details: s })
+                tav.map(|tav| {
+                    let value: Result<WitValue, String> = tav.try_into();
+                    value
+                })
+                .transpose()
+                .map_err(|s: String| RpcError::ProtocolError { details: s })
             })
         } else {
             let (bytes, oplog_entry_version) = durability.replay_raw(self).await?;
@@ -191,12 +196,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             )
                         })?
                         .expect("Empty payload");
-                    wit_value.map_err(|err| err.into())
+                    wit_value.map(Some).map_err(|err| err.into())
                 }
                 OplogEntryVersion::V2 => {
                     // New oplog entry, uses TypeAnnotatedValue in its payload
                     let typed_value: Result<
-                        Result<TypeAnnotatedValue, SerializableError>,
+                        Result<Option<TypeAnnotatedValue>, SerializableError>,
                         GolemError,
                     > = try_deserialize(&bytes)
                         .map_err(|err| {
@@ -209,7 +214,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
                     match typed_value {
                         Ok(Ok(typed_value)) => typed_value
-                            .try_into()
+                            .map(|tav| {
+                                let wit_value: Result<WitValue, String> = tav.try_into();
+                                wit_value
+                            })
+                            .transpose()
                             .map_err(|s: String| RpcError::ProtocolError { details: s }),
                         Ok(Err(err)) => Err(err.into()),
                         Err(err) => Err(err.into()),
@@ -221,7 +230,19 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self.finish_span(span.span_id()).await?;
 
         match result {
-            Ok(wit_value) => Ok(Ok(wit_value)),
+            Ok(wit_value) => {
+                // Temporary wrapping of the WitValue in a tuple to keep the original WIT interface
+                let wit_value = match wit_value {
+                    Some(wit_value) => {
+                        let value: Value = wit_value.into();
+                        let wrapped = Value::Tuple(vec![value]);
+                        WitValue::from(wrapped)
+                    }
+                    None => WitValue::from(Value::Record(vec![])),
+                };
+
+                Ok(Ok(wit_value))
+            }
             Err(err) => {
                 error!("RPC error: {err}");
                 Ok(Err(err.into()))
@@ -621,12 +642,14 @@ impl From<RpcError> for golem_wasm_rpc::RpcError {
 enum FutureInvokeResultState {
     Pending {
         request: SerializableInvokeRequest,
-        handle: AbortOnDropJoinHandle<Result<Result<TypeAnnotatedValue, RpcError>, anyhow::Error>>,
+        handle: AbortOnDropJoinHandle<
+            Result<Result<Option<TypeAnnotatedValue>, RpcError>, anyhow::Error>,
+        >,
         span_id: SpanId,
     },
     Completed {
         request: SerializableInvokeRequest,
-        result: Result<Result<TypeAnnotatedValue, RpcError>, anyhow::Error>,
+        result: Result<Result<Option<TypeAnnotatedValue>, RpcError>, anyhow::Error>,
         span_id: SpanId,
     },
     Deferred {
@@ -876,7 +899,29 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
             match result {
                 Ok(Some(Ok(tav))) => {
-                    let wit_value = tav.try_into().map_err(|s: String| anyhow!(s))?;
+                    // The wasm-rpc interface encodes unit result types as empty records and other result types as 1-tuples.
+                    let wit_value = match tav {
+                        Some(tav) => {
+                            let value_and_type =
+                                ValueAndType::try_from(tav).map_err(|s: String| anyhow!(s))?;
+                            let wrapped = ValueAndType::new(
+                                Value::Tuple(vec![value_and_type.value]),
+                                analysed_type::tuple(vec![value_and_type.typ]),
+                            );
+                            let tav = TypeAnnotatedValue::try_from(&wrapped)
+                                .map_err(|s: Vec<String>| anyhow!(s.join(", ")))?;
+                            tav.try_into().map_err(|s: String| anyhow!(s))?
+                        }
+                        None => {
+                            let tav = TypeAnnotatedValue::try_from(&ValueAndType::new(
+                                Value::Record(vec![]),
+                                analysed_type::record(vec![]),
+                            ))
+                            .map_err(|s: Vec<String>| anyhow!(s.join(", ")))?;
+                            tav.try_into().map_err(|s: String| anyhow!(s))?
+                        }
+                    };
+
                     Ok(Some(Ok(wit_value)))
                 }
                 Ok(Some(Err(error))) => Ok(Some(Err(error))),
@@ -925,7 +970,28 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     SerializableInvokeResult::Pending => Ok(None),
                     SerializableInvokeResult::Completed(result) => match result {
                         Ok(tav) => {
-                            let wit_value = tav.try_into().map_err(|s: String| anyhow!(s))?;
+                            // The wasm-rpc interface encodes unit result types as empty records and other result types as 1-tuples.
+                            let wit_value = match tav {
+                                Some(tav) => {
+                                    let value_and_type = ValueAndType::try_from(tav)
+                                        .map_err(|s: String| anyhow!(s))?;
+                                    let wrapped = ValueAndType::new(
+                                        Value::Tuple(vec![value_and_type.value]),
+                                        analysed_type::tuple(vec![value_and_type.typ]),
+                                    );
+                                    let tav = TypeAnnotatedValue::try_from(&wrapped)
+                                        .map_err(|s: Vec<String>| anyhow!(s.join(", ")))?;
+                                    tav.try_into().map_err(|s: String| anyhow!(s))?
+                                }
+                                None => {
+                                    let tav = TypeAnnotatedValue::try_from(&ValueAndType::new(
+                                        Value::Record(vec![]),
+                                        analysed_type::record(vec![]),
+                                    ))
+                                    .map_err(|s: Vec<String>| anyhow!(s.join(", ")))?;
+                                    tav.try_into().map_err(|s: String| anyhow!(s))?
+                                }
+                            };
                             Ok(Some(Ok(wit_value)))
                         }
                         Err(error) => Ok(Some(Err(error.into()))),

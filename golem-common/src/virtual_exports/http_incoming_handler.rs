@@ -91,15 +91,14 @@ pub static ANALYZED_FUNCTION_PARAMETERS: LazyLock<
     })
 };
 
-pub static ANALYZED_FUNCTION_RESULTS: LazyLock<
-    Vec<golem_wasm_ast::analysis::AnalysedFunctionResult>,
+pub static ANALYZED_FUNCTION_RESULT: LazyLock<
+    Option<golem_wasm_ast::analysis::AnalysedFunctionResult>,
 > = {
     use golem_wasm_ast::analysis::*;
     LazyLock::new(|| {
-        vec![AnalysedFunctionResult {
-            name: None,
+        Some(AnalysedFunctionResult {
             typ: HttpResponse::analysed_type(),
-        }]
+        })
     })
 };
 
@@ -109,7 +108,7 @@ pub static ANALYZED_FUNCTION: LazyLock<AnalysedFunction> = {
     LazyLock::new(|| AnalysedFunction {
         name: "handle".to_string(),
         parameters: ANALYZED_FUNCTION_PARAMETERS.clone(),
-        results: ANALYZED_FUNCTION_RESULTS.clone(),
+        result: ANALYZED_FUNCTION_RESULT.clone(),
     })
 };
 

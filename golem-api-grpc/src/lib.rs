@@ -57,7 +57,6 @@ pub mod proto {
             value: crate::proto::golem::component::FunctionResult,
         ) -> Result<Self, Self::Error> {
             Ok(Self {
-                name: value.name,
                 typ: (&value.typ.ok_or("Missing typ")?).try_into()?,
             })
         }
@@ -66,7 +65,6 @@ pub mod proto {
     impl From<AnalysedFunctionResult> for crate::proto::golem::component::FunctionResult {
         fn from(value: AnalysedFunctionResult) -> Self {
             Self {
-                name: value.name,
                 typ: Some((&value.typ).into()),
             }
         }
@@ -115,11 +113,7 @@ pub mod proto {
                     .into_iter()
                     .map(|parameter| parameter.try_into())
                     .collect::<Result<_, _>>()?,
-                results: value
-                    .results
-                    .into_iter()
-                    .map(|result| result.try_into())
-                    .collect::<Result<_, _>>()?,
+                result: value.result.map(|result| result.try_into()).transpose()?,
             })
         }
     }
@@ -133,11 +127,7 @@ pub mod proto {
                     .into_iter()
                     .map(|parameter| parameter.into())
                     .collect(),
-                results: value
-                    .results
-                    .into_iter()
-                    .map(|result| result.into())
-                    .collect(),
+                result: value.result.map(|result| result.into()),
             }
         }
     }

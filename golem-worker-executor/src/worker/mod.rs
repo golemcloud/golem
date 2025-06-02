@@ -546,7 +546,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         full_function_name: String,
         function_input: Vec<Value>,
         invocation_context: InvocationContextStack,
-    ) -> Result<TypeAnnotatedValue, GolemError> {
+    ) -> Result<Option<TypeAnnotatedValue>, GolemError> {
         match self
             .invoke(
                 idempotency_key.clone(),
@@ -682,7 +682,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn store_invocation_success(
         &self,
         key: &IdempotencyKey,
-        result: TypeAnnotatedValue,
+        result: Option<TypeAnnotatedValue>,
         oplog_index: OplogIndex,
     ) {
         let mut map = self.invocation_results.write().await;
@@ -1703,7 +1703,7 @@ struct FailedInvocationResult {
 #[derive(Debug, Clone)]
 enum InvocationResult {
     Cached {
-        result: Result<TypeAnnotatedValue, FailedInvocationResult>,
+        result: Result<Option<TypeAnnotatedValue>, FailedInvocationResult>,
         oplog_idx: OplogIndex,
     },
     Lazy {
@@ -1729,10 +1729,10 @@ impl InvocationResult {
 
             let result = match entry {
                 OplogEntry::ExportedFunctionCompleted { .. } => {
-                    let values: TypeAnnotatedValue =
+                    let value: Option<TypeAnnotatedValue> =
                         services.oplog().get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
 
-                    Ok(values)
+                    Ok(value)
                 }
                 OplogEntry::Error { error, .. } => {
                     let stderr = recover_stderr_logs(services, owned_worker_id, oplog_idx).await;
@@ -1825,6 +1825,6 @@ impl QueuedWorkerInvocation {
 }
 
 pub enum ResultOrSubscription {
-    Finished(Result<TypeAnnotatedValue, GolemError>),
+    Finished(Result<Option<TypeAnnotatedValue>, GolemError>),
     Pending(EventsSubscription),
 }

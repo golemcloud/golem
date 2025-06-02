@@ -287,7 +287,7 @@ mod internal {
                 }
                 RegistryValue::Function {
                     parameter_types,
-                    return_types,
+                    return_type,
                 } => {
                     let mut parameter_types = parameter_types.clone();
 
@@ -302,12 +302,10 @@ mod internal {
 
                         if let Some(function_result_type) = function_result_inferred_type {
                             *function_result_type = {
-                                if return_types.len() == 1 {
-                                    return_types.first().unwrap().into()
+                                if let Some(tpe) = return_type {
+                                    tpe.into()
                                 } else {
-                                    InferredType::sequence(
-                                        return_types.iter().map(|t| t.into()).collect(),
-                                    )
+                                    InferredType::sequence(vec![])
                                 }
                             }
                         };

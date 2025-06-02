@@ -40,13 +40,13 @@ impl WorkerFunctionsInRib {
         for (key, value) in type_registry_subset.types {
             if let RegistryValue::Function {
                 parameter_types,
-                return_types,
+                return_type,
             } = value
             {
                 let function_call_in_rib = WorkerFunctionType {
                     function_key: key,
                     parameter_types,
-                    return_types,
+                    return_type,
                 };
                 function_calls.push(function_call_in_rib)
             } else {
@@ -69,7 +69,7 @@ impl WorkerFunctionsInRib {
 pub struct WorkerFunctionType {
     pub function_key: RegistryKey,
     pub parameter_types: Vec<AnalysedType>,
-    pub return_types: Vec<AnalysedType>,
+    pub return_type: Option<AnalysedType>,
 }
 
 #[cfg(feature = "protobuf")]
@@ -110,11 +110,11 @@ mod protobuf {
         type Error = String;
 
         fn try_from(value: WorkerFunctionTypeProto) -> Result<Self, Self::Error> {
-            let return_types = value
-                .return_types
-                .iter()
+            let return_type = value
+                .return_type
+                .as_ref()
                 .map(AnalysedType::try_from)
-                .collect::<Result<_, _>>()?;
+                .transpose()?;
 
             let parameter_types = value
                 .parameter_types
@@ -127,7 +127,7 @@ mod protobuf {
 
             Ok(Self {
                 function_key,
-                return_types,
+                return_type,
                 parameter_types,
             })
         }
@@ -144,11 +144,7 @@ mod protobuf {
                     .iter()
                     .map(|analysed_type| analysed_type.into())
                     .collect(),
-                return_types: value
-                    .return_types
-                    .iter()
-                    .map(|analysed_type| analysed_type.into())
-                    .collect(),
+                return_type: value.return_type.as_ref().map(|analysed_type| analysed_type.into()),
             }
         }
     }

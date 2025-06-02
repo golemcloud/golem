@@ -77,7 +77,7 @@ pub enum Event {
     InvocationCompleted {
         worker_id: WorkerId,
         idempotency_key: IdempotencyKey,
-        result: Result<TypeAnnotatedValue, GolemError>,
+        result: Result<Option<TypeAnnotatedValue>, GolemError>,
     },
     WorkerLoaded {
         worker_id: WorkerId,

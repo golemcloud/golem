@@ -1260,8 +1260,8 @@ fn encode_host_function_response_as_value(
                         unit_case("Completed"),
                     ]),
                 )),
-                SerializableInvokeResult::Completed(Ok(value)) => {
-                    let typ: AnalysedType = (&value).try_into()?;
+                SerializableInvokeResult::Completed(Ok(Some(value))) => {
+                    let typ = (&value).try_into()?;
                     let value: Value = value.try_into()?;
                     Ok(ValueAndType::new(
                         Value::Variant {
@@ -1275,6 +1275,17 @@ fn encode_host_function_response_as_value(
                         ]),
                     ))
                 }
+                SerializableInvokeResult::Completed(Ok(None)) => Ok(ValueAndType::new(
+                    Value::Variant {
+                        case_idx: 2,
+                        case_value: Some(Box::new(Value::Result(Ok(None)))),
+                    },
+                    variant(vec![
+                        case("Failed", SerializableError::get_type()),
+                        unit_case("Pending"),
+                        case("Completed", result_err(RpcError::get_type())),
+                    ]),
+                )),
                 SerializableInvokeResult::Completed(Err(rpc_error)) => Ok(ValueAndType::new(
                     Value::Variant {
                         case_idx: 2,
