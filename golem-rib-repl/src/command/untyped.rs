@@ -4,7 +4,7 @@ use convert_case::{Case, Casing};
 
 pub trait UntypedCommand {
     fn run(&self, input: &str, repl_context: &mut ReplContext);
-    fn name(&self) -> String;
+    fn command_name(&self) -> String;
 }
 
 impl<T: Clone> UntypedCommand for T
@@ -25,9 +25,7 @@ where
         }
     }
 
-    fn name(&self) -> String {
-        let full = std::any::type_name::<T>();
-        let last = full.rsplit("::").next().unwrap_or(full);
-        last.to_case(Case::Kebab)
+    fn command_name(&self) -> String {
+        T::name(self)
     }
 }

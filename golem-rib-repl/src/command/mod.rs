@@ -1,9 +1,12 @@
+use convert_case::{Case, Casing};
 pub use registry::*;
 pub use untyped::*;
+pub use parser::*;
 
 mod builtin;
 mod registry;
 mod untyped;
+mod parser;
 
 use crate::rib_context::ReplContext;
 
@@ -19,6 +22,8 @@ use crate::rib_context::ReplContext;
 ///  and `registry.register(MyCommand);`, and pass it the config when bootstrapping the REPL.
 pub trait Command {
     /// The structured input type resulting from parsing the raw REPL string.
+    /// If using Clap, this should be a type that derives `clap::Parser`, and the error
+    /// is typically `clap::Error`.
     type Input;
 
     /// The output produced after successful execution of the command.
@@ -30,7 +35,17 @@ pub trait Command {
     /// Error type returned when command execution fails.
     type ExecutionError;
 
+    fn name(&self) -> String {
+        let full = std::any::type_name::<Self>();
+        let last = full.rsplit("::").next().unwrap_or(full);
+        last.to_case(Case::Kebab)
+    }
+
     /// Parses user input into a structured `Input` type.
+    ///
+    /// Parse implementation can internally make use of Clap or any other parsing library
+    /// If using Clap, using helpers like `parse_with_clap` is recommended to handle shell-style splitting
+    /// and all you need is derived `clap:Parser` trait on the `Input` type.
     ///
     /// # Parameters
     /// - `prompt_input`: The raw string entered by the user after the command name in the REPL.

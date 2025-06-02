@@ -1,4 +1,4 @@
-use crate::{Command, ReplContext};
+use crate::{parse_with_clap, Command, ReplContext, UntypedCommand};
 use crossterm::cursor::MoveTo;
 use crossterm::{
     execute,
@@ -7,32 +7,41 @@ use crossterm::{
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{CompilerOutput, Expr, FunctionDictionary, RibCompilationError};
 use std::io::stdout;
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(about = "Display type of an expression")]
+pub struct TypeInfoInput {
+    /// Expression to analyze (e.g. a + b, or (1 + 2) * 3)
+    /// Multiline rib expressions are not supported.
+    #[arg(required = true)]
+    pub expr: Vec<String>,
+}
+
+impl TypeInfoInput {
+    pub fn as_text(&self) -> String {
+        self.expr.join(" ")
+    }
+}
 
 #[derive(Clone)]
 pub struct TypeInfo;
 
 impl Command for TypeInfo {
-    type Input = Expr;
+    type Input = TypeInfoInput;
     type Output = AnalysedType;
-    type InputParseError = RibCompilationError;
+    type InputParseError = clap::Error;
     type ExecutionError = RibCompilationError;
 
     fn parse(
         &self,
         input: &str,
-        repl_context: &ReplContext,
+        _repl_context: &ReplContext,
     ) -> Result<Self::Input, Self::InputParseError> {
-        if input.is_empty() {
-            return Err(RibCompilationError::InvalidSyntax(
-                "Input cannot be empty".to_string(),
-            ));
-        }
-        let existing_raw_script = repl_context.get_new_rib_script(input);
+        let parse_result =
+            parse_with_clap::<TypeInfoInput>(self.name().as_str(), input)?;
 
-        let expr = Expr::from_text(&existing_raw_script.as_text())
-            .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
-
-        Ok(expr)
+        Ok(parse_result)
     }
 
     fn execute(
@@ -40,7 +49,14 @@ impl Command for TypeInfo {
         input: Self::Input,
         repl_context: &mut ReplContext,
     ) -> Result<Self::Output, Self::ExecutionError> {
-        let compiler_output: CompilerOutput = repl_context.get_rib_compiler().compile(input)?;
+        let existing_raw_script =
+            repl_context.get_new_rib_script(input.as_text().as_str());
+
+        let expr = Expr::from_text(&existing_raw_script.as_text())
+            .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
+
+        let compiler_output: CompilerOutput =
+            repl_context.get_rib_compiler().compile(expr)?;
 
         let result = compiler_output
             .rib_output_type_info
@@ -59,7 +75,7 @@ impl Command for TypeInfo {
 
     fn print_input_parse_error(&self, error: &Self::InputParseError, repl_context: &ReplContext) {
         let printer = repl_context.get_printer();
-        printer.print_rib_compilation_error(error);
+        printer.print_clap_parse_error(error);
     }
 
     fn print_execution_error(&self, error: &Self::ExecutionError, repl_context: &ReplContext) {
@@ -67,6 +83,7 @@ impl Command for TypeInfo {
         printer.print_rib_compilation_error(error);
     }
 }
+
 
 #[derive(Clone)]
 pub struct Clear;

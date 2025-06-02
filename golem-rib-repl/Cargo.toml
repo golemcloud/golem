@@ -23,6 +23,7 @@ golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = 
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+clap = {workspace = true}
 colored = { workspace = true }
 convert_case = { workspace = true }
 crossterm = { workspace = true }
@@ -30,6 +31,7 @@ dirs = { workspace = true }
 prometheus = { workspace = true }
 rustyline = { workspace = true }
 serde_json = { workspace = true }
+shell-words = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }

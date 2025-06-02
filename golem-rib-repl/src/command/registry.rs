@@ -25,7 +25,7 @@ impl CommandRegistry {
     where
         T: UntypedCommand + 'static,
     {
-        let name = command.name().to_string();
+        let name = command.command_name().to_string();
         self.commands.insert(name, Arc::new(command));
     }
 

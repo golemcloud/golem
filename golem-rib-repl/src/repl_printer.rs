@@ -24,8 +24,11 @@ pub trait ReplPrinter {
     fn print_bootstrap_error(&self, error: &ReplBootstrapError);
     fn print_rib_runtime_error(&self, error: &RibRuntimeError);
     fn print_wasm_value_type(&self, analysed_type: &AnalysedType);
+    fn print_clap_parse_error(&self, error: &clap::Error) {
+        println!("{} {}", "[error]".red(), error.to_string().red());
+    }
     fn print_custom_error(&self, error: &str) {
-        println!("{} {}", "[error]".red(), error.red());
+        println!("{} {}", "[x]".red(), error.red());
     }
     fn print_custom_message(&self, message: &str) {
         println!("{} {}", "[message]".yellow(), message.cyan());
