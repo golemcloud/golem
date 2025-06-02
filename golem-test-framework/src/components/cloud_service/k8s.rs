@@ -205,6 +205,7 @@ impl CloudServiceInternal for K8sCloudService {
     }
 }
 
+#[async_trait]
 impl CloudService for K8sCloudService {
     fn private_host(&self) -> String {
         format!("{}.{}.svc.cluster.local", Self::NAME, &self.namespace.0)
@@ -223,16 +224,17 @@ impl CloudService for K8sCloudService {
     }
 
     fn public_http_port(&self) -> u16 {
-        todo!()
+        self.local_http_port
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.local_port
+        self.local_grpc_port
     }
 
     async fn kill(&self) {
         let _ = self.pod.lock().await.take();
         let _ = self.service.lock().await.take();
-        let _ = self.routing.lock().await.take();
+        let _ = self.http_routing.lock().await.take();
+        let _ = self.grpc_routing.lock().await.take();
     }
 }
