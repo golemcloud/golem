@@ -29,6 +29,8 @@ use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::WorkerService;
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
 
+use super::cloud_service::CloudService;
+
 pub mod docker;
 pub mod k8s;
 pub mod provided;
@@ -86,6 +88,7 @@ async fn env_vars(
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + 'static>,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
+    cloud_service: &Arc<dyn CloudService>,
     verbosity: Level,
 ) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
@@ -115,9 +118,9 @@ async fn env_vars(
             "GOLEM__PUBLIC_WORKER_API__PORT",
             worker_service.private_grpc_port().to_string(),
         )
-        .with_str(
+        .with(
             "GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN",
-            "2A354594-7A63-4091-A46B-CC58D379F677",
+            cloud_service.admin_token().to_string(),
         )
         .with_str(
             "GOLEM__COMPONENT_SERVICE__CONFIG__HOST",
@@ -127,9 +130,9 @@ async fn env_vars(
             "GOLEM__COMPONENT_SERVICE__CONFIG__PORT",
             component_service.private_grpc_port().to_string(),
         )
-        .with_str(
-            "GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN",
-            "2A354594-7A63-4091-A46B-CC58D379F677",
+        .with(
+            "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
+            cloud_service.admin_token().to_string(),
         )
         .with_str(
             "GOLEM__PLUGIN_SERVICE__CONFIG__HOST",
@@ -139,9 +142,9 @@ async fn env_vars(
             "GOLEM__PLUGIN_SERVICE__CONFIG__PORT",
             component_service.private_grpc_port().to_string(),
         )
-        .with_str(
+        .with(
             "GOLEM__PLUGIN_SERVICE__CONFIG__ACCESS_TOKEN",
-            "2A354594-7A63-4091-A46B-CC58D379F677",
+            cloud_service.admin_token().to_string(),
         )
         .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")
         .with_str("GOLEM__SHARD_MANAGER_SERVICE__TYPE", "Grpc")
@@ -168,6 +171,14 @@ async fn env_vars(
         .with_str(
             "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER",
             "2",
+        )
+        .with(
+            "GOLEM__RESOURCE_LIMITS__CONFIG__PORT",
+            cloud_service.private_grpc_port().to_string()
+        )
+        .with(
+            "GOLEM__RESOURCE_LIMITS__CONFIG__ACCESS_TOKEN",
+            cloud_service.admin_token().to_string(),
         )
         .with("GOLEM__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
