@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{CloudService, CloudServiceInternal, ProjectServiceClient};
 use crate::components::cloud_service::new_project_client;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tracing::info;
-use super::{CloudService, CloudServiceInternal, ProjectServiceClient};
 
 pub struct ProvidedCloudService {
     host: String,
@@ -33,7 +30,7 @@ impl ProvidedCloudService {
         host: String,
         http_port: u16,
         grpc_port: u16,
-        client_protocol: GolemClientProtocol
+        client_protocol: GolemClientProtocol,
     ) -> Self {
         info!("Using already running cloud-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {

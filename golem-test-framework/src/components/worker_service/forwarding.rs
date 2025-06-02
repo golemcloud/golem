@@ -53,19 +53,19 @@ use super::WorkerServiceInternal;
 pub struct ForwardingWorkerService {
     worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
     component_service: Arc<dyn ComponentService>,
-    cloud_service: Arc<dyn CloudService>
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl ForwardingWorkerService {
     pub fn new(
         worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
         component_service: Arc<dyn ComponentService>,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         Self {
             worker_executor,
             component_service,
-            cloud_service
+            cloud_service,
         }
     }
 

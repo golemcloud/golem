@@ -16,11 +16,9 @@
 use std::sync::Arc;
 
 use golem_common::tracing::init_tracing_with_default_env_filter;
+use golem_worker_executor::cloud;
 use golem_worker_executor::metrics;
-use golem_worker_executor::services::golem_config::{
-    make_config_loader, GolemConfig,
-};
-use golem_worker_executor::{cloud};
+use golem_worker_executor::services::golem_config::{make_config_loader, GolemConfig};
 use tokio::task::JoinSet;
 
 fn main() -> Result<(), anyhow::Error> {

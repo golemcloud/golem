@@ -38,7 +38,7 @@ pub struct ProvidedWorkerService {
     api_deployment_client: ApiDeploymentServiceClient,
     api_security_client: ApiSecurityServiceClient,
     component_service: Arc<dyn ComponentService>,
-    cloud_service: Arc<dyn CloudService>
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl ProvidedWorkerService {
@@ -49,7 +49,7 @@ impl ProvidedWorkerService {
         custom_request_port: u16,
         client_protocol: GolemClientProtocol,
         component_service: Arc<dyn ComponentService>,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {
@@ -60,34 +60,36 @@ impl ProvidedWorkerService {
             client_protocol,
             worker_client: new_worker_client(
                 client_protocol,
-                &host, grpc_port,
+                &host,
+                grpc_port,
                 http_port,
-                &cloud_service
-            ).await,
+                &cloud_service,
+            )
+            .await,
             api_definition_client: new_api_definition_client(
                 client_protocol,
                 &host,
                 grpc_port,
                 http_port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             api_deployment_client: new_api_deployment_client(
                 client_protocol,
                 &host,
                 http_port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             api_security_client: new_api_security_client(
                 client_protocol,
                 &host,
                 http_port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             component_service,
-            cloud_service
+            cloud_service,
         }
     }
 }

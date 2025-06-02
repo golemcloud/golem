@@ -2,11 +2,11 @@ use crate::api::dto::{CloudApiMapper, DefaultCloudApiMapper};
 use crate::config::ComponentServiceConfig;
 use crate::service::component::CloudComponentService;
 use crate::service::plugin::CloudPluginService;
-use golem_api_grpc::proto::golem::project::v1::project_error;
 use cloud_common::clients::auth::{AuthServiceError, BaseAuthService, CloudAuthService};
 use cloud_common::clients::limit::{LimitError, LimitService, LimitServiceDefault};
 use cloud_common::clients::project::{ProjectError, ProjectService, ProjectServiceDefault};
 use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, CloudPluginScope};
+use golem_api_grpc::proto::golem::project::v1::project_error;
 use golem_common::config::DbConfig;
 use golem_common::SafeDisplay;
 use golem_component_service_base::config::ComponentCompilationConfig;
@@ -260,21 +260,15 @@ impl From<LimitError> for CloudComponentError {
 impl From<ProjectError> for CloudComponentError {
     fn from(error: ProjectError) -> Self {
         match error {
-            ProjectError::Server(
-                golem_api_grpc::proto::golem::project::v1::ProjectError {
-                    error: Some(project_error::Error::Unauthorized(e)),
-                },
-            ) => CloudComponentError::Unauthorized(e.error),
-            ProjectError::Server(
-                golem_api_grpc::proto::golem::project::v1::ProjectError {
-                    error: Some(project_error::Error::LimitExceeded(e)),
-                },
-            ) => CloudComponentError::LimitExceeded(e.error),
-            ProjectError::Server(
-                golem_api_grpc::proto::golem::project::v1::ProjectError {
-                    error: Some(project_error::Error::NotFound(e)),
-                },
-            ) => CloudComponentError::UnknownProject(e.error),
+            ProjectError::Server(golem_api_grpc::proto::golem::project::v1::ProjectError {
+                error: Some(project_error::Error::Unauthorized(e)),
+            }) => CloudComponentError::Unauthorized(e.error),
+            ProjectError::Server(golem_api_grpc::proto::golem::project::v1::ProjectError {
+                error: Some(project_error::Error::LimitExceeded(e)),
+            }) => CloudComponentError::LimitExceeded(e.error),
+            ProjectError::Server(golem_api_grpc::proto::golem::project::v1::ProjectError {
+                error: Some(project_error::Error::NotFound(e)),
+            }) => CloudComponentError::UnknownProject(e.error),
             _ => CloudComponentError::InternalProjectError(error),
         }
     }

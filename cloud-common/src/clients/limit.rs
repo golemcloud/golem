@@ -1,13 +1,13 @@
 use crate::clients::auth::authorised_request;
 use crate::config::RemoteCloudServiceConfig;
 use async_trait::async_trait;
+use golem_api_grpc::proto::golem::common::ResourceLimits;
 use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
 use golem_api_grpc::proto::golem::limit::v1::limits_error::Error;
 use golem_api_grpc::proto::golem::limit::v1::{
     get_resource_limits_response, update_component_limit_response, update_worker_limit_response,
     GetResourceLimitsRequest, UpdateComponentLimitRequest, UpdateWorkerLimitRequest,
 };
-use golem_api_grpc::proto::golem::common::ResourceLimits;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, ComponentId, WorkerId};

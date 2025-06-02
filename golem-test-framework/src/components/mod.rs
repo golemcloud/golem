@@ -16,7 +16,6 @@ use golem_api_grpc::proto::grpc::health::v1::health_check_response::ServingStatu
 use golem_api_grpc::proto::grpc::health::v1::HealthCheckRequest;
 use golem_client::api::HealthCheckClient;
 use golem_client::Security;
-use uuid::uuid;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::Child;
@@ -27,7 +26,9 @@ use tokio::time::Instant;
 use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
 use url::Url;
+use uuid::uuid;
 
+pub mod cloud_service;
 pub mod component_compilation_service;
 pub mod component_service;
 mod docker;
@@ -40,7 +41,6 @@ pub mod shard_manager;
 pub mod worker_executor;
 pub mod worker_executor_cluster;
 pub mod worker_service;
-pub mod cloud_service;
 
 pub const ADMIN_TOKEN: uuid::Uuid = uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1");
 
@@ -151,7 +151,7 @@ pub async fn wait_for_startup_http(host: &str, http_port: u16, name: &str, timeo
                 client: new_reqwest_client(),
                 base_url: Url::from_str(&format!("http://{host}:{http_port}"))
                     .expect("Can't parse HTTP URL for health check"),
-                security_token: Security::Empty
+                security_token: Security::Empty,
             },
         };
 

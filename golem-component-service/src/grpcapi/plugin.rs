@@ -1,21 +1,21 @@
 use crate::grpcapi::{auth, bad_request_error};
 use crate::service::plugin::CloudPluginService;
 use async_trait::async_trait;
+use cloud_common::grpc::plugin_definition_to_grpc;
+use cloud_common::model::CloudPluginScope;
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::component::v1::plugin_service_server::PluginService;
+use golem_api_grpc::proto::golem::component::v1::{
+    component_error, create_plugin_response, delete_plugin_response, ComponentError,
+    CreatePluginResponse, DeletePluginRequest, DeletePluginResponse, GetPluginRequest,
+    ListPluginVersionsRequest,
+};
 use golem_api_grpc::proto::golem::component::v1::{
     get_plugin_by_id_response, get_plugin_response, list_plugins_response, CreatePluginRequest,
     GetPluginByIdRequest, GetPluginByIdResponse, GetPluginResponse, GetPluginSuccessResponse,
     ListPluginsRequest, ListPluginsResponse, ListPluginsSuccessResponse,
 };
 use golem_api_grpc::proto::golem::component::PluginDefinition;
-use cloud_common::grpc::plugin_definition_to_grpc;
-use cloud_common::model::CloudPluginScope;
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
-use golem_api_grpc::proto::golem::component::v1::{
-    component_error, create_plugin_response, delete_plugin_response, ComponentError,
-    CreatePluginResponse, DeletePluginRequest, DeletePluginResponse, GetPluginRequest,
-    ListPluginVersionsRequest,
-};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::model::plugin::PluginDefinitionCreation;
@@ -42,8 +42,7 @@ impl PluginGrpcApi {
 
         let plugins = match &request.scope {
             Some(scope) => {
-                let scope = scope
-                    .clone()
+                let scope = (*scope)
                     .try_into()
                     .map_err(|err| bad_request_error(&format!("Invalid plugin scope: {err}")))?;
 

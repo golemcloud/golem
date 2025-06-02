@@ -56,7 +56,7 @@ impl SpawnedComponentService {
         err_level: Level,
         client_protocol: GolemClientProtocol,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting golem-component-service process");
 
@@ -74,7 +74,7 @@ impl SpawnedComponentService {
                     rdb,
                     verbosity,
                     false,
-                    &cloud_service
+                    &cloud_service,
                 )
                 .await,
             )

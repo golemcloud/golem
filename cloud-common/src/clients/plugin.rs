@@ -32,7 +32,11 @@ pub trait PluginServiceClient {
 
 #[derive(Clone)]
 pub struct PluginServiceClientDefault {
-    plugin_service_client: GrpcClient<golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient<Channel>>,
+    plugin_service_client: GrpcClient<
+        golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient<
+            Channel,
+        >,
+    >,
     retry_config: RetryConfig,
 }
 

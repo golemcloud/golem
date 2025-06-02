@@ -253,9 +253,12 @@ impl WorkerExecutorTestDependencies {
             ProvidedWorkerExecutor::new("localhost".to_string(), http_port, grpc_port, true),
         );
         // Fake worker service forwarding all requests to the worker executor directly
-        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
-            ForwardingWorkerService::new(worker_executor.clone(), self.component_service(), Arc::new(DisabledCloudService)),
-        );
+        let worker_service: Arc<dyn WorkerService + 'static> =
+            Arc::new(ForwardingWorkerService::new(
+                worker_executor.clone(),
+                self.component_service(),
+                Arc::new(DisabledCloudService),
+            ));
         WorkerExecutorPerTestDependencies {
             redis,
             redis_monitor: self.redis_monitor.clone(),

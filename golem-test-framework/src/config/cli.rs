@@ -16,7 +16,7 @@ use crate::components::cloud_service::docker::DockerCloudService;
 use crate::components::cloud_service::k8s::K8sCloudService;
 use crate::components::cloud_service::provided::ProvidedCloudService;
 use crate::components::cloud_service::spawned::SpawnedCloudService;
-use crate::components::cloud_service::{self, CloudService};
+use crate::components::cloud_service::CloudService;
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::k8s::K8sComponentCompilationService;
 use crate::components::component_compilation_service::provided::ProvidedComponentCompilationService;
@@ -71,7 +71,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
-use tracing::{Instrument, Level};
+use tracing::Level;
 use uuid::Uuid;
 
 /// Test dependencies created from command line arguments
@@ -379,35 +379,42 @@ impl CliTestDependencies {
         let rdb: Arc<dyn Rdb + Send + Sync> =
             Arc::new(DockerPostgresRdb::new(&unique_network_id).await);
 
-        let cloud_service: Arc<dyn CloudService> =
-            Arc::new(DockerCloudService::new(&unique_network_id, rdb.clone(), params.service_verbosity(), params.golem_client_protocol).await);
-
-        let component_service: Arc<dyn ComponentService + Send + Sync> =
-            Arc::new(
-                DockerComponentService::new(
-                    &unique_network_id,
-                    PathBuf::from(&params.component_directory),
-                    Some((
-                        DockerComponentCompilationService::NAME,
-                        DockerComponentCompilationService::GRPC_PORT.as_u16(),
-                    )),
-                    rdb.clone(),
-                    params_clone.service_verbosity(),
-                    params.golem_client_protocol,
-                    plugin_wasm_files_service.clone(),
-                    cloud_service.clone()
-                )
-                .await,
-            );
-
-        let component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> = Arc::new(
-            DockerComponentCompilationService::new(
+        let cloud_service: Arc<dyn CloudService> = Arc::new(
+            DockerCloudService::new(
                 &unique_network_id,
-                component_service.clone(),
-                params_clone.service_verbosity(),
+                rdb.clone(),
+                params.service_verbosity(),
+                params.golem_client_protocol,
             )
             .await,
         );
+
+        let component_service: Arc<dyn ComponentService + Send + Sync> = Arc::new(
+            DockerComponentService::new(
+                &unique_network_id,
+                PathBuf::from(&params.component_directory),
+                Some((
+                    DockerComponentCompilationService::NAME,
+                    DockerComponentCompilationService::GRPC_PORT.as_u16(),
+                )),
+                rdb.clone(),
+                params_clone.service_verbosity(),
+                params.golem_client_protocol,
+                plugin_wasm_files_service.clone(),
+                cloud_service.clone(),
+            )
+            .await,
+        );
+
+        let component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> =
+            Arc::new(
+                DockerComponentCompilationService::new(
+                    &unique_network_id,
+                    component_service.clone(),
+                    params_clone.service_verbosity(),
+                )
+                .await,
+            );
 
         let redis: Arc<dyn Redis + Send + Sync> =
             Arc::new(DockerRedis::new(&unique_network_id, redis_prefix.to_string()).await);
@@ -434,7 +441,7 @@ impl CliTestDependencies {
                 rdb.clone(),
                 params.service_verbosity(),
                 params.golem_client_protocol,
-                cloud_service.clone()
+                cloud_service.clone(),
             )
             .await,
         );
@@ -450,7 +457,7 @@ impl CliTestDependencies {
                     worker_service.clone(),
                     params.service_verbosity(),
                     true,
-                    cloud_service.clone()
+                    cloud_service.clone(),
                 )
                 .await,
             );
@@ -520,8 +527,8 @@ impl CliTestDependencies {
             Arc::new(DockerPostgresRdb::new(&unique_network_id).await)
         };
 
-        let cloud_service: Arc<dyn CloudService> =
-            Arc::new(SpawnedCloudService::new(
+        let cloud_service: Arc<dyn CloudService> = Arc::new(
+            SpawnedCloudService::new(
                 &build_root.join("cloud-service"),
                 &workspace_root.join("cloud-service"),
                 cloud_service_http_port,
@@ -531,7 +538,9 @@ impl CliTestDependencies {
                 out_level,
                 Level::ERROR,
                 params.golem_client_protocol,
-            ).await);
+            )
+            .await,
+        );
 
         let component_service: Arc<dyn ComponentService + Send + Sync> = {
             Arc::new(
@@ -541,32 +550,34 @@ impl CliTestDependencies {
                     &workspace_root.join("golem-component-service"),
                     component_service_http_port,
                     component_service_grpc_port,
-                    (!compilation_service_disabled).then(|| component_compilation_service_grpc_port),
+                    (!compilation_service_disabled)
+                        .then_some(component_compilation_service_grpc_port),
                     rdb.clone(),
                     params.service_verbosity(),
                     out_level,
                     Level::ERROR,
                     params.golem_client_protocol,
                     plugin_wasm_files_service.clone(),
-                    cloud_service.clone()
+                    cloud_service.clone(),
                 )
                 .await,
             )
         };
 
-        let component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> = Arc::new(
-            SpawnedComponentCompilationService::new(
-                &build_root.join("golem-component-compilation-service"),
-                &workspace_root.join("golem-component-compilation-service"),
-                component_compilation_service_http_port,
-                component_compilation_service_grpc_port,
-                component_service.clone(),
-                params.service_verbosity(),
-                out_level,
-                Level::ERROR,
-            )
-            .await,
-        );
+        let component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> =
+            Arc::new(
+                SpawnedComponentCompilationService::new(
+                    &build_root.join("golem-component-compilation-service"),
+                    &workspace_root.join("golem-component-compilation-service"),
+                    component_compilation_service_http_port,
+                    component_compilation_service_grpc_port,
+                    component_service.clone(),
+                    params.service_verbosity(),
+                    out_level,
+                    Level::ERROR,
+                )
+                .await,
+            );
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
             redis_port,
@@ -608,7 +619,7 @@ impl CliTestDependencies {
                 out_level,
                 Level::ERROR,
                 params.golem_client_protocol,
-                cloud_service.clone()
+                cloud_service.clone(),
             )
             .await,
         );
@@ -628,7 +639,7 @@ impl CliTestDependencies {
                     out_level,
                     Level::ERROR,
                     true,
-                    cloud_service.clone()
+                    cloud_service.clone(),
                 )
                 .await,
             );
@@ -647,7 +658,7 @@ impl CliTestDependencies {
             plugin_wasm_files_service,
             initial_component_files_service,
             component_temp_directory: Arc::new(TempDir::new().unwrap()),
-            cloud_service
+            cloud_service,
         }
     }
 
@@ -684,7 +695,8 @@ impl CliTestDependencies {
                 timeout,
                 None,
                 params.golem_client_protocol,
-            ).await
+            )
+            .await,
         );
 
         let component_service: Arc<dyn ComponentService + Send + Sync> = Arc::new(
@@ -693,13 +705,16 @@ impl CliTestDependencies {
                 &namespace,
                 &routing_type,
                 Level::INFO,
-                (!compilation_service_disabled).then(|| (K8sComponentCompilationService::NAME, K8sComponentCompilationService::GRPC_PORT)),
+                (!compilation_service_disabled).then_some((
+                    K8sComponentCompilationService::NAME,
+                    K8sComponentCompilationService::GRPC_PORT,
+                )),
                 rdb.clone(),
                 timeout,
                 None,
                 params.golem_client_protocol,
                 plugin_wasm_files_service.clone(),
-                cloud_service.clone()
+                cloud_service.clone(),
             )
             .await,
         );
@@ -756,7 +771,7 @@ impl CliTestDependencies {
                 timeout,
                 None,
                 params.golem_client_protocol,
-                cloud_service.clone()
+                cloud_service.clone(),
             )
             .await,
         );
@@ -775,7 +790,7 @@ impl CliTestDependencies {
                     timeout,
                     None,
                     true,
-                    cloud_service.clone()
+                    cloud_service.clone(),
                 )
                 .await,
             );
@@ -794,7 +809,7 @@ impl CliTestDependencies {
             plugin_wasm_files_service,
             component_directory: Path::new(&params.component_directory).to_path_buf(),
             component_temp_directory: Arc::new(TempDir::new().unwrap()),
-            cloud_service
+            cloud_service,
         }
     }
 
@@ -803,7 +818,7 @@ impl CliTestDependencies {
         cluster_size: usize,
         namespace: &str,
         redis_prefix: &str,
-        compilation_service_disabled: bool
+        compilation_service_disabled: bool,
     ) -> Self {
         let routing_type = K8sRoutingType::Service;
         let namespace = K8sNamespace(namespace.to_string());
@@ -839,7 +854,8 @@ impl CliTestDependencies {
                 timeout,
                 service_annotations.clone(),
                 params.golem_client_protocol,
-            ).await
+            )
+            .await,
         );
 
         let component_service: Arc<dyn ComponentService + Send + Sync> = {
@@ -851,7 +867,7 @@ impl CliTestDependencies {
                     &namespace,
                     &routing_type,
                     Level::INFO,
-                    (!compilation_service_disabled).then(|| (
+                    (!compilation_service_disabled).then_some((
                         K8sComponentCompilationService::NAME,
                         K8sComponentCompilationService::GRPC_PORT,
                     )),
@@ -860,23 +876,24 @@ impl CliTestDependencies {
                     service_annotations.clone(),
                     params.golem_client_protocol,
                     plugin_wasm_files_service.clone(),
-                    cloud_service.clone()
+                    cloud_service.clone(),
                 )
                 .await,
             )
         };
 
-        let component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> = Arc::new(
-            K8sComponentCompilationService::new(
-                &namespace,
-                &routing_type,
-                Level::INFO,
-                component_service.clone(),
-                timeout,
-                service_annotations.clone(),
-            )
-            .await,
-        );
+        let component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> =
+            Arc::new(
+                K8sComponentCompilationService::new(
+                    &namespace,
+                    &routing_type,
+                    Level::INFO,
+                    component_service.clone(),
+                    timeout,
+                    service_annotations.clone(),
+                )
+                .await,
+            );
 
         let redis: Arc<dyn Redis + Send + Sync> = Arc::new(
             K8sRedis::new(
@@ -916,28 +933,27 @@ impl CliTestDependencies {
                 timeout,
                 service_annotations.clone(),
                 params.golem_client_protocol,
-                cloud_service.clone()
+                cloud_service.clone(),
             )
             .await,
         );
-        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync> =
-            Arc::new(
-                K8sWorkerExecutorCluster::new(
-                    cluster_size,
-                    &namespace,
-                    &routing_type,
-                    redis.clone(),
-                    component_service.clone(),
-                    shard_manager.clone(),
-                    worker_service.clone(),
-                    Level::INFO,
-                    timeout,
-                    service_annotations.clone(),
-                    true,
-                    cloud_service.clone()
-                )
-                .await,
-            );
+        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync> = Arc::new(
+            K8sWorkerExecutorCluster::new(
+                cluster_size,
+                &namespace,
+                &routing_type,
+                redis.clone(),
+                component_service.clone(),
+                shard_manager.clone(),
+                worker_service.clone(),
+                Level::INFO,
+                timeout,
+                service_annotations.clone(),
+                true,
+                cloud_service.clone(),
+            )
+            .await,
+        );
 
         Self {
             rdb,
@@ -953,7 +969,7 @@ impl CliTestDependencies {
             plugin_wasm_files_service,
             initial_component_files_service,
             component_temp_directory: Arc::new(TempDir::new().unwrap()),
-            cloud_service
+            cloud_service,
         }
     }
 
@@ -1009,12 +1025,15 @@ impl CliTestDependencies {
                     SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
                 );
 
-                let cloud_service: Arc<dyn CloudService> = Arc::new(ProvidedCloudService::new(
-                    cloud_service_host.clone(),
-                    *cloud_service_http_port,
-                    *cloud_service_grpc_port,
-                    params.golem_client_protocol
-                ).await);
+                let cloud_service: Arc<dyn CloudService> = Arc::new(
+                    ProvidedCloudService::new(
+                        cloud_service_host.clone(),
+                        *cloud_service_http_port,
+                        *cloud_service_grpc_port,
+                        params.golem_client_protocol,
+                    )
+                    .await,
+                );
 
                 let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> =
                     Arc::new(ProvidedShardManager::new(
@@ -1035,12 +1054,13 @@ impl CliTestDependencies {
                     .await,
                 );
 
-                let component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> =
-                    Arc::new(ProvidedComponentCompilationService::new(
-                        component_compilation_service_host.clone(),
-                        *component_compilation_service_http_port,
-                        *component_compilation_service_grpc_port,
-                    ));
+                let component_compilation_service: Arc<
+                    dyn ComponentCompilationService + Send + Sync,
+                > = Arc::new(ProvidedComponentCompilationService::new(
+                    component_compilation_service_host.clone(),
+                    *component_compilation_service_http_port,
+                    *component_compilation_service_grpc_port,
+                ));
 
                 let worker_service: Arc<dyn WorkerService> = Arc::new(
                     ProvidedWorkerService::new(
@@ -1050,7 +1070,7 @@ impl CliTestDependencies {
                         *worker_service_custom_request_port,
                         params.golem_client_protocol,
                         component_service.clone(),
-                        cloud_service.clone()
+                        cloud_service.clone(),
                     )
                     .await,
                 );
@@ -1077,7 +1097,7 @@ impl CliTestDependencies {
                     plugin_wasm_files_service,
                     initial_component_files_service,
                     component_temp_directory: Arc::new(TempDir::new().unwrap()),
-                    cloud_service
+                    cloud_service,
                 }
             }
             TestMode::Docker {
@@ -1204,9 +1224,7 @@ impl TestDependencies for CliTestDependencies {
         self.component_service.clone()
     }
 
-    fn component_compilation_service(
-        &self,
-    ) -> Arc<dyn ComponentCompilationService + Send + Sync> {
+    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService + Send + Sync> {
         self.component_compilation_service.clone()
     }
 

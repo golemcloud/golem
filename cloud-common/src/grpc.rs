@@ -12,7 +12,7 @@ pub fn proto_project_id_string(id: &Option<common::ProjectId>) -> Option<String>
 pub fn proto_project_policy_id_string(
     id: &Option<golem_api_grpc::proto::golem::projectpolicy::ProjectPolicyId>,
 ) -> Option<String> {
-    id.clone()
+    (*id)
         .and_then(|v| TryInto::<ProjectPolicyId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
@@ -20,7 +20,7 @@ pub fn proto_project_policy_id_string(
 pub fn proto_project_grant_id_string(
     id: &Option<golem_api_grpc::proto::golem::projectgrant::ProjectGrantId>,
 ) -> Option<String> {
-    id.clone()
+    (*id)
         .and_then(|v| TryInto::<ProjectGrantId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
@@ -28,7 +28,7 @@ pub fn proto_project_grant_id_string(
 pub fn proto_token_id_string(
     id: &Option<golem_api_grpc::proto::golem::token::TokenId>,
 ) -> Option<String> {
-    id.clone()
+    (*id)
         .and_then(|v| TryInto::<TokenId>::try_into(v).ok())
         .map(|v| v.to_string())
 }

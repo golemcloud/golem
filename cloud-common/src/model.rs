@@ -618,24 +618,31 @@ impl From<CloudPluginScope> for golem_api_grpc::proto::golem::component::CloudPl
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::CloudPluginScope>
-    for CloudPluginScope
-{
+impl TryFrom<golem_api_grpc::proto::golem::component::CloudPluginScope> for CloudPluginScope {
     type Error = String;
 
     fn try_from(
         proto: golem_api_grpc::proto::golem::component::CloudPluginScope,
     ) -> Result<Self, Self::Error> {
         match proto.scope {
-            Some(golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Global(
-                     _,
-                 )) => Ok(Self::global()),
-            Some(golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Component(
-                     scope,
-                 )) => Ok(Self::component(scope.component_id.ok_or("Missing component_id")?.try_into()?)),
+            Some(golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Global(_)) => {
+                Ok(Self::global())
+            }
+            Some(
+                golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Component(
+                    scope,
+                ),
+            ) => Ok(Self::component(
+                scope
+                    .component_id
+                    .ok_or("Missing component_id")?
+                    .try_into()?,
+            )),
             Some(golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Project(
-                     scope,
-                 )) => Ok(Self::project(scope.project_id.ok_or("Missing project_id")?.try_into()?)),
+                scope,
+            )) => Ok(Self::project(
+                scope.project_id.ok_or("Missing project_id")?.try_into()?,
+            )),
             None => Err("Missing scope".to_string()),
         }
     }

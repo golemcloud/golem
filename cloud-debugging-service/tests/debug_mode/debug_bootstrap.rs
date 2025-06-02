@@ -23,6 +23,8 @@ use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::OplogService;
 use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
 use golem_worker_executor::services::promise::PromiseService;
+use golem_worker_executor::services::rdbms;
+use golem_worker_executor::services::resource_limits;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
@@ -35,9 +37,7 @@ use golem_worker_executor::services::worker_enumeration::{
 use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::All;
-use golem_worker_executor::services::{component, rdbms};
-use golem_worker_executor::services::{plugins, resource_limits};
-use golem_worker_executor::{Bootstrap, DefaultGolemTypes};
+use golem_worker_executor::Bootstrap;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -76,7 +76,9 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for TestDebuggingServerBootStrap {
         Arc<dyn Plugins<CloudGolemTypes>>,
         Arc<dyn PluginsObservations>,
     ) {
-        let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(&golem_config.plugin_service);
+        let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(
+            &golem_config.plugin_service,
+        );
         (plugins.clone(), plugins)
     }
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::cloud_service::{self, CloudService};
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
@@ -62,7 +62,7 @@ impl K8sWorkerExecutor {
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
         shared_client: bool,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting Golem Worker Executor {idx} pod");
 
@@ -76,7 +76,7 @@ impl K8sWorkerExecutor {
             worker_service,
             redis,
             &cloud_service,
-            verbosity
+            verbosity,
         )
         .await;
         let env_vars = env_vars

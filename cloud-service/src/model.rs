@@ -140,9 +140,7 @@ impl Token {
 impl TryFrom<golem_api_grpc::proto::golem::token::Token> for Token {
     type Error = String;
 
-    fn try_from(
-        value: golem_api_grpc::proto::golem::token::Token,
-    ) -> Result<Self, Self::Error> {
+    fn try_from(value: golem_api_grpc::proto::golem::token::Token) -> Result<Self, Self::Error> {
         Ok(Self {
             id: value.id.ok_or("Missing id")?.try_into()?,
             account_id: value.account_id.ok_or("Missing account_id")?.into(),
@@ -188,9 +186,7 @@ impl TryFrom<i32> for ProjectType {
 impl From<golem_api_grpc::proto::golem::project::ProjectType> for ProjectType {
     fn from(value: golem_api_grpc::proto::golem::project::ProjectType) -> Self {
         match value {
-            golem_api_grpc::proto::golem::project::ProjectType::Default => {
-                ProjectType::Default
-            }
+            golem_api_grpc::proto::golem::project::ProjectType::Default => ProjectType::Default,
             golem_api_grpc::proto::golem::project::ProjectType::NonDefault => {
                 ProjectType::NonDefault
             }
@@ -394,9 +390,7 @@ impl Default for Plan {
 impl TryFrom<golem_api_grpc::proto::golem::plan::Plan> for Plan {
     type Error = String;
 
-    fn try_from(
-        value: golem_api_grpc::proto::golem::plan::Plan,
-    ) -> Result<Self, Self::Error> {
+    fn try_from(value: golem_api_grpc::proto::golem::plan::Plan) -> Result<Self, Self::Error> {
         Ok(Self {
             plan_id: value.plan_id.ok_or("Missing field: plan_id")?.try_into()?,
             plan_data: value.plan_data.ok_or("Missing field: plan_data")?.into(),
@@ -476,9 +470,7 @@ pub struct AccountSummary {
     pub created_at: chrono::DateTime<Utc>,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::accountsummary::v1::AccountSummary>
-    for AccountSummary
-{
+impl TryFrom<golem_api_grpc::proto::golem::accountsummary::v1::AccountSummary> for AccountSummary {
     type Error = String;
 
     fn try_from(
@@ -496,9 +488,7 @@ impl TryFrom<golem_api_grpc::proto::golem::accountsummary::v1::AccountSummary>
     }
 }
 
-impl From<AccountSummary>
-    for golem_api_grpc::proto::golem::accountsummary::v1::AccountSummary
-{
+impl From<AccountSummary> for golem_api_grpc::proto::golem::accountsummary::v1::AccountSummary {
     fn from(value: AccountSummary) -> Self {
         Self {
             id: Some(value.id.into()),
@@ -552,9 +542,7 @@ pub struct OAuth2Data {
 impl TryFrom<golem_api_grpc::proto::golem::login::OAuth2Data> for OAuth2Data {
     type Error = String;
 
-    fn try_from(
-        value: golem_api_grpc::proto::golem::login::OAuth2Data,
-    ) -> Result<Self, String> {
+    fn try_from(value: golem_api_grpc::proto::golem::login::OAuth2Data) -> Result<Self, String> {
         Ok(Self {
             url: value.url,
             user_code: value.user_code,

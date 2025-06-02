@@ -17,10 +17,11 @@ use axum::body::Bytes;
 use axum::extract::Multipart;
 use axum::routing::post;
 use axum::Router;
+use cloud_common::model::CloudPluginScope;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
 use golem_common::model::plugin::{
-    AppPluginDefinition, ComponentTransformerDefinition, DefaultPluginScope,
-    LibraryPluginDefinition, OplogProcessorDefinition, PluginTypeSpecificDefinition,
+    AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
+    OplogProcessorDefinition, PluginTypeSpecificDefinition,
 };
 use golem_common::model::{Empty, ScanCursor};
 use golem_test_framework::config::EnvBasedTestDependencies;
@@ -34,7 +35,6 @@ use test_r::{inherit_test_dep, test};
 use tracing::{debug, info};
 use wac_graph::types::Package;
 use wac_graph::{plug, CompositionGraph, EncodeOptions, Processor};
-use cloud_common::model::CloudPluginScope;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);

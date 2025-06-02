@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::components::cloud_service::{new_project_client, wait_for_startup};
-use crate::components::component_service::ComponentService;
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
@@ -22,7 +21,6 @@ use crate::components::rdb::Rdb;
 use crate::config::GolemClientProtocol;
 use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
-use golem_client::api::ProjectClient;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};
@@ -43,7 +41,7 @@ pub struct K8sCloudService {
     service: Arc<Mutex<Option<K8sService>>>,
     grpc_routing: Arc<Mutex<Option<K8sRouting>>>,
     http_routing: Arc<Mutex<Option<K8sRouting>>>,
-    project_client: ProjectServiceClient
+    project_client: ProjectServiceClient,
 }
 
 impl K8sCloudService {
@@ -62,14 +60,8 @@ impl K8sCloudService {
     ) -> Self {
         info!("Starting Cloud Service pod");
 
-        let env_vars = super::env_vars(
-            Self::HTTP_PORT,
-            Self::GRPC_PORT,
-            rdb,
-            verbosity,
-            true,
-        )
-        .await;
+        let env_vars =
+            super::env_vars(Self::HTTP_PORT, Self::GRPC_PORT, rdb, verbosity, true).await;
 
         let env_vars = env_vars
             .into_iter()
@@ -173,14 +165,7 @@ impl K8sCloudService {
             ..
         } = Routing::create(Self::NAME, Self::HTTP_PORT, namespace, routing_type).await;
 
-        wait_for_startup(
-            client_protocol,
-            &local_host,
-            grpc_port,
-            http_port,
-            timeout,
-        )
-        .await;
+        wait_for_startup(client_protocol, &local_host, grpc_port, http_port, timeout).await;
 
         info!("Golem Component Compilation Service pod started");
 
@@ -192,8 +177,9 @@ impl K8sCloudService {
             service: Arc::new(Mutex::new(Some(managed_service))),
             grpc_routing: Arc::new(Mutex::new(Some(grpc_routing))),
             http_routing: Arc::new(Mutex::new(Some(http_routing))),
-            project_client: new_project_client(client_protocol, &local_host, grpc_port, http_port).await,
-            local_host
+            project_client: new_project_client(client_protocol, &local_host, grpc_port, http_port)
+                .await,
+            local_host,
         }
     }
 }

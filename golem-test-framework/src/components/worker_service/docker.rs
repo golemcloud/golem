@@ -46,7 +46,7 @@ pub struct DockerWorkerService {
     api_deployment_client: ApiDeploymentServiceClient,
     api_security_client: ApiSecurityServiceClient,
     component_service: Arc<dyn ComponentService>,
-    cloud_service: Arc<dyn CloudService>
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl DockerWorkerService {
@@ -61,7 +61,7 @@ impl DockerWorkerService {
         rdb: Arc<dyn Rdb + Send + Sync>,
         verbosity: Level,
         client_protocol: GolemClientProtocol,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting golem-worker-service container");
 
@@ -74,7 +74,7 @@ impl DockerWorkerService {
             &rdb,
             verbosity,
             true,
-            &cloud_service
+            &cloud_service,
         )
         .await;
 
@@ -118,7 +118,7 @@ impl DockerWorkerService {
                 "localhost",
                 public_grpc_port,
                 public_http_port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             api_definition_client: new_api_definition_client(
@@ -126,25 +126,25 @@ impl DockerWorkerService {
                 "localhost",
                 public_grpc_port,
                 public_http_port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             api_deployment_client: new_api_deployment_client(
                 client_protocol,
                 "localhost",
                 public_http_port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             api_security_client: new_api_security_client(
                 client_protocol,
                 "localhost",
                 public_http_port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             component_service,
-            cloud_service
+            cloud_service,
         }
     }
 }

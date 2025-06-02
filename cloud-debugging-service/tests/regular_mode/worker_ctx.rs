@@ -23,7 +23,6 @@ use golem_worker_executor::workerctx::{
     InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
-use golem_worker_executor::DefaultGolemTypes;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 

@@ -17,10 +17,8 @@ use crate::components::docker::{get_docker_container_name, network, ContainerHan
 use crate::components::rdb::Rdb;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
@@ -45,7 +43,7 @@ impl DockerCloudService {
         unique_network_id: &str,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
-        client_protocol: GolemClientProtocol
+        client_protocol: GolemClientProtocol,
     ) -> Self {
         info!("Starting golem-component-service container");
 
@@ -87,7 +85,7 @@ impl DockerCloudService {
                 public_grpc_port,
                 public_http_port,
             )
-            .await
+            .await,
         }
     }
 }

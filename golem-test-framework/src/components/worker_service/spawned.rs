@@ -21,7 +21,7 @@ use crate::components::worker_service::{
     new_worker_client, wait_for_startup, ApiDefinitionServiceClient, ApiDeploymentServiceClient,
     ApiSecurityServiceClient, WorkerService, WorkerServiceClient,
 };
-use crate::components::{cloud_service, ChildProcessLogger};
+use crate::components::ChildProcessLogger;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use std::path::Path;
@@ -45,7 +45,7 @@ pub struct SpawnedWorkerService {
     api_deployment_client: ApiDeploymentServiceClient,
     api_security_client: ApiSecurityServiceClient,
     component_service: Arc<dyn ComponentService>,
-    cloud_service: Arc<dyn CloudService>
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl SpawnedWorkerService {
@@ -62,7 +62,7 @@ impl SpawnedWorkerService {
         out_level: Level,
         err_level: Level,
         client_protocol: GolemClientProtocol,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting golem-worker-service process");
 
@@ -82,7 +82,7 @@ impl SpawnedWorkerService {
                     &rdb,
                     verbosity,
                     false,
-                    &cloud_service
+                    &cloud_service,
                 )
                 .await,
             )
@@ -116,33 +116,33 @@ impl SpawnedWorkerService {
                 "localhost",
                 grpc_port,
                 http_port,
-                &cloud_service
+                &cloud_service,
             )
-                .await,
+            .await,
             api_definition_client: new_api_definition_client(
                 client_protocol,
                 "localhost",
                 grpc_port,
                 http_port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             api_deployment_client: new_api_deployment_client(
                 client_protocol,
                 "localhost",
                 http_port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             api_security_client: new_api_security_client(
                 client_protocol,
                 "localhost",
                 http_port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             component_service,
-            cloud_service
+            cloud_service,
         }
     }
 

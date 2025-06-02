@@ -2,12 +2,13 @@ use crate::service::api_certificate::CertificateServiceError;
 use crate::service::api_domain::ApiDomainServiceError;
 use crate::service::api_domain::RegisterDomainRouteError;
 use crate::service::api_security::SecuritySchemeServiceError;
-use golem_api_grpc::proto::golem::project::v1::project_error::Error;
 use cloud_common::auth::CloudNamespace;
 use cloud_common::clients::auth::AuthServiceError;
 use cloud_common::clients::project::ProjectError;
+use golem_api_grpc::proto::golem::project::v1::project_error::Error;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::error::ErrorBody;
+use golem_common::model::error::ErrorsBody;
 use golem_common::{safe, SafeDisplay};
 use golem_worker_service_base::gateway_security::IdentityProviderError;
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionError as BaseApiDefinitionError;
@@ -15,7 +16,6 @@ use golem_worker_service_base::service::gateway::api_deployment::ApiDeploymentEr
 use golem_worker_service_base::service::gateway::security_scheme::SecuritySchemeServiceError as BaseSecuritySchemeServiceError;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Tags, Union};
-use golem_common::model::error::ErrorsBody;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Tags)]
@@ -93,11 +93,9 @@ impl ApiEndpointError {
     }
 
     pub fn bad_request<T: SafeDisplay>(error: T) -> Self {
-        Self::BadRequest(Json(WorkerServiceErrorsBody::Messages(
-            ErrorsBody {
-                errors: vec![error.to_safe_string()],
-            },
-        )))
+        Self::BadRequest(Json(WorkerServiceErrorsBody::Messages(ErrorsBody {
+            errors: vec![error.to_safe_string()],
+        })))
     }
 
     pub fn not_found<T: SafeDisplay>(error: T) -> Self {
@@ -261,11 +259,11 @@ impl From<ProjectError> for ApiEndpointError {
 impl From<RegisterDomainRouteError> for ApiEndpointError {
     fn from(value: RegisterDomainRouteError) -> Self {
         match value {
-            RegisterDomainRouteError::NotAvailable(_) => ApiEndpointError::BadRequest(Json(
-                WorkerServiceErrorsBody::Messages(ErrorsBody {
+            RegisterDomainRouteError::NotAvailable(_) => {
+                ApiEndpointError::BadRequest(Json(WorkerServiceErrorsBody::Messages(ErrorsBody {
                     errors: vec![value.to_safe_string()],
-                }),
-            )),
+                })))
+            }
             RegisterDomainRouteError::AWSError { .. } => {
                 ApiEndpointError::InternalError(Json(ErrorBody {
                     error: value.to_safe_string(),
@@ -283,11 +281,11 @@ impl From<ApiDomainServiceError> for ApiEndpointError {
                     error: value.to_safe_string(),
                 }))
             }
-            ApiDomainServiceError::NotFound(_) => ApiEndpointError::BadRequest(Json(
-                WorkerServiceErrorsBody::Messages(ErrorsBody {
+            ApiDomainServiceError::NotFound(_) => {
+                ApiEndpointError::BadRequest(Json(WorkerServiceErrorsBody::Messages(ErrorsBody {
                     errors: vec![value.to_safe_string()],
-                }),
-            )),
+                })))
+            }
             ApiDomainServiceError::AlreadyExists(_) => {
                 ApiEndpointError::AlreadyExists(Json(value.to_safe_string()))
             }
@@ -306,16 +304,16 @@ impl From<ApiDomainServiceError> for ApiEndpointError {
 impl From<CertificateServiceError> for ApiEndpointError {
     fn from(value: CertificateServiceError) -> Self {
         match value {
-            CertificateServiceError::CertificateNotAvailable(_) => ApiEndpointError::BadRequest(
-                Json(WorkerServiceErrorsBody::Messages(ErrorsBody {
+            CertificateServiceError::CertificateNotAvailable(_) => {
+                ApiEndpointError::BadRequest(Json(WorkerServiceErrorsBody::Messages(ErrorsBody {
                     errors: vec![value.to_safe_string()],
-                })),
-            ),
-            CertificateServiceError::CertificateNotFound(_) => ApiEndpointError::BadRequest(Json(
-                WorkerServiceErrorsBody::Messages(ErrorsBody {
+                })))
+            }
+            CertificateServiceError::CertificateNotFound(_) => {
+                ApiEndpointError::BadRequest(Json(WorkerServiceErrorsBody::Messages(ErrorsBody {
                     errors: vec![value.to_safe_string()],
-                }),
-            )),
+                })))
+            }
             CertificateServiceError::Unauthorized(_) => {
                 ApiEndpointError::Unauthorized(Json(ErrorBody {
                     error: value.to_string(),

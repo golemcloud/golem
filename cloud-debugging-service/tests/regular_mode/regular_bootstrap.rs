@@ -7,7 +7,7 @@ use golem_worker_executor::durable_host::DurableWorkerCtx;
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::blob_store::BlobStoreService;
-use golem_worker_executor::services::component::{self, ComponentService};
+use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{GolemConfig, ResourceLimitsConfig};
@@ -28,9 +28,9 @@ use golem_worker_executor::services::worker_enumeration::{
 };
 use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{plugins, resource_limits, All};
+use golem_worker_executor::services::{resource_limits, All};
 use golem_worker_executor::wasi_host::create_linker;
-use golem_worker_executor::{Bootstrap, DefaultGolemTypes};
+use golem_worker_executor::Bootstrap;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use wasmtime::component::Linker;
@@ -54,7 +54,9 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         Arc<dyn Plugins<CloudGolemTypes>>,
         Arc<dyn PluginsObservations>,
     ) {
-        let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(&golem_config.plugin_service);
+        let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(
+            &golem_config.plugin_service,
+        );
         (plugins.clone(), plugins)
     }
 

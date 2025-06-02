@@ -174,7 +174,7 @@ async fn env_vars(
         )
         .with(
             "GOLEM__RESOURCE_LIMITS__CONFIG__PORT",
-            cloud_service.private_grpc_port().to_string()
+            cloud_service.private_grpc_port().to_string(),
         )
         .with(
             "GOLEM__RESOURCE_LIMITS__CONFIG__ACCESS_TOKEN",

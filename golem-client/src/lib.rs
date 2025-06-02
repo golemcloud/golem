@@ -1,8 +1,4 @@
-use golem_common::model::plugin::ComponentPluginScope;
-use golem_common::model::{Empty, ProjectId};
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::fmt::{Display, Formatter};
 
 include!(concat!(env!("OUT_DIR"), "/src/lib.rs"));
 

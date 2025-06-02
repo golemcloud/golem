@@ -52,7 +52,7 @@ use golem_worker_executor::services::worker::WorkerService;
 use golem_worker_executor::services::worker_activator::WorkerActivator;
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::{
-    plugins, rdbms, resource_limits, All, HasAll, HasConfig, HasOplogService,
+    rdbms, resource_limits, All, HasAll, HasConfig, HasOplogService,
 };
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::workerctx::{
@@ -60,7 +60,7 @@ use golem_worker_executor::workerctx::{
     InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
-use golem_worker_executor::{Bootstrap, DefaultGolemTypes, RunDetails};
+use golem_worker_executor::{Bootstrap, RunDetails};
 
 use tokio::runtime::Handle;
 
@@ -89,7 +89,6 @@ use golem_wasm_rpc::golem_rpc_0_2_x::types::{FutureInvokeResult, WasmRpc};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{HostFutureInvokeResult, Pollable};
 use golem_worker_executor::preview2::golem::durability;
 use golem_worker_executor::preview2::golem_api_1_x;
-use golem_worker_executor::services::component;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
@@ -241,9 +240,7 @@ impl TestDependencies for TestWorkerExecutor {
         self.deps.component_service()
     }
 
-    fn component_compilation_service(
-        &self,
-    ) -> Arc<dyn ComponentCompilationService + Send + Sync> {
+    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService + Send + Sync> {
         self.deps.component_compilation_service()
     }
 
@@ -988,7 +985,9 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         Arc<dyn Plugins<CloudGolemTypes>>,
         Arc<dyn PluginsObservations>,
     ) {
-        let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(&golem_config.plugin_service);
+        let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(
+            &golem_config.plugin_service,
+        );
         (plugins.clone(), plugins)
     }
 

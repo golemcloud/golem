@@ -6,6 +6,8 @@ use crate::grpcapi::get_authorisation_token;
 use crate::model;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::project;
+use cloud_common::grpc::proto_project_id_string;
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::project::v1::cloud_project_service_server::CloudProjectService;
 use golem_api_grpc::proto::golem::project::v1::{
     create_project_response, delete_project_response, get_default_project_response,
@@ -16,8 +18,6 @@ use golem_api_grpc::proto::golem::project::v1::{
     ProjectError,
 };
 use golem_api_grpc::proto::golem::project::Project;
-use cloud_common::grpc::proto_project_id_string;
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::{AccountId, ProjectId};
 use golem_common::recorded_grpc_api_request;

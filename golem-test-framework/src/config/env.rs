@@ -15,7 +15,6 @@
 use crate::components::cloud_service::docker::DockerCloudService;
 use crate::components::cloud_service::spawned::SpawnedCloudService;
 use crate::components::cloud_service::CloudService;
-use crate::components::{self, cloud_service};
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
 use crate::components::component_compilation_service::ComponentCompilationService;
@@ -40,6 +39,7 @@ use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::docker::DockerWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
+use crate::components::{self};
 use crate::config::{DbType, GolemClientProtocol, TestDependencies};
 use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -50,7 +50,7 @@ use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
-use tracing::{Instrument, Level};
+use tracing::Level;
 use uuid::Uuid;
 
 pub struct EnvBasedTestDependenciesConfig {
@@ -180,7 +180,7 @@ pub struct EnvBasedTestDependencies {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_temp_directory: Arc<TempDir>,
-    cloud_service: Arc<dyn CloudService>
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl Debug for EnvBasedTestDependencies {
@@ -261,7 +261,7 @@ impl EnvBasedTestDependencies {
                     config.default_verbosity(),
                     config.default_stdout_level(),
                     config.default_stderr_level(),
-                    config.golem_client_protocol
+                    config.golem_client_protocol,
                 )
                 .await,
             )
@@ -304,7 +304,7 @@ impl EnvBasedTestDependencies {
         config: Arc<EnvBasedTestDependenciesConfig>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Arc<dyn ComponentService + Send + Sync + 'static> {
         if config.golem_docker_services {
             Arc::new(
@@ -319,7 +319,7 @@ impl EnvBasedTestDependencies {
                     config.default_verbosity(),
                     config.golem_client_protocol,
                     plugin_wasm_files_service,
-                    cloud_service
+                    cloud_service,
                 )
                 .await,
             )
@@ -338,7 +338,7 @@ impl EnvBasedTestDependencies {
                     config.default_stderr_level(),
                     config.golem_client_protocol,
                     plugin_wasm_files_service,
-                    cloud_service
+                    cloud_service,
                 )
                 .await,
             )
@@ -380,7 +380,7 @@ impl EnvBasedTestDependencies {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Arc<dyn WorkerService + 'static> {
         if config.golem_docker_services {
             Arc::new(
@@ -391,7 +391,7 @@ impl EnvBasedTestDependencies {
                     rdb,
                     config.default_verbosity(),
                     config.golem_client_protocol,
-                    cloud_service
+                    cloud_service,
                 )
                 .await,
             )
@@ -410,7 +410,7 @@ impl EnvBasedTestDependencies {
                     config.default_stdout_level(),
                     config.default_stderr_level(),
                     config.golem_client_protocol,
-                    cloud_service
+                    cloud_service,
                 )
                 .await,
             )
@@ -423,7 +423,7 @@ impl EnvBasedTestDependencies {
         shard_manager: Arc<dyn ShardManager + Send + Sync>,
         worker_service: Arc<dyn WorkerService>,
         redis: Arc<dyn Redis + Send + Sync>,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Arc<dyn WorkerExecutorCluster + Send + Sync> {
         if config.golem_docker_services {
             Arc::new(
@@ -436,7 +436,7 @@ impl EnvBasedTestDependencies {
                     worker_service,
                     config.default_verbosity(),
                     config.shared_client,
-                    cloud_service
+                    cloud_service,
                 )
                 .await,
             )
@@ -456,7 +456,7 @@ impl EnvBasedTestDependencies {
                     config.default_stdout_level(),
                     config.default_stderr_level(),
                     config.shared_client,
-                    cloud_service
+                    cloud_service,
                 )
                 .await,
             )
@@ -492,14 +492,13 @@ impl EnvBasedTestDependencies {
             config.clone(),
             rdb.clone(),
             plugin_wasm_files_service.clone(),
-            cloud_service.clone()
+            cloud_service.clone(),
         )
         .await;
 
-        let component_compilation_service = Self::make_component_compilation_service(
-            config.clone(),
-            component_service.clone(),
-        ).await;
+        let component_compilation_service =
+            Self::make_component_compilation_service(config.clone(), component_service.clone())
+                .await;
 
         let shard_manager = Self::make_shard_manager(config.clone(), redis.clone()).await;
 
@@ -508,7 +507,7 @@ impl EnvBasedTestDependencies {
             component_service.clone(),
             shard_manager.clone(),
             rdb.clone(),
-            cloud_service.clone()
+            cloud_service.clone(),
         )
         .await;
 
@@ -518,7 +517,7 @@ impl EnvBasedTestDependencies {
             shard_manager.clone(),
             worker_service.clone(),
             redis.clone(),
-            cloud_service.clone()
+            cloud_service.clone(),
         )
         .await;
 
@@ -538,7 +537,7 @@ impl EnvBasedTestDependencies {
             component_temp_directory: Arc::new(
                 TempDir::new().expect("Failed to create temporary directory"),
             ),
-            cloud_service
+            cloud_service,
         }
     }
 }

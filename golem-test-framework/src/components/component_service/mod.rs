@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::cloud_service::CloudService;
+use super::ADMIN_TOKEN;
 use crate::components::rdb::Rdb;
 use crate::components::{
     new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder,
@@ -68,8 +70,6 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::{debug, info, Level};
 use url::Url;
-use super::cloud_service::CloudService;
-use super::ADMIN_TOKEN;
 
 pub mod docker;
 pub mod filesystem;
@@ -493,7 +493,10 @@ pub trait ComponentService: ComponentServiceInternal {
 
                 match client
                     .create_component(
-                        &ComponentQuery { project_id: None, component_name: name.to_string() },
+                        &ComponentQuery {
+                            project_id: None,
+                            component_name: name.to_string(),
+                        },
                         file,
                         Some(&component_type),
                         to_http_file_permissions(files).as_ref(),
@@ -994,7 +997,7 @@ fn new_component_http_client(host: &str, http_port: u16) -> Arc<ComponentService
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
-            security_token: Security::Bearer(ADMIN_TOKEN.to_string())
+            security_token: Security::Bearer(ADMIN_TOKEN.to_string()),
         },
     })
 }
@@ -1029,7 +1032,7 @@ fn new_plugin_http_client(host: &str, http_port: u16) -> Arc<PluginServiceHttpCl
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
-            security_token: Security::Empty
+            security_token: Security::Empty,
         },
     })
 }
@@ -1074,7 +1077,7 @@ async fn env_vars(
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     verbosity: Level,
     private_rdb_connection: bool,
-    cloud_service: &Arc<dyn CloudService>
+    cloud_service: &Arc<dyn CloudService>,
 ) -> HashMap<String, String> {
     let mut builder = EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__COMPONENT_STORE__TYPE", "Local")
@@ -1088,10 +1091,7 @@ async fn env_vars(
             "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
             "/tmp/ittest-local-object-store/golem",
         )
-        .with(
-            "GOLEM__CLOUD_SERVICE__HOST",
-            cloud_service.private_host(),
-        )
+        .with("GOLEM__CLOUD_SERVICE__HOST", cloud_service.private_host())
         .with(
             "GOLEM__CLOUD_SERVICE__PORT",
             cloud_service.private_grpc_port().to_string(),

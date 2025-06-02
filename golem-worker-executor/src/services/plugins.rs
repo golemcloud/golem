@@ -13,29 +13,12 @@
 // limitations under the License.
 
 use crate::error::GolemError;
-use crate::grpc::authorised_grpc_request;
-use crate::services::golem_config::PluginServiceConfig;
-use crate::{DefaultGolemTypes, GolemTypes};
+use crate::GolemTypes;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
-use golem_api_grpc::proto::golem::component::v1::{
-    get_installed_plugins_response, get_plugin_by_id_response, GetInstalledPluginsRequest,
-    GetPluginByIdRequest,
-};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::plugin::{
-    DefaultPluginOwner, DefaultPluginScope, PluginDefinition, PluginInstallation,
-};
+use golem_common::model::plugin::{PluginDefinition, PluginInstallation};
+use golem_common::model::PluginId;
 use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
-use golem_common::model::{PluginId, RetryConfig};
-use http::Uri;
-use std::sync::Arc;
-use std::time::Duration;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
-use uuid::Uuid;
 
 /// Part of the `Plugins` service for recording observed information as a way to pre-cache
 /// data. It is in a separate trait because it does not have to be parametric for the Owner/Scope

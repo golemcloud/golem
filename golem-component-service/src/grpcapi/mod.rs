@@ -1,12 +1,12 @@
 use crate::grpcapi::component::ComponentGrpcApi;
 use crate::grpcapi::plugin::PluginGrpcApi;
 use crate::service::Services;
-use golem_api_grpc::proto::golem::component::v1::plugin_service_server::PluginServiceServer;
 use cloud_common::auth::CloudAuthCtx;
 use cloud_common::clients::auth::get_authorisation_token;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentServiceServer;
+use golem_api_grpc::proto::golem::component::v1::plugin_service_server::PluginServiceServer;
 use golem_api_grpc::proto::golem::component::v1::{component_error, ComponentError};
 use golem_common::model::ComponentId;
 use std::net::SocketAddr;

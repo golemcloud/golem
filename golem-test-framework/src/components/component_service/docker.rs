@@ -56,7 +56,7 @@ impl DockerComponentService {
         verbosity: Level,
         client_protocol: GolemClientProtocol,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting golem-component-service container");
 
@@ -67,7 +67,7 @@ impl DockerComponentService {
             rdb,
             verbosity,
             true,
-            &cloud_service
+            &cloud_service,
         )
         .await;
 

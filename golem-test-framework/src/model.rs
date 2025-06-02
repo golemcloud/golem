@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::plugin::{ PluginTypeSpecificDefinition};
 use cloud_common::model::CloudPluginScope;
+use golem_common::model::plugin::PluginTypeSpecificDefinition;
 
 #[derive(Debug, Clone)]
 pub struct PluginDefinitionCreation {

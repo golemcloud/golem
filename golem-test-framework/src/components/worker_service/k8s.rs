@@ -54,7 +54,7 @@ pub struct K8sWorkerService {
     api_deployment_client: ApiDeploymentServiceClient,
     api_security_client: ApiSecurityServiceClient,
     component_service: Arc<dyn ComponentService>,
-    cloud_service: Arc<dyn CloudService>
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl K8sWorkerService {
@@ -73,7 +73,7 @@ impl K8sWorkerService {
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
         client_protocol: GolemClientProtocol,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting Golem Worker Service pod");
 
@@ -86,7 +86,7 @@ impl K8sWorkerService {
             &rdb,
             verbosity,
             true,
-            &cloud_service
+            &cloud_service,
         )
         .await;
 
@@ -220,7 +220,7 @@ impl K8sWorkerService {
                 &grpc_routing.hostname,
                 grpc_routing.port,
                 http_routing.port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             api_definition_client: new_api_definition_client(
@@ -228,25 +228,25 @@ impl K8sWorkerService {
                 &grpc_routing.hostname,
                 grpc_routing.port,
                 http_routing.port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             api_deployment_client: new_api_deployment_client(
                 client_protocol,
                 &grpc_routing.hostname,
                 http_routing.port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             api_security_client: new_api_security_client(
                 client_protocol,
                 &grpc_routing.hostname,
                 http_routing.port,
-                &cloud_service
+                &cloud_service,
             )
             .await,
             component_service,
-            cloud_service
+            cloud_service,
         }
     }
 }

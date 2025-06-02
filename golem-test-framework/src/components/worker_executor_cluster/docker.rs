@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::{cloud_service::CloudService, component_service::ComponentService};
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::docker::DockerWorkerExecutor;
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
+use crate::components::{cloud_service::CloudService, component_service::ComponentService};
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -39,7 +39,7 @@ impl DockerWorkerExecutorCluster {
         worker_service: Arc<dyn WorkerService + 'static>,
         verbosity: Level,
         shared_client: bool,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Arc<DockerWorkerExecutor> {
         Arc::new(
             DockerWorkerExecutor::new(
@@ -50,7 +50,7 @@ impl DockerWorkerExecutorCluster {
                 worker_service,
                 verbosity,
                 shared_client,
-                cloud_service
+                cloud_service,
             )
             .await,
         )
@@ -65,7 +65,7 @@ impl DockerWorkerExecutorCluster {
         worker_service: Arc<dyn WorkerService + 'static>,
         verbosity: Level,
         shared_client: bool,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors_joins = Vec::new();
@@ -88,7 +88,7 @@ impl DockerWorkerExecutorCluster {
                         worker_service.clone(),
                         verbosity,
                         shared_client,
-                        cloud_service.clone()
+                        cloud_service.clone(),
                     )
                     .await
                 }

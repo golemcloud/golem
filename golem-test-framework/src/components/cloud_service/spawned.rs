@@ -12,20 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::wait_for_startup;
+use super::{CloudService, CloudServiceInternal, ProjectServiceClient};
 use crate::components::cloud_service::new_project_client;
 use crate::components::rdb::Rdb;
 use crate::components::ChildProcessLogger;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::info;
 use tracing::Level;
-use super::{CloudService, CloudServiceInternal, ProjectServiceClient};
-use super::wait_for_startup;
 
 pub struct SpawnedCloudService {
     http_port: u16,
@@ -55,16 +54,7 @@ impl SpawnedCloudService {
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(
-                super::env_vars(
-                    http_port,
-                    grpc_port,
-                    rdb,
-                    verbosity,
-                    false,
-                )
-                .await,
-            )
+            .envs(super::env_vars(http_port, grpc_port, rdb, verbosity, false).await)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -92,13 +82,8 @@ impl SpawnedCloudService {
             grpc_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
-            project_client: new_project_client(
-                client_protocol,
-                "localhost",
-                grpc_port,
-                http_port,
-            )
-            .await,
+            project_client: new_project_client(client_protocol, "localhost", grpc_port, http_port)
+                .await,
         }
     }
 }

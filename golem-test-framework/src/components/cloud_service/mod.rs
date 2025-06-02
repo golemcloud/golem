@@ -12,72 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ADMIN_TOKEN;
 use crate::components::rdb::Rdb;
 use crate::components::{
     new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder,
 };
 use crate::config::GolemClientProtocol;
-use crate::model::PluginDefinitionCreation;
-use anyhow::{anyhow, Context as AnyhowContext};
+use anyhow::anyhow;
 use async_trait::async_trait;
-use async_zip::base::write::ZipFileWriter;
-use async_zip::{Compression, ZipEntryBuilder};
-use futures_util::{stream, StreamExt, TryStreamExt};
-use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient as ComponentServiceGrpcClient;
-use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient as PluginServiceGrpcClient;
-use golem_api_grpc::proto::golem::component::v1::{
-    component_error, create_component_request, create_component_response, create_plugin_response,
-    delete_plugin_response, download_component_response,
-    get_component_metadata_all_versions_response, get_component_metadata_response,
-    get_components_response, get_plugin_response, install_plugin_response,
-    update_component_request, update_component_response, CreateComponentRequest,
-    CreateComponentRequestChunk, CreateComponentRequestHeader, CreatePluginRequest,
-    DeletePluginRequest, GetComponentRequest, GetComponentsRequest, GetLatestComponentRequest,
-    GetPluginRequest, UpdateComponentRequest, UpdateComponentRequestChunk,
-    UpdateComponentRequestHeader,
-};
-use golem_api_grpc::proto::golem::component::{
-    Component, PluginInstallation, VersionedComponentId,
-};
 use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
-use golem_api_grpc::proto::golem::project::v1::{get_default_project_response, GetDefaultProjectRequest};
-use golem_client::api::{ComponentClient as ComponentServiceHttpClient, ProjectClient};
-use golem_client::api::ComponentClientLive as ComponentServiceHttpClientLive;
-use golem_client::api::PluginClient as PluginServiceHttpClient;
-use golem_client::api::PluginClientLive as PluginServiceHttpClientLive;
-use golem_client::model::ComponentQuery;
-use golem_client::{Context, Security};
-use golem_common::model::component_metadata::DynamicLinkedInstance;
-use golem_common::model::plugin::PluginTypeSpecificDefinition;
-use golem_common::model::{
-    AccountId, ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion,
-    InitialComponentFile, PluginId, PluginInstallationId,
+use golem_api_grpc::proto::golem::project::v1::{
+    get_default_project_response, GetDefaultProjectRequest,
 };
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
-use uuid::Uuid;
+use golem_client::api::ProjectClient;
+use golem_client::{Context, Security};
+use golem_common::model::ProjectId;
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
-use std::ops::DerefMut;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
-use tempfile::TempDir;
-use tokio::fs;
-use tokio::fs::File;
-use tokio::io::AsyncReadExt;
-use tokio::time::sleep;
+use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use tracing::{debug, info, Level};
+use tracing::Level;
 use url::Url;
-use super::ADMIN_TOKEN;
-use golem_common::model::ProjectId;
+use uuid::Uuid;
 
 pub mod docker;
+pub mod k8s;
 pub mod provided;
 pub mod spawned;
-pub mod k8s;
 
 #[derive(Clone)]
 pub enum ProjectServiceClient {
@@ -96,23 +58,27 @@ pub trait CloudService: CloudServiceInternal {
         match self.project_client() {
             ProjectServiceClient::Grpc(mut client) => {
                 let result = client
-                    .get_default_project(GetDefaultProjectRequest { })
+                    .get_default_project(GetDefaultProjectRequest {})
                     .await?
                     .into_inner()
                     .result
                     .ok_or_else(|| anyhow!("get_default_project: no result"))?;
 
                 match result {
-                    get_default_project_response::Result::Success(result) => Ok(result.id.unwrap().try_into().unwrap()),
-                    get_default_project_response::Result::Error(error) => Err(anyhow!("{error:?}"))
+                    get_default_project_response::Result::Success(result) => {
+                        Ok(result.id.unwrap().try_into().unwrap())
+                    }
+                    get_default_project_response::Result::Error(error) => Err(anyhow!("{error:?}")),
                 }
             }
-            ProjectServiceClient::Http(client) => Ok(ProjectId(client.get_default_project().await?.project_id))
+            ProjectServiceClient::Http(client) => {
+                Ok(ProjectId(client.get_default_project().await?.project_id))
+            }
         }
     }
 
     fn admin_token(&self) -> Uuid {
-        ADMIN_TOKEN.clone()
+        ADMIN_TOKEN
     }
 
     fn private_host(&self) -> String;
@@ -134,10 +100,7 @@ pub trait CloudService: CloudServiceInternal {
     async fn kill(&self);
 }
 
-async fn new_project_grpc_client(
-    host: &str,
-    grpc_port: u16,
-) -> CloudProjectServiceClient<Channel> {
+async fn new_project_grpc_client(host: &str, grpc_port: u16) -> CloudProjectServiceClient<Channel> {
     CloudProjectServiceClient::connect(format!("http://{host}:{grpc_port}"))
         .await
         .expect("Failed to connect to golem-cloud-service")
@@ -145,13 +108,16 @@ async fn new_project_grpc_client(
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-fn new_project_http_client(host: &str, http_port: u16) -> Arc<golem_client::api::ProjectClientLive> {
+fn new_project_http_client(
+    host: &str,
+    http_port: u16,
+) -> Arc<golem_client::api::ProjectClientLive> {
     Arc::new(golem_client::api::ProjectClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
-            security_token: Security::Bearer(ADMIN_TOKEN.to_string())
+            security_token: Security::Bearer(ADMIN_TOKEN.to_string()),
         },
     })
 }

@@ -69,7 +69,7 @@ impl K8sComponentService {
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
         client_protocol: GolemClientProtocol,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-        cloud_service: Arc<dyn CloudService>
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting Golem Component Service pod");
 
@@ -80,7 +80,7 @@ impl K8sComponentService {
             rdb,
             verbosity,
             true,
-            &cloud_service
+            &cloud_service,
         )
         .await;
         let env_vars = env_vars

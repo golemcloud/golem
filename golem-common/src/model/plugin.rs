@@ -444,9 +444,9 @@ impl PluginInstallationTarget for ComponentPluginInstallationTarget {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::plugin::{
-        AppPluginDefinition, ComponentTransformerDefinition, DefaultPluginOwner,
-        DefaultPluginScope, LibraryPluginDefinition, OplogProcessorDefinition, PluginDefinition,
-        PluginInstallation, PluginTypeSpecificDefinition, PluginWasmFileKey,
+        AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
+        OplogProcessorDefinition, PluginInstallation, PluginTypeSpecificDefinition,
+        PluginWasmFileKey,
     };
 
     impl From<PluginInstallation> for golem_api_grpc::proto::golem::component::PluginInstallation {

@@ -213,7 +213,7 @@ pub struct RegularWorkerExecutorTestDependencies {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
-    component_temp_directory: Arc<TempDir>
+    component_temp_directory: Arc<TempDir>,
 }
 
 impl Debug for RegularWorkerExecutorTestDependencies {
@@ -284,9 +284,12 @@ impl RegularWorkerExecutorTestDependencies {
             ProvidedWorkerExecutor::new("localhost".to_string(), http_port, grpc_port, true),
         );
 
-        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
-            ForwardingWorkerService::new(worker_executor.clone(), self.component_service(), Arc::new(DisabledCloudService)),
-        );
+        let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> =
+            Arc::new(ForwardingWorkerService::new(
+                worker_executor.clone(),
+                self.component_service(),
+                Arc::new(DisabledCloudService),
+            ));
 
         RegularWorkerExecutorPerTestDependencies {
             redis,

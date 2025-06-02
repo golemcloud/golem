@@ -15,9 +15,8 @@
 use bytes::Bytes;
 use golem_common::model::{
     plugin::{
-        ComponentTransformerDefinition, DefaultPluginScope, OplogProcessorDefinition,
-        PluginDefinition, PluginOwner, PluginScope, PluginTypeSpecificDefinition,
-        PluginWasmFileKey,
+        ComponentTransformerDefinition, OplogProcessorDefinition, PluginDefinition, PluginOwner,
+        PluginScope, PluginTypeSpecificDefinition, PluginWasmFileKey,
     },
     PluginId,
 };

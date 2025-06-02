@@ -6,6 +6,10 @@ use chrono::Utc;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::auth::{AuthServiceError, BaseAuthService};
 use cloud_common::model::{ProjectAction, TokenSecret};
+use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
+use golem_common::model::{AccountId, ComponentId, ProjectId};
+use golem_service_base::db;
+use golem_service_base::migration::{Migrations, MigrationsDir};
 use golem_worker_service::model::{ApiDomain, Certificate, CertificateRequest, DomainRequest};
 use golem_worker_service::repo::api_certificate::{ApiCertificateRepo, DbApiCertificateRepo};
 use golem_worker_service::repo::api_domain::{ApiDomainRepo, DbApiDomainRepo};
@@ -16,10 +20,6 @@ use golem_worker_service::service::api_domain::{
     ApiDomainService, ApiDomainServiceDefault, InMemoryRegisterDomain, RegisterDomain,
 };
 use golem_worker_service::service::auth::AuthService;
-use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
-use golem_common::model::{AccountId, ComponentId, ProjectId};
-use golem_service_base::db;
-use golem_service_base::migration::{Migrations, MigrationsDir};
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};

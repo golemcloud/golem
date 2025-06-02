@@ -39,7 +39,6 @@ use golem_api_grpc::proto::golem::apidefinition::{
     static_binding, ApiDefinition, ApiDefinitionId, CorsPreflight, GatewayBinding,
     GatewayBindingType, HttpApiDefinition, HttpMethod, HttpRoute, StaticBinding,
 };
-use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::CloudAuthServiceClient;
 use golem_api_grpc::proto::golem::common::{
     AccountId, Empty, FilterComparator, PluginInstallationId, StringFilterComparator,
 };
@@ -967,13 +966,19 @@ pub trait WorkerService: WorkerServiceInternal {
                         match client
                             .create_definition_json(
                                 &default_project.0,
-                                &grpc_api_definition_request_to_http(request, self.component_service()).await,
+                                &grpc_api_definition_request_to_http(
+                                    request,
+                                    self.component_service(),
+                                )
+                                .await,
                             )
                             .await
                         {
-                            Ok(result) => {
-                                Ok(http_api_definition_to_grpc(result, self.component_service()).await)
-                            }
+                            Ok(result) => Ok(http_api_definition_to_grpc(
+                                result,
+                                self.component_service(),
+                            )
+                            .await),
                             Err(error) => Err(anyhow!("{error:?}")),
                         }
                     }
@@ -987,7 +992,7 @@ pub trait WorkerService: WorkerServiceInternal {
                         Err(error) => Err(anyhow!("{error:?}")),
                     },
                 }
-            },
+            }
         }
     }
 
@@ -1014,7 +1019,8 @@ pub trait WorkerService: WorkerServiceInternal {
                 let default_project = self.cloud_service().get_default_project().await?;
                 match request.api_definition.unwrap() {
                     update_api_definition_request::ApiDefinition::Definition(request) => {
-                        match client.update_definition_yaml(
+                        match client
+                            .update_definition_yaml(
                                 &default_project.0,
                                 &request.id.clone().unwrap().value,
                                 &request.clone().version,
@@ -1031,9 +1037,11 @@ pub trait WorkerService: WorkerServiceInternal {
                             )
                             .await
                         {
-                            Ok(result) => {
-                                Ok(http_api_definition_to_grpc(result, self.component_service()).await)
-                            }
+                            Ok(result) => Ok(http_api_definition_to_grpc(
+                                result,
+                                self.component_service(),
+                            )
+                            .await),
                             Err(error) => Err(anyhow!("{error:?}")),
                         }
                     }
@@ -1041,7 +1049,7 @@ pub trait WorkerService: WorkerServiceInternal {
                         todo!() // TODO: see worker-service-base for how this is interpreted
                     }
                 }
-            },
+            }
         }
     }
 
@@ -1066,7 +1074,7 @@ pub trait WorkerService: WorkerServiceInternal {
                     .get_definition(
                         &default_project.0,
                         &request.api_definition_id.unwrap().value,
-                        &request.version
+                        &request.version,
                     )
                     .await
                 {
@@ -1102,7 +1110,10 @@ pub trait WorkerService: WorkerServiceInternal {
                 let default_project = self.cloud_service().get_default_project().await?;
 
                 match client
-                    .list_definitions(&default_project.0, request.api_definition_id.map(|id| id.value).as_deref())
+                    .list_definitions(
+                        &default_project.0,
+                        request.api_definition_id.map(|id| id.value).as_deref(),
+                    )
                     .await
                 {
                     Ok(result) => Ok(join_all(result.into_iter().map(async |def| {
@@ -1136,7 +1147,7 @@ pub trait WorkerService: WorkerServiceInternal {
                     .await),
                     Err(error) => Err(anyhow!("{error:?}")),
                 }
-            },
+            }
         }
     }
 
@@ -1160,7 +1171,11 @@ pub trait WorkerService: WorkerServiceInternal {
             ApiDefinitionServiceClient::Http(client) => {
                 let default_project = self.cloud_service().get_default_project().await?;
                 match client
-                    .delete_definition(&default_project.0, &request.api_definition_id.unwrap().value, &request.version)
+                    .delete_definition(
+                        &default_project.0,
+                        &request.api_definition_id.unwrap().value,
+                        &request.version,
+                    )
                     .await
                 {
                     Ok(_) => Ok(()),
@@ -1291,7 +1306,10 @@ pub trait WorkerService: WorkerServiceInternal {
             ApiDeploymentServiceClient::Http(client) => {
                 let default_project = self.cloud_service().get_default_project().await?;
 
-                match client.undeploy_api(&default_project.0, site, id, version).await {
+                match client
+                    .undeploy_api(&default_project.0, site, id, version)
+                    .await
+                {
                     Ok(_) => Ok(()),
                     Err(error) => Err(anyhow!("{error:?}")),
                 }
@@ -1316,14 +1334,14 @@ async fn new_worker_grpc_client(host: &str, grpc_port: u16) -> WorkerServiceGrpc
 fn new_worker_http_client(
     host: &str,
     http_port: u16,
-    cloud_service: &Arc<dyn CloudService>
+    cloud_service: &Arc<dyn CloudService>,
 ) -> Arc<WorkerServiceHttpClientLive> {
     Arc::new(WorkerServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
-            security_token: Security::Bearer(cloud_service.admin_token().to_string())
+            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
         },
     })
 }
@@ -1333,7 +1351,7 @@ async fn new_worker_client(
     host: &str,
     grpc_port: u16,
     http_port: u16,
-    cloud_service: &Arc<dyn CloudService>
+    cloud_service: &Arc<dyn CloudService>,
 ) -> WorkerServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => {
@@ -1364,14 +1382,14 @@ async fn new_api_definition_grpc_client(
 fn new_api_definition_http_client(
     host: &str,
     http_port: u16,
-    cloud_service: &Arc<dyn CloudService>
+    cloud_service: &Arc<dyn CloudService>,
 ) -> Arc<ApiDefinitionServiceHttpClientLive> {
     Arc::new(ApiDefinitionServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
-            security_token: Security::Bearer(cloud_service.admin_token().to_string())
+            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
         },
     })
 }
@@ -1381,29 +1399,29 @@ async fn new_api_definition_client(
     host: &str,
     grpc_port: u16,
     http_port: u16,
-    cloud_service: &Arc<dyn CloudService>
+    cloud_service: &Arc<dyn CloudService>,
 ) -> ApiDefinitionServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => {
             ApiDefinitionServiceClient::Grpc(new_api_definition_grpc_client(host, grpc_port).await)
         }
-        GolemClientProtocol::Http => {
-            ApiDefinitionServiceClient::Http(new_api_definition_http_client(host, http_port, cloud_service))
-        }
+        GolemClientProtocol::Http => ApiDefinitionServiceClient::Http(
+            new_api_definition_http_client(host, http_port, cloud_service),
+        ),
     }
 }
 
 fn new_api_deployment_http_client(
     host: &str,
     http_port: u16,
-    cloud_service: &Arc<dyn CloudService>
+    cloud_service: &Arc<dyn CloudService>,
 ) -> Arc<ApiDeploymentServiceHttpClientLive> {
     Arc::new(ApiDeploymentServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
-            security_token: Security::Bearer(cloud_service.admin_token().to_string())
+            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
         },
     })
 }
@@ -1412,27 +1430,27 @@ async fn new_api_deployment_client(
     protocol: GolemClientProtocol,
     host: &str,
     http_port: u16,
-    cloud_service: &Arc<dyn CloudService>
+    cloud_service: &Arc<dyn CloudService>,
 ) -> ApiDeploymentServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => ApiDeploymentServiceClient::Grpc,
-        GolemClientProtocol::Http => {
-            ApiDeploymentServiceClient::Http(new_api_deployment_http_client(host, http_port, cloud_service))
-        }
+        GolemClientProtocol::Http => ApiDeploymentServiceClient::Http(
+            new_api_deployment_http_client(host, http_port, cloud_service),
+        ),
     }
 }
 
 fn new_api_security_http_client(
     host: &str,
     http_port: u16,
-    cloud_service: &Arc<dyn CloudService>
+    cloud_service: &Arc<dyn CloudService>,
 ) -> Arc<ApiSecurityServiceHttpClientLive> {
     Arc::new(ApiSecurityServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
-            security_token: Security::Bearer(cloud_service.admin_token().to_string())
+            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
         },
     })
 }
@@ -1441,13 +1459,15 @@ async fn new_api_security_client(
     protocol: GolemClientProtocol,
     host: &str,
     http_port: u16,
-    cloud_service: &Arc<dyn CloudService>
+    cloud_service: &Arc<dyn CloudService>,
 ) -> ApiSecurityServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => ApiSecurityServiceClient::Grpc,
-        GolemClientProtocol::Http => {
-            ApiSecurityServiceClient::Http(new_api_security_http_client(host, http_port, cloud_service))
-        }
+        GolemClientProtocol::Http => ApiSecurityServiceClient::Http(new_api_security_http_client(
+            host,
+            http_port,
+            cloud_service,
+        )),
     }
 }
 
@@ -1477,7 +1497,7 @@ async fn env_vars(
     rdb: &Arc<dyn Rdb + Send + Sync>,
     verbosity: Level,
     rdb_private_connection: bool,
-    cloud_service: &Arc<dyn CloudService>
+    cloud_service: &Arc<dyn CloudService>,
 ) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
@@ -1508,10 +1528,7 @@ async fn env_vars(
             "GOLEM__CUSTOM_REQUEST_PORT",
             custom_request_port.to_string(),
         )
-        .with(
-            "GOLEM__CLOUD_SERVICE__HOST",
-            cloud_service.private_host(),
-        )
+        .with("GOLEM__CLOUD_SERVICE__HOST", cloud_service.private_host())
         .with(
             "GOLEM__CLOUD_SERVICE__PORT",
             cloud_service.private_grpc_port().to_string(),

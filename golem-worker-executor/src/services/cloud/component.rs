@@ -30,7 +30,6 @@ use crate::services::golem_config::{
 };
 use crate::services::plugins::PluginsObservations;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use cloud_common::model::CloudComponentOwner;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
@@ -39,6 +38,7 @@ use golem_api_grpc::proto::golem::component::v1::{
     DownloadComponentRequest, GetComponentsRequest, GetLatestComponentRequest,
     GetVersionedComponentRequest,
 };
+use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
