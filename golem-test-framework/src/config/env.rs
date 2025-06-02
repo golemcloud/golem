@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components;
+use crate::components::cloud_service::docker::DockerCloudService;
+use crate::components::cloud_service::spawned::SpawnedCloudService;
+use crate::components::cloud_service::CloudService;
+use crate::components::{self, cloud_service};
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
 use crate::components::component_compilation_service::ComponentCompilationService;
@@ -232,6 +235,38 @@ impl EnvBasedTestDependencies {
         ))
     }
 
+    async fn make_cloud_service(
+        config: Arc<EnvBasedTestDependenciesConfig>,
+        rdb: Arc<dyn Rdb + Send + Sync>,
+    ) -> Arc<dyn CloudService> {
+        if config.golem_docker_services {
+            Arc::new(
+                DockerCloudService::new(
+                    &config.unique_network_id,
+                    rdb,
+                    config.default_verbosity(),
+                    config.golem_client_protocol,
+                )
+                .await,
+            )
+        } else {
+            Arc::new(
+                SpawnedCloudService::new(
+                    Path::new("../target/debug/cloud-service"),
+                    Path::new("../cloud-service"),
+                    8084,
+                    9095,
+                    rdb,
+                    config.default_verbosity(),
+                    config.default_stdout_level(),
+                    config.default_stderr_level(),
+                    config.golem_client_protocol
+                )
+                .await,
+            )
+        }
+    }
+
     async fn make_shard_manager(
         config: Arc<EnvBasedTestDependenciesConfig>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -268,6 +303,7 @@ impl EnvBasedTestDependencies {
         config: Arc<EnvBasedTestDependenciesConfig>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+        cloud_service: Arc<dyn CloudService>
     ) -> Arc<dyn ComponentService + Send + Sync + 'static> {
         if config.golem_docker_services {
             Arc::new(
@@ -282,6 +318,7 @@ impl EnvBasedTestDependencies {
                     config.default_verbosity(),
                     config.golem_client_protocol,
                     plugin_wasm_files_service,
+                    cloud_service
                 )
                 .await,
             )
@@ -300,6 +337,7 @@ impl EnvBasedTestDependencies {
                     config.default_stderr_level(),
                     config.golem_client_protocol,
                     plugin_wasm_files_service,
+                    cloud_service
                 )
                 .await,
             )
@@ -341,6 +379,7 @@ impl EnvBasedTestDependencies {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        cloud_service: Arc<dyn CloudService>
     ) -> Arc<dyn WorkerService + 'static> {
         if config.golem_docker_services {
             Arc::new(
@@ -351,6 +390,7 @@ impl EnvBasedTestDependencies {
                     rdb,
                     config.default_verbosity(),
                     config.golem_client_protocol,
+                    cloud_service
                 )
                 .await,
             )
@@ -369,6 +409,7 @@ impl EnvBasedTestDependencies {
                     config.default_stdout_level(),
                     config.default_stderr_level(),
                     config.golem_client_protocol,
+                    cloud_service
                 )
                 .await,
             )
@@ -377,11 +418,12 @@ impl EnvBasedTestDependencies {
 
     async fn make_worker_executor_cluster(
         config: Arc<EnvBasedTestDependenciesConfig>,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        worker_service: Arc<dyn WorkerService + 'static>,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-    ) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
+        component_service: Arc<dyn ComponentService + Send + Sync>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync>,
+        worker_service: Arc<dyn WorkerService>,
+        redis: Arc<dyn Redis + Send + Sync>,
+        cloud_service: Arc<dyn CloudService>
+    ) -> Arc<dyn WorkerExecutorCluster + Send + Sync> {
         if config.golem_docker_services {
             Arc::new(
                 DockerWorkerExecutorCluster::new(
@@ -393,6 +435,7 @@ impl EnvBasedTestDependencies {
                     worker_service,
                     config.default_verbosity(),
                     config.shared_client,
+                    cloud_service
                 )
                 .await,
             )
@@ -412,6 +455,7 @@ impl EnvBasedTestDependencies {
                     config.default_stdout_level(),
                     config.default_stderr_level(),
                     config.shared_client,
+                    cloud_service
                 )
                 .await,
             )
@@ -437,56 +481,45 @@ impl EnvBasedTestDependencies {
             redis::cmd("FLUSHALL").exec(&mut connection).unwrap();
         }
 
-        let rdb_and_component_service_join = {
-            let config = config.clone();
-            let plugin_wasm_files_service = plugin_wasm_files_service.clone();
+        let redis_monitor = Self::make_redis_monitor(config.clone(), redis.clone()).await;
 
-            tokio::spawn(async move {
-                let rdb = Self::make_rdb(config.clone()).await;
-                let component_service = Self::make_component_service(
-                    config.clone(),
-                    rdb.clone(),
-                    plugin_wasm_files_service,
-                )
-                .await;
-                let component_compilation_service = Self::make_component_compilation_service(
-                    config.clone(),
-                    component_service.clone(),
-                )
-                .await;
-                (rdb, component_service, component_compilation_service)
-            })
-        };
+        let rdb = Self::make_rdb(config.clone()).await;
 
-        let redis_monitor_join =
-            tokio::spawn(Self::make_redis_monitor(config.clone(), redis.clone()).in_current_span());
-        let shard_manager_join =
-            tokio::spawn(Self::make_shard_manager(config.clone(), redis.clone()).in_current_span());
+        let cloud_service = Self::make_cloud_service(config.clone(), rdb.clone()).await;
 
-        let (rdb, component_service, component_compilation_service) =
-            rdb_and_component_service_join
-                .await
-                .expect("Failed to join.");
+        let component_service = Self::make_component_service(
+            config.clone(),
+            rdb.clone(),
+            plugin_wasm_files_service.clone(),
+            cloud_service.clone()
+        )
+        .await;
 
-        let shard_manager = shard_manager_join.await.expect("Failed to join");
+        let component_compilation_service = Self::make_component_compilation_service(
+            config.clone(),
+            component_service.clone(),
+        ).await;
+
+        let shard_manager = Self::make_shard_manager(config.clone(), redis.clone()).await;
 
         let worker_service = Self::make_worker_service(
             config.clone(),
             component_service.clone(),
             shard_manager.clone(),
             rdb.clone(),
+            cloud_service.clone()
         )
         .await;
+
         let worker_executor_cluster = Self::make_worker_executor_cluster(
             config.clone(),
             component_service.clone(),
             shard_manager.clone(),
             worker_service.clone(),
             redis.clone(),
+            cloud_service.clone()
         )
         .await;
-
-        let redis_monitor = redis_monitor_join.await.expect("Failed to join");
 
         Self {
             config: config.clone(),

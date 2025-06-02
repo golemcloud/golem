@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::docker::DockerCloudService;
+use crate::components::cloud_service::spawned::SpawnedCloudService;
+use crate::components::cloud_service::{self, CloudService};
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::k8s::K8sComponentCompilationService;
 use crate::components::component_compilation_service::provided::ProvidedComponentCompilationService;
@@ -87,6 +90,7 @@ pub struct CliTestDependencies {
     blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+    cloud_service: Arc<dyn CloudService>,
     component_directory: PathBuf,
     component_temp_directory: Arc<TempDir>,
 }
@@ -360,62 +364,47 @@ impl CliTestDependencies {
 
         let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
-        let rdb_and_component_service_join = {
-            let component_directory = PathBuf::from(&params.component_directory);
-            let plugin_wasm_files_service = plugin_wasm_files_service.clone();
-            let unique_network_id = unique_network_id.clone();
+        let rdb: Arc<dyn Rdb + Send + Sync> =
+            Arc::new(DockerPostgresRdb::new(&unique_network_id).await);
 
-            tokio::spawn(
-                async move {
-                    let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                        Arc::new(DockerPostgresRdb::new(&unique_network_id).await);
+        let cloud_service: Arc<dyn CloudService> =
+            Arc::new(DockerCloudService::new(&unique_network_id, rdb.clone(), params.service_verbosity(), params.golem_client_protocol).await);
 
-                    let component_compilation_service = if !compilation_service_disabled {
-                        Some((
-                            DockerComponentCompilationService::NAME,
-                            DockerComponentCompilationService::GRPC_PORT.as_u16(),
-                        ))
-                    } else {
-                        None
-                    };
+        let component_service: Arc<dyn ComponentService + Send + Sync> =
+            Arc::new(
+                DockerComponentService::new(
+                    &unique_network_id,
+                    PathBuf::from(&params.component_directory),
+                    Some((
+                        DockerComponentCompilationService::NAME,
+                        DockerComponentCompilationService::GRPC_PORT.as_u16(),
+                    )),
+                    rdb.clone(),
+                    params_clone.service_verbosity(),
+                    params.golem_client_protocol,
+                    plugin_wasm_files_service.clone(),
+                    cloud_service.clone()
+                )
+                .await,
+            );
 
-                    let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
-                        Arc::new(
-                            DockerComponentService::new(
-                                &unique_network_id,
-                                component_directory,
-                                component_compilation_service,
-                                rdb.clone(),
-                                params_clone.service_verbosity(),
-                                params.golem_client_protocol,
-                                plugin_wasm_files_service,
-                            )
-                            .await,
-                        );
-
-                    let component_compilation_service: Arc<
-                        dyn ComponentCompilationService + Send + Sync + 'static,
-                    > = Arc::new(
-                        DockerComponentCompilationService::new(
-                            &unique_network_id,
-                            component_service.clone(),
-                            params_clone.service_verbosity(),
-                        )
-                        .await,
-                    );
-
-                    (rdb, component_service, component_compilation_service)
-                }
-                .in_current_span(),
+        let component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> = Arc::new(
+            DockerComponentCompilationService::new(
+                &unique_network_id,
+                component_service.clone(),
+                params_clone.service_verbosity(),
             )
-        };
+            .await,
+        );
 
-        let redis: Arc<dyn Redis + Send + Sync + 'static> =
+        let redis: Arc<dyn Redis + Send + Sync> =
             Arc::new(DockerRedis::new(&unique_network_id, redis_prefix.to_string()).await);
-        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
+
+        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync> = Arc::new(
             SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
         );
-        let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
+
+        let shard_manager: Arc<dyn ShardManager + Send + Sync> = Arc::new(
             DockerShardManager::new(
                 &unique_network_id,
                 redis.clone(),
@@ -425,12 +414,7 @@ impl CliTestDependencies {
             .await,
         );
 
-        let (rdb, component_service, component_compilation_service) =
-            rdb_and_component_service_join
-                .await
-                .expect("Failed to join");
-
-        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
+        let worker_service: Arc<dyn WorkerService> = Arc::new(
             DockerWorkerService::new(
                 &unique_network_id,
                 component_service.clone(),
@@ -438,9 +422,11 @@ impl CliTestDependencies {
                 rdb.clone(),
                 params.service_verbosity(),
                 params.golem_client_protocol,
+                cloud_service.clone()
             )
             .await,
         );
+
         let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> =
             Arc::new(
                 DockerWorkerExecutorCluster::new(
@@ -452,6 +438,7 @@ impl CliTestDependencies {
                     worker_service.clone(),
                     params.service_verbosity(),
                     true,
+                    cloud_service.clone()
                 )
                 .await,
             );
@@ -468,6 +455,7 @@ impl CliTestDependencies {
             blob_storage,
             initial_component_files_service,
             plugin_wasm_files_service,
+            cloud_service,
             component_directory: params.component_directory.clone().into(),
             component_temp_directory: Arc::new(TempDir::new().unwrap()),
         }
@@ -492,6 +480,8 @@ impl CliTestDependencies {
         worker_service_custom_request_port: u16,
         worker_executor_base_http_port: u16,
         worker_executor_base_grpc_port: u16,
+        cloud_service_http_port: u16,
+        cloud_service_grpc_port: u16,
         mute_child: bool,
     ) -> Self {
         let workspace_root = Path::new(workspace_root).canonicalize().unwrap();
@@ -510,65 +500,59 @@ impl CliTestDependencies {
         );
         let initial_component_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
         let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
-        let rdb_and_component_service_join = {
-            let params = params.clone();
-            let workspace_root = workspace_root.clone();
-            let build_root = build_root.clone();
-            let component_directory = PathBuf::from(&params.component_directory);
-            let plugin_wasm_files_service = plugin_wasm_files_service.clone();
-
-            tokio::spawn(
-                async move {
-                    let unique_network_id = Uuid::new_v4().to_string();
-                    let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                        Arc::new(DockerPostgresRdb::new(&unique_network_id).await);
-
-                    let component_compilation_service_port = if !compilation_service_disabled {
-                        Some(component_compilation_service_grpc_port)
-                    } else {
-                        None
-                    };
-                    let component_service: Arc<dyn ComponentService + Send + Sync + 'static> =
-                        Arc::new(
-                            SpawnedComponentService::new(
-                                component_directory,
-                                &build_root.join("golem-component-service"),
-                                &workspace_root.join("golem-component-service"),
-                                component_service_http_port,
-                                component_service_grpc_port,
-                                component_compilation_service_port,
-                                rdb.clone(),
-                                params.service_verbosity(),
-                                out_level,
-                                Level::ERROR,
-                                params.golem_client_protocol,
-                                plugin_wasm_files_service.clone(),
-                            )
-                            .await,
-                        );
-                    let component_compilation_service: Arc<
-                        dyn ComponentCompilationService + Send + Sync + 'static,
-                    > = Arc::new(
-                        SpawnedComponentCompilationService::new(
-                            &build_root.join("golem-component-compilation-service"),
-                            &workspace_root.join("golem-component-compilation-service"),
-                            component_compilation_service_http_port,
-                            component_compilation_service_grpc_port,
-                            component_service.clone(),
-                            params.service_verbosity(),
-                            out_level,
-                            Level::ERROR,
-                        )
-                        .await,
-                    );
-
-                    (rdb, component_service, component_compilation_service)
-                }
-                .in_current_span(),
-            )
+        let rdb: Arc<dyn Rdb + Send + Sync> = {
+            let unique_network_id = Uuid::new_v4().to_string();
+            Arc::new(DockerPostgresRdb::new(&unique_network_id).await)
         };
+
+        let cloud_service: Arc<dyn CloudService> =
+            Arc::new(SpawnedCloudService::new(
+                &build_root.join("cloud-service"),
+                &workspace_root.join("cloud-service"),
+                cloud_service_http_port,
+                cloud_service_grpc_port,
+                rdb.clone(),
+                params.service_verbosity(),
+                out_level,
+                Level::ERROR,
+                params.golem_client_protocol,
+            ).await);
+
+        let component_service: Arc<dyn ComponentService + Send + Sync> =
+            Arc::new(
+                SpawnedComponentService::new(
+                    component_directory,
+                    &build_root.join("golem-component-service"),
+                    &workspace_root.join("golem-component-service"),
+                    component_service_http_port,
+                    component_service_grpc_port,
+                    component_compilation_service_port,
+                    rdb.clone(),
+                    params.service_verbosity(),
+                    out_level,
+                    Level::ERROR,
+                    params.golem_client_protocol,
+                    plugin_wasm_files_service.clone(),
+                )
+                .await,
+            );
+
+        let component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> = Arc::new(
+            SpawnedComponentCompilationService::new(
+                &build_root.join("golem-component-compilation-service"),
+                &workspace_root.join("golem-component-compilation-service"),
+                component_compilation_service_http_port,
+                component_compilation_service_grpc_port,
+                component_service.clone(),
+                params.service_verbosity(),
+                out_level,
+                Level::ERROR,
+            )
+            .await,
+        );
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
             redis_port,
@@ -576,9 +560,11 @@ impl CliTestDependencies {
             out_level,
             Level::ERROR,
         ));
+
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
             SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
         );
+
         let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
             SpawnedShardManager::new(
                 &build_root.join("golem-shard-manager"),
@@ -594,11 +580,6 @@ impl CliTestDependencies {
             .await,
         );
 
-        let (rdb, component_service, component_compilation_service) =
-            rdb_and_component_service_join
-                .await
-                .expect("Failed to join.");
-
         let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
             SpawnedWorkerService::new(
                 &build_root.join("golem-worker-service"),
@@ -613,6 +594,7 @@ impl CliTestDependencies {
                 out_level,
                 Level::ERROR,
                 params.golem_client_protocol,
+                cloud_service.clone()
             )
             .await,
         );
@@ -632,6 +614,7 @@ impl CliTestDependencies {
                     out_level,
                     Level::ERROR,
                     true,
+                    cloud_service.clone()
                 )
                 .await,
             );
@@ -650,6 +633,7 @@ impl CliTestDependencies {
             plugin_wasm_files_service,
             initial_component_files_service,
             component_temp_directory: Arc::new(TempDir::new().unwrap()),
+            cloud_service
         }
     }
 
