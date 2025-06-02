@@ -50,7 +50,12 @@ impl GatewayWorkerRequestExecutor<CloudNamespace> for CloudGatewayWorkerRequestE
                 resolved_worker_request.idempotency_key,
                 resolved_worker_request.function_name.to_string(),
                 resolved_worker_request.function_params,
-                None,
+                Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+                    parent: None,
+                    args: vec![],
+                    env: Default::default(),
+                    tracing: Some(resolved_worker_request.invocation_context.into()),
+                }),
                 resolved_worker_request.namespace,
             )
             .await
