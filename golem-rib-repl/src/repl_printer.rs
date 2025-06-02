@@ -33,7 +33,7 @@ pub struct DefaultReplResultPrinter;
 
 impl ReplPrinter for DefaultReplResultPrinter {
     fn print_rib_result(&self, result: &RibResult) {
-        println!("{}", result.to_string().green());
+        println!("{}", result.to_string().yellow());
     }
 
     fn print_rib_compilation_error(&self, error: &RibCompilationError) {

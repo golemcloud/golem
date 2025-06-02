@@ -139,7 +139,7 @@ impl RibRepl {
                 .unwrap_or_else(|| Box::new(DefaultReplResultPrinter)),
             editor: rl,
             repl_state: Arc::new(repl_state),
-            prompt: config.prompt.unwrap_or_else(|| ">>> ".cyan().to_string()),
+            prompt: config.prompt.unwrap_or_else(|| ">>> ".truecolor(192, 192, 192).to_string()),
             command_registry,
         })
     }

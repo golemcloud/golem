@@ -385,7 +385,10 @@ impl Validator for RibEdit {
             return Ok(ValidationResult::Valid(None));
         }
 
-        let expr = Expr::from_text(input.strip_suffix(";").unwrap_or(input));
+        // Note that this is not compiling or parsing the entire Rib program, but syntax checking
+        // the single statement
+        let expr =
+            Expr::from_text(input.strip_suffix(";").unwrap_or(input));
 
         match expr {
             Ok(_) => Ok(ValidationResult::Valid(None)),
@@ -400,21 +403,35 @@ impl Highlighter for RibEdit {
             .compiler_output
             .as_ref()
             .map(|output| &output.identifiers);
+
         let instance_vars = self
             .compiler_output
             .as_ref()
             .map(|output| &output.instance_variables);
 
         let mut highlighted = String::new();
+
         let mut word = String::new();
+
         let chars = line.chars().peekable();
 
+        // if line.starts_with(":") {
+        //     // If the line starts with ":", treat it as a command
+        //     highlighted.push_str(&line[..2]);
+        // }
+
         for c in chars {
+            // accumulate code characters
             if c.is_alphanumeric() || c == '_' || c == '.' || c == '-' {
                 word.push(c);
             } else {
                 if !word.is_empty() {
-                    highlighted.push_str(&highlight_word(&word, self, identifiers, instance_vars));
+                    if word.starts_with(":") {
+                        highlighted.push_str(&highlight_command(&word, self));
+                    } else {
+                        // Highlight code identifiers, instance variables, and keywords
+                        highlighted.push_str(&highlight_code(&word, self, identifiers, instance_vars));
+                    }
                     word.clear();
                 }
                 highlighted.push(c);
@@ -422,14 +439,24 @@ impl Highlighter for RibEdit {
         }
 
         if !word.is_empty() {
-            highlighted.push_str(&highlight_word(&word, self, identifiers, instance_vars));
+            highlighted.push_str(&highlight_code(&word, self, identifiers, instance_vars));
         }
 
         Cow::Owned(highlighted)
     }
 }
 
-fn highlight_word(
+fn highlight_command(
+    word: &str,
+    context: &RibEdit,
+) -> String {
+    if context.repl_commands.contains(&word.to_string()) {
+        return word.yellow().to_string();
+    }
+    word.to_string()
+}
+
+fn highlight_code(
     word: &str,
     context: &RibEdit,
     identifiers: Option<&Vec<VariableId>>,
@@ -447,7 +474,7 @@ fn highlight_word(
             instance_vars.is_some_and(|vars| vars.method_names().contains(&method.to_string()));
 
         if is_instance && is_method {
-            return format!("{}.{}", obj.blue(), method.green());
+            return format!("{}.{}", obj.cyan(), method.green());
         } else {
             return word.to_string();
         }
@@ -456,7 +483,7 @@ fn highlight_word(
     let is_identifier = identifiers.is_some_and(|vars| vars.iter().any(|var| var.name() == word));
 
     if is_identifier {
-        return word.blue().to_string();
+        return word.cyan().to_string();
     }
 
     let is_instance_var =
@@ -472,6 +499,10 @@ fn highlight_word(
 
     if word.chars().all(|ch| ch.is_numeric()) {
         return word.green().to_string();
+    }
+
+    if word.starts_with("\"") && word.ends_with("\"") {
+        return word.truecolor(152, 195, 121).to_string();
     }
 
     word.to_string()
