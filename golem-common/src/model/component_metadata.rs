@@ -392,7 +392,7 @@ fn drop_from_constructor(constructor: &AnalysedFunction) -> AnalysedFunction {
                 typ: result.typ.clone(),
             })
             .collect(),
-        result: None
+        result: None,
     }
 }
 

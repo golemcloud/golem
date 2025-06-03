@@ -91,7 +91,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(
                 result,
                 "{pad}result:            {}",
-                value_to_string(&params.response)
+                params
+                    .response
+                    .as_ref()
+                    .map(value_to_string)
+                    .unwrap_or("()".to_string())
             );
         }
         PublicOplogEntry::Suspend(params) => {

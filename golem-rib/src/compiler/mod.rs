@@ -918,10 +918,7 @@ mod compiler_error_tests {
                         },
                     ]),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
-                    typ: str(),
-                }],
+                result: Some(AnalysedFunctionResult { typ: str() }),
             });
 
             let resource_export = AnalysedExport::Instance(AnalysedInstance {
@@ -933,10 +930,9 @@ mod compiler_error_tests {
                             name: "cons".to_string(),
                             typ: str(),
                         }],
-                        results: vec![AnalysedFunctionResult {
-                            name: None,
+                        result: Some(AnalysedFunctionResult {
                             typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
-                        }],
+                        }),
                     },
                     AnalysedFunction {
                         name: "[method]cart.add-item".to_string(),
@@ -955,7 +951,7 @@ mod compiler_error_tests {
                                 ]),
                             },
                         ],
-                        results: vec![],
+                        result: None,
                     },
                     AnalysedFunction {
                         name: "[method]cart.remove-item".to_string(),
@@ -969,7 +965,7 @@ mod compiler_error_tests {
                                 typ: str(),
                             },
                         ],
-                        results: vec![],
+                        result: None,
                     },
                     AnalysedFunction {
                         name: "[method]cart.update-item-quantity".to_string(),
@@ -987,7 +983,7 @@ mod compiler_error_tests {
                                 typ: u32(),
                             },
                         ],
-                        results: vec![],
+                        result: None,
                     },
                     AnalysedFunction {
                         name: "[method]cart.checkout".to_string(),
@@ -995,13 +991,12 @@ mod compiler_error_tests {
                             name: "self".to_string(),
                             typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                         }],
-                        results: vec![AnalysedFunctionResult {
-                            name: None,
+                        result: Some(AnalysedFunctionResult {
                             typ: variant(vec![
                                 case("error", str()),
                                 case("success", record(vec![field("order-id", str())])),
                             ]),
-                        }],
+                        }),
                     },
                     AnalysedFunction {
                         name: "[method]cart.get-cart-contents".to_string(),
@@ -1009,15 +1004,14 @@ mod compiler_error_tests {
                             name: "self".to_string(),
                             typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                         }],
-                        results: vec![AnalysedFunctionResult {
-                            name: None,
+                        result: Some(AnalysedFunctionResult {
                             typ: list(record(vec![
                                 field("product-id", str()),
                                 field("name", str()),
                                 field("price", f32()),
                                 field("quantity", u32()),
                             ])),
-                        }],
+                        }),
                     },
                     AnalysedFunction {
                         name: "[method]cart.merge-with".to_string(),
@@ -1031,7 +1025,7 @@ mod compiler_error_tests {
                                 typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                             },
                         ],
-                        results: vec![],
+                        result: None,
                     },
                     AnalysedFunction {
                         name: "[drop]cart".to_string(),
@@ -1039,7 +1033,7 @@ mod compiler_error_tests {
                             name: "self".to_string(),
                             typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
                         }],
-                        results: vec![],
+                        result: None,
                     },
                 ],
             });

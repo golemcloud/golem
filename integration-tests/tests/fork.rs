@@ -557,7 +557,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
 
     match entry {
         PublicOplogEntry::ExportedFunctionCompleted(parameters) => {
-            assert_eq!(parameters.response.value, expected);
+            assert_eq!(parameters.response.map(|vat| vat.value), Some(expected));
         }
         _ => panic!("Expected ExportedFunctionCompleted"),
     };

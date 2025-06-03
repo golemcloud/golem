@@ -94,7 +94,7 @@ pub trait WorkerService {
         params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<TypeAnnotatedValue> {
+    ) -> WorkerResult<Option<TypeAnnotatedValue>> {
         let params = self.validate_typed_parameters(params)?;
         self.invoke_and_await_typed(
             worker_id,
@@ -117,7 +117,7 @@ pub trait WorkerService {
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<TypeAnnotatedValue>;
+    ) -> WorkerResult<Option<TypeAnnotatedValue>>;
 
     /// Invokes a worker using raw `Val` parameter values and awaits its results returning
     /// a `Val` values (without type information)
@@ -142,7 +142,7 @@ pub trait WorkerService {
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<TypeAnnotatedValue>;
+    ) -> WorkerResult<Option<TypeAnnotatedValue>>;
 
     /// Validates the provided list of `TypeAnnotatedValue` parameters, and then enqueues
     /// an invocation for the worker without awaiting its results.
@@ -490,7 +490,7 @@ impl WorkerService for WorkerServiceDefault {
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<TypeAnnotatedValue> {
+    ) -> WorkerResult<Option<TypeAnnotatedValue>> {
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
 
@@ -521,7 +521,7 @@ impl WorkerService for WorkerServiceDefault {
                                  },
                              )),
                     } => {
-                        output.type_annotated_value.ok_or("Empty response".into())
+                        Ok(output.type_annotated_value)
                     }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:
@@ -606,7 +606,7 @@ impl WorkerService for WorkerServiceDefault {
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<TypeAnnotatedValue> {
+    ) -> WorkerResult<Option<TypeAnnotatedValue>> {
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
 
@@ -637,7 +637,7 @@ impl WorkerService for WorkerServiceDefault {
                                  },
                              )),
                     } => {
-                        output.type_annotated_value.ok_or("Empty response".into())
+                        Ok(output.type_annotated_value)
                     }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:

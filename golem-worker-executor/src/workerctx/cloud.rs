@@ -58,10 +58,9 @@ use golem_common::model::{
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{
-    CancellationTokenEntry, ComponentId, HostWasmRpc, RpcError, Uri, Value, WitValue,
+    CancellationTokenEntry, ComponentId, HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
@@ -241,7 +240,7 @@ impl InvocationHooks for Context {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Option<TypeAnnotatedValue>,
+        output: Option<ValueAndType>,
     ) -> Result<(), GolemError> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)

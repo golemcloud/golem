@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod function_result_interpreter;
 pub mod invocation;
 mod invocation_loop;
 pub mod status;
@@ -58,8 +57,8 @@ use golem_common::model::{
     WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_service_base::model::RevertWorkerTarget;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::Value;
+use golem_wasm_ast::analysis::AnalysedFunctionResult;
+use golem_wasm_rpc::{Value, ValueAndType};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -546,7 +545,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         full_function_name: String,
         function_input: Vec<Value>,
         invocation_context: InvocationContextStack,
-    ) -> Result<Option<TypeAnnotatedValue>, GolemError> {
+    ) -> Result<Option<ValueAndType>, GolemError> {
         match self
             .invoke(
                 idempotency_key.clone(),
@@ -682,7 +681,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn store_invocation_success(
         &self,
         key: &IdempotencyKey,
-        result: Option<TypeAnnotatedValue>,
+        result: Option<ValueAndType>,
         oplog_index: OplogIndex,
     ) {
         let mut map = self.invocation_results.write().await;
@@ -1703,7 +1702,7 @@ struct FailedInvocationResult {
 #[derive(Debug, Clone)]
 enum InvocationResult {
     Cached {
-        result: Result<Option<TypeAnnotatedValue>, FailedInvocationResult>,
+        result: Result<Option<ValueAndType>, FailedInvocationResult>,
         oplog_idx: OplogIndex,
     },
     Lazy {
@@ -1729,7 +1728,7 @@ impl InvocationResult {
 
             let result = match entry {
                 OplogEntry::ExportedFunctionCompleted { .. } => {
-                    let value: Option<TypeAnnotatedValue> =
+                    let value: Option<ValueAndType> =
                         services.oplog().get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
 
                     Ok(value)
@@ -1825,6 +1824,22 @@ impl QueuedWorkerInvocation {
 }
 
 pub enum ResultOrSubscription {
-    Finished(Result<Option<TypeAnnotatedValue>, GolemError>),
+    Finished(Result<Option<ValueAndType>, GolemError>),
     Pending(EventsSubscription),
+}
+
+pub fn interpret_function_result(
+    function_results: Option<Value>,
+    expected_types: Option<AnalysedFunctionResult>,
+) -> Result<Option<ValueAndType>, Vec<String>> {
+    match (function_results, expected_types) {
+        (None, None) => Ok(None),
+        (Some(_), None) => Err(vec![
+            "Unexpected result value (got some, expected: none)".to_string()
+        ]),
+        (None, Some(_)) => Err(vec![
+            "Unexpected result value (got none, expected: some)".to_string()
+        ]),
+        (Some(value), Some(expected)) => Ok(Some(ValueAndType::new(value, expected.typ))),
+    }
 }

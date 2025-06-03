@@ -5560,8 +5560,6 @@ components:
       properties:
         result:
           $ref: '#/components/schemas/TypeAnnotatedValue'
-      required:
-      - result
     JumpParameters:
       title: JumpParameters
       type: object

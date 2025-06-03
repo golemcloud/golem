@@ -66,9 +66,8 @@ use golem_wasm_ast::analysis::analysed_type::{
     case, field, list, option, record, result, result_err, str, u64, unit_case, variant,
 };
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedType};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{
-    parse_type_annotated_value, IntoValue, IntoValueAndType, Value, ValueAndType, WitValue,
+    parse_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType, WitValue,
 };
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use std::collections::{BTreeSet, HashMap};
@@ -470,19 +469,11 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                 let payload_bytes = oplog_service
                     .download_payload(owned_worker_id, &response)
                     .await?;
-                let proto_type_annotated_value: TypeAnnotatedValue =
-                    core_try_deserialize(&payload_bytes)?.unwrap_or(TypeAnnotatedValue::Record(
-                        golem_wasm_rpc::protobuf::TypedRecord {
-                            typ: Vec::new(),
-                            value: Vec::new(),
-                        },
-                    ));
-                let typ: AnalysedType = AnalysedType::try_from(&proto_type_annotated_value)?;
-                let value = Value::try_from(proto_type_annotated_value)?;
+                let value_and_type: Option<ValueAndType> = core_try_deserialize(&payload_bytes)?;
                 Ok(PublicOplogEntry::ExportedFunctionCompleted(
                     ExportedFunctionCompletedParameters {
                         timestamp,
-                        response: ValueAndType::new(value, typ),
+                        response: value_and_type,
                         consumed_fuel,
                     },
                 ))
@@ -742,10 +733,7 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     .iter()
                     .zip(constructor_def.parameters)
                 {
-                    let type_annotated_value: TypeAnnotatedValue =
-                        parse_type_annotated_value(&param.typ, value_str)?;
-                    let value = type_annotated_value.try_into()?;
-                    let value_and_type = ValueAndType::new(value, param.typ.clone());
+                    let value_and_type = parse_value_and_type(&param.typ, value_str)?;
                     resource_params.push(value_and_type);
                 }
                 Ok(PublicOplogEntry::DescribeResource(
@@ -1261,8 +1249,7 @@ fn encode_host_function_response_as_value(
                     ]),
                 )),
                 SerializableInvokeResult::Completed(Ok(Some(value))) => {
-                    let typ = (&value).try_into()?;
-                    let value: Value = value.try_into()?;
+                    let ValueAndType { value, typ } = value;
                     Ok(ValueAndType::new(
                         Value::Variant {
                             case_idx: 2,
@@ -1501,7 +1488,7 @@ fn encode_host_function_response_as_value(
         }
         "golem::rpc::wasm-rpc::invoke-and-await"
         | "golem::rpc::wasm-rpc::invoke-and-await result" => {
-            let payload: Result<Result<TypeAnnotatedValue, SerializableError>, String> =
+            let payload: Result<Result<Option<ValueAndType>, SerializableError>, String> =
                 try_deserialize(bytes);
 
             match payload {
@@ -1509,14 +1496,17 @@ fn encode_host_function_response_as_value(
                     let _payload: Result<WitValue, SerializableError> = try_deserialize(bytes)?;
                     no_payload()
                 }
-                Ok(Ok(payload)) => {
-                    let typ: AnalysedType = (&payload).try_into()?;
-                    let value: Value = payload.try_into()?;
+                Ok(Ok(Some(payload))) => {
+                    let ValueAndType { value, typ } = payload;
                     Ok(ValueAndType::new(
                         Value::Result(Ok(Some(Box::new(value)))),
                         result(typ, SerializableError::get_type()),
                     ))
                 }
+                Ok(Ok(None)) => Ok(ValueAndType::new(
+                    Value::Result(Ok(None)),
+                    result_err(SerializableError::get_type()),
+                )),
                 Ok(Err(error)) => Ok(ValueAndType::new(
                     Value::Result(Err(Some(Box::new(error.into_value())))),
                     result_err(SerializableError::get_type()),

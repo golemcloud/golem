@@ -290,12 +290,15 @@ fn record_or_tuple(fields: &Fields) -> (proc_macro2::TokenStream, proc_macro2::T
                 } else {
                     let field_name = field.ident.as_ref().unwrap();
 
-                    match (&wit_field.convert, &wit_field.convert_vec) {
-                        (Some(convert_to), None) => Some(
+                    match (&wit_field.convert, &wit_field.convert_vec, &wit_field.convert_option) {
+                        (Some(convert_to), None, None) => Some(
                             quote! { Into::<#convert_to>::into(self.#field_name).into_value() },
                         ),
-                        (None, Some(convert_to)) => Some(
+                        (None, Some(convert_to), None) => Some(
                             quote! { self.#field_name.into_iter().map(Into::<#convert_to>::into).collect::<Vec<_>>().into_value() },
+                        ),
+                        (None, None, Some(convert_to)) => Some(
+                            quote! { self.#field_name.map(Into::<#convert_to>::into).into_value() },
                         ),
                         _ => Some(quote! { self.#field_name.into_value() }),
                     }
@@ -313,9 +316,14 @@ fn record_or_tuple(fields: &Fields) -> (proc_macro2::TokenStream, proc_macro2::T
                     let field_name = wit_field.rename.map(|lit| lit.value()).unwrap_or_else(|| {
                         field.ident.as_ref().unwrap().to_string().to_kebab_case()
                     });
-                    let field_type = match (&wit_field.convert, &wit_field.convert_vec) {
-                        (Some(convert_to), None) => quote! { #convert_to },
-                        (None, Some(convert_to)) => quote! { Vec<#convert_to> },
+                    let field_type = match (
+                        &wit_field.convert,
+                        &wit_field.convert_vec,
+                        &wit_field.convert_option,
+                    ) {
+                        (Some(convert_to), None, None) => quote! { #convert_to },
+                        (None, Some(convert_to), None) => quote! { Vec<#convert_to> },
+                        (None, None, Some(convert_to)) => quote! { Option<#convert_to> },
                         _ => {
                             let ty = &field.ty;
                             quote! { #ty }
@@ -399,6 +407,7 @@ struct WitField {
     rename: Option<LitStr>,
     convert: Option<Type>,
     convert_vec: Option<Type>,
+    convert_option: Option<Type>,
 }
 
 fn parse_wit_field_attribute(attr: &Attribute) -> WitField {
@@ -412,6 +421,7 @@ impl Parse for WitField {
         let mut rename = None;
         let mut convert = None;
         let mut convert_vec = None;
+        let mut convert_option = None;
 
         while !input.is_empty() {
             let ident: Ident = input.parse()?;
@@ -426,6 +436,9 @@ impl Parse for WitField {
             } else if ident == "convert_vec" {
                 input.parse::<syn::Token![=]>()?;
                 convert_vec = Some(input.parse()?);
+            } else if ident == "convert_option" {
+                input.parse::<syn::Token![=]>()?;
+                convert_option = Some(input.parse()?);
             } else {
                 return Err(syn::Error::new(ident.span(), "unexpected attribute"));
             }
@@ -436,6 +449,7 @@ impl Parse for WitField {
             rename,
             convert,
             convert_vec,
+            convert_option,
         })
     }
 }

@@ -2308,20 +2308,12 @@ mod test_utils {
             })
             .collect();
 
-        let results = if let Some(output) = output {
-            vec![AnalysedFunctionResult {
-                name: None,
-                typ: output,
-            }]
-        } else {
-            // Representing Unit
-            vec![]
-        };
+        let result = output.map(|typ| AnalysedFunctionResult { typ });
 
         vec![AnalysedExport::Function(AnalysedFunction {
             name: function_name.to_string(),
             parameters: analysed_function_parameters,
-            results,
+            result,
         })]
     }
 }

@@ -148,9 +148,9 @@ pub fn serializable_invoke_result() {
         message: "hello world".to_string(),
     });
     let sir3 =
-        SerializableInvokeResult::Completed(Ok(ValueAndType::new(Value::Bool(true), bool())
-            .try_into()
-            .unwrap()));
+        SerializableInvokeResult::Completed(
+            Ok(ValueAndType::new(Value::Bool(true), bool()).into()),
+        );
     let sir4 = SerializableInvokeResult::Completed(Err(RpcError::Denied {
         details: "not now".to_string(),
     }));

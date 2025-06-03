@@ -17,11 +17,13 @@ use crate::model::{InterruptKind, ListDirectoryResult, ReadFileResult, TrapType}
 use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
-use crate::worker::function_result_interpreter::interpret_function_result;
 use crate::worker::invocation::{
     find_first_available_function, invoke_observed_and_traced, InvokeResult,
 };
-use crate::worker::{QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand};
+use crate::worker::{
+    interpret_function_result, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker,
+    WorkerCommand,
+};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
 use async_mutex::Mutex;

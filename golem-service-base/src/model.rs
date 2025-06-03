@@ -520,7 +520,7 @@ impl From<IndexedWorkerMetadata> for golem_api_grpc::proto::golem::worker::Index
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct InvokeResult {
-    pub result: TypeAnnotatedValue,
+    pub result: Option<TypeAnnotatedValue>,
 }
 
 #[derive(Debug, Clone)]

@@ -14,7 +14,7 @@
 
 use crate::error::GolemError;
 use golem_common::model::{IdempotencyKey, WorkerId};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::ValueAndType;
 use tokio::sync::broadcast::error::RecvError;
 
 pub struct Events {
@@ -77,7 +77,7 @@ pub enum Event {
     InvocationCompleted {
         worker_id: WorkerId,
         idempotency_key: IdempotencyKey,
-        result: Result<Option<TypeAnnotatedValue>, GolemError>,
+        result: Result<Option<ValueAndType>, GolemError>,
     },
     WorkerLoaded {
         worker_id: WorkerId,

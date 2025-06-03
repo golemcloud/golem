@@ -739,8 +739,8 @@ async fn test_component_constraint_incompatible_updates(
                 new: vec![str()],
             }),
             return_type_conflict: Some(ReturnTypeConflict {
-                existing: vec![str()],
-                new: vec![],
+                existing: Some(str()),
+                new: None,
             }),
         }],
     })

@@ -712,7 +712,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .collect::<Result<Vec<_>, _>>()
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
-        let values = worker
+        let value = worker
             .invoke_and_await(
                 idempotency_key,
                 full_function_name,
@@ -721,7 +721,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .await?;
 
-        Ok(values)
+        let tav =
+            value
+                .map(|value| value.try_into())
+                .transpose()
+                .map_err(|msgs: Vec<String>| {
+                    GolemError::runtime(format!("Failed to encode result: {}", msgs.join(", ")))
+                })?;
+
+        Ok(tav)
     }
 
     async fn get_or_create<Req: CanStartWorker>(

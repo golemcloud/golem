@@ -10,8 +10,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::model::RevertWorkerTarget;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::WitValue;
+use golem_wasm_rpc::{ValueAndType, WitValue};
 use golem_worker_executor::error::GolemError;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use std::collections::HashMap;
@@ -53,7 +52,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_args: Vec<String>,
         _caller_env: HashMap<String, String>,
         _invocation_context_stack: InvocationContextStack,
-    ) -> Result<TypeAnnotatedValue, WorkerProxyError> {
+    ) -> Result<Option<ValueAndType>, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             GolemError::unknown(
                 "Not implemented in tests as debug service is not expected to call invoke and await through proxy",

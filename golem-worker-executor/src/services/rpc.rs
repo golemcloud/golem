@@ -40,8 +40,7 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::WitValue;
+use golem_wasm_rpc::{ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
 use tokio::runtime::Handle;
 use tracing::debug;
@@ -60,7 +59,7 @@ pub trait Rpc: Send + Sync {
         self_args: &[String],
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
-    ) -> Result<Option<TypeAnnotatedValue>, RpcError>;
+    ) -> Result<Option<ValueAndType>, RpcError>;
 
     async fn invoke(
         &self,
@@ -219,7 +218,7 @@ impl Rpc for RemoteInvocationRpc {
         self_args: &[String],
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
-    ) -> Result<Option<TypeAnnotatedValue>, RpcError> {
+    ) -> Result<Option<ValueAndType>, RpcError> {
         Ok(self
             .worker_proxy
             .invoke_and_await(
@@ -577,7 +576,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_args: &[String],
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
-    ) -> Result<Option<TypeAnnotatedValue>, RpcError> {
+    ) -> Result<Option<ValueAndType>, RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
         if self

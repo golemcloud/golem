@@ -714,8 +714,11 @@ impl HttpResponse {
         })
     }
 
-    pub fn from_function_output(output: TypeAnnotatedValue) -> Result<Self, String> {
-        let value: Value = output.try_into()?;
+    pub fn from_function_output(output: Option<TypeAnnotatedValue>) -> Result<Self, String> {
+        let value: Value = output
+            .map(|tav| tav.try_into())
+            .transpose()?
+            .unwrap_or(Value::Record(vec![]));
 
         let mut tuple_values = extract!(value, Value::Tuple(inner), inner, "not a tuple")?;
 

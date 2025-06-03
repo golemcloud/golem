@@ -204,8 +204,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into(),
                     response: exported_function_completed
                         .response
-                        .ok_or("Missing response field")?
-                        .try_into()?,
+                        .map(|tav| tav.try_into())
+                        .transpose()?,
                     consumed_fuel: exported_function_completed.consumed_fuel,
                 }),
             ),
@@ -558,13 +558,12 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::ExportedFunctionCompleted(
                         golem_api_grpc::proto::golem::worker::ExportedFunctionCompletedParameters {
                             timestamp: Some(exported_function_completed.timestamp.into()),
-                            response: Some(
-                                exported_function_completed.response.try_into().map_err(
-                                    |errors: Vec<String>| {
-                                        format!("Failed to convert response for completed exported function: {}", errors.join(", "))
-                                    },
-                                )?,
-                            ),
+                            response:
+                            exported_function_completed.response.map(|value| value.try_into()).transpose().map_err(
+                                |errors: Vec<String>| {
+                                    format!("Failed to convert response for completed exported function: {}", errors.join(", "))
+                                },
+                            )?,
                             consumed_fuel: exported_function_completed.consumed_fuel,
                         },
                     )),

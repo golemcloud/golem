@@ -144,7 +144,10 @@ mod protobuf {
                     .iter()
                     .map(|analysed_type| analysed_type.into())
                     .collect(),
-                return_type: value.return_type.as_ref().map(|analysed_type| analysed_type.into()),
+                return_type: value
+                    .return_type
+                    .as_ref()
+                    .map(|analysed_type| analysed_type.into()),
             }
         }
     }

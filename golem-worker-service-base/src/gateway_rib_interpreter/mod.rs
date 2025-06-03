@@ -12,19 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::gateway_execution::{GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor};
 use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
+use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::{Value, ValueAndType};
 use rib::{
     EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibByteCode,
     RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult,
 };
 use std::fmt::Display;
 use std::sync::Arc;
-
-use crate::gateway_execution::{GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor};
 
 // A wrapper service over original RibInterpreter concerning
 // the details of the worker service.
@@ -179,6 +180,15 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
 
         let tav = executor.execute(worker_request).await.map(|v| v.result)?;
 
-        tav.try_into().map_err(|err: String| err.into())
+        match tav {
+            Some(tav) => tav.try_into().map_err(|err: String| err.into()),
+            None => {
+                // Representing the absence of return value as an empty record for Rib
+                Ok(ValueAndType::new(
+                    Value::Record(vec![]),
+                    analysed_type::record(vec![]),
+                ))
+            }
+        }
     }
 }

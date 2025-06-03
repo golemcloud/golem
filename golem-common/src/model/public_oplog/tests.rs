@@ -149,10 +149,10 @@ fn exported_function_invoked_serialization_poem_serde_equivalence() {
 fn exported_function_completed_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParameters {
         timestamp: rounded_ts(Timestamp::now_utc()),
-        response: ValueAndType {
+        response: Some(ValueAndType {
             value: Value::Enum(1),
             typ: r#enum(&["red", "green", "blue"]),
-        },
+        }),
         consumed_fuel: 100,
     });
     let serialized = entry.to_json_string();
