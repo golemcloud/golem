@@ -245,9 +245,6 @@ async fn dynamic_function_call<Ctx: WorkerCtx + ResourceStore + DynamicGrpc + Se
                         anyhow!(format!("Failed to decode result value 0: {err}"))
                     })?;
                 results[0] = decoded_result.val;
-
-                // this is needed for custom handling.
-                // let _ = to_vals_(vec![result], results, result_types);
             };
         }
         _ => {}
