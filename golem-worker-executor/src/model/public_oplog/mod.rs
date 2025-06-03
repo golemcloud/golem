@@ -469,7 +469,7 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                 let payload_bytes = oplog_service
                     .download_payload(owned_worker_id, &response)
                     .await?;
-                let value_and_type: Option<ValueAndType> = core_try_deserialize(&payload_bytes)?;
+                let value_and_type: Option<ValueAndType> = try_deserialize(&payload_bytes)?;
                 Ok(PublicOplogEntry::ExportedFunctionCompleted(
                     ExportedFunctionCompletedParameters {
                         timestamp,
