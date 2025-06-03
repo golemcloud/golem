@@ -15,8 +15,8 @@
 use crate::config::CloudServiceConfig;
 use crate::repo;
 use crate::service::api_mapper::RemoteCloudApiMapper;
-use cloud_common::clients::plugin::PluginServiceClientDefault;
 use golem_common::config::DbConfig;
+use golem_service_base::clients::plugin::PluginServiceClientDefault;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use std::sync::Arc;

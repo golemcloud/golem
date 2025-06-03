@@ -14,8 +14,8 @@
 
 use crate::model::Account;
 use async_trait::async_trait;
-use cloud_common::model::PlanId;
 use conditional_trait_gen::trait_gen;
+use golem_common::model::PlanId;
 use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
 use sqlx::QueryBuilder;

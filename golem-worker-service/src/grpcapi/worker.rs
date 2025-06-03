@@ -14,9 +14,6 @@
 
 use crate::service::auth::AuthService;
 use crate::service::worker::{self, ConnectWorkerStream, WorkerService};
-use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
-use cloud_common::clients::auth::get_authorisation_token;
-use cloud_common::model::ProjectAction;
 use futures::Stream;
 use futures::StreamExt;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
@@ -50,10 +47,13 @@ use golem_common::grpc::{
     proto_invocation_context_parent_worker_id_string, proto_plugin_installation_id_string,
     proto_target_worker_id_string, proto_worker_id_string,
 };
+use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
 use golem_common::SafeDisplay;
+use golem_service_base::clients::get_authorisation_token;
 use golem_worker_service_base::api::WorkerTraceErrorKind;
 use golem_worker_service_base::grpcapi::{
     bad_request_error, bad_request_errors, error_to_status, parse_json_invoke_parameters,

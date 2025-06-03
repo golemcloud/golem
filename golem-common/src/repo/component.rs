@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::CloudPluginOwnerRow;
-use crate::model::CloudComponentOwner;
-use golem_common::model::{AccountId, ProjectId};
-use golem_common::repo::RowMeta;
+use super::plugin::CloudPluginOwnerRow;
+use crate::model::component::CloudComponentOwner;
+use crate::model::{AccountId, ProjectId};
+use crate::repo::RowMeta;
 use sqlx::query_builder::Separated;
 use sqlx::{Database, Encode, QueryBuilder, Type};
 use std::fmt::Display;

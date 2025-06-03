@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use crate::model::{Plan, PlanData};
-use cloud_common::config::RemoteCloudServiceConfig;
-use cloud_common::model::PlanId;
-use cloud_common::model::Role;
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
+use golem_common::model::auth::Role;
+use golem_common::model::PlanId;
 use golem_common::tracing::TracingConfig;
+use golem_service_base::clients::RemoteCloudServiceConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;

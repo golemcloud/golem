@@ -15,11 +15,11 @@
 use crate::model::{Project, ProjectData, ProjectPluginInstallationTarget, ProjectType};
 use crate::repo::plugin_installation::ProjectPluginInstallationTargetRow;
 use async_trait::async_trait;
-use cloud_common::model::CloudPluginOwner;
-use cloud_common::repo::CloudPluginOwnerRow;
 use conditional_trait_gen::trait_gen;
 use futures::{future, TryFutureExt};
+use golem_common::model::plugin::CloudPluginOwner;
 use golem_common::model::ProjectId;
+use golem_common::repo::CloudPluginOwnerRow;
 use golem_service_base::db::Pool;
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,

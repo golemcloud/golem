@@ -2,7 +2,6 @@
 resolver = "2"
 
 members = [
-    "cloud-common",
     "cloud-debugging-service",
     "cloud-service",
     "golem-api-grpc",

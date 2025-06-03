@@ -15,8 +15,6 @@
 use crate::grpcapi::{auth, bad_request_error};
 use crate::service::plugin::CloudPluginService;
 use async_trait::async_trait;
-use cloud_common::grpc::plugin_definition_to_grpc;
-use cloud_common::model::CloudPluginScope;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::component::v1::plugin_service_server::PluginService;
 use golem_api_grpc::proto::golem::component::v1::{
@@ -30,6 +28,7 @@ use golem_api_grpc::proto::golem::component::v1::{
     ListPluginsRequest, ListPluginsResponse, ListPluginsSuccessResponse,
 };
 use golem_api_grpc::proto::golem::component::PluginDefinition;
+use golem_common::model::plugin::CloudPluginScope;
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::model::plugin::PluginDefinitionCreation;
@@ -67,7 +66,7 @@ impl PluginGrpcApi {
             None => self.plugin_service.list_plugins(&auth).await?,
         };
 
-        Ok(plugins.into_iter().map(plugin_definition_to_grpc).collect())
+        Ok(plugins.into_iter().map(|pd| pd.into()).collect())
     }
 
     async fn list_plugin_versions(
@@ -82,7 +81,7 @@ impl PluginGrpcApi {
             .list_plugin_versions(&auth, &request.name)
             .await?;
 
-        Ok(plugins.into_iter().map(plugin_definition_to_grpc).collect())
+        Ok(plugins.into_iter().map(|pd| pd.into()).collect())
     }
 
     async fn create_plugin(
@@ -113,7 +112,7 @@ impl PluginGrpcApi {
             .await?;
 
         match plugin {
-            Some(plugin) => Ok(plugin_definition_to_grpc(plugin)),
+            Some(plugin) => Ok(plugin.into()),
             None => Err(ComponentError {
                 error: Some(component_error::Error::NotFound(ErrorBody {
                     error: "Plugin not found".to_string(),
@@ -152,7 +151,7 @@ impl PluginGrpcApi {
         let plugin = self.plugin_service.get_by_id(&auth, plugin_id).await?;
 
         match plugin {
-            Some(plugin) => Ok(plugin_definition_to_grpc(plugin)),
+            Some(plugin) => Ok(plugin.into()),
             None => Err(ComponentError {
                 error: Some(component_error::Error::NotFound(ErrorBody {
                     error: "Plugin not found".to_string(),

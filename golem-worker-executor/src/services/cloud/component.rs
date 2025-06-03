@@ -12,11 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::future::Future;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
 use crate::cloud::CloudGolemTypes;
 use crate::error::GolemError;
 use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
@@ -32,7 +27,6 @@ use crate::services::golem_config::{
 };
 use crate::services::plugins::PluginsObservations;
 use async_trait::async_trait;
-use cloud_common::model::CloudComponentOwner;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
@@ -44,6 +38,7 @@ use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::Clo
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
+use golem_common::model::component::CloudComponentOwner;
 use golem_common::model::{AccountId, ComponentId, ComponentVersion};
 use golem_common::model::{ProjectId, RetryConfig};
 use golem_common::retries::with_retries;
@@ -51,6 +46,10 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
 use prost::Message;
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::task::spawn_blocking;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;

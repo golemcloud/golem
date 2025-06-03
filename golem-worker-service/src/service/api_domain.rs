@@ -28,12 +28,12 @@ use crate::repo::api_domain::{ApiDomainRecord, ApiDomainRepo};
 use crate::service::auth::AuthService;
 use async_trait::async_trait;
 use chrono::Utc;
-use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
-use cloud_common::clients::auth::AuthServiceError;
-use cloud_common::model::ProjectAction;
+use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_common::SafeDisplay;
+use golem_service_base::clients::auth::AuthServiceError;
 use golem_service_base::repo::RepoError;
 use rusoto_route53::{
     AliasTarget, Change, ChangeBatch, ChangeResourceRecordSetsRequest, CreateHostedZoneRequest,

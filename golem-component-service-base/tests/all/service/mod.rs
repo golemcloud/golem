@@ -12,26 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bytes::Bytes;
-use cloud_common::model::{CloudComponentOwner, CloudPluginScope};
-use golem_component_service_base::model::plugin::{
-    AppPluginCreation, LibraryPluginCreation, PluginDefinitionCreation, PluginTypeSpecificCreation,
-    PluginWasmFileReference,
-};
-use golem_component_service_base::service::transformer_plugin_caller::{
-    TransformationFailedReason, TransformerPluginCaller,
-};
-use golem_service_base::replayable_stream::ReplayableStream;
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
-use http::StatusCode;
-use test_r::{inherit_test_dep, test, test_dep};
-
 use crate::all::repo::sqlite::SqliteDb;
 use crate::all::repo::{constraint_data, get_component_data, test_component_owner};
 use crate::Tracing;
 use async_trait::async_trait;
-use cloud_common::model::CloudPluginOwner;
+use bytes::Bytes;
+use golem_common::model::component::CloudComponentOwner;
 use golem_common::model::component::ComponentOwner;
+use golem_common::model::plugin::CloudPluginOwner;
+use golem_common::model::plugin::CloudPluginScope;
 use golem_common::model::plugin::{
     ComponentTransformerDefinition, OplogProcessorDefinition, PluginInstallation,
     PluginInstallationCreation,
@@ -41,6 +30,10 @@ use golem_common::model::{
     ComponentType, Empty,
 };
 use golem_common::{widen_infallible, SafeDisplay};
+use golem_component_service_base::model::plugin::{
+    AppPluginCreation, LibraryPluginCreation, PluginDefinitionCreation, PluginTypeSpecificCreation,
+    PluginWasmFileReference,
+};
 use golem_component_service_base::model::{Component, InitialComponentFilesArchiveAndPermissions};
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
@@ -59,16 +52,23 @@ use golem_component_service_base::service::component_object_store::ComponentObje
 use golem_component_service_base::service::plugin::{
     PluginError, PluginService, PluginServiceDefault,
 };
+use golem_component_service_base::service::transformer_plugin_caller::{
+    TransformationFailedReason, TransformerPluginCaller,
+};
 use golem_service_base::model::ComponentName;
+use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_ast::analysis::analysed_type::{str, u64};
+use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
+use http::StatusCode;
 use rib::RegistryKey;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use test_r::{inherit_test_dep, test, test_dep};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);

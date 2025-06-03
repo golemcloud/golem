@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cloud_common::config::RemoteCloudServiceConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
+use golem_service_base::clients::RemoteCloudServiceConfig;
 use golem_service_base::config::MergedConfigLoaderOrDumper;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use serde::{Deserialize, Serialize};

@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::model::Token;
-use cloud_common::model::{CloudPluginOwner, Role};
+use golem_common::model::auth::Role;
+use golem_common::model::plugin::CloudPluginOwner;
 use golem_common::model::AccountId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -59,7 +60,7 @@ impl AccountAuthorisation {
 
     #[cfg(test)]
     pub fn new_test(account_id: &AccountId, roles: Vec<Role>) -> AccountAuthorisation {
-        use cloud_common::model::TokenId;
+        use golem_common::model::TokenId;
         AccountAuthorisation {
             token: Token {
                 id: TokenId::new_v4(),

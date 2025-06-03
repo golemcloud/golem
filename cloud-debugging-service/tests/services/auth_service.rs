@@ -1,9 +1,9 @@
 use async_trait::async_trait;
-use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
-use cloud_common::clients::auth::{AuthServiceError, BaseAuthService};
-use cloud_common::model::ProjectAction;
 use cloud_debugging_service::auth::AuthService;
+use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
+use golem_service_base::clients::auth::{AuthServiceError, BaseAuthService};
 
 // This will be used by debugging service in tests
 pub struct TestAuthService;

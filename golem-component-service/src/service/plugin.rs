@@ -14,13 +14,13 @@
 
 use crate::service::component::CloudComponentService;
 use crate::service::CloudComponentError;
-use cloud_common::auth::CloudAuthCtx;
-use cloud_common::clients::auth::BaseAuthService;
-use cloud_common::model::{CloudPluginOwner, CloudPluginScope};
+use golem_common::model::auth::CloudAuthCtx;
 use golem_common::model::plugin::PluginDefinition;
+use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
 use golem_common::model::PluginId;
 use golem_component_service_base::model::plugin::PluginDefinitionCreation;
 use golem_component_service_base::service::plugin::PluginService;
+use golem_service_base::clients::auth::BaseAuthService;
 use std::sync::Arc;
 
 /// Wraps a `PluginService` implementation (defined in `golem-component-service-base`) so that each

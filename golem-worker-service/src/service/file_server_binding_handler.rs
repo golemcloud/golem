@@ -14,8 +14,8 @@
 
 use crate::service::worker::{WorkerError, WorkerService};
 use bytes::Bytes;
-use cloud_common::auth::CloudNamespace;
 use futures::stream::BoxStream;
+use golem_common::model::auth::CloudNamespace;
 use golem_common::model::{ComponentFilePath, TargetWorkerId, WorkerId};
 use golem_common::SafeDisplay;
 use golem_worker_service_base::gateway_execution::file_server_binding_handler::{

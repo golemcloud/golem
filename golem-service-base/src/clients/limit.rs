@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::clients::auth::authorised_request;
-use crate::config::RemoteCloudServiceConfig;
+use super::authorised_request;
+use super::RemoteCloudServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::ResourceLimits;
 use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;

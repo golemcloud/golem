@@ -16,8 +16,6 @@ use crate::grpcapi::{auth, bad_request_error, internal_error, require_component_
 use crate::service;
 use crate::service::component::CloudComponentService;
 use async_trait::async_trait;
-use cloud_common::grpc::proto_project_id_string;
-use cloud_common::model::CloudComponentOwner;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
@@ -45,6 +43,7 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_api_grpc::proto::golem::component::{Component, PluginInstallation};
 use golem_common::grpc::{proto_component_id_string, proto_plugin_installation_id_string};
+use golem_common::model::component::CloudComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
@@ -55,6 +54,7 @@ use golem_common::SafeDisplay;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::service::component::ComponentError as BaseComponentError;
 use golem_component_service_base::service::plugin::PluginError;
+use golem_service_base::grpc::proto_project_id_string;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;

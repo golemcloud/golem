@@ -17,8 +17,8 @@ use std::collections::HashMap;
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 
-use crate::model::component_metadata::{DynamicLinkedInstance, LinearMemory};
-use crate::model::{
+use golem_common::model::component_metadata::{DynamicLinkedInstance, LinearMemory};
+use golem_common::model::{
     AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile, ProjectId,
 };
 

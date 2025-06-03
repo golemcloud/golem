@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use cloud_common::model::Role;
 use conditional_trait_gen::trait_gen;
+use golem_common::model::auth::Role;
 use golem_common::model::AccountId;
 use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;

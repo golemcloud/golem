@@ -3,11 +3,11 @@ use test_r::test;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
-use cloud_common::clients::auth::{AuthServiceError, BaseAuthService};
-use cloud_common::model::{ProjectAction, TokenSecret};
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
+use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
+use golem_common::model::auth::{ProjectAction, TokenSecret};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
+use golem_service_base::clients::auth::{AuthServiceError, BaseAuthService};
 use golem_service_base::db;
 use golem_service_base::migration::{Migrations, MigrationsDir};
 use golem_worker_service::model::{ApiDomain, Certificate, CertificateRequest, DomainRequest};

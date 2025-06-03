@@ -23,7 +23,6 @@ use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
-use cloud_common::clients::auth::authorised_request;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient as ComponentServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient as PluginServiceGrpcClient;
@@ -53,6 +52,7 @@ use golem_common::model::{
     ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion,
     InitialComponentFile, PluginId, PluginInstallationId,
 };
+use golem_service_base::clients::authorised_request;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::collections::HashMap;
 use std::error::Error;

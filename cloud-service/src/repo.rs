@@ -28,7 +28,7 @@ use crate::repo::project::{DbProjectRepo, ProjectRepo};
 use crate::repo::project_grant::{DbProjectGrantRepo, ProjectGrantRepo};
 use crate::repo::project_policy::{DbProjectPolicyRepo, ProjectPolicyRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
-use cloud_common::model::CloudPluginOwner;
+use golem_common::model::plugin::CloudPluginOwner;
 use golem_service_base::db::Pool;
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRepoQueries,

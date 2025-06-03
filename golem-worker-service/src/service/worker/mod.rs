@@ -14,13 +14,11 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use cloud_common::auth::CloudNamespace;
-use cloud_common::clients::auth::AuthServiceError;
-use cloud_common::clients::limit::{LimitError, LimitService};
 use futures::Stream;
 use golem_api_grpc::proto::golem::worker::{
     InvocationContext, InvokeResult as ProtoInvokeResult, UpdateMode,
 };
+use golem_common::model::auth::CloudNamespace;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
@@ -29,6 +27,8 @@ use golem_common::model::{
     WorkerId,
 };
 use golem_common::SafeDisplay;
+use golem_service_base::clients::auth::AuthServiceError;
+use golem_service_base::clients::limit::{LimitError, LimitService};
 use golem_service_base::model::*;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;

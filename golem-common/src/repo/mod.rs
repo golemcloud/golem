@@ -12,8 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod plugin_installation;
+mod component;
+mod plugin;
+mod plugin_installation;
 
+pub use self::component::*;
+pub use self::plugin::*;
+pub use self::plugin_installation::*;
 use sqlx::query_builder::Separated;
 use sqlx::{Database, QueryBuilder};
 use std::fmt::Display;

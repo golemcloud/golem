@@ -14,12 +14,13 @@
 
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::service::auth::AuthService;
-use cloud_common::auth::{CloudAuthCtx, CloudNamespace, GolemSecurityScheme};
-use cloud_common::model::ProjectAction;
 use futures_util::future::try_join_all;
 use golem_common::json_yaml::JsonOrYaml;
+use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe};
+use golem_service_base::model::auth::GolemSecurityScheme;
 use golem_worker_service_base::api::HttpApiDefinitionRequest;
 use golem_worker_service_base::api::HttpApiDefinitionResponseData;
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;

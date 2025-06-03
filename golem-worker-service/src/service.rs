@@ -37,16 +37,15 @@ use crate::service::api_security::{SecuritySchemeService, SecuritySchemeServiceD
 use crate::service::auth::{AuthService, CloudAuthService};
 use crate::service::worker::{WorkerService, WorkerServiceDefault};
 use crate::service::worker_request_executor::CloudGatewayWorkerRequestExecutor;
-use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
-use cloud_common::clients::limit::{LimitService, LimitServiceDefault};
-use cloud_common::clients::project::{ProjectService, ProjectServiceDefault};
-use cloud_common::model::TokenSecret;
 use file_server_binding_handler::CloudWorkerServiceAdapter;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::config::DbConfig;
+use golem_common::model::auth::{CloudAuthCtx, CloudNamespace, TokenSecret};
 use golem_common::model::RetryConfig;
 use golem_common::redis::RedisPool;
+use golem_service_base::clients::limit::{LimitService, LimitServiceDefault};
+use golem_service_base::clients::project::{ProjectService, ProjectServiceDefault};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -121,7 +120,7 @@ impl ApiServices {
         );
 
         let auth_service: Arc<dyn AuthService + Send + Sync> = Arc::new(CloudAuthService::new(
-            cloud_common::clients::auth::CloudAuthService::new(
+            golem_service_base::clients::auth::CloudAuthService::new(
                 &config.cloud_specific_config.cloud_service,
             ),
             config.base_config.component_service.clone(),

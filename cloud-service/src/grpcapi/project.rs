@@ -17,7 +17,6 @@ use crate::grpcapi::get_authorisation_token;
 use crate::model;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::project;
-use cloud_common::grpc::proto_project_id_string;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::project::v1::cloud_project_service_server::CloudProjectService;
 use golem_api_grpc::proto::golem::project::v1::{
@@ -33,6 +32,7 @@ use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::{AccountId, ProjectId};
 use golem_common::recorded_grpc_api_request;
 use golem_common::SafeDisplay;
+use golem_service_base::grpc::proto_project_id_string;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tonic::metadata::MetadataMap;

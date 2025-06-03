@@ -13,12 +13,10 @@
 // limitations under the License.
 
 use crate::Tracing;
-use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, CloudPluginScope};
-use cloud_common::repo::component::CloudComponentOwnerRow;
-use cloud_common::repo::plugin::CloudPluginScopeRow;
-use cloud_common::repo::CloudPluginOwnerRow;
+use golem_common::model::component::CloudComponentOwner;
 use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::FunctionConstraints;
+use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
 use golem_common::model::plugin::{
     ComponentPluginInstallationTarget, ComponentPluginScope, ComponentTransformerDefinition,
     OplogProcessorDefinition, PluginDefinition, PluginInstallation, PluginOwner,
@@ -27,7 +25,10 @@ use golem_common::model::plugin::{
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, Empty, PluginId, PluginInstallationId, ProjectId,
 };
-use golem_common::repo::plugin_installation::ComponentPluginInstallationRow;
+use golem_common::repo::CloudComponentOwnerRow;
+use golem_common::repo::CloudPluginOwnerRow;
+use golem_common::repo::CloudPluginScopeRow;
+use golem_common::repo::ComponentPluginInstallationRow;
 use golem_common::repo::RowMeta;
 use golem_component_service_base::model::Component;
 use golem_component_service_base::repo::component::{

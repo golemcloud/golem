@@ -14,10 +14,10 @@
 
 use crate::service::auth::AuthService;
 use async_trait::async_trait;
-use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
-use cloud_common::clients::auth::AuthServiceError;
-use cloud_common::model::ProjectAction;
+use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
 use golem_common::model::ProjectId;
+use golem_service_base::clients::auth::AuthServiceError;
 use golem_worker_service_base::gateway_security::{
     SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata,
 };

@@ -15,14 +15,14 @@
 use crate::grpcapi::component::ComponentGrpcApi;
 use crate::grpcapi::plugin::PluginGrpcApi;
 use crate::service::Services;
-use cloud_common::auth::CloudAuthCtx;
-use cloud_common::clients::auth::get_authorisation_token;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentServiceServer;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_server::PluginServiceServer;
 use golem_api_grpc::proto::golem::component::v1::{component_error, ComponentError};
-use golem_common::model::ComponentId;
+use golem_common::model::auth::CloudAuthCtx;
+use golem_common::model::{ComponentId, ProjectId};
+use golem_service_base::clients::get_authorisation_token;
 use std::net::SocketAddr;
 use tonic::codec::CompressionEncoding;
 use tonic::metadata::MetadataMap;
@@ -96,4 +96,12 @@ fn require_component_id(
             .map_err(|err| bad_request_error(&format!("Invalid component id: {err}"))),
         None => Err(bad_request_error("Missing component id")),
     }
+}
+
+pub fn proto_project_id_string(
+    id: &Option<golem_api_grpc::proto::golem::common::ProjectId>,
+) -> Option<String> {
+    (*id)
+        .and_then(|v| TryInto::<ProjectId>::try_into(v).ok())
+        .map(|v| v.to_string())
 }
