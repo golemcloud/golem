@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::parser::char::{char, spaces};
-use combine::{between, Parser};
-use combine::{sep_by, ParseError};
-
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;
 use crate::rib_source_span::GetSourcePosition;
+use combine::parser::char::{char, spaces};
+use combine::{between, Parser};
+use combine::{sep_by, ParseError};
 
 pub fn sequence<Input>() -> impl Parser<Input, Output = Expr>
 where

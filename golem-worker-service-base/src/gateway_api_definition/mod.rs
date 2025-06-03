@@ -11,17 +11,16 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 mod api_common;
 pub mod http;
 
-use std::fmt::Debug;
-use std::fmt::Display;
-
+use crate::gateway_binding::GatewayBinding;
 use bincode::{Decode, Encode};
 use poem_openapi::NewType;
 use serde::{Deserialize, Serialize};
-
-use crate::gateway_binding::GatewayBinding;
+use std::fmt::Debug;
+use std::fmt::Display;
 
 // Common to API definitions regardless of different protocols
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]

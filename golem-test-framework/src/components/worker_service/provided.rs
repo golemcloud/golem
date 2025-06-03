@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
+use super::WorkerServiceInternal;
 use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::worker_service::{
@@ -23,9 +22,8 @@ use crate::components::worker_service::{
 };
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
+use std::sync::Arc;
 use tracing::info;
-
-use super::WorkerServiceInternal;
 
 pub struct ProvidedWorkerService {
     host: String,

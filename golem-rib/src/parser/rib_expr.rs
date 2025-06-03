@@ -12,13 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bigdecimal::BigDecimal;
-use combine::parser::char;
-use combine::parser::char::{char, digit, spaces};
-use combine::{attempt, choice, many, many1, optional, parser, position, Stream};
-use combine::{ParseError, Parser};
-use std::str::FromStr;
-
 use super::binary_op::{binary_op, BinaryOp};
 use crate::expr::Expr;
 use crate::parser::boolean::boolean_literal;
@@ -29,22 +22,27 @@ use crate::parser::flag::flag;
 use crate::parser::identifier::identifier;
 use crate::parser::integer::integer;
 use crate::parser::let_binding::let_binding;
+use crate::parser::list_aggregation::list_aggregation;
+use crate::parser::list_comprehension::list_comprehension;
 use crate::parser::literal::literal;
+use crate::parser::multi_line_code_block::multi_line_block;
 use crate::parser::not::not;
 use crate::parser::optional::option;
 use crate::parser::pattern_match::pattern_match;
 use crate::parser::range_type::{range_type, RangeType};
-use crate::parser::sequence::sequence;
-use crate::parser::tuple::tuple;
-use crate::rib_source_span::{GetSourcePosition, SourceSpan};
-
-use crate::parser::list_aggregation::list_aggregation;
-use crate::parser::list_comprehension::list_comprehension;
-use crate::parser::multi_line_code_block::multi_line_block;
 use crate::parser::record::record;
 use crate::parser::result::result;
+use crate::parser::sequence::sequence;
+use crate::parser::tuple::tuple;
 use crate::parser::type_name::type_name;
+use crate::rib_source_span::{GetSourcePosition, SourceSpan};
 use crate::TypeName;
+use bigdecimal::BigDecimal;
+use combine::parser::char;
+use combine::parser::char::{char, digit, spaces};
+use combine::{attempt, choice, many, many1, optional, parser, position, Stream};
+use combine::{ParseError, Parser};
+use std::str::FromStr;
 
 // A rib expression := (simple_expr, rib_expr_rest*)
 // A simple_expr never has any expression that starts with rib_expression

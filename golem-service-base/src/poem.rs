@@ -12,23 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{
-    borrow::Cow,
-    fmt::{self, Debug, Formatter},
-};
-
+use crate::replayable_stream::ReplayableStream;
 use bytes::{Bytes, BytesMut};
-use poem::web::Field as PoemField;
-use tempfile::NamedTempFile;
-
 use futures::StreamExt;
+use poem::web::Field as PoemField;
 use poem_openapi::{
     registry::{MetaSchema, MetaSchemaRef},
     types::{ParseError, ParseFromMultipartField, ParseResult, Type},
 };
+use std::{
+    borrow::Cow,
+    fmt::{self, Debug, Formatter},
+};
+use tempfile::NamedTempFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
-
-use crate::replayable_stream::ReplayableStream;
 
 /// A uploaded file for multipart.
 ///

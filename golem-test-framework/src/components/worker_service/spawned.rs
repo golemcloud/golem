@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::WorkerServiceInternal;
 use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
@@ -30,8 +31,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::info;
 use tracing::Level;
-
-use super::WorkerServiceInternal;
 
 pub struct SpawnedWorkerService {
     http_port: u16,

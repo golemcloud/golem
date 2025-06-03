@@ -12,19 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Display;
-use std::ops::Deref;
-
+use crate::parser::errors::RibParseError;
+use crate::rib_source_span::GetSourcePosition;
+use crate::{InferredNumber, InferredType, TypeInternal};
 use bincode::{Decode, Encode};
 use combine::parser::char;
 use combine::parser::char::{char, spaces, string};
 use combine::{attempt, between, choice, optional, sep_by, Parser};
 use combine::{parser, ParseError};
 use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
-
-use crate::parser::errors::RibParseError;
-use crate::rib_source_span::GetSourcePosition;
-use crate::{InferredNumber, InferredType, TypeInternal};
+use std::fmt::Display;
+use std::ops::Deref;
 
 // Rib grammar uses it's own `TypeName` instead of relying from any other crates to annotate types (Example: 1: u32, let x: u32 = 1;),
 // and sticks on to the  Display instance that aligns with what we see in WIT.

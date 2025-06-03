@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-use serde::{Deserialize, Serialize};
-
+use crate::model::Empty;
+use crate::shard_manager_config::HealthCheckMode::K8s;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RedisConfig};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
-
-use crate::model::Empty;
-use crate::shard_manager_config::HealthCheckMode::K8s;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShardManagerConfig {

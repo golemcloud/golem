@@ -1,13 +1,26 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use anyhow::anyhow;
 use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_service_base::db;
 use golem_service_base::migration::{Migrations, MigrationsDir};
-use std::path::Path;
-use tracing::{error, info};
-
 use golem_worker_service::app::{app, dump_openapi_yaml};
 use golem_worker_service::config::load_or_dump_config;
+use std::path::Path;
+use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

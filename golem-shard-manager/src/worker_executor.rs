@@ -12,10 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::{HealthCheckError, ShardManagerError};
+use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
+use crate::shard_manager_config::WorkerExecutorServiceConfig;
+use async_trait::async_trait;
+use golem_api_grpc::proto::golem;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
+use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
+use golem_common::model::error::{GolemError, GolemErrorUnknown};
+use golem_common::model::ShardId;
+use golem_common::retries::with_retriable_errors;
 use std::collections::BTreeSet;
 use std::sync::Arc;
-
-use async_trait::async_trait;
 use tokio::time::error::Elapsed;
 use tokio::time::timeout;
 use tonic::codec::CompressionEncoding;
@@ -25,16 +33,6 @@ use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};
 use tracing::info;
-
-use crate::error::{HealthCheckError, ShardManagerError};
-use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
-use crate::shard_manager_config::WorkerExecutorServiceConfig;
-use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
-use golem_common::model::error::{GolemError, GolemErrorUnknown};
-use golem_common::model::ShardId;
-use golem_common::retries::with_retriable_errors;
 
 #[async_trait]
 pub trait WorkerExecutorService {

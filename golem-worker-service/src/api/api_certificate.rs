@@ -1,16 +1,28 @@
-use std::result::Result;
-use std::sync::Arc;
-
-use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::model::{Certificate, CertificateId, CertificateRequest};
 use crate::service::api_certificate::CertificateService;
+use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
 use golem_common::model::ProjectId;
 use golem_common::recorded_http_api_request;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::result::Result;
+use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct ApiCertificateApi {

@@ -12,24 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-
-use async_trait::async_trait;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::{Channel, Endpoint};
-use tracing::Level;
-
-use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-
+use super::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::WorkerService;
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
-
-use super::cloud_service::CloudService;
+use async_trait::async_trait;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tonic::codec::CompressionEncoding;
+use tonic::transport::{Channel, Endpoint};
+use tracing::Level;
 
 pub mod docker;
 pub mod k8s;

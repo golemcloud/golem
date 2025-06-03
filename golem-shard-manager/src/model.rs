@@ -12,25 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::ShardManagerError;
+use crate::rebalancing::Rebalance;
+use bincode::{Decode, Encode};
 use core::cmp::Ordering;
+use golem_api_grpc::proto::golem;
+use golem_common::model::ShardId;
+use http::Uri;
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::{fmt, vec};
-
-use bincode::{Decode, Encode};
-use http::Uri;
-use itertools::Itertools;
-use serde::{Deserialize, Serialize};
 use tonic::transport::Endpoint;
 use tracing::{error, warn};
-
-use golem_api_grpc::proto::golem;
-use golem_common::model::ShardId;
-
-use crate::error::ShardManagerError;
-use crate::rebalancing::Rebalance;
 
 #[derive(
     Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
