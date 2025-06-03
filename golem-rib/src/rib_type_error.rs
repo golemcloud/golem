@@ -1,4 +1,4 @@
-use crate::type_checker::{ExhaustivePatternMatchError, InvalidProgramReturn};
+use crate::type_checker::ExhaustivePatternMatchError;
 use crate::{
     ActualType, AmbiguousTypeError, CustomError, ExpectedType, Expr, FunctionCallError,
     InvalidPatternMatchError, InvalidWorkerName, TypeMismatchError, TypeName, TypeUnificationError,
@@ -247,18 +247,6 @@ impl From<FunctionCallError> for RibTypeError {
                 additional_error_details: vec![],
                 help_messages: vec![],
             },
-        }
-    }
-}
-
-impl From<InvalidProgramReturn> for RibTypeError {
-    fn from(value: InvalidProgramReturn) -> Self {
-        RibTypeError {
-            cause: value.message,
-            expr: value.return_expr,
-            immediate_parent: None,
-            additional_error_details: vec![],
-            help_messages: vec![],
         }
     }
 }

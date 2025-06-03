@@ -22,28 +22,26 @@ use std::sync::Arc;
 pub fn compile_rib_script(
     rib_script: &str,
     repl_state: &Arc<ReplState>,
-) -> Result<CompilerOutput, RibCompilationError> {
+) -> Result<ReplCompilerOutput, RibCompilationError> {
     let expr = Expr::from_text(rib_script)
         .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
 
-    let function_registry =
-        FunctionTypeRegistry::from_export_metadata(&repl_state.dependency().metadata);
+    let compiler = repl_state.rib_compiler();
 
-    let inferred_expr = InferredExpr::from_expr(expr, &function_registry, &vec![])
-        .map_err(RibCompilationError::RibTypeError)?;
+    let inferred_expr = compiler.infer_types(expr)?;
 
     let instance_variables = fetch_instance_variables(&inferred_expr);
 
     let identifiers = get_identifiers(&inferred_expr);
 
-    let variants = function_registry.get_variants();
+    let variants = compiler.get_variants();
 
-    let enums = function_registry.get_enums();
+    let enums = compiler.get_enums();
 
     let byte_code = RibByteCode::from_expr(&inferred_expr)
         .map_err(RibCompilationError::ByteCodeGenerationFail)?;
 
-    Ok(CompilerOutput {
+    Ok(ReplCompilerOutput {
         rib_byte_code: byte_code,
         instance_variables,
         identifiers,
@@ -53,7 +51,7 @@ pub fn compile_rib_script(
 }
 
 #[derive(Clone)]
-pub struct CompilerOutput {
+pub struct ReplCompilerOutput {
     pub rib_byte_code: RibByteCode,
     pub instance_variables: InstanceVariables,
     pub identifiers: Vec<VariableId>,

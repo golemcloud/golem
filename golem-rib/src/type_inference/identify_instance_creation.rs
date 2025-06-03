@@ -103,7 +103,7 @@ mod internal {
                 let type_parameter = generic_type_parameter
                     .as_ref()
                     .map(|gtp| {
-                        TypeParameter::from_str(&gtp.value).map_err(|err| {
+                        TypeParameter::from_text(&gtp.value).map_err(|err| {
                             FunctionCallError::invalid_generic_type_parameter(&gtp.value, err)
                         })
                     })

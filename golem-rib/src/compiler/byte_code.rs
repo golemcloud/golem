@@ -147,12 +147,12 @@ mod internal {
         InferredType, InstructionId, Range, RibByteCodeGenerationError, RibIR, TypeInternal,
         VariableId, WorkerNamePresence,
     };
-    use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
+    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeFlags};
     use std::collections::HashSet;
 
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::type_inference::{GetTypeHint, TypeHint};
-    use golem_wasm_ast::analysis::analysed_type::{bool, tuple};
+    use golem_wasm_ast::analysis::analysed_type::{bool, record, str, tuple};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
 
@@ -427,15 +427,15 @@ mod internal {
             } => {
                 // If the call type is an instance creation (worker creation),
                 // this will push worker name expression.
-                for expr in args.iter().rev() {
-                    stack.push(ExprState::from_expr(expr));
-                }
-
                 match call_type {
                     CallType::Function {
                         function_name,
                         worker,
                     } => {
+                        for expr in args.iter().rev() {
+                            stack.push(ExprState::from_expr(expr));
+                        }
+
                         let function_result_type = if inferred_type.is_unit() {
                             AnalysedTypeWithUnit::Unit
                         } else {
@@ -584,27 +584,102 @@ mod internal {
                     CallType::InstanceCreation(instance_creation_type) => {
                         match instance_creation_type {
                             InstanceCreationType::Worker { worker_name } => {
-                                if worker_name.is_none() {
-                                    // This would imply returning a instance representing ephemeral
-                                    // worker it simply returns an empty tuple. This is a corner case
-                                    // that a rib script hardly achieves anything from it,
-                                    // but we need to handle it
-                                    stack.push(ExprState::Instruction(RibIR::PushLit(
-                                        ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])),
-                                    )));
+                                for expr in args.iter().rev() {
+                                    stack.push(ExprState::from_expr(expr));
+                                }
+
+                                match worker_name {
+                                    // worker name is already in stack due to args
+                                    Some(worker) => {
+                                        stack.push(ExprState::from_ir(RibIR::PushLit(
+                                            ValueAndType::new(
+                                                Value::Record(vec![Value::String(
+                                                    worker.to_string(),
+                                                )]),
+                                                record(vec![NameTypePair {
+                                                    name: "worker".to_string(),
+                                                    typ: str(),
+                                                }]),
+                                            ),
+                                        )));
+                                    }
+                                    None => {
+                                        // This would imply returning a instance representing ephemeral
+                                        // worker it simply returns an empty tuple. This is a corner case
+                                        // that a rib script hardly achieves anything from it,
+                                        // but we need to handle it
+                                        stack.push(ExprState::from_ir(RibIR::PushLit(
+                                            ValueAndType::new(
+                                                Value::Record(vec![Value::String(
+                                                    "<ephemeral>".to_string(),
+                                                )]),
+                                                record(vec![NameTypePair {
+                                                    name: "worker".to_string(),
+                                                    typ: str(),
+                                                }]),
+                                            ),
+                                        )));
+                                    }
                                 }
                             }
-                            InstanceCreationType::Resource { .. } => {}
+
+                            InstanceCreationType::Resource {
+                                worker_name,
+                                resource_name,
+                                ..
+                            } => {
+                                for expr in args.iter().rev() {
+                                    stack.push(ExprState::from_expr(expr));
+                                }
+
+                                let arg_exprs = args
+                                    .iter()
+                                    .map(|x| Value::String(x.to_string()))
+                                    .collect::<Vec<_>>();
+
+                                stack.push(ExprState::from_ir(RibIR::PushLit(ValueAndType::new(
+                                    Value::Record(vec![
+                                        Value::String(resource_name.resource_name.clone()),
+                                        worker_name.as_ref().map_or(
+                                            Value::String("<ephemeral>".to_string()),
+                                            |w| Value::String(w.to_string()),
+                                        ),
+                                        Value::Tuple(arg_exprs),
+                                    ]),
+                                    record(vec![
+                                        NameTypePair {
+                                            name: "resource".to_string(),
+                                            typ: str(),
+                                        },
+                                        NameTypePair {
+                                            name: "worker".to_string(),
+                                            typ: str(),
+                                        },
+                                        NameTypePair {
+                                            name: "args".to_string(),
+                                            typ: tuple(vec![str(); args.len()]),
+                                        },
+                                    ]),
+                                ))));
+                            }
                         }
                     }
 
                     CallType::VariantConstructor(variant_name) => {
+                        for expr in args.iter().rev() {
+                            stack.push(ExprState::from_expr(expr));
+                        }
+
                         instructions.push(RibIR::PushVariant(
                             variant_name.clone(),
                             convert_to_analysed_type(expr, inferred_type)?,
                         ));
                     }
                     CallType::EnumConstructor(enum_name) => {
+                        for expr in args.iter().rev() {
+                            stack.push(ExprState::from_expr(expr));
+                        }
+
                         instructions.push(RibIR::PushEnum(
                             enum_name.clone(),
                             convert_to_analysed_type(expr, inferred_type)?,
@@ -918,7 +993,9 @@ mod compiler_tests {
     use test_r::test;
 
     use super::*;
-    use crate::{ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
+    use crate::{
+        ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, RibCompiler, VariableId,
+    };
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
@@ -943,11 +1020,15 @@ mod compiler_tests {
     #[test]
     fn test_instructions_for_identifier() {
         let inferred_input_type = InferredType::string();
+
         let variable_id = VariableId::local("request", 0);
-        let empty_registry = FunctionTypeRegistry::empty();
+
         let expr = Expr::identifier_with_variable_id(variable_id.clone(), None)
             .with_inferred_type(inferred_input_type);
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -968,8 +1049,9 @@ mod compiler_tests {
 
         let expr = Expr::let_binding_with_variable_id(variable_id.clone(), literal, None);
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -988,15 +1070,19 @@ mod compiler_tests {
     #[test]
     fn test_instructions_equal_to() {
         let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::f32());
+
         let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::u32());
 
         let expr = Expr::equal_to(number_f32, number_u32);
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let value_and_type1 = 1.0f32.into_value_and_type();
+
         let value_and_type2 = 1u32.into_value_and_type();
 
         let instruction_set = vec![
@@ -1015,15 +1101,19 @@ mod compiler_tests {
     #[test]
     fn test_instructions_greater_than() {
         let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::f32());
+
         let number_u32 = Expr::number_inferred(BigDecimal::from(2), None, InferredType::u32());
 
         let expr = Expr::greater_than(number_f32, number_u32);
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let value_and_type1 = 1.0f32.into_value_and_type();
+
         let value_and_type2 = 2u32.into_value_and_type();
 
         let instruction_set = vec![
@@ -1042,15 +1132,19 @@ mod compiler_tests {
     #[test]
     fn test_instructions_less_than() {
         let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::f32());
+
         let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::u32());
 
         let expr = Expr::less_than(number_f32, number_u32);
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let value_and_type1 = 1.0f32.into_value_and_type();
+
         let value_and_type2 = 1u32.into_value_and_type();
 
         let instruction_set = vec![
@@ -1069,15 +1163,19 @@ mod compiler_tests {
     #[test]
     fn test_instructions_greater_than_or_equal_to() {
         let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::f32());
+
         let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::u32());
 
         let expr = Expr::greater_than_or_equal_to(number_f32, number_u32);
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let value_and_type1 = 1.0f32.into_value_and_type();
+
         let value_and_type2 = 1u32.into_value_and_type();
 
         let instruction_set = vec![
@@ -1096,15 +1194,19 @@ mod compiler_tests {
     #[test]
     fn test_instructions_less_than_or_equal_to() {
         let number_f32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::f32());
+
         let number_u32 = Expr::number_inferred(BigDecimal::from(1), None, InferredType::u32());
 
         let expr = Expr::less_than_or_equal_to(number_f32, number_u32);
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let value_and_type1 = 1.0f32.into_value_and_type();
+
         let value_and_type2 = 1u32.into_value_and_type();
 
         let instruction_set = vec![
@@ -1131,12 +1233,14 @@ mod compiler_tests {
             (String::from("bar_key"), InferredType::string()),
         ]));
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let bar_value = "bar_value".into_value_and_type();
+
         let foo_value = "foo_value".into_value_and_type();
 
         let instruction_set = vec![
@@ -1169,8 +1273,9 @@ mod compiler_tests {
     fn test_instructions_for_multiple() {
         let expr = Expr::expr_block(vec![Expr::literal("foo"), Expr::literal("bar")]);
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1189,14 +1294,17 @@ mod compiler_tests {
     #[test]
     fn test_instructions_if_conditional() {
         let if_expr = Expr::literal("pred").with_inferred_type(InferredType::bool());
+
         let then_expr = Expr::literal("then");
+
         let else_expr = Expr::literal("else");
 
         let expr =
             Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::string());
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1220,7 +1328,9 @@ mod compiler_tests {
     #[test]
     fn test_instructions_for_nested_if_else() {
         let if_expr = Expr::literal("if-pred1").with_inferred_type(InferredType::bool());
+
         let then_expr = Expr::literal("then1").with_inferred_type(InferredType::string());
+
         let else_expr = Expr::cond(
             Expr::literal("else-pred2").with_inferred_type(InferredType::bool()),
             Expr::literal("else-then2"),
@@ -1231,8 +1341,9 @@ mod compiler_tests {
         let expr =
             Expr::cond(if_expr, then_expr, else_expr).with_inferred_type(InferredType::string());
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1274,12 +1385,14 @@ mod compiler_tests {
         let expr =
             Expr::select_field(record, "bar_key", None).with_inferred_type(InferredType::string());
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let bar_value = "bar_value".into_value_and_type();
+
         let foo_value = "foo_value".into_value_and_type();
 
         let instruction_set = vec![
@@ -1317,8 +1430,9 @@ mod compiler_tests {
         let expr = Expr::select_index(sequence, Expr::number(BigDecimal::from(1)))
             .with_inferred_type(InferredType::string());
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
@@ -1433,7 +1547,9 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
+
             let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
 
             assert_eq!(
@@ -1455,6 +1571,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1481,6 +1598,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1502,6 +1620,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1523,6 +1642,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1545,6 +1665,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1570,6 +1691,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1591,6 +1713,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1611,6 +1734,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
@@ -1633,6 +1757,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
 
             let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+
             let compiler = RibCompiler::new(compiler_config);
 
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();

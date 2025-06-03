@@ -23,7 +23,7 @@ use std::fmt::{Display, Formatter};
 // The structure is raw and closer to the original component metadata.
 // FunctionTypeRegistry act as a set of all dependencies in Rib.
 // Currently, it talks about only 1 component.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct FunctionTypeRegistry {
     pub types: HashMap<RegistryKey, RegistryValue>,
 }

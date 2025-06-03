@@ -498,7 +498,7 @@ impl FunctionDictionary {
                         interface_name,
                         function_name,
                     } => {
-                        let type_parameter = TypeParameter::from_str(interface_name.as_str())?;
+                        let type_parameter = TypeParameter::from_text(interface_name.as_str())?;
 
                         let interface_name = type_parameter.get_interface_name();
                         let package_name = type_parameter.get_package_name();
@@ -641,10 +641,10 @@ pub struct FullyQualifiedFunctionName {
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FullyQualifiedResourceMethod {
-    package_name: Option<PackageName>,
-    interface_name: Option<InterfaceName>,
-    resource_name: String,
-    method_name: String,
+    pub package_name: Option<PackageName>,
+    pub interface_name: Option<InterfaceName>,
+    pub resource_name: String,
+    pub method_name: String,
 }
 
 impl FullyQualifiedResourceMethod {
@@ -713,8 +713,8 @@ impl Display for FullyQualifiedFunctionName {
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FunctionType {
-    parameter_types: Vec<InferredType>,
-    return_type: Option<InferredType>,
+    pub parameter_types: Vec<InferredType>,
+    pub return_type: Option<InferredType>,
 }
 
 impl FunctionType {

@@ -3459,7 +3459,7 @@ mod tests {
 
         let compiled = compiler.compile(expr);
 
-        assert!(compiled.is_err());
+        assert!(compiled.is_ok());
     }
 
     #[test]
@@ -3491,7 +3491,7 @@ mod tests {
 
         let compiled = compiler.compile(expr);
 
-        assert!(compiled.is_err());
+        assert!(compiled.is_ok());
     }
 
     #[test]
@@ -4010,15 +4010,9 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
 
-        let compiled = compiler.compile(expr).unwrap_err().to_string();
+        let compiled = compiler.compile(expr);
 
-        let expected = r#"
-            error in the following rib found at line 3, column 17
-            `cart("bar")`
-            cause: program is invalid as it returns a resource constructor
-            "#;
-
-        assert_eq!(compiled, strip_spaces(expected));
+        assert!(compiled.is_ok());
     }
 
     // This resource construction is a Noop, and compiler can give warnings

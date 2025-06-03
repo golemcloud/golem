@@ -18,28 +18,16 @@ use crate::eval::eval;
 use crate::invoke::WorkerFunctionInvoke;
 use crate::repl_printer::{DefaultReplResultPrinter, ReplPrinter};
 use crate::repl_state::ReplState;
+use crate::rib_context::ReplContext;
 use crate::rib_edit::RibEdit;
-use async_trait::async_trait;
+use crate::{CommandRegistry, ReplBootstrapError, RibExecutionError, UntypedCommand};
 use colored::Colorize;
-use golem_wasm_rpc::ValueAndType;
-use rib::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId};
-use rib::{RibCompilationError, RibFunctionInvoke};
-use rib::{RibFunctionInvokeResult, RibResult, RibRuntimeError};
+use rib::{RibCompiler, RibCompilerConfig, RibResult};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
-use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
-
-/// The REPL environment for Rib, providing an interactive shell for executing Rib code.
-pub struct RibRepl {
-    history_file_path: PathBuf,
-    printer: Box<dyn ReplPrinter>,
-    editor: Editor<RibEdit, DefaultHistory>,
-    repl_state: Arc<ReplState>,
-    prompt: String,
-}
 
 /// Config options:
 ///
@@ -61,6 +49,16 @@ pub struct RibReplConfig {
     pub printer: Option<Box<dyn ReplPrinter>>,
     pub component_source: Option<ComponentSource>,
     pub prompt: Option<String>,
+    pub command_registry: Option<CommandRegistry>,
+}
+
+/// The REPL environment for Rib, providing an interactive shell for executing Rib code.
+pub struct RibRepl {
+    printer: Box<dyn ReplPrinter>,
+    editor: Editor<RibEdit, DefaultHistory>,
+    repl_state: Arc<ReplState>,
+    prompt: String,
+    command_registry: CommandRegistry,
 }
 
 impl RibRepl {
@@ -70,7 +68,11 @@ impl RibRepl {
     pub async fn bootstrap(config: RibReplConfig) -> Result<RibRepl, ReplBootstrapError> {
         let history_file_path = config.history_file.unwrap_or_else(get_default_history_file);
 
-        let rib_editor = RibEdit::init();
+        let mut command_registry = CommandRegistry::built_in();
+        let external_commands = config.command_registry.unwrap_or_default();
+        command_registry.merge(external_commands);
+
+        let helper = RibEdit::init(&command_registry);
 
         let mut rl = Editor::<RibEdit, DefaultHistory>::with_history(
             Config::default(),
@@ -78,7 +80,7 @@ impl RibRepl {
         )
         .unwrap();
 
-        rl.set_helper(Some(rib_editor));
+        rl.set_helper(Some(helper));
 
         if history_file_path.exists() {
             if let Err(err) = rl.load_history(&history_file_path) {
@@ -118,16 +120,28 @@ impl RibRepl {
             }
         }?;
 
-        let repl_state = ReplState::new(&component_dependency, config.worker_function_invoke);
+        // Once https://github.com/golemcloud/golem/issues/1608 is resolved,
+        // component dependency will not be required in the REPL state
+        let repl_state = ReplState::new(
+            component_dependency.clone(),
+            config.worker_function_invoke,
+            RibCompiler::new(RibCompilerConfig::new(
+                component_dependency.metadata,
+                vec![],
+            )),
+            history_file_path.clone(),
+        );
 
         Ok(RibRepl {
-            history_file_path,
             printer: config
                 .printer
                 .unwrap_or_else(|| Box::new(DefaultReplResultPrinter)),
             editor: rl,
             repl_state: Arc::new(repl_state),
-            prompt: config.prompt.unwrap_or_else(|| ">>> ".cyan().to_string()),
+            prompt: config
+                .prompt
+                .unwrap_or_else(|| ">>> ".truecolor(192, 192, 192).to_string()),
+            command_registry,
         })
     }
 
@@ -144,57 +158,79 @@ impl RibRepl {
     /// This function is exposed for users who want to implement custom REPL loops
     /// or integrate Rib execution into other workflows.
     /// For a built-in REPL loop, see [`Self::run`].
-    pub async fn execute_rib(&mut self, rib: &str) -> Result<Option<RibResult>, RibExecutionError> {
-        if !rib.is_empty() {
-            let rib = rib.strip_suffix(";").unwrap_or(rib);
+    pub async fn execute(
+        &mut self,
+        script_or_command: &str,
+    ) -> Result<Option<RibResult>, RibExecutionError> {
+        let script_or_command = CommandOrExpr::from_str(script_or_command, &self.command_registry)
+            .map_err(RibExecutionError::Custom)?;
 
-            self.update_rib(rib);
+        match script_or_command {
+            CommandOrExpr::Command { args, executor } => {
+                let mut repl_context =
+                    ReplContext::new(self.printer.as_ref(), &self.repl_state, &mut self.editor);
 
-            // Add every rib script into the history (in memory) and save it
-            // regardless of whether it compiles or not
-            // History is never used for any progressive compilation or interpretation
-            let _ = self.editor.add_history_entry(rib);
-            let _ = self.editor.save_history(&self.history_file_path);
+                executor.run(args.as_str(), &mut repl_context);
 
-            match compile_rib_script(&self.current_rib_program(), &self.repl_state) {
-                Ok(compiler_output) => {
-                    let helper = self.editor.helper_mut().unwrap();
+                Ok(None)
+            }
+            CommandOrExpr::RawExpr(script) => {
+                // If the script is empty, we do not execute it
+                if !script.is_empty() {
+                    let rib = script.strip_suffix(";").unwrap_or(script.as_str()).trim();
 
-                    helper.update_progression(&compiler_output);
+                    self.repl_state.update_rib(rib);
 
-                    let result = eval(compiler_output.rib_byte_code, &self.repl_state).await;
+                    // Add every rib script into the history (in memory) and save it
+                    // regardless of whether it compiles or not
+                    // History is never used for any progressive compilation or interpretation
+                    let _ = self.editor.add_history_entry(rib);
+                    let _ = self
+                        .editor
+                        .save_history(self.repl_state.history_file_path());
 
-                    match result {
-                        Ok(result) => Ok(Some(result)),
+                    match compile_rib_script(&self.current_rib_program(), &self.repl_state) {
+                        Ok(compiler_output) => {
+                            let rib_edit = self.editor.helper_mut().unwrap();
+
+                            rib_edit.update_progression(&compiler_output);
+
+                            let result =
+                                eval(compiler_output.rib_byte_code, &self.repl_state).await;
+
+                            match result {
+                                Ok(result) => Ok(Some(result)),
+                                Err(err) => {
+                                    self.repl_state.remove_last_rib_expression();
+
+                                    Err(RibExecutionError::RibRuntimeError(err))
+                                }
+                            }
+                        }
                         Err(err) => {
                             self.repl_state.remove_last_rib_expression();
 
-                            Err(RibExecutionError::RibRuntimeError(err))
+                            Err(RibExecutionError::RibCompilationError(err))
                         }
                     }
-                }
-                Err(err) => {
-                    self.repl_state.remove_last_rib_expression();
-
-                    Err(RibExecutionError::RibCompilationError(err))
+                } else {
+                    Ok(None)
                 }
             }
-        } else {
-            Ok(None)
         }
     }
 
     /// Starts the default REPL loop for executing Rib code interactively.
     ///
     /// This is a convenience method that repeatedly reads user input and executes
-    /// it using [`Self::execute_rib`]. If you need more control over the REPL behavior,
-    /// use [`Self::read_line`] and [`Self::execute_rib`] directly.
+    /// it using [`Self::execute`]. If you need more control over the REPL behavior,
+    /// use [`Self::read_line`] and [`Self::execute`] directly.
     pub async fn run(&mut self) {
         loop {
             let readline = self.read_line();
             match readline {
                 Ok(rib) => {
-                    let result = self.execute_rib(rib.as_str()).await;
+                    let result = self.execute(rib.as_str()).await;
 
                     match result {
                         Ok(Some(result)) => {
@@ -210,6 +246,9 @@ impl RibRepl {
                             RibExecutionError::RibCompilationError(runtime_error) => {
                                 self.printer.print_rib_compilation_error(&runtime_error);
                             }
+                            RibExecutionError::Custom(custom_error) => {
+                                self.printer.print_custom_error(&custom_error);
+                            }
                         },
                     }
                 }
@@ -219,28 +258,42 @@ impl RibRepl {
         }
     }
 
-    fn update_rib(&mut self, rib_text: &str) {
-        self.repl_state.update_rib(rib_text);
-    }
-
     fn current_rib_program(&self) -> String {
         self.repl_state.current_rib_program()
     }
 }
 
-#[derive(Debug)]
-pub enum RibExecutionError {
-    RibCompilationError(RibCompilationError),
-    RibRuntimeError(RibRuntimeError),
+enum CommandOrExpr {
+    Command {
+        args: String,
+        executor: Arc<dyn UntypedCommand>,
+    },
+    RawExpr(String),
 }
 
-impl std::error::Error for RibExecutionError {}
+impl CommandOrExpr {
+    pub fn from_str(input: &str, command_registry: &CommandRegistry) -> Result<Self, String> {
+        if input.starts_with(":") {
+            let repl_input = input.split_whitespace().collect::<Vec<&str>>();
 
-impl Display for RibExecutionError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RibExecutionError::RibCompilationError(err) => write!(f, "{}", err),
-            RibExecutionError::RibRuntimeError(err) => write!(f, "{}", err),
+            let command_name = repl_input
+                .first()
+                .map(|x| x.strip_prefix(":").unwrap_or(x).trim())
+                .ok_or("Expecting a command name after `:`".to_string())?;
+
+            let input_args = repl_input[1..].join(" ");
+
+            let command = command_registry
+                .get_command(command_name)
+                .map(|command| CommandOrExpr::Command {
+                    args: input_args,
+                    executor: command,
+                })
+                .ok_or_else(|| format!("Command '{}' not found", command_name))?;
+
+            Ok(command)
+        } else {
+            Ok(CommandOrExpr::RawExpr(input.trim().to_string()))
         }
     }
 }
@@ -261,114 +314,4 @@ fn get_default_history_file() -> PathBuf {
     let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     path.push(".rib_history");
     path
-}
-
-/// Represents errors that can occur during the bootstrap phase of the Rib REPL environment.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ReplBootstrapError {
-    /// Multiple components were found, but the REPL requires a single component context.
-    ///
-    /// To resolve this, either:
-    /// - Ensure the context includes only one component, or
-    /// - Explicitly specify the component to load when starting the REPL.
-    ///
-    /// In the future, Rib will support multiple components
-    MultipleComponentsFound(String),
-
-    /// No components were found in the given context.
-    NoComponentsFound,
-
-    /// Failed to load a specified component.
-    ComponentLoadError(String),
-
-    /// Failed to read from or write to the REPL history file.
-    ReplHistoryFileError(String),
-}
-
-impl std::error::Error for ReplBootstrapError {}
-
-impl Display for ReplBootstrapError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ReplBootstrapError::MultipleComponentsFound(msg) => {
-                write!(f, "Multiple components found: {}", msg)
-            }
-            ReplBootstrapError::NoComponentsFound => {
-                write!(f, "No components found in the given context")
-            }
-            ReplBootstrapError::ComponentLoadError(msg) => {
-                write!(f, "Failed to load component: {}", msg)
-            }
-            ReplBootstrapError::ReplHistoryFileError(msg) => {
-                write!(f, "Failed to read/write REPL history file: {}", msg)
-            }
-        }
-    }
-}
-
-// Note: Currently, the Rib interpreter supports only one component, so the
-// `RibFunctionInvoke` trait in the `golem-rib` module does not include `component_id` in
-// the `invoke` arguments. It only requires the optional worker name, function name, and arguments.
-// Once multi-component support is added, the trait will be updated to include `component_id`,
-// and we can use it directly instead of `WorkerFunctionInvoke` in the `golem-rib-repl` module.
-pub struct ReplRibFunctionInvoke {
-    repl_state: Arc<ReplState>,
-}
-
-impl ReplRibFunctionInvoke {
-    pub fn new(repl_state: Arc<ReplState>) -> Self {
-        Self { repl_state }
-    }
-
-    fn get_cached_result(&self, instruction_id: &InstructionId) -> Option<ValueAndType> {
-        // If the current instruction index is greater than the last played index result,
-        // then we shouldn't use the cache result no matter what.
-        // This check is important because without this, loops end up reusing the cached invocation result
-        if instruction_id.index > self.repl_state.last_executed_instruction().index {
-            None
-        } else {
-            self.repl_state.invocation_results().get(instruction_id)
-        }
-    }
-}
-
-#[async_trait]
-impl RibFunctionInvoke for ReplRibFunctionInvoke {
-    async fn invoke(
-        &self,
-        instruction_id: &InstructionId,
-        worker_name: Option<EvaluatedWorkerName>,
-        function_name: EvaluatedFqFn,
-        args: EvaluatedFnArgs,
-    ) -> RibFunctionInvokeResult {
-        let component_id = self.repl_state.dependency().component_id;
-        let component_name = &self.repl_state.dependency().component_name;
-
-        match self.get_cached_result(instruction_id) {
-            Some(result) => Ok(result),
-            None => {
-                let rib_invocation_result = self
-                    .repl_state
-                    .worker_function_invoke()
-                    .invoke(
-                        component_id,
-                        component_name,
-                        worker_name.map(|x| x.0),
-                        function_name.0.as_str(),
-                        args.0,
-                    )
-                    .await;
-
-                match rib_invocation_result {
-                    Ok(result) => {
-                        self.repl_state
-                            .update_cache(instruction_id.clone(), result.clone());
-
-                        Ok(result)
-                    }
-                    Err(err) => Err(err.into()),
-                }
-            }
-        }
-    }
 }
