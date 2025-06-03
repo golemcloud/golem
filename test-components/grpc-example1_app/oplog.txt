@@ -1,0 +1,130 @@
+Selected profile: local
+Fuzzy matched pattern rpc-grpc:api-caller as rpc-grpc:api-caller
+#00001: 
+CREATE
+          at:                2025-06-03T21:56:02.245Z
+          component version: 1
+          args:              
+          env:
+            - RPC_GRPC_TOKEN: token
+            - RPC_GRPC_URL: http://localhost:50051
+          initial active plugins:
+#00002: 
+INVOKE rpc-grpc:api-caller-exports/rpc-grpc-api-caller-api.{bidirectional-streaming-rpc}
+          at:                2025-06-03T21:56:17.272Z
+          idempotency key:   e667dcbd-5980-49bf-8ef3-e31843da9bfd
+          input:
+#00003: 
+GROW MEMORY
+          at:                2025-06-03T21:56:17.274Z
+          increase:          64 KiB
+#00004: 
+GROW MEMORY
+          at:                2025-06-03T21:56:17.275Z
+          increase:          64 KiB
+#00005: 
+CALL golem_environment::get_environment
+          at:                2025-06-03T21:56:17.276Z
+          input:             none
+          result:            ok([("RPC_GRPC_TOKEN", "token"), ("RPC_GRPC_URL", "http://localhost:50051"), ("GOLEM_WORKER_NAME",
+     "085a7eb6-fbbc-4aef-878b-e15b32848c0d"), ("GOLEM_COMPONENT_ID", "a648b6a3-427b-4f49-93d3-8f1359efd994"), ("GOLEM_COMPONENT_VERSION", "1")])
+#00006: 
+CALL golem_environment::get_environment
+          at:                2025-06-03T21:56:17.276Z
+          input:             none
+          result:            ok([("RPC_GRPC_TOKEN", "token"), ("RPC_GRPC_URL", "http://localhost:50051"), ("GOLEM_WORKER_NAME",
+     "085a7eb6-fbbc-4aef-878b-e15b32848c0d"), ("GOLEM_COMPONENT_ID", "a648b6a3-427b-4f49-93d3-8f1359efd994"), ("GOLEM_COMPONENT_VERSION", "1")])
+#00007: 
+CALL golem::rpc::grpc::invoke-and-await-grpc result
+          at:                2025-06-03T21:56:17.314Z
+          input:             {function-name: "dummy-bi-stream-resource-bidirectional-streaming.send", function-params: [{nodes: [record-value([1,
+     3, 5, 7, 9, 11, 13, 16, 19, 21, 23, 25, 27, 38, 49, 51]), option-value(some(2)), prim-string("string"), list-value([4]), prim-string("string"),
+     option-value(some(6)), prim-s32(1), list-value([8]), prim-s32(1), option-value(some(10)), enum-value(0), list-value([12]), enum-value(0),
+     option-value(some(14)), record-value([15]), option-value(none), list-value([17]), record-value([18]), option-value(none), option-value(some(20)),
+     prim-bool(false), list-value([22]), prim-bool(false), option-value(some(24)), prim-s64(400000000), list-value([26]), prim-s64(40000000000),
+     option-value(some(28)), list-value([29, 30, 31, 32, 33, 34, 35, 36, 37]), prim-u8(1), prim-u8(1), prim-u8(1), prim-u8(2), prim-u8(2), prim-u8(4),
+     prim-u8(6), prim-u8(7), prim-u8(89), list-value([39]), list-value([40, 41, 42, 43, 44, 45, 46, 47, 48]), prim-u8(1), prim-u8(1), prim-u8(1),
+     prim-u8(2), prim-u8(2), prim-u8(4), prim-u8(6), prim-u8(7), prim-u8(8), option-value(some(50)), prim-float32(15.6), list-value([52, 53]),
+     prim-float32(14.2), prim-float32(13.13)]}]}
+          result:            ok(some(true))
+#00008: 
+CALL golem::rpc::grpc::invoke-and-await-grpc result
+          at:                2025-06-03T21:56:17.317Z
+          input:             {function-name: "dummy-bi-stream-resource-bidirectional-streaming.receive", function-params: []}
+          result:            ok(some({f-string: some("Hello, World!"), f-strings: ["one", "two"], f-int32: some(42), f-int32s: [1, 2, 3], f-enum:
+     some(enum1), f-enums: [enum1, enum1], f-sub: some({f-string: some("Hello, World!")}), f-subs: [{f-string: some("Hello, World!")}, {f-string:
+     some("Hello, World!")}], f-bool: some(true), f-bools: [true, false, true], f-int64: some(9876543210), f-int64s: [100, 200, 300], f-bytes: some([222,
+     173, 190, 239]), f-bytess: [[170, 187], [204, 221]], f-float: some(3.14), f-floats: [1.1, 2.2, 3.3]}))
+#00009: 
+CALL golem::rpc::grpc::invoke-and-await-grpc result
+          at:                2025-06-03T21:56:17.320Z
+          input:             {function-name: "dummy-bi-stream-resource-bidirectional-streaming.send", function-params: [{nodes: [record-value([1,
+     3, 5, 7, 9, 11, 13, 16, 19, 21, 23, 25, 27, 38, 49, 51]), option-value(some(2)), prim-string("string"), list-value([4]), prim-string("string"),
+     option-value(some(6)), prim-s32(1), list-value([8]), prim-s32(1), option-value(some(10)), enum-value(0), list-value([12]), enum-value(0),
+     option-value(some(14)), record-value([15]), option-value(none), list-value([17]), record-value([18]), option-value(none), option-value(some(20)),
+     prim-bool(false), list-value([22]), prim-bool(false), option-value(some(24)), prim-s64(400000000), list-value([26]), prim-s64(40000000000),
+     option-value(some(28)), list-value([29, 30, 31, 32, 33, 34, 35, 36, 37]), prim-u8(1), prim-u8(1), prim-u8(1), prim-u8(2), prim-u8(2), prim-u8(4),
+     prim-u8(6), prim-u8(7), prim-u8(89), list-value([39]), list-value([40, 41, 42, 43, 44, 45, 46, 47, 48]), prim-u8(1), prim-u8(1), prim-u8(1),
+     prim-u8(2), prim-u8(2), prim-u8(4), prim-u8(6), prim-u8(7), prim-u8(8), option-value(some(50)), prim-float32(15.6), list-value([52, 53]),
+     prim-float32(14.2), prim-float32(13.13)]}]}
+          result:            ok(some(true))
+#00010: 
+CALL golem::rpc::grpc::invoke-and-await-grpc result
+          at:                2025-06-03T21:56:17.323Z
+          input:             {function-name: "dummy-bi-stream-resource-bidirectional-streaming.receive", function-params: []}
+          result:            ok(some({f-string: some("Hello, World!"), f-strings: ["one", "two"], f-int32: some(42), f-int32s: [1, 2, 3], f-enum:
+     some(enum1), f-enums: [enum1, enum1], f-sub: some({f-string: some("Hello, World!")}), f-subs: [{f-string: some("Hello, World!")}, {f-string:
+     some("Hello, World!")}], f-bool: some(true), f-bools: [true, false, true], f-int64: some(9876543210), f-int64s: [100, 200, 300], f-bytes: some([222,
+     173, 190, 239]), f-bytess: [[170, 187], [204, 221]], f-float: some(3.14), f-floats: [1.1, 2.2, 3.3]}))
+#00011: 
+CALL golem::rpc::grpc::invoke-and-await-grpc result
+          at:                2025-06-03T21:56:17.325Z
+          input:             {function-name: "dummy-bi-stream-resource-bidirectional-streaming.send", function-params: [{nodes: [record-value([1,
+     3, 5, 7, 9, 11, 13, 16, 19, 21, 23, 25, 27, 38, 49, 51]), option-value(some(2)), prim-string("string"), list-value([4]), prim-string("string"),
+     option-value(some(6)), prim-s32(1), list-value([8]), prim-s32(1), option-value(some(10)), enum-value(0), list-value([12]), enum-value(0),
+     option-value(some(14)), record-value([15]), option-value(none), list-value([17]), record-value([18]), option-value(none), option-value(some(20)),
+     prim-bool(false), list-value([22]), prim-bool(false), option-value(some(24)), prim-s64(400000000), list-value([26]), prim-s64(40000000000),
+     option-value(some(28)), list-value([29, 30, 31, 32, 33, 34, 35, 36, 37]), prim-u8(1), prim-u8(1), prim-u8(1), prim-u8(2), prim-u8(2), prim-u8(4),
+     prim-u8(6), prim-u8(7), prim-u8(89), list-value([39]), list-value([40, 41, 42, 43, 44, 45, 46, 47, 48]), prim-u8(1), prim-u8(1), prim-u8(1),
+     prim-u8(2), prim-u8(2), prim-u8(4), prim-u8(6), prim-u8(7), prim-u8(8), option-value(some(50)), prim-float32(15.6), list-value([52, 53]),
+     prim-float32(14.2), prim-float32(13.13)]}]}
+          result:            ok(some(true))
+#00012: 
+CALL golem::rpc::grpc::invoke-and-await-grpc result
+          at:                2025-06-03T21:56:17.328Z
+          input:             {function-name: "dummy-bi-stream-resource-bidirectional-streaming.receive", function-params: []}
+          result:            ok(some({f-string: some("Hello, World!"), f-strings: ["one", "two"], f-int32: some(42), f-int32s: [1, 2, 3], f-enum:
+     some(enum1), f-enums: [enum1, enum1], f-sub: some({f-string: some("Hello, World!")}), f-subs: [{f-string: some("Hello, World!")}, {f-string:
+     some("Hello, World!")}], f-bool: some(true), f-bools: [true, false, true], f-int64: some(9876543210), f-int64s: [100, 200, 300], f-bytes: some([222,
+     173, 190, 239]), f-bytess: [[170, 187], [204, 221]], f-float: some(3.14), f-floats: [1.1, 2.2, 3.3]}))
+#00013: 
+CALL golem::rpc::grpc::invoke-and-await-grpc result
+          at:                2025-06-03T21:56:17.331Z
+          input:             {function-name: "dummy-bi-stream-resource-bidirectional-streaming.send", function-params: [{nodes: [record-value([1,
+     3, 5, 7, 9, 11, 13, 16, 19, 21, 23, 25, 27, 38, 49, 51]), option-value(some(2)), prim-string("string"), list-value([4]), prim-string("string"),
+     option-value(some(6)), prim-s32(1), list-value([8]), prim-s32(1), option-value(some(10)), enum-value(0), list-value([12]), enum-value(0),
+     option-value(some(14)), record-value([15]), option-value(none), list-value([17]), record-value([18]), option-value(none), option-value(some(20)),
+     prim-bool(false), list-value([22]), prim-bool(false), option-value(some(24)), prim-s64(400000000), list-value([26]), prim-s64(40000000000),
+     option-value(some(28)), list-value([29, 30, 31, 32, 33, 34, 35, 36, 37]), prim-u8(1), prim-u8(1), prim-u8(1), prim-u8(2), prim-u8(2), prim-u8(4),
+     prim-u8(6), prim-u8(7), prim-u8(89), list-value([39]), list-value([40, 41, 42, 43, 44, 45, 46, 47, 48]), prim-u8(1), prim-u8(1), prim-u8(1),
+     prim-u8(2), prim-u8(2), prim-u8(4), prim-u8(6), prim-u8(7), prim-u8(8), option-value(some(50)), prim-float32(15.6), list-value([52, 53]),
+     prim-float32(14.2), prim-float32(13.13)]}]}
+          result:            ok(some(true))
+#00014: 
+CALL golem::rpc::grpc::invoke-and-await-grpc result
+          at:                2025-06-03T21:56:17.333Z
+          input:             {function-name: "dummy-bi-stream-resource-bidirectional-streaming.receive", function-params: []}
+          result:            ok(some({f-string: some("Hello, World!"), f-strings: ["one", "two"], f-int32: some(42), f-int32s: [1, 2, 3], f-enum:
+     some(enum1), f-enums: [enum1, enum1], f-sub: some({f-string: some("Hello, World!")}), f-subs: [{f-string: some("Hello, World!")}, {f-string:
+     some("Hello, World!")}], f-bool: some(true), f-bools: [true, false, true], f-int64: some(9876543210), f-int64s: [100, 200, 300], f-bytes: some([222,
+     173, 190, 239]), f-bytess: [[170, 187], [204, 221]], f-float: some(3.14), f-floats: [1.1, 2.2, 3.3]}))
+#00015: 
+CALL golem::rpc::grpc::invoke-and-await-grpc result
+          at:                2025-06-03T21:56:17.335Z
+          input:             {function-name: "dummy-bi-stream-resource-bidirectional-streaming.finish", function-params: []}
+          result:            ok(true)
+#00016: 
+INVOKE COMPLETED
+          at:                2025-06-03T21:56:17.336Z
+          consumed fuel:     0
+          result:            ({name: "Good, bi directional streaming was demostrated well enough"})

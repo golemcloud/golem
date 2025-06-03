@@ -1640,8 +1640,16 @@ fn encode_host_function_response_as_value(
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
         "golem::rpc::grpc::invoke-and-await-grpc result" => {
-            let payload: Result<String, SerializableError> = try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
+            let payload: Result<ValueAndType, SerializableError> = try_deserialize(bytes)?;
+            match payload {
+                Ok(vt) => Ok(vt),
+                Err(err) => {
+                    Ok(ValueAndType::new(
+                        Value::Result(Err(Some(Box::new(err.into_value())))),
+                        result_err(SerializableError::get_type()),
+                    ))
+                }
+            }
         }
         _ => {
             // For everything else we assume that payload is a serialized ValueAndType

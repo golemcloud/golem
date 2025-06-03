@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, WitValue};
+use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
 use golem_worker_executor_base::services::file_loader::FileLoader;
 use prometheus::Registry;
 
@@ -916,21 +916,19 @@ impl DynamicGrpc for TestWorkerCtx {
         function_str: String,
         service_name: String,
         params: &[wasmtime::component::Val],
-        results: &mut [wasmtime::component::Val],
+        params_witvalues: &[WitValue],
         result_types: &[wasmtime::component::Type],
         grpc_metadata: golem_common::model::component_metadata::GrpcMetadata,
-        _call_type: String,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ValueAndType> {
         self.durable_ctx
             .invoke_and_await_grpc(
                 self_,
                 function_str,
                 service_name,
                 params,
-                results,
+                params_witvalues,
                 result_types,
                 grpc_metadata,
-                _call_type,
             )
             .await
     }

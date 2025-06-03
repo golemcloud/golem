@@ -29,8 +29,8 @@ use golem_wasm_rpc::golem_rpc_0_2_x::types::{
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{ComponentId, HostWasmRpc, RpcError, Uri, Value, WitValue};
-use golem_worker_executor_base::durable_host::grpc::{DynamicGrpc, GrpcEntry}                                              ;
+use golem_wasm_rpc::{ComponentId, HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
+use golem_worker_executor_base::durable_host::grpc::{DynamicGrpc, GrpcEntry};
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -587,21 +587,19 @@ impl DynamicGrpc for Context {
         function_str: String,
         service_name: String,
         params: &[wasmtime::component::Val],
-        results: &mut [wasmtime::component::Val],
+        params_witvalues: &[WitValue],
         result_types: &[wasmtime::component::Type],
         grpc_metadata: golem_common::model::component_metadata::GrpcMetadata,
-        _call_type: String,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ValueAndType> {
         self.durable_ctx
             .invoke_and_await_grpc(
                 self_,
                 function_str,
                 service_name,
                 params,
-                results,
+                params_witvalues,
                 result_types,
                 grpc_metadata,
-                _call_type,
             )
             .await
     }

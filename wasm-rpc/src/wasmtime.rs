@@ -490,6 +490,194 @@ async fn decode_param_impl(
 
 /// Converts a wasmtime Val to a wasm-rpc Value
 #[async_recursion]
+pub async fn encode_output_without_store(
+    value: &Val,
+    typ: &Type,
+) -> Result<Value, EncodingError> {
+    match value {
+        Val::Bool(bool) => Ok(Value::Bool(*bool)),
+        Val::S8(i8) => Ok(Value::S8(*i8)),
+        Val::U8(u8) => Ok(Value::U8(*u8)),
+        Val::S16(i16) => Ok(Value::S16(*i16)),
+        Val::U16(u16) => Ok(Value::U16(*u16)),
+        Val::S32(i32) => Ok(Value::S32(*i32)),
+        Val::U32(u32) => Ok(Value::U32(*u32)),
+        Val::S64(i64) => Ok(Value::S64(*i64)),
+        Val::U64(u64) => Ok(Value::U64(*u64)),
+        Val::Float32(f32) => Ok(Value::F32(*f32)),
+        Val::Float64(f64) => Ok(Value::F64(*f64)),
+        Val::Char(char) => Ok(Value::Char(*char)),
+        Val::String(string) => Ok(Value::String(string.to_string())),
+        Val::List(list) => {
+            if let Type::List(list_type) = typ {
+                let mut encoded_values = Vec::new();
+                for value in (*list).iter() {
+                    encoded_values
+                        .push(encode_output_without_store(value, &list_type.ty()).await?);
+                }
+                Ok(Value::List(encoded_values))
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got a List value for non-list result type".to_string(),
+                })
+            }
+        }
+        Val::Record(record) => {
+            if let Type::Record(record_type) = typ {
+                let mut encoded_values = Vec::new();
+                for ((_name, value), field) in record.iter().zip(record_type.fields()) {
+                    let field = encode_output_without_store(value, &field.ty).await?;
+                    encoded_values.push(field);
+                }
+                Ok(Value::Record(encoded_values))
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got a Record value for non-record result type".to_string(),
+                })
+            }
+        }
+        Val::Tuple(tuple) => {
+            if let Type::Tuple(tuple_type) = typ {
+                let mut encoded_values = Vec::new();
+                for (v, t) in tuple.iter().zip(tuple_type.types()) {
+                    let value = encode_output_without_store(v, &t).await?;
+                    encoded_values.push(value);
+                }
+                Ok(Value::Tuple(encoded_values))
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got a Tuple value for non-tuple result type".to_string(),
+                })
+            }
+        }
+        Val::Variant(name, value) => {
+            if let Type::Variant(variant_type) = typ {
+                let (discriminant, case) = variant_type
+                    .cases()
+                    .enumerate()
+                    .find(|(_idx, case)| case.name == *name)
+                    .ok_or(EncodingError::ValueMismatch {
+                        details: format!("Could not find case for variant {}", name),
+                    })?;
+
+                let encoded_output = match value {
+                    Some(v) => Some(
+                        encode_output_without_store(
+                            v,
+                            &case.ty.ok_or(EncodingError::ValueMismatch {
+                                details: "Could not get type information for case".to_string(),
+                            })?
+                        )
+                        .await?,
+                    ),
+                    None => None,
+                };
+
+                Ok(Value::Variant {
+                    case_idx: discriminant as u32,
+                    case_value: encoded_output.map(Box::new),
+                })
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got a Variant value for non-variant result type".to_string(),
+                })
+            }
+        }
+        Val::Enum(name) => {
+            if let Type::Enum(enum_type) = typ {
+                let (discriminant, _name) = enum_type
+                    .names()
+                    .enumerate()
+                    .find(|(_idx, n)| n == name)
+                    .ok_or(EncodingError::ValueMismatch {
+                        details: format!("Could not find discriminant for enum {}", name),
+                    })?;
+                Ok(Value::Enum(discriminant as u32))
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got an Enum value for non-enum result type".to_string(),
+                })
+            }
+        }
+        Val::Option(option) => match option {
+            Some(value) => {
+                if let Type::Option(option_type) = typ {
+                    let encoded_output =
+                        encode_output_without_store(value, &option_type.ty()).await?;
+                    Ok(Value::Option(Some(Box::new(encoded_output))))
+                } else {
+                    Err(EncodingError::ValueMismatch {
+                        details: "Got an Option value for non-option result type".to_string(),
+                    })
+                }
+            }
+            None => Ok(Value::Option(None)),
+        },
+        Val::Result(result) => {
+            if let Type::Result(result_type) = typ {
+                match result {
+                    Ok(value) => {
+                        let encoded_output = match value {
+                            Some(v) => {
+                                let t = result_type.ok().ok_or(EncodingError::ValueMismatch {
+                                    details: "Could not get ok type for result".to_string(),
+                                })?;
+
+                                Some(encode_output_without_store(v, &t).await?)
+                            }
+                            None => None,
+                        };
+                        Ok(Value::Result(Ok(encoded_output.map(Box::new))))
+                    }
+                    Err(value) => {
+                        let encoded_output = match value {
+                            Some(v) => {
+                                let t = result_type.err().ok_or(EncodingError::ValueMismatch {
+                                    details: "Could not get error type for result".to_string(),
+                                })?;
+                                Some(encode_output_without_store(v, &t).await?)
+                            }
+                            None => None,
+                        };
+                        Ok(Value::Result(Err(encoded_output.map(Box::new))))
+                    }
+                }
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got a Result value for non-result result type".to_string(),
+                })
+            }
+        }
+        Val::Flags(flags) => {
+            if let Type::Flags(flags_type) = typ {
+                let mut encoded_value = vec![false; flags_type.names().count()];
+
+                for (idx, name) in flags_type.names().enumerate() {
+                    if flags.contains(&name.to_string()) {
+                        encoded_value[idx] = true;
+                    }
+                }
+
+                Ok(Value::Flags(encoded_value))
+            } else {
+                Err(EncodingError::ValueMismatch {
+                    details: "Got a Flags value for non-flags result type".to_string(),
+                })
+            }
+        }
+        Val::Resource(_) => {
+            
+            // dummy
+            Ok(Value::Handle {
+                uri: "dummy".to_owned(),
+                resource_id: 1,
+            })
+        }
+    }
+}
+
+/// Converts a wasmtime Val to a wasm-rpc Value
+#[async_recursion]
 pub async fn encode_output(
     value: &Val,
     typ: &Type,

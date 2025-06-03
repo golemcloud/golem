@@ -47,10 +47,14 @@ async fn grpc_unary_rpc(
     let root: String = std::env::var("WORKSPACE_DIR").expect("root directory");
 
     let (_, package_name, fds) = wit_carpenter::from_grpc(
-        Path::new(&format!(
+        &[Path::new(&format!(
+            "{}/test-components/grpc-example1_app/components-rust/rpc-grpc-api-caller/proto/index.proto",
+            root
+        ))],
+        &[Path::new(&format!(
             "{}/test-components/grpc-example1_app/components-rust/rpc-grpc-api-caller/proto",
             root
-        )),
+        ))],
         None,
     );
 
@@ -171,10 +175,14 @@ async fn grpc_unary_rpc_unavailable(
     let root: String = std::env::var("WORKSPACE_DIR").expect("root directory");
 
     let (_, package_name, fds) = wit_carpenter::from_grpc(
-        Path::new(&format!(
+        &[Path::new(&format!(
+            "{}/test-components/grpc-example1_app/components-rust/rpc-grpc-api-caller/proto/index.proto",
+            root
+        ))],
+        &[Path::new(&format!(
             "{}/test-components/grpc-example1_app/components-rust/rpc-grpc-api-caller/proto",
             root
-        )),
+        ))],
         None,
     );
 
@@ -302,10 +310,14 @@ async fn grpc_server_streaming_rpc(
     let root: String = std::env::var("WORKSPACE_DIR").expect("root directory");
 
     let (_, package_name, fds) = wit_carpenter::from_grpc(
-        Path::new(&format!(
+        &[Path::new(&format!(
+            "{}/test-components/grpc-example1_app/components-rust/rpc-grpc-api-caller/proto/index.proto",
+            root
+        ))],
+        &[Path::new(&format!(
             "{}/test-components/grpc-example1_app/components-rust/rpc-grpc-api-caller/proto",
             root
-        )),
+        ))],
         None,
     );
 
@@ -425,10 +437,14 @@ async fn grpc_client_streaming_rpc(
     let root: String = std::env::var("WORKSPACE_DIR").expect("root directory");
 
     let (_, package_name, fds) = wit_carpenter::from_grpc(
-        Path::new(&format!(
+        &[Path::new(&format!(
+            "{}/test-components/grpc-example1_app/components-rust/rpc-grpc-api-caller/proto/index.proto",
+            root
+        ))],
+        &[Path::new(&format!(
             "{}/test-components/grpc-example1_app/components-rust/rpc-grpc-api-caller/proto",
             root
-        )),
+        ))],
         None,
     );
 
@@ -549,10 +565,14 @@ async fn grpc_bidirectional_streaming_rpc(
     let root: String = std::env::var("WORKSPACE_DIR").expect("root directory");
 
     let (_, package_name, fds) = wit_carpenter::from_grpc(
-        Path::new(&format!(
+        &[Path::new(&format!(
+            "{}/test-components/grpc-example1_app/components-rust/rpc-grpc-api-caller/proto/index.proto",
+            root
+        ))],
+        &[Path::new(&format!(
             "{}/test-components/grpc-example1_app/components-rust/rpc-grpc-api-caller/proto",
             root
-        )),
+        ))],
         None,
     );
 
@@ -674,10 +694,14 @@ async fn durabile_grpc_unary_rpc(
     let root: String = std::env::var("WORKSPACE_DIR").expect("root directory");
 
     let (_, package_name, fds) = wit_carpenter::from_grpc(
-        Path::new(&format!(
+        &[Path::new(&format!(
+            "{}/test-components/grpc-example1_app/components-rust/rpc-grpc-api-caller/proto/index.proto",
+            root
+        ))],
+        &[Path::new(&format!(
             "{}/test-components/grpc-example1_app/components-rust/rpc-grpc-api-caller/proto",
             root
-        )),
+        ))],
         None,
     );
 

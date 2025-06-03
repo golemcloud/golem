@@ -12,20 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prost_reflect::DynamicMessage;
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot;
-use tonic::{Response, Status};
 use super::common::*;
 use crate::durable_host::grpc::{DynamicGrpc, GrpcEntry, GrpcEntryPayload};
 use crate::workerctx::WorkerCtx;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use golem_common::model::component_metadata::DynamicLinkedGrpc;
-use golem_wasm_rpc::wasmtime::ResourceStore;
+
+use golem_wasm_rpc::wasmtime::{decode_param, encode_output, ResourceStore};
+use golem_wasm_rpc::{Value, WitValue};
 use heck::ToPascalCase;
+use prost_reflect::DynamicMessage;
 use rib::ParsedFunctionName;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
+use tonic::{Response, Status};
 use tracing::{warn, Instrument};
 use wasmtime::component::types::{ComponentInstance, ComponentItem};
 use wasmtime::component::{LinkerInstance, Resource, ResourceType, Type, Val};
@@ -74,14 +76,10 @@ pub fn dynamic_grpc_link<Ctx: WorkerCtx + ResourceStore + DynamicGrpc>(
                     results: result_types,
                 });
             }
-            ComponentItem::CoreFunc(_) => {}
-            ComponentItem::Module(_) => {}
-            ComponentItem::Component(_) => {}
-            ComponentItem::ComponentInstance(_) => {}
-            ComponentItem::Type(_) => {}
             ComponentItem::Resource(_resource) => {
                 resources.entry((name, inner_name)).or_default();
             }
+            _ => {}
         }
     }
 
@@ -128,17 +126,17 @@ pub fn dynamic_grpc_link<Ctx: WorkerCtx + ResourceStore + DynamicGrpc>(
             instance.func_new_async(
                 &function.name.function.function_name(),
                 move |store, params, results| {
+                    let param_types = function.params.clone();
                     let result_types = function.results.clone();
                     let call_type = call_type.clone();
-                    let function_name = function.name.clone();
                     let rpc_metadata = rpc_metadata.clone();
 
                     Box::new(
                         async move {
                             dynamic_function_call(
                                 store,
-                                &function_name,
                                 params,
+                                &param_types,
                                 results,
                                 &result_types,
                                 &call_type,
@@ -184,8 +182,8 @@ async fn register_grpc_entry<Ctx: WorkerCtx>(
 
 async fn dynamic_function_call<Ctx: WorkerCtx + ResourceStore + DynamicGrpc + Send>(
     mut store_: impl AsContextMut<Data = Ctx> + Send,
-    _function_name: &ParsedFunctionName,
     params: &[Val],
+    param_types: &[Type],
     results: &mut [Val],
     result_types: &[Type],
     call_type: &DynamicRpcCall,
@@ -195,7 +193,7 @@ async fn dynamic_function_call<Ctx: WorkerCtx + ResourceStore + DynamicGrpc + Se
     match call_type {
         DynamicRpcCall::ResourceStubConstructor { .. } => {
             let handle = init(params, &mut store).await?;
-            
+
             store.data_mut().init().await?;
 
             results[0] = Val::Resource(handle.try_into_resource_any(store)?);
@@ -205,38 +203,54 @@ async fn dynamic_function_call<Ctx: WorkerCtx + ResourceStore + DynamicGrpc + Se
             ..
         } => {
             if let Val::Resource(handle) = params[0] {
-                let resource: Resource<GrpcEntry> = handle.try_into_resource(&mut store)?;
+                let params_witvalue = encode_parameters_without_skip(
+                    &params[1..params.len()],
+                    &param_types[1..param_types.len()],
+                    &mut store,
+                )
+                .await
+                .context(format!(
+                    "Encoding parameters of {}",
+                    target_function_name.to_string()
+                ))?;
 
-                store
+                let resource: Resource<GrpcEntry> = handle.try_into_resource(&mut store)?;
+                let service_name = target_function_name
+                    .clone()
+                    .site
+                    .interface_name()
+                    .unwrap()
+                    .split("/")
+                    .nth(1)
+                    .unwrap()
+                    .to_pascal_case();
+
+                let result = store
                     .data_mut()
-                    .invoke_and_await_grpc(                        resource,
+                    .invoke_and_await_grpc(
+                        resource,
                         target_function_name.function().to_string(),
-                        target_function_name
-                            .clone()
-                            .site
-                            .interface_name()
-                            .unwrap()
-                            .split("/")
-                            .nth(1)
-                            .unwrap()
-                            .to_pascal_case(),
+                        service_name,
                         params,
-                        results,
+                        &params_witvalue,
                         result_types,
                         rpc_metadata.metadata.clone(),
-                        "blocking".to_string(),
                     )
                     .await?;
+                let witvalue = WitValue::from(result);
+                
+                let decoded_result = decode_param(&witvalue.into(), &result_types[0], store.data_mut())
+                    .await
+                    .map_err(|err| {
+                        anyhow!(format!("Failed to decode result value 0: {err}"))
+                    })?;
+                results[0] = decoded_result.val;
+
+                // this is needed for custom handling.
+                // let _ = to_vals_(vec![result], results, result_types);
             };
         }
-        DynamicRpcCall::ResourceCustomConstructor { .. } => {}
-        DynamicRpcCall::GlobalStubConstructor { .. } => {}
-        DynamicRpcCall::GlobalCustomConstructor { .. } => {}
-        DynamicRpcCall::FireAndForgetFunctionCall { .. } => {}
-        DynamicRpcCall::ScheduledFunctionCall { .. } => {}
-        DynamicRpcCall::FutureInvokeResultSubscribe => {}
-        DynamicRpcCall::FutureInvokeResultGet => {}
-        DynamicRpcCall::AsyncFunctionCall { .. } => {}
+        _ => {}
     }
     Ok(())
 }
@@ -256,4 +270,20 @@ async fn init<Ctx: WorkerCtx + ResourceStore + Send>(
     )
     .await?;
     Ok(handle)
+}
+
+pub async fn encode_parameters_without_skip<Ctx: ResourceStore + Send>(
+    params: &[Val],
+    param_types: &[Type],
+    store: &mut StoreContextMut<'_, Ctx>,
+) -> anyhow::Result<Vec<WitValue>> {
+    let mut wit_value_params = Vec::new();
+    for (idx, (param, typ)) in params.iter().zip(param_types).enumerate() {
+        let value: Value = encode_output(param, typ, store.data_mut())
+            .await
+            .map_err(|err| anyhow!(format!("Failed to encode parameter {idx}: {err}")))?;
+        let wit_value: WitValue = value.into();
+        wit_value_params.push(wit_value);
+    }
+    Ok(wit_value_params)
 }
