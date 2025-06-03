@@ -556,7 +556,9 @@ where
     E: From<RdbmsError>,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
-    // let interface = get_db_transaction_interface::<T>();
+    let interface = get_db_transaction_interface::<T>();
+    ctx.observe_function_call(interface.as_str(), "rollback");
+
     let handle = entry.rep();
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
 
@@ -613,6 +615,9 @@ where
     E: From<RdbmsError>,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
+    let interface = get_db_transaction_interface::<T>();
+    ctx.observe_function_call(interface.as_str(), "commit");
+
     let handle = entry.rep();
     let begin_oplog_idx = get_begin_oplog_index(ctx, handle)?;
 

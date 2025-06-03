@@ -1220,17 +1220,17 @@ impl TestOplog {
         {
             let failed_before = self
                 .additional_test_deps
-                .has_oplog_failed(self.owned_worker_id.clone(), entry_name.to_string());
+                .get_oplog_failures_count(self.owned_worker_id.clone(), entry_name.to_string());
 
-            if failed_before {
+            if failed_before > 0 {
                 println!(
-                    "worker {} failed on {} before",
-                    self.owned_worker_id.worker_id.worker_name, entry_name
+                    "worker {} failed on {} before {} times",
+                    self.owned_worker_id.worker_id.worker_name, entry_name, failed_before
                 );
                 Ok(())
             } else {
                 self.additional_test_deps
-                    .set_oplog_failed(self.owned_worker_id.clone(), entry_name.to_string());
+                    .add_oplog_failure(self.owned_worker_id.clone(), entry_name.to_string());
                 println!(
                     "worker {} failed on {}",
                     self.owned_worker_id.worker_id.worker_name, entry_name
@@ -1298,24 +1298,30 @@ impl Debug for TestOplog {
 
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
-    oplog_failures: Arc<DashMap<OwnedWorkerId, String>>,
+    oplog_failures: Arc<DashMap<OwnedWorkerId, DashMap<String, usize>>>,
 }
 
 impl AdditionalTestDeps {
     pub fn new() -> Self {
-        let oplog_failed = Arc::new(DashMap::new());
-        Self {
-            oplog_failures: oplog_failed,
-        }
+        let oplog_failures = Arc::new(DashMap::new());
+        Self { oplog_failures }
     }
 
-    pub fn has_oplog_failed(&self, owned_worker_id: OwnedWorkerId, entry: String) -> bool {
-        self.oplog_failures
+    pub fn get_oplog_failures_count(&self, owned_worker_id: OwnedWorkerId, entry: String) -> usize {
+        let v = self
+            .oplog_failures
             .get(&owned_worker_id)
-            .is_some_and(|v| v.contains(&entry))
+            .and_then(|v| v.get(&entry).map(|v| *v.value()));
+        v.unwrap_or_default()
     }
 
-    pub fn set_oplog_failed(&self, owned_worker_id: OwnedWorkerId, entry: String) {
-        self.oplog_failures.insert(owned_worker_id, entry);
+    pub fn add_oplog_failure(&self, owned_worker_id: OwnedWorkerId, entry: String) {
+        *self
+            .oplog_failures
+            .entry(owned_worker_id)
+            .or_default()
+            .entry(entry)
+            .or_default()
+            .value_mut() += 1;
     }
 }

@@ -1247,10 +1247,7 @@ fn encode_host_function_request_as_value(
             let payload: Option<RdbmsRequest<MysqlType>> = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
-        "rdbms::mysql::db-connection::begin-transaction"
-        | "rdbms::mysql::db-transaction::rollback"
-        | "rdbms::mysql::db-transaction::commit"
-        | "rdbms::mysql::db-result-stream::get-columns"
+        "rdbms::mysql::db-result-stream::get-columns"
         | "rdbms::mysql::db-result-stream::get-next" => no_payload(),
         "rdbms::postgres::db-connection::query"
         | "rdbms::postgres::db-connection::execute"
@@ -1261,10 +1258,7 @@ fn encode_host_function_request_as_value(
             let payload: Option<RdbmsRequest<PostgresType>> = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
-        "rdbms::postgres::db-connection::begin-transaction"
-        | "rdbms::postgres::db-transaction::rollback"
-        | "rdbms::postgres::db-transaction::commit"
-        | "rdbms::postgres::db-result-stream::get-columns"
+        "rdbms::postgres::db-result-stream::get-columns"
         | "rdbms::postgres::db-result-stream::get-next" => no_payload(),
         _ => {
             // For everything else we assume that payload is a serialized ValueAndType
@@ -1634,11 +1628,6 @@ fn encode_host_function_response_as_value(
             let payload: Result<Option<WorkerId>, SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "rdbms::mysql::db-connection::begin-transaction" => {
-            let payload: Result<RdbmsTransactionRequest, SerializableError> =
-                try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
-        }
         "rdbms::mysql::db-connection::execute" | "rdbms::mysql::db-transaction::execute" => {
             let payload: Result<u64, SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
@@ -1654,10 +1643,6 @@ fn encode_host_function_response_as_value(
                 try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
-        "rdbms::mysql::db-transaction::rollback" | "rdbms::mysql::db-transaction::commit" => {
-            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
-        }
         "rdbms::mysql::db-result-stream::get-columns" => {
             let payload: Result<Vec<mysql_types::DbColumn>, SerializableError> =
                 try_deserialize(bytes)?;
@@ -1669,11 +1654,6 @@ fn encode_host_function_response_as_value(
                 SerializableError,
             > = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
-        }
-        "rdbms::postgres::db-connection::begin-transaction" => {
-            let payload: Result<RdbmsTransactionRequest, SerializableError> =
-                try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
         }
         "rdbms::postgres::db-connection::execute" | "rdbms::postgres::db-transaction::execute" => {
             let payload: Result<u64, SerializableError> = try_deserialize(bytes)?;
@@ -1689,10 +1669,6 @@ fn encode_host_function_response_as_value(
             let payload: Result<RdbmsRequest<PostgresType>, SerializableError> =
                 try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
-        }
-        "rdbms::postgres::db-transaction::rollback" | "rdbms::postgres::db-transaction::commit" => {
-            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
         }
         "rdbms::postgres::db-result-stream::get-columns" => {
             let payload: Result<Vec<postgres_types::DbColumn>, SerializableError> =
