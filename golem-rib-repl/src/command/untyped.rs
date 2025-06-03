@@ -1,6 +1,5 @@
 use crate::rib_context::ReplContext;
 use crate::Command;
-use convert_case::{Case, Casing};
 
 pub trait UntypedCommand {
     fn run(&self, input: &str, repl_context: &mut ReplContext);

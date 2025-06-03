@@ -1,4 +1,4 @@
-use crate::{parse_with_clap, Command, ReplContext, UntypedCommand};
+use crate::{parse_with_clap, Command, ReplContext};
 use crossterm::cursor::MoveTo;
 use crossterm::{
     execute,
@@ -10,9 +10,9 @@ use std::io::stdout;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(about = "Display type of an expression")]
+#[command(about = "Display type of a rib expression")]
 pub struct TypeInfoInput {
-    /// Expression to analyze (e.g. a + b, or (1 + 2) * 3)
+    /// Rib expression.
     /// Multiline rib expressions are not supported.
     #[arg(required = true)]
     pub expr: Vec<String>,
