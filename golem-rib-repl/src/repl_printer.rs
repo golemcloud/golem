@@ -19,17 +19,18 @@ use rib::*;
 use std::collections::BTreeMap;
 
 pub trait ReplPrinter {
-    fn print_rib_result(&self, result: &RibResult);
-    fn print_rib_compilation_error(&self, error: &RibCompilationError);
-    fn print_bootstrap_error(&self, error: &ReplBootstrapError);
-    fn print_rib_runtime_error(&self, error: &RibRuntimeError);
-    fn print_wasm_value_type(&self, analysed_type: &AnalysedType);
+    fn print_bootstrap_error(&self, error: &ReplBootstrapError) {
+        print_bootstrap_error(error);
+    }
+
     fn print_clap_parse_error(&self, error: &clap::Error) {
         println!("{}", error.to_string().red());
     }
+
     fn print_custom_error(&self, error: &str) {
         println!("{} {}", "[message]".red(), error.red());
     }
+
     fn print_custom_message(&self, message: &str) {
         println!("{} {}", "[message]".yellow(), message.cyan());
     }
@@ -37,99 +38,13 @@ pub trait ReplPrinter {
     fn print_exports(&self, exports: &FunctionDictionary) {
         print_function_dictionary(exports)
     }
-}
-
-#[derive(Clone)]
-pub struct DefaultReplResultPrinter;
-
-impl ReplPrinter for DefaultReplResultPrinter {
-    fn print_rib_result(&self, result: &RibResult) {
-        println!("{}", result.to_string().yellow());
-    }
 
     fn print_rib_compilation_error(&self, error: &RibCompilationError) {
-        match error {
-            RibCompilationError::RibStaticAnalysisError(msg) => {
-                println!("{} {}", "[rib static analysis error]".red(), msg.red());
-            }
-
-            RibCompilationError::UnsupportedGlobalInput {
-                invalid_global_inputs: found,
-                valid_global_inputs: expected,
-            } => {
-                println!(
-                    "{} {} {}",
-                    "[unsupported input]".red(),
-                    "found:".yellow(),
-                    found.join(", ").white()
-                );
-                println!(
-                    "{} {} {}",
-                    "[supported inputs]".green(),
-                    "expected:".yellow(),
-                    expected.join(", ").white()
-                );
-            }
-            RibCompilationError::RibTypeError(compilation_error) => {
-                let cause = &compilation_error.cause;
-                let position = compilation_error.expr.source_span();
-
-                println!("{}", "[compilation error]".red().bold());
-                println!("{} {}", "[position]".yellow(), position.start_column());
-                println!(
-                    "{} {}",
-                    "[expression]".yellow(),
-                    compilation_error.expr.to_string().white()
-                );
-                println!("{} {}", "[cause]".yellow(), cause.bright_red().bold());
-
-                if !compilation_error.additional_error_details.is_empty() {
-                    for detail in &compilation_error.additional_error_details {
-                        println!("{} {}", "[help]".yellow(), detail.cyan());
-                    }
-                }
-
-                if !compilation_error.help_messages.is_empty() {
-                    for message in &compilation_error.help_messages {
-                        println!("{} {}", "[help]".yellow(), message.cyan());
-                    }
-                }
-            }
-            RibCompilationError::InvalidSyntax(script) => {
-                println!("{} {}", "[invalid script]".red(), script.white());
-            }
-            RibCompilationError::ByteCodeGenerationFail(error) => {
-                println!(
-                    "{} {}",
-                    "[internal bytecode generation error]".red(),
-                    error.to_string().red()
-                );
-            }
-        }
+        print_rib_compilation_error(error);
     }
 
-    fn print_bootstrap_error(&self, error: &ReplBootstrapError) {
-        match error {
-            ReplBootstrapError::ReplHistoryFileError(msg) => {
-                println!("{} {}", "[warn]".yellow(), msg);
-            }
-            ReplBootstrapError::ComponentLoadError(msg) => {
-                println!("{} {}", "[error]".red(), msg);
-            }
-            ReplBootstrapError::MultipleComponentsFound(msg) => {
-                println!("{} {}", "[error]".red(), msg);
-                println!(
-                    "{}",
-                    "specify the component name when bootstrapping repl".yellow()
-                );
-            }
-            ReplBootstrapError::NoComponentsFound => {
-                println!(
-                    "{} no components found in the repl context",
-                    "[warn]".yellow()
-                );
-            }
-        }
+    fn print_rib_result(&self, result: &RibResult) {
+        println!("{}", result.to_string().yellow());
     }
 
     fn print_rib_runtime_error(&self, error: &RibRuntimeError) {
@@ -145,6 +60,11 @@ impl ReplPrinter for DefaultReplResultPrinter {
         );
     }
 }
+
+#[derive(Clone)]
+pub struct DefaultReplResultPrinter;
+
+impl ReplPrinter for DefaultReplResultPrinter {}
 
 pub fn print_function_dictionary(dict: &FunctionDictionary) {
     let mut output = String::new();
@@ -305,4 +225,89 @@ struct HierarchyNode<'a> {
 struct ResourceNode<'a> {
     constructor: Option<&'a FunctionType>,
     methods: Vec<(String, &'a FunctionType)>,
+}
+
+fn print_rib_compilation_error(error: &RibCompilationError) {
+    match error {
+        RibCompilationError::RibStaticAnalysisError(msg) => {
+            println!("{} {}", "[rib static analysis error]".red(), msg.red());
+        }
+
+        RibCompilationError::UnsupportedGlobalInput {
+            invalid_global_inputs: found,
+            valid_global_inputs: expected,
+        } => {
+            println!(
+                "{} {} {}",
+                "[unsupported input]".red(),
+                "found:".yellow(),
+                found.join(", ").white()
+            );
+            println!(
+                "{} {} {}",
+                "[supported inputs]".green(),
+                "expected:".yellow(),
+                expected.join(", ").white()
+            );
+        }
+        RibCompilationError::RibTypeError(compilation_error) => {
+            let cause = &compilation_error.cause;
+            let position = compilation_error.expr.source_span();
+
+            println!("{}", "[compilation error]".red().bold());
+            println!("{} {}", "[position]".yellow(), position.start_column());
+            println!(
+                "{} {}",
+                "[expression]".yellow(),
+                compilation_error.expr.to_string().white()
+            );
+            println!("{} {}", "[cause]".yellow(), cause.bright_red().bold());
+
+            if !compilation_error.additional_error_details.is_empty() {
+                for detail in &compilation_error.additional_error_details {
+                    println!("{} {}", "[help]".yellow(), detail.cyan());
+                }
+            }
+
+            if !compilation_error.help_messages.is_empty() {
+                for message in &compilation_error.help_messages {
+                    println!("{} {}", "[help]".yellow(), message.cyan());
+                }
+            }
+        }
+        RibCompilationError::InvalidSyntax(script) => {
+            println!("{} {}", "[invalid script]".red(), script.white());
+        }
+        RibCompilationError::ByteCodeGenerationFail(error) => {
+            println!(
+                "{} {}",
+                "[internal bytecode generation error]".red(),
+                error.to_string().red()
+            );
+        }
+    }
+}
+
+fn print_bootstrap_error(error: &ReplBootstrapError) {
+    match error {
+        ReplBootstrapError::ReplHistoryFileError(msg) => {
+            println!("{} {}", "[warn]".yellow(), msg);
+        }
+        ReplBootstrapError::ComponentLoadError(msg) => {
+            println!("{} {}", "[error]".red(), msg);
+        }
+        ReplBootstrapError::MultipleComponentsFound(msg) => {
+            println!("{} {}", "[error]".red(), msg);
+            println!(
+                "{}",
+                "specify the component name when bootstrapping repl".yellow()
+            );
+        }
+        ReplBootstrapError::NoComponentsFound => {
+            println!(
+                "{} no components found in the repl context",
+                "[warn]".yellow()
+            );
+        }
+    }
 }
