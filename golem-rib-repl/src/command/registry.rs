@@ -17,6 +17,12 @@ impl CommandRegistry {
         registry
     }
 
+    pub fn merge(&mut self, other: CommandRegistry) {
+        for (name, command) in other.commands {
+            self.commands.insert(name, command);
+        }
+    }
+
     pub fn get_commands(&self) -> Vec<String> {
         self.commands.keys().map(|name| name.to_string()).collect()
     }

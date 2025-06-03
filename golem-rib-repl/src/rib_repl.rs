@@ -68,7 +68,9 @@ impl RibRepl {
     pub async fn bootstrap(config: RibReplConfig) -> Result<RibRepl, ReplBootstrapError> {
         let history_file_path = config.history_file.unwrap_or_else(get_default_history_file);
 
-        let command_registry = CommandRegistry::built_in();
+        let mut command_registry = CommandRegistry::built_in();
+        let external_commands = config.command_registry.unwrap_or_default();
+        command_registry.merge(external_commands);
 
         let helper = RibEdit::init(&command_registry);
 
