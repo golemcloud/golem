@@ -48,7 +48,7 @@ impl TypeParameter {
         }
     }
 
-    pub fn from_str(input: &str) -> Result<TypeParameter, String> {
+    pub fn from_text(input: &str) -> Result<TypeParameter, String> {
         type_parameter()
             .easy_parse(position::Stream::new(input))
             .map(|t| t.0)

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::invoke::ReplRibFunctionInvoke;
 use crate::repl_state::ReplState;
-use crate::ReplRibFunctionInvoke;
 use rib::{InstructionId, Interpreter, RibByteCode, RibInput, RibResult, RibRuntimeError};
 use std::sync::Arc;
 
@@ -31,7 +31,7 @@ pub async fn eval(
 }
 
 // A dynamic rib interpreter that is created based on the state of the repl
-pub fn dynamic_interpreter(repl_state: &Arc<ReplState>) -> Interpreter {
+fn dynamic_interpreter(repl_state: &Arc<ReplState>) -> Interpreter {
     let rib_function_invoke = Arc::new(ReplRibFunctionInvoke::new(repl_state.clone()));
 
     Interpreter::new(RibInput::default(), rib_function_invoke)

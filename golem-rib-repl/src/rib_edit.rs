@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::compiler::{CompilerOutput, InstanceVariables};
+use crate::compiler::{InstanceVariables, ReplCompilerOutput};
 use crate::value_generator::generate_value;
+use crate::CommandRegistry;
 use colored::Colorize;
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeVariant};
 use golem_wasm_rpc::ValueAndType;
@@ -27,9 +28,10 @@ use std::borrow::Cow;
 
 #[derive(Default)]
 pub struct RibEdit {
-    pub compiler_output: Option<CompilerOutput>,
+    pub compiler_output: Option<ReplCompilerOutput>,
     pub key_words: Vec<&'static str>,
     pub std_function_names: Vec<&'static str>,
+    pub repl_commands: Vec<String>,
 }
 
 impl RibEdit {
@@ -53,7 +55,7 @@ impl RibEdit {
         self.compiler_output.as_ref().map(|output| &output.enums)
     }
 
-    pub fn init() -> RibEdit {
+    pub fn init(command_registry: &CommandRegistry) -> RibEdit {
         RibEdit {
             compiler_output: None,
             key_words: vec![
@@ -61,9 +63,10 @@ impl RibEdit {
                 "none", "ok", "err",
             ],
             std_function_names: vec!["instance"],
+            repl_commands: command_registry.get_commands(),
         }
     }
-    pub fn update_progression(&mut self, compiler_output: &CompilerOutput) {
+    pub fn update_progression(&mut self, compiler_output: &ReplCompilerOutput) {
         self.compiler_output = Some(compiler_output.clone());
     }
 
@@ -77,6 +80,21 @@ impl RibEdit {
                 (!is_token_char).then(|| pos + c.len_utf8())
             })
             .unwrap_or(0)
+    }
+
+    fn complete_commands(&self, word: &str, start: usize) -> Option<(usize, Vec<String>)> {
+        let commands = self.repl_commands.clone();
+
+        let completions: Vec<String> = commands
+            .into_iter()
+            .filter(|cmd| cmd.starts_with(word))
+            .collect();
+
+        if completions.is_empty() {
+            None
+        } else {
+            Some((start, completions))
+        }
     }
 
     fn complete_method_calls(
@@ -263,6 +281,13 @@ impl Completer for RibEdit {
 
         let word = &line[start..end_pos];
 
+        if line.starts_with(":") {
+            if let Some((new_start, new_completions)) = self.complete_commands(word, start) {
+                completions.extend(new_completions);
+                return Ok((new_start, completions));
+            }
+        }
+
         if let Some((new_start, new_completions)) =
             Self::complete_method_calls(word, instance_variables, start, end_pos)?
         {
@@ -355,6 +380,13 @@ impl Validator for RibEdit {
         context: &mut rustyline::validate::ValidationContext,
     ) -> rustyline::Result<ValidationResult> {
         let input = context.input();
+
+        if input.starts_with(":") {
+            return Ok(ValidationResult::Valid(None));
+        }
+
+        // Note that this is not compiling or parsing the entire Rib program, but syntax checking
+        // the single statement
         let expr = Expr::from_text(input.strip_suffix(";").unwrap_or(input));
 
         match expr {
@@ -370,21 +402,40 @@ impl Highlighter for RibEdit {
             .compiler_output
             .as_ref()
             .map(|output| &output.identifiers);
+
         let instance_vars = self
             .compiler_output
             .as_ref()
             .map(|output| &output.instance_variables);
 
         let mut highlighted = String::new();
+
         let mut word = String::new();
+
         let chars = line.chars().peekable();
 
+        // if line.starts_with(":") {
+        //     // If the line starts with ":", treat it as a command
+        //     highlighted.push_str(&line[..2]);
+        // }
+
         for c in chars {
+            // accumulate code characters
             if c.is_alphanumeric() || c == '_' || c == '.' || c == '-' {
                 word.push(c);
             } else {
                 if !word.is_empty() {
-                    highlighted.push_str(&highlight_word(&word, self, identifiers, instance_vars));
+                    if word.starts_with(":") {
+                        highlighted.push_str(&highlight_command(&word, self));
+                    } else {
+                        // Highlight code identifiers, instance variables, and keywords
+                        highlighted.push_str(&highlight_code(
+                            &word,
+                            self,
+                            identifiers,
+                            instance_vars,
+                        ));
+                    }
                     word.clear();
                 }
                 highlighted.push(c);
@@ -392,14 +443,21 @@ impl Highlighter for RibEdit {
         }
 
         if !word.is_empty() {
-            highlighted.push_str(&highlight_word(&word, self, identifiers, instance_vars));
+            highlighted.push_str(&highlight_code(&word, self, identifiers, instance_vars));
         }
 
         Cow::Owned(highlighted)
     }
 }
 
-fn highlight_word(
+fn highlight_command(word: &str, context: &RibEdit) -> String {
+    if context.repl_commands.contains(&word.to_string()) {
+        return word.yellow().to_string();
+    }
+    word.to_string()
+}
+
+fn highlight_code(
     word: &str,
     context: &RibEdit,
     identifiers: Option<&Vec<VariableId>>,
@@ -417,7 +475,7 @@ fn highlight_word(
             instance_vars.is_some_and(|vars| vars.method_names().contains(&method.to_string()));
 
         if is_instance && is_method {
-            return format!("{}.{}", obj.blue(), method.green());
+            return format!("{}.{}", obj.cyan(), method.green());
         } else {
             return word.to_string();
         }
@@ -426,7 +484,7 @@ fn highlight_word(
     let is_identifier = identifiers.is_some_and(|vars| vars.iter().any(|var| var.name() == word));
 
     if is_identifier {
-        return word.blue().to_string();
+        return word.cyan().to_string();
     }
 
     let is_instance_var =
@@ -442,6 +500,10 @@ fn highlight_word(
 
     if word.chars().all(|ch| ch.is_numeric()) {
         return word.green().to_string();
+    }
+
+    if word.starts_with("\"") && word.ends_with("\"") {
+        return word.truecolor(152, 195, 121).to_string();
     }
 
     word.to_string()

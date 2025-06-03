@@ -25,6 +25,7 @@ async fn main() {
                 .join(format!("{}.wasm", component_name)),
         }),
         prompt: None,
+        command_registry: None,
     })
     .await
     .expect("Failed to bootstrap REPL");

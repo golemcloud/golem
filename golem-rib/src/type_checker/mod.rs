@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) use check_instance_returns::*;
 pub(crate) use exhaustive_pattern_match::*;
 pub(crate) use unresolved_types::*;
 
 pub use path::*;
-mod check_instance_returns;
 mod exhaustive_pattern_match;
 mod invalid_function_args;
 mod invalid_worker_name;
@@ -38,7 +36,7 @@ pub fn type_check(
     check_invalid_function_args(expr, function_type_registry)?;
     check_unresolved_types(expr)?;
     check_invalid_worker_name(expr)?;
-    check_invalid_program_return(expr)?;
+    //check_invalid_program_return(expr)?;
     check_exhaustive_pattern_match(expr, function_type_registry)?;
     Ok(())
 }
