@@ -1,12 +1,12 @@
+pub use clap_parser::*;
 use convert_case::{Case, Casing};
 pub use registry::*;
 pub use untyped::*;
-pub use clap_parser::*;
 
 mod builtin;
+mod clap_parser;
 mod registry;
 mod untyped;
-mod clap_parser;
 
 use crate::rib_context::ReplContext;
 

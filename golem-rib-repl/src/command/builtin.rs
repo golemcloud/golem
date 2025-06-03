@@ -1,4 +1,5 @@
 use crate::{parse_with_clap, Command, ReplContext};
+use clap::Parser;
 use crossterm::cursor::MoveTo;
 use crossterm::{
     execute,
@@ -7,7 +8,6 @@ use crossterm::{
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{CompilerOutput, Expr, FunctionDictionary, RibCompilationError};
 use std::io::stdout;
-use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(about = "Display type of a rib expression")]
@@ -38,8 +38,7 @@ impl Command for TypeInfo {
         input: &str,
         _repl_context: &ReplContext,
     ) -> Result<Self::Input, Self::InputParseError> {
-        let parse_result =
-            parse_with_clap::<TypeInfoInput>(self.name().as_str(), input)?;
+        let parse_result = parse_with_clap::<TypeInfoInput>(self.name().as_str(), input)?;
 
         Ok(parse_result)
     }
@@ -49,14 +48,12 @@ impl Command for TypeInfo {
         input: Self::Input,
         repl_context: &mut ReplContext,
     ) -> Result<Self::Output, Self::ExecutionError> {
-        let existing_raw_script =
-            repl_context.get_new_rib_script(input.as_text().as_str());
+        let existing_raw_script = repl_context.get_new_rib_script(input.as_text().as_str());
 
         let expr = Expr::from_text(&existing_raw_script.as_text())
             .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
 
-        let compiler_output: CompilerOutput =
-            repl_context.get_rib_compiler().compile(expr)?;
+        let compiler_output: CompilerOutput = repl_context.get_rib_compiler().compile(expr)?;
 
         let result = compiler_output
             .rib_output_type_info
@@ -83,7 +80,6 @@ impl Command for TypeInfo {
         printer.print_rib_compilation_error(error);
     }
 }
-
 
 #[derive(Clone)]
 pub struct Clear;
