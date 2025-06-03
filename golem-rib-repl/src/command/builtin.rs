@@ -24,7 +24,6 @@ impl TypeInfoInput {
     }
 }
 
-#[derive(Clone)]
 pub struct TypeInfo;
 
 impl Command for TypeInfo {
@@ -81,7 +80,6 @@ impl Command for TypeInfo {
     }
 }
 
-#[derive(Clone)]
 pub struct Clear;
 
 impl Command for Clear {
@@ -120,7 +118,6 @@ impl Command for Clear {
     fn print_execution_error(&self, _error: &Self::ExecutionError, _repl_context: &ReplContext) {}
 }
 
-#[derive(Clone)]
 pub struct Exports;
 
 impl Command for Exports {

@@ -6,7 +6,7 @@ pub trait UntypedCommand {
     fn command_name(&self) -> String;
 }
 
-impl<T: Clone> UntypedCommand for T
+impl<T> UntypedCommand for T
 where
     T: Command,
     T::Input: 'static,
