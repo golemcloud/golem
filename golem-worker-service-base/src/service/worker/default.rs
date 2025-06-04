@@ -517,11 +517,11 @@ impl WorkerService for WorkerServiceDefault {
                         result:
                         Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(
                                  workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
-                                     output: Some(output),
+                                     output
                                  },
                              )),
                     } => {
-                        Ok(output.type_annotated_value)
+                        Ok(output.and_then(|tav| tav.type_annotated_value))
                     }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:
@@ -633,11 +633,11 @@ impl WorkerService for WorkerServiceDefault {
                         result:
                         Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(
                                  workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
-                                     output: Some(output),
+                                     output
                                  },
                              )),
                     } => {
-                        Ok(output.type_annotated_value)
+                        Ok(output.and_then(|tav| tav.type_annotated_value))
                     }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:

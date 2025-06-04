@@ -863,7 +863,7 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
     }
 }
 
-fn try_deserialize<T: Decode>(data: &[u8]) -> Result<T, String> {
+fn try_deserialize<T: Decode<()>>(data: &[u8]) -> Result<T, String> {
     core_try_deserialize(data)?.ok_or("Unexpected oplog payload, cannot deserialize".to_string())
 }
 

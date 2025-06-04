@@ -146,16 +146,18 @@ impl Encode for PayloadId {
     }
 }
 
-impl Decode for PayloadId {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<Context> Decode<Context> for PayloadId {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let mut bytes = [0u8; 16];
         decoder.reader().read(&mut bytes)?;
         Ok(Self(Uuid::from_bytes(bytes)))
     }
 }
 
-impl<'de> BorrowDecode<'de> for PayloadId {
-    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<'de, Context> BorrowDecode<'de, Context> for PayloadId {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
         let mut bytes = [0u8; 16];
         decoder.reader().read(&mut bytes)?;
         Ok(Self(Uuid::from_bytes(bytes)))

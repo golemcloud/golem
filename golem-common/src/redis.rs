@@ -91,7 +91,7 @@ impl RedisPool {
         serialize(value)
     }
 
-    pub fn deserialize<T: Decode>(&self, bytes: &[u8]) -> Result<T, String> {
+    pub fn deserialize<T: Decode<()>>(&self, bytes: &[u8]) -> Result<T, String> {
         deserialize(bytes)
     }
 }

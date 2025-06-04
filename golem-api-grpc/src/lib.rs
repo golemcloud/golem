@@ -196,8 +196,8 @@ pub mod proto {
         }
     }
 
-    impl Decode for UpdateMode {
-        fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+    impl<Context> Decode<Context> for UpdateMode {
+        fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
             match Decode::decode(decoder)? {
                 0u8 => Ok(UpdateMode::Automatic),
                 1u8 => Ok(UpdateMode::Manual),

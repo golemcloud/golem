@@ -181,12 +181,22 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
         let tav = executor.execute(worker_request).await.map(|v| v.result)?;
 
         match tav {
-            Some(tav) => tav.try_into().map_err(|err: String| err.into()),
-            None => {
-                // Representing the absence of return value as an empty record for Rib
+            Some(tav) => {
+                // Wrapping the return value in a tuple because unit is represented as an empty-tuple for Rib
+                let inner: ValueAndType = tav.try_into().map_err(|err: String| {
+                    let err: Box<dyn std::error::Error + Send + Sync> = err.into();
+                    err
+                })?;
                 Ok(ValueAndType::new(
-                    Value::Record(vec![]),
-                    analysed_type::record(vec![]),
+                    Value::Tuple(vec![inner.value]),
+                    analysed_type::tuple(vec![inner.typ]),
+                ))
+            }
+            None => {
+                // Representing the absence of return value as an empty tuple for Rib
+                Ok(ValueAndType::new(
+                    Value::Tuple(vec![]),
+                    analysed_type::tuple(vec![]),
                 ))
             }
         }

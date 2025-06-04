@@ -515,7 +515,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         .unwrap();
 
     // The worker name is foo
-    let expected = Value::Tuple(vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
+    let expected = Value::Result(Ok(Some(Box::new(Value::List(vec![
         Value::Tuple(vec![
             Value::String("GOLEM_WORKER_NAME".to_string()),
             Value::String(source_worker_name),
@@ -528,7 +528,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
             Value::String("GOLEM_COMPONENT_VERSION".to_string()),
             Value::String("0".to_string()),
         ]),
-    ])))))]);
+    ])))));
 
     let target_worker_name = Uuid::new_v4().to_string();
 

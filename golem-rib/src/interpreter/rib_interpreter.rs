@@ -1288,7 +1288,11 @@ mod internal {
             }
             _ => Err(function_invoke_fail(
                 function_name.as_str(),
-                "named multiple results are not supported yet".into(),
+                format!(
+                    "unexpected function return value: {}",
+                    golem_wasm_rpc::print_value_and_type(&result).unwrap_or("?".to_string())
+                )
+                .into(),
             )),
         };
 

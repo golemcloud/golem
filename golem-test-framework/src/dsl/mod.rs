@@ -13,7 +13,7 @@
 // limitations under the License.
 
 pub mod benchmark;
-mod debug_render;
+pub mod debug_render;
 
 use crate::config::TestDependencies;
 use crate::dsl::debug_render::debug_render_oplog_entry;
