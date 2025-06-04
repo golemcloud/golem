@@ -53,7 +53,7 @@ use std::sync::Arc;
 use tracing::{error, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::component::Resource;
-use wasmtime_wasi::bindings::cli::environment::Host;
+use wasmtime_wasi::p2::bindings::cli::environment::Host;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 use wasmtime_wasi::subscribe;
 

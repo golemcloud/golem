@@ -16,7 +16,7 @@ use async_trait::async_trait;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use wasmtime_wasi::bindings::cli::exit::Host;
+use wasmtime_wasi::p2::bindings::cli::exit::Host;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {

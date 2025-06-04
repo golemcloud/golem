@@ -18,16 +18,16 @@ use std::time::SystemTime;
 use fs_set_times::{set_symlink_times, SystemTimeSpec};
 use metrohash::MetroHash128;
 use wasmtime::component::Resource;
-use wasmtime_wasi::bindings::clocks::wall_clock::Datetime;
-use wasmtime_wasi::bindings::filesystem::types::{
+use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
+use wasmtime_wasi::p2::bindings::filesystem::types::{
     Advice, Descriptor, DescriptorFlags, DescriptorStat, DescriptorType, DirectoryEntry,
     DirectoryEntryStream, Error, ErrorCode, Filesize, Host, HostDescriptor,
     HostDirectoryEntryStream, InputStream, MetadataHashValue, NewTimestamp, OpenFlags,
     OutputStream, PathFlags,
 };
+use wasmtime_wasi::p2::FsError;
+use wasmtime_wasi::p2::ReaddirIterator;
 use wasmtime_wasi::runtime::spawn_blocking;
-use wasmtime_wasi::FsError;
-use wasmtime_wasi::ReaddirIterator;
 
 use golem_common::model::oplog::DurableFunctionType;
 

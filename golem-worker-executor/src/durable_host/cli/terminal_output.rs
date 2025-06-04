@@ -17,7 +17,7 @@ use wasmtime::component::Resource;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use wasmtime_wasi::bindings::cli::terminal_output::{Host, HostTerminalOutput, TerminalOutput};
+use wasmtime_wasi::p2::bindings::cli::terminal_output::{Host, HostTerminalOutput, TerminalOutput};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostTerminalOutput for DurableWorkerCtx<Ctx> {

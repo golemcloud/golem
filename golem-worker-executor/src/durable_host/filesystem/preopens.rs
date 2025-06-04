@@ -19,7 +19,7 @@ use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::DurableFunctionType;
-use wasmtime_wasi::bindings::filesystem::preopens::{Descriptor, Host};
+use wasmtime_wasi::p2::bindings::filesystem::preopens::{Descriptor, Host};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_directories(&mut self) -> anyhow::Result<Vec<(Resource<Descriptor>, String)>> {

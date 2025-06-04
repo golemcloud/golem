@@ -16,7 +16,7 @@ use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::DurableFunctionType;
-use wasmtime_wasi::bindings::random::random::Host;
+use wasmtime_wasi::p2::bindings::random::random::Host;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_random_bytes(&mut self, len: u64) -> anyhow::Result<Vec<u8>> {

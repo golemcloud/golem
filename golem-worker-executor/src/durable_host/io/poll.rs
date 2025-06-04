@@ -16,7 +16,7 @@ use crate::model::InterruptKind;
 use chrono::{Duration, Utc};
 use golem_common::model::oplog::DurableFunctionType;
 use wasmtime::component::Resource;
-use wasmtime_wasi::bindings::io::poll::{Host, HostPollable, Pollable};
+use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, SuspendForSleep};

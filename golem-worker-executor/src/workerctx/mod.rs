@@ -58,7 +58,7 @@ use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Value, ValueAndType};
 use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
-use wasmtime_wasi::WasiView;
+use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context

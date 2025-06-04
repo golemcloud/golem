@@ -16,7 +16,7 @@ use crate::durable_host::serialized::{SerializableDateTime, SerializableError};
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::DurableFunctionType;
-use wasmtime_wasi::bindings::clocks::wall_clock::{Datetime, Host};
+use wasmtime_wasi::p2::bindings::clocks::wall_clock::{Datetime, Host};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Datetime> {

@@ -17,7 +17,7 @@ use wasmtime::component::Resource;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use wasmtime_wasi::bindings::sockets::instance_network::{Host, Network};
+use wasmtime_wasi::p2::bindings::sockets::instance_network::{Host, Network};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
