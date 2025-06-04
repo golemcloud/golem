@@ -36,10 +36,7 @@ mod internal {
     use crate::rib_type_error::RibTypeError;
     use crate::type_parameter::TypeParameter;
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{
-        CustomError, Expr, ExprVisitor, FunctionCallError, InferredType, ParsedFunctionReference,
-        TypeInternal, TypeOrigin,
-    };
+    use crate::{ComponentDependency, CustomError, Expr, ExprVisitor, FunctionCallError, InferredType, ParsedFunctionReference, TypeInternal, TypeOrigin};
 
     pub(crate) fn search_for_invalid_instance_declarations(
         expr: &mut Expr,
@@ -86,7 +83,7 @@ mod internal {
     // this has to go in first to disambiguate global variables with instance creations
     pub(crate) fn identify_instance_creation_with_worker(
         expr: &mut Expr,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependency,
     ) -> Result<(), RibTypeError> {
         let mut visitor = ExprVisitor::bottom_up(expr);
 
@@ -109,15 +106,18 @@ mod internal {
                     })
                     .transpose()?;
 
-                let instance_creation_type = get_instance_creation_details(call_type, args);
+
+                let instance_creation_type =
+                    get_instance_creation_details(call_type, type_parameter, args, component_dependency);
 
                 if let Some(instance_creation_details) = instance_creation_type {
                     let worker_name = instance_creation_details.worker_name().cloned();
 
                     *call_type = CallType::InstanceCreation(instance_creation_details);
 
+                    let type_parameter =
                     let new_instance_type = InstanceType::from(
-                        function_type_registry,
+                        component_dependency,
                         worker_name.as_ref(),
                         type_parameter,
                     )
@@ -150,14 +150,20 @@ mod internal {
 
     fn get_instance_creation_details(
         call_type: &CallType,
+        type_parameter: Option<TypeParameter>,
         args: &[Expr],
+        component_dependency: &ComponentDependency,
     ) -> Option<InstanceCreationType> {
         match call_type {
-            CallType::Function { function_name, .. } => {
+            CallType::Function { component_info, function_name, .. } => {
                 let function_name = function_name.to_parsed_function_name().function;
                 match function_name {
                     ParsedFunctionReference::Function { function } if function == "instance" => {
                         let optional_worker_name_expression = args.first();
+
+
+                        ComponentDependency::get_worker_instance_type()
+
                         Some(InstanceCreationType::Worker {
                             worker_name: optional_worker_name_expression
                                 .map(|x| Box::new(x.clone())),

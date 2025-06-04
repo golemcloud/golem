@@ -1,8 +1,6 @@
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
-use crate::{
-    DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
-};
+use crate::{ComponentInfo, DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
 use golem_api_grpc::proto::golem::rib::instance_type::Instance;
 use golem_api_grpc::proto::golem::rib::{
     function_name_type, FullyQualifiedFunctionName as ProtoFullyQualifiedFunctionName,
@@ -26,8 +24,27 @@ use std::ops::Deref;
 // Here we will add the resource type as well as the resource creation itself can be be part of this InstanceType
 // allowing lazy loading of resource and invoke the functions in them!
 // The distinction is only to disallow compiler to see only the functions that are part of a location (package/interface/package-interface/resoruce or all)
+
+pub struct InstanceType {
+    pub component_info: InferredComponent,
+    pub details: InstanceTypeDetails
+}
+
+impl InstanceType {
+    pub fn from(
+        type_parameter: Option<TypeParameter>,
+
+    )
+
+}
+
+pub enum InferredComponent {
+    Available(ComponentInfo),
+    Unavailable
+}
+
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
-pub enum InstanceType {
+pub enum InstanceTypeDetails {
     // Holds functions across every package and interface in the component
     Global {
         worker_name: Option<Box<Expr>>,
@@ -68,30 +85,30 @@ pub enum InstanceType {
     },
 }
 
-impl InstanceType {
+impl InstanceTypeDetails {
     pub fn set_worker_name(&mut self, worker_name: Expr) {
         match self {
-            InstanceType::Global {
+            InstanceTypeDetails::Global {
                 worker_name: wn, ..
             } => {
                 *wn = Some(Box::new(worker_name));
             }
-            InstanceType::Package {
+            InstanceTypeDetails::Package {
                 worker_name: wn, ..
             } => {
                 *wn = Some(Box::new(worker_name));
             }
-            InstanceType::Interface {
+            InstanceTypeDetails::Interface {
                 worker_name: wn, ..
             } => {
                 *wn = Some(Box::new(worker_name));
             }
-            InstanceType::PackageInterface {
+            InstanceTypeDetails::PackageInterface {
                 worker_name: wn, ..
             } => {
                 *wn = Some(Box::new(worker_name));
             }
-            InstanceType::Resource {
+            InstanceTypeDetails::Resource {
                 worker_name: wn, ..
             } => {
                 *wn = Some(Box::new(worker_name));
@@ -101,23 +118,23 @@ impl InstanceType {
 
     pub fn worker_mut(&mut self) -> Option<&mut Box<Expr>> {
         match self {
-            InstanceType::Global { worker_name, .. } => worker_name.as_mut(),
-            InstanceType::Package { worker_name, .. } => worker_name.as_mut(),
-            InstanceType::Interface { worker_name, .. } => worker_name.as_mut(),
-            InstanceType::PackageInterface { worker_name, .. } => worker_name.as_mut(),
-            InstanceType::Resource { worker_name, .. } => worker_name.as_mut(),
+            InstanceTypeDetails::Global { worker_name, .. } => worker_name.as_mut(),
+            InstanceTypeDetails::Package { worker_name, .. } => worker_name.as_mut(),
+            InstanceTypeDetails::Interface { worker_name, .. } => worker_name.as_mut(),
+            InstanceTypeDetails::PackageInterface { worker_name, .. } => worker_name.as_mut(),
+            InstanceTypeDetails::Resource { worker_name, .. } => worker_name.as_mut(),
         }
     }
 
     pub fn worker(&self) -> Option<&Expr> {
         match self {
-            InstanceType::Global { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
-            InstanceType::Package { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
-            InstanceType::Interface { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
-            InstanceType::PackageInterface { worker_name, .. } => {
+            InstanceTypeDetails::Global { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
+            InstanceTypeDetails::Package { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
+            InstanceTypeDetails::Interface { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
+            InstanceTypeDetails::PackageInterface { worker_name, .. } => {
                 worker_name.as_ref().map(|v| v.deref())
             }
-            InstanceType::Resource { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
+            InstanceTypeDetails::Resource { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
         }
     }
 
@@ -149,7 +166,7 @@ impl InstanceType {
             map: resource_method_dict,
         };
 
-        InstanceType::Resource {
+        InstanceTypeDetails::Resource {
             worker_name,
             package_name,
             interface_name,
@@ -161,31 +178,31 @@ impl InstanceType {
 
     pub fn interface_name(&self) -> Option<InterfaceName> {
         match self {
-            InstanceType::Global { .. } => None,
-            InstanceType::Package { .. } => None,
-            InstanceType::Interface { interface_name, .. } => Some(interface_name.clone()),
-            InstanceType::PackageInterface { interface_name, .. } => Some(interface_name.clone()),
-            InstanceType::Resource { interface_name, .. } => interface_name.clone(),
+            InstanceTypeDetails::Global { .. } => None,
+            InstanceTypeDetails::Package { .. } => None,
+            InstanceTypeDetails::Interface { interface_name, .. } => Some(interface_name.clone()),
+            InstanceTypeDetails::PackageInterface { interface_name, .. } => Some(interface_name.clone()),
+            InstanceTypeDetails::Resource { interface_name, .. } => interface_name.clone(),
         }
     }
 
     pub fn package_name(&self) -> Option<PackageName> {
         match self {
-            InstanceType::Global { .. } => None,
-            InstanceType::Package { package_name, .. } => Some(package_name.clone()),
-            InstanceType::Interface { .. } => None,
-            InstanceType::PackageInterface { package_name, .. } => Some(package_name.clone()),
-            InstanceType::Resource { package_name, .. } => package_name.clone(),
+            InstanceTypeDetails::Global { .. } => None,
+            InstanceTypeDetails::Package { package_name, .. } => Some(package_name.clone()),
+            InstanceTypeDetails::Interface { .. } => None,
+            InstanceTypeDetails::PackageInterface { package_name, .. } => Some(package_name.clone()),
+            InstanceTypeDetails::Resource { package_name, .. } => package_name.clone(),
         }
     }
 
     pub fn worker_name(&self) -> Option<Box<Expr>> {
         match self {
-            InstanceType::Global { worker_name, .. } => worker_name.clone(),
-            InstanceType::Package { worker_name, .. } => worker_name.clone(),
-            InstanceType::Interface { worker_name, .. } => worker_name.clone(),
-            InstanceType::PackageInterface { worker_name, .. } => worker_name.clone(),
-            InstanceType::Resource { worker_name, .. } => worker_name.clone(),
+            InstanceTypeDetails::Global { worker_name, .. } => worker_name.clone(),
+            InstanceTypeDetails::Package { worker_name, .. } => worker_name.clone(),
+            InstanceTypeDetails::Interface { worker_name, .. } => worker_name.clone(),
+            InstanceTypeDetails::PackageInterface { worker_name, .. } => worker_name.clone(),
+            InstanceTypeDetails::Resource { worker_name, .. } => worker_name.clone(),
         }
     }
     pub fn get_function(
@@ -433,6 +450,7 @@ pub struct Function {
     pub function_type: FunctionType,
 }
 
+// Global Function Dictionary across Components,
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd, Default)]
 pub struct FunctionDictionary {
     pub name_and_types: Vec<(FunctionName, FunctionType)>,

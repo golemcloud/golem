@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use crate::instance_type::FullyQualifiedResourceConstructor;
-use crate::{DynamicParsedFunctionName, Expr};
+use crate::{ComponentInfo, DynamicParsedFunctionName, Expr};
 use std::fmt::Display;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum CallType {
     Function {
+        component_info: Option<ComponentInfo>,
         worker: Option<Box<Expr>>,
         function_name: DynamicParsedFunctionName,
     },
@@ -30,9 +31,11 @@ pub enum CallType {
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum InstanceCreationType {
     Worker {
+        component_info: Option<ComponentInfo>,
         worker_name: Option<Box<Expr>>,
     },
     Resource {
+        component_info: Option<ComponentInfo>,
         worker_name: Option<Box<Expr>>,
         resource_name: FullyQualifiedResourceConstructor,
     },

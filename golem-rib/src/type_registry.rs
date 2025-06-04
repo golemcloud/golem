@@ -13,11 +13,94 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::DynamicParsedFunctionName;
+use crate::{DynamicParsedFunctionName, Expr, InstanceCreationType, InstanceType, TypeParameter};
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum};
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Display, Formatter};
+use std::fmt::{format, Display, Formatter};
+use uuid::Uuid;
+
+pub struct ComponentDependency {
+    pub dependencies: HashMap<ComponentInfo, FunctionTypeRegistry>,
+}
+
+impl ComponentDependency {
+
+    // type-parameter can be None.
+    // If present, it may represent the root package name of the component
+    // or it could represent the package or interface within a component
+    pub fn get_worker_instance_type(
+        &self,
+        type_parameter: Option<TypeParameter>,
+        worker_name: Option<Expr>
+    ) -> Result<InstanceCreationType, String> {
+        match type_parameter {
+            None => Ok(InstanceCreationType::Worker {
+                component_info: None,
+                worker_name: worker_name.map(|expr| Box::new(expr)),
+            }),
+
+            Some(type_parameter) => {
+                match type_parameter {
+                    // If the user has specified the root package name, annotate the InstanceCreationType with the component already
+                    TypeParameter::PackageName(package_name ) => {
+                        let result = self.dependencies.iter().find(|(x, y)| {
+                            match &x.root_package_name {
+                                Some(name) => {
+                                    let pkg = match &x.root_package_version {
+                                        None => name.to_string(),
+                                        Some(version) => format!("{}@{}", name, version),
+                                    };
+
+                                    pkg == package_name.to_string()
+                                }
+
+                                None => false,
+                            }
+                        });
+
+                        if let Some(result) = result {
+                            Ok(InstanceCreationType::Worker {
+                                component_info: Some(result.0.clone()),
+                                worker_name: worker_name.map(|expr| Box::new(expr)),
+                            })
+                        } else {
+                            Ok(InstanceCreationType::Worker {
+                                component_info: None,
+                                worker_name: worker_name.map(|expr| Box::new(expr)),
+                            })
+                        }
+                    }
+
+                    _ => Ok(InstanceCreationType::Worker {
+                        component_info: None,
+                        worker_name: worker_name.map(|expr| Box::new(expr)),
+                    }),
+                }
+            }
+        }
+    }
+    pub fn from_raw(dependencies: Vec<(ComponentInfo, &Vec<AnalysedExport>)>) -> Self {
+        let mut dep_map = HashMap::new();
+
+        for (component_info, exports) in dependencies {
+            let function_type_registry = FunctionTypeRegistry::from_export_metadata(exports);
+            dep_map.insert(component_info, function_type_registry);
+        }
+
+        ComponentDependency {
+            dependencies: dep_map,
+        }
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
+pub struct ComponentInfo {
+    pub component_name: String,
+    pub component_id: Uuid,
+    pub root_package_name: Option<String>,
+    pub root_package_version: Option<String>,
+}
 
 // A type-registry is a mapping from a function/variant/enum to the `arguments` and `return types` of that function/variant/enum.
 // The structure is raw and closer to the original component metadata.
