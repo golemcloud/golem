@@ -28,7 +28,7 @@ use golem_common::model::{
     ComponentFileSystemNode, ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId,
     WorkerStatusRecord,
 };
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::ValueAndType;
 use golem_wasm_rpc_derive::IntoValue;
 use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
@@ -347,7 +347,7 @@ pub enum LookupResult {
     New,
     Pending,
     Interrupted,
-    Complete(Result<TypeAnnotatedValue, GolemError>),
+    Complete(Result<Option<ValueAndType>, GolemError>),
 }
 
 #[derive(Clone, Debug)]

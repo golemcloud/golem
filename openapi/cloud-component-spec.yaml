@@ -1627,7 +1627,6 @@ components:
       required:
       - name
       - parameters
-      - results
       properties:
         name:
           type: string
@@ -1635,10 +1634,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AnalysedFunctionParameter'
-        results:
-          type: array
-          items:
-            $ref: '#/components/schemas/AnalysedFunctionResult'
+        result:
+          $ref: '#/components/schemas/AnalysedFunctionResult'
     AnalysedFunctionParameter:
       type: object
       title: AnalysedFunctionParameter
@@ -1656,8 +1653,6 @@ components:
       required:
       - typ
       properties:
-        name:
-          type: string
         typ:
           $ref: '#/components/schemas/AnalysedType'
     AnalysedInstance:

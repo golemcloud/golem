@@ -10,15 +10,17 @@ impl Encode for Uri {
     }
 }
 
-impl Decode for Uri {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<Context> Decode<Context> for Uri {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let value = String::decode(decoder)?;
         Ok(Uri { value })
     }
 }
 
-impl<'de> BorrowDecode<'de> for Uri {
-    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<'de, Context> BorrowDecode<'de, Context> for Uri {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
         let value = String::borrow_decode(decoder)?;
         Ok(Uri { value })
     }
@@ -30,15 +32,17 @@ impl Encode for WitValue {
     }
 }
 
-impl Decode for WitValue {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<Context> Decode<Context> for WitValue {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let nodes = Vec::<WitNode>::decode(decoder)?;
         Ok(WitValue { nodes })
     }
 }
 
-impl<'de> BorrowDecode<'de> for WitValue {
-    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<'de, Context> BorrowDecode<'de, Context> for WitValue {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
         let nodes = Vec::<WitNode>::borrow_decode(decoder)?;
         Ok(WitValue { nodes })
     }
@@ -141,8 +145,8 @@ impl Encode for WitNode {
     }
 }
 
-impl Decode for WitNode {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<Context> Decode<Context> for WitNode {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let tag: u8 = Decode::decode(decoder)?;
         match tag {
             0u8 => {
@@ -244,8 +248,10 @@ impl Decode for WitNode {
     }
 }
 
-impl<'de> BorrowDecode<'de> for WitNode {
-    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<'de, Context> BorrowDecode<'de, Context> for WitNode {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
         let tag: u8 = BorrowDecode::borrow_decode(decoder)?;
         match tag {
             0u8 => {

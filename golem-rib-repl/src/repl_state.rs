@@ -41,7 +41,7 @@ impl ReplState {
         &self.invocation_results
     }
 
-    pub fn update_cache(&self, instruction_id: InstructionId, result: ValueAndType) {
+    pub fn update_cache(&self, instruction_id: InstructionId, result: Option<ValueAndType>) {
         self.invocation_results
             .results
             .write()
@@ -117,11 +117,11 @@ impl ReplState {
 
 #[derive(Debug)]
 pub struct InvocationResultCache {
-    pub results: RwLock<HashMap<InstructionId, ValueAndType>>,
+    pub results: RwLock<HashMap<InstructionId, Option<ValueAndType>>>,
 }
 
 impl InvocationResultCache {
-    pub fn get(&self, script_id: &InstructionId) -> Option<ValueAndType> {
+    pub fn get(&self, script_id: &InstructionId) -> Option<Option<ValueAndType>> {
         self.results.read().unwrap().get(script_id).cloned()
     }
 }

@@ -167,7 +167,7 @@ impl WitAnalysisContext {
                         })
                 })
                 .collect::<Result<Vec<_>, _>>()?,
-            results: function
+            result: function
                 .result
                 .map(|typ| {
                     typ.to_analysed_type(self.wasm.resolve(), self)
@@ -177,10 +177,9 @@ impl WitAnalysisContext {
                                 function.name, err
                             ))
                         })
-                        .map(|typ| AnalysedFunctionResult { name: None, typ })
+                        .map(|typ| AnalysedFunctionResult { typ })
                 })
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()?,
+                .transpose()?,
         })
     }
 

@@ -6,9 +6,9 @@ import "wasm/rpc/val.proto";
 import "wasm/rpc/type_annotated_value.proto";
 
 message InvokeResult {
-  repeated wasm.rpc.Val result = 1;
+  optional wasm.rpc.Val result = 1;
 }
 
 message InvokeResultTyped {
-  wasm.rpc.TypeAnnotatedValue result = 1;
+  optional wasm.rpc.TypeAnnotatedValue result = 1;
 }

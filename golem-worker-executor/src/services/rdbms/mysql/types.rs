@@ -260,7 +260,7 @@ pub mod tests {
     use test_r::test;
     use uuid::Uuid;
 
-    fn check_bincode<T: Encode + Decode + PartialEq>(value: T) {
+    fn check_bincode<T: Encode + Decode<()> + PartialEq>(value: T) {
         let bin_value = serialize(&value).unwrap().to_vec();
         let value2: Option<T> = try_deserialize(bin_value.as_slice()).ok().flatten();
         check!(value2.unwrap() == value);

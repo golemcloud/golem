@@ -1255,9 +1255,9 @@ impl bincode::Encode for ForkResult {
     }
 }
 
-impl Decode for ForkResult {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let value = <u8 as Decode>::decode(decoder)?;
+impl<Context> Decode<Context> for ForkResult {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let value = <u8 as Decode<Context>>::decode(decoder)?;
         match value {
             0 => Ok(ForkResult::Original),
             1 => Ok(ForkResult::Forked),

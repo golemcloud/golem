@@ -13,15 +13,44 @@
 // limitations under the License.
 
 use crate::services::rdbms::{RdbmsIntoValueAndType, RdbmsPoolKey, RdbmsType};
-use bincode::{Decode, Encode};
+use bincode::Encode;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode)]
 pub struct RdbmsRequest<T: RdbmsType + 'static> {
     pub pool_key: RdbmsPoolKey,
     pub statement: String,
     pub params: Vec<T::DbValue>,
+}
+
+impl<T: RdbmsType + 'static> bincode::Decode<()> for RdbmsRequest<T>
+where
+    T: bincode::Decode<()>,
+{
+    fn decode<D: bincode::de::Decoder<Context = ()>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        Ok(Self {
+            pool_key: bincode::Decode::decode(decoder)?,
+            statement: bincode::Decode::decode(decoder)?,
+            params: bincode::Decode::decode(decoder)?,
+        })
+    }
+}
+impl<'de, T: RdbmsType + 'static> bincode::BorrowDecode<'de, ()> for RdbmsRequest<T>
+where
+    T: bincode::de::BorrowDecode<'de, ()>,
+{
+    fn borrow_decode<__D: bincode::de::BorrowDecoder<'de, Context = ()>>(
+        decoder: &mut __D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        Ok(Self {
+            pool_key: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
+            statement: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
+            params: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
+        })
+    }
 }
 
 impl<T: RdbmsType> RdbmsRequest<T> {

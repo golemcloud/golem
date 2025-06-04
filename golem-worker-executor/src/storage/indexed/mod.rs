@@ -344,7 +344,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     }
 
     /// Reads a closed range of entries from the index of the given key, deserializing each entry
-    pub async fn read<V: Decode>(
+    pub async fn read<V: Decode<()>>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
@@ -409,7 +409,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     }
 
     /// Gets the first entry in the index of the given key, deserializing the value
-    pub async fn first<V: Decode>(
+    pub async fn first<V: Decode<()>>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
@@ -458,7 +458,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     }
 
     /// Gets the last entry in the index of the given key, deserializing the value
-    pub async fn last<V: Decode>(
+    pub async fn last<V: Decode<()>>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
@@ -511,7 +511,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 
     /// Gets the entry with the closest id to the given id in the index of the given key,
     /// in a way that `id` is less or equal to the id of the returned entry, deserializing the value
-    pub async fn closest<V: Decode>(
+    pub async fn closest<V: Decode<()>>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,

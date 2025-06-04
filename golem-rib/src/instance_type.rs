@@ -480,7 +480,7 @@ impl FunctionDictionary {
             match value {
                 RegistryValue::Function {
                     parameter_types,
-                    return_types,
+                    return_type,
                 } => match key {
                     RegistryKey::FunctionName(function_name) => {
                         let function_name = resolve_function_name(None, None, function_name)?;
@@ -489,7 +489,7 @@ impl FunctionDictionary {
                             function_name,
                             FunctionType {
                                 parameter_types: parameter_types.iter().map(|x| x.into()).collect(),
-                                return_type: return_types.iter().map(|x| x.into()).collect(),
+                                return_type: return_type.as_ref().map(|x| x.into()),
                             },
                         ));
                     }
@@ -510,7 +510,7 @@ impl FunctionDictionary {
                             function_name,
                             FunctionType {
                                 parameter_types: parameter_types.iter().map(|x| x.into()).collect(),
-                                return_type: return_types.iter().map(|x| x.into()).collect(),
+                                return_type: return_type.as_ref().map(|x| x.into()),
                             },
                         ));
                     }
@@ -714,7 +714,7 @@ impl Display for FullyQualifiedFunctionName {
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct FunctionType {
     pub parameter_types: Vec<InferredType>,
-    pub return_type: Vec<InferredType>,
+    pub return_type: Option<InferredType>,
 }
 
 impl FunctionType {
@@ -722,7 +722,7 @@ impl FunctionType {
         self.parameter_types.clone()
     }
 
-    pub fn return_type(&self) -> Vec<InferredType> {
+    pub fn return_type(&self) -> Option<InferredType> {
         self.return_type.clone()
     }
 }
@@ -834,10 +834,11 @@ impl TryFrom<ProtoFunctionType> for FunctionType {
             parameter_types.push(InferredType::from(&AnalysedType::try_from(&param)?));
         }
 
-        let mut return_type = Vec::new();
-        for ret in proto.return_type {
-            return_type.push(InferredType::from(&AnalysedType::try_from(&ret)?));
-        }
+        let return_type = proto
+            .return_type
+            .as_ref()
+            .map(|ret| AnalysedType::try_from(ret).map(|ret| InferredType::from(&ret)))
+            .transpose()?;
 
         Ok(Self {
             parameter_types,

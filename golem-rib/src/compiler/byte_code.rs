@@ -2162,13 +2162,12 @@ mod compiler_tests {
                             ],
                         }),
                     }],
-                    results: vec![AnalysedFunctionResult {
-                        name: None,
+                    result: Some(AnalysedFunctionResult {
                         typ: AnalysedType::Handle(TypeHandle {
                             resource_id: AnalysedResourceId(0),
                             mode: AnalysedResourceMode::Owned,
                         }),
-                    }],
+                    }),
                 }],
             });
 
@@ -2185,13 +2184,12 @@ mod compiler_tests {
                             name: "param1".to_string(),
                             typ: AnalysedType::Str(TypeStr),
                         }],
-                        results: vec![AnalysedFunctionResult {
-                            name: None,
+                        result: Some(AnalysedFunctionResult {
                             typ: AnalysedType::Handle(TypeHandle {
                                 resource_id: AnalysedResourceId(0),
                                 mode: AnalysedResourceMode::Owned,
                             }),
-                        }],
+                        }),
                     },
                     AnalysedFunction {
                         name: "[method]cart.add-item".to_string(),
@@ -2213,7 +2211,7 @@ mod compiler_tests {
                                 }),
                             },
                         ],
-                        results: vec![],
+                        result: None,
                     },
                 ],
             });
@@ -2237,10 +2235,7 @@ mod compiler_tests {
             vec![AnalysedExport::Function(AnalysedFunction {
                 name: function_name.to_string(),
                 parameters: analysed_function_parameters,
-                results: vec![AnalysedFunctionResult {
-                    name: None,
-                    typ: output,
-                }],
+                result: Some(AnalysedFunctionResult { typ: output }),
             })]
         }
 

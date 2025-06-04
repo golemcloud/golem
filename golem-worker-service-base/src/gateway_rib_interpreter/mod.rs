@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::gateway_execution::{GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor};
 use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::ValueAndType;
 use rib::{
     EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibByteCode,
     RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult,
 };
 use std::fmt::Display;
 use std::sync::Arc;
-
-use crate::gateway_execution::{GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor};
 
 // A wrapper service over original RibInterpreter concerning
 // the details of the worker service.
@@ -177,8 +177,10 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
             namespace,
         };
 
-        let tav = executor.execute(worker_request).await.map(|v| v.result)?;
+        let tav_opt = executor.execute(worker_request).await.map(|v| v.result)?;
 
-        tav.try_into().map_err(|err: String| err.into())
+        tav_opt
+            .map(|tav| ValueAndType::try_from(tav).map_err(|x| x.into()))
+            .transpose()
     }
 }

@@ -34,7 +34,7 @@ fn exports_shopping_cart_component() {
                     name: "user-id".to_string(),
                     typ: str(),
                 }],
-                results: vec![],
+                result: None,
             },
             AnalysedFunction {
                 name: "add-item".to_string(),
@@ -47,7 +47,7 @@ fn exports_shopping_cart_component() {
                         field("quantity", u32()),
                     ]),
                 }],
-                results: vec![],
+                result: None,
             },
             AnalysedFunction {
                 name: "remove-item".to_string(),
@@ -55,7 +55,7 @@ fn exports_shopping_cart_component() {
                     name: "product-id".to_string(),
                     typ: str(),
                 }],
-                results: vec![],
+                result: None,
             },
             AnalysedFunction {
                 name: "update-item-quantity".to_string(),
@@ -69,31 +69,29 @@ fn exports_shopping_cart_component() {
                         typ: u32(),
                     },
                 ],
-                results: vec![],
+                result: None,
             },
             AnalysedFunction {
                 name: "checkout".to_string(),
                 parameters: vec![],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: variant(vec![
                         case("error", str()),
                         case("success", record(vec![field("order-id", str())])),
                     ]),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "get-cart-contents".to_string(),
                 parameters: vec![],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: list(record(vec![
                         field("product-id", str()),
                         field("name", str()),
                         field("price", f32()),
                         field("quantity", u32()),
                     ])),
-                }],
+                }),
             },
         ],
     })];
@@ -123,10 +121,9 @@ fn exports_file_service_component() {
                     name: "path".to_string(),
                     typ: str(),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: result(str(), str()),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "write-file".to_string(),
@@ -140,10 +137,9 @@ fn exports_file_service_component() {
                         typ: str(),
                     },
                 ],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: result_err(str()),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "write-file-direct".to_string(),
@@ -157,10 +153,9 @@ fn exports_file_service_component() {
                         typ: str(),
                     },
                 ],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: result_err(str()),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "delete-file".to_string(),
@@ -168,10 +163,9 @@ fn exports_file_service_component() {
                     name: "path".to_string(),
                     typ: str(),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: result_err(str()),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "get-file-info".to_string(),
@@ -179,8 +173,7 @@ fn exports_file_service_component() {
                     name: "path".to_string(),
                     typ: str(),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: result(
                         record(vec![
                             field(
@@ -194,7 +187,7 @@ fn exports_file_service_component() {
                         ]),
                         str(),
                     ),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "get-info".to_string(),
@@ -202,8 +195,7 @@ fn exports_file_service_component() {
                     name: "path".to_string(),
                     typ: str(),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: result(
                         record(vec![
                             field(
@@ -217,7 +209,7 @@ fn exports_file_service_component() {
                         ]),
                         str(),
                     ),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "create-directory".to_string(),
@@ -225,10 +217,9 @@ fn exports_file_service_component() {
                     name: "path".to_string(),
                     typ: str(),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: result_err(str()),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "create-link".to_string(),
@@ -242,10 +233,9 @@ fn exports_file_service_component() {
                         typ: str(),
                     },
                 ],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: result_err(str()),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "create-sym-link".to_string(),
@@ -259,10 +249,9 @@ fn exports_file_service_component() {
                         typ: str(),
                     },
                 ],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: result_err(str()),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "remove-directory".to_string(),
@@ -270,10 +259,9 @@ fn exports_file_service_component() {
                     name: "path".to_string(),
                     typ: str(),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: result_err(str()),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "remove-file".to_string(),
@@ -281,10 +269,9 @@ fn exports_file_service_component() {
                     name: "path".to_string(),
                     typ: str(),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: result_err(str()),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "rename-file".to_string(),
@@ -298,10 +285,9 @@ fn exports_file_service_component() {
                         typ: str(),
                     },
                 ],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: result_err(str()),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "hash".to_string(),
@@ -309,13 +295,12 @@ fn exports_file_service_component() {
                     name: "path".to_string(),
                     typ: str(),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: result(
                         record(vec![field("lower", u64()), field("upper", u64())]),
                         str(),
                     ),
-                }],
+                }),
             },
         ],
     })];
@@ -351,10 +336,9 @@ fn exports_auction_registry_composed_component() {
                         typ: str(),
                     },
                 ],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: record(vec![field("bidder-id", str())]),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "create-auction".to_string(),
@@ -376,16 +360,14 @@ fn exports_auction_registry_composed_component() {
                         typ: u64(),
                     },
                 ],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: record(vec![field("auction-id", str())]),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "get-auctions".to_string(),
                 parameters: vec![],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: list(record(vec![
                         field("auction-id", record(vec![field("auction-id", str())])),
                         field("name", str()),
@@ -393,7 +375,7 @@ fn exports_auction_registry_composed_component() {
                         field("limit-price", f32()),
                         field("expiration", u64()),
                     ])),
-                }],
+                }),
             },
         ],
     })];
@@ -423,10 +405,9 @@ fn exports_shopping_cart_resource_component() {
                     name: "user-id".to_string(),
                     typ: str(),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "[method]cart.add-item".to_string(),
@@ -445,7 +426,7 @@ fn exports_shopping_cart_resource_component() {
                         ]),
                     },
                 ],
-                results: vec![],
+                result: None,
             },
             AnalysedFunction {
                 name: "[method]cart.remove-item".to_string(),
@@ -459,7 +440,7 @@ fn exports_shopping_cart_resource_component() {
                         typ: str(),
                     },
                 ],
-                results: vec![],
+                result: None,
             },
             AnalysedFunction {
                 name: "[method]cart.update-item-quantity".to_string(),
@@ -477,7 +458,7 @@ fn exports_shopping_cart_resource_component() {
                         typ: u32(),
                     },
                 ],
-                results: vec![],
+                result: None,
             },
             AnalysedFunction {
                 name: "[method]cart.checkout".to_string(),
@@ -485,13 +466,12 @@ fn exports_shopping_cart_resource_component() {
                     name: "self".to_string(),
                     typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: variant(vec![
                         case("error", str()),
                         case("success", record(vec![field("order-id", str())])),
                     ]),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "[method]cart.get-cart-contents".to_string(),
@@ -499,15 +479,14 @@ fn exports_shopping_cart_resource_component() {
                     name: "self".to_string(),
                     typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: list(record(vec![
                         field("product-id", str()),
                         field("name", str()),
                         field("price", f32()),
                         field("quantity", u32()),
                     ])),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "[method]cart.merge-with".to_string(),
@@ -521,7 +500,7 @@ fn exports_shopping_cart_resource_component() {
                         typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                     },
                 ],
-                results: vec![],
+                result: None,
             },
         ],
     })];
@@ -551,10 +530,9 @@ fn exports_shopping_cart_resource_versioned_component() {
                     name: "user-id".to_string(),
                     typ: str(),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "[method]cart.add-item".to_string(),
@@ -573,7 +551,7 @@ fn exports_shopping_cart_resource_versioned_component() {
                         ]),
                     },
                 ],
-                results: vec![],
+                result: None,
             },
             AnalysedFunction {
                 name: "[method]cart.remove-item".to_string(),
@@ -587,7 +565,7 @@ fn exports_shopping_cart_resource_versioned_component() {
                         typ: str(),
                     },
                 ],
-                results: vec![],
+                result: None,
             },
             AnalysedFunction {
                 name: "[method]cart.update-item-quantity".to_string(),
@@ -605,7 +583,7 @@ fn exports_shopping_cart_resource_versioned_component() {
                         typ: u32(),
                     },
                 ],
-                results: vec![],
+                result: None,
             },
             AnalysedFunction {
                 name: "[method]cart.checkout".to_string(),
@@ -613,13 +591,12 @@ fn exports_shopping_cart_resource_versioned_component() {
                     name: "self".to_string(),
                     typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: variant(vec![
                         case("error", str()),
                         case("success", record(vec![field("order-id", str())])),
                     ]),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "[method]cart.get-cart-contents".to_string(),
@@ -627,15 +604,14 @@ fn exports_shopping_cart_resource_versioned_component() {
                     name: "self".to_string(),
                     typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
+                result: Some(AnalysedFunctionResult {
                     typ: list(record(vec![
                         field("product-id", str()),
                         field("name", str()),
                         field("price", f32()),
                         field("quantity", u32()),
                     ])),
-                }],
+                }),
             },
             AnalysedFunction {
                 name: "[method]cart.merge-with".to_string(),
@@ -649,7 +625,7 @@ fn exports_shopping_cart_resource_versioned_component() {
                         typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                     },
                 ],
-                results: vec![],
+                result: None,
             },
         ],
     })];
@@ -674,42 +650,31 @@ fn exports_caller_composed_component() {
         AnalysedExport::Function(AnalysedFunction {
             name: "test1".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
+            result: Some(AnalysedFunctionResult {
                 typ: list(tuple(vec![str(), u64()])),
-            }],
+            }),
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "test2".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
-                typ: u64(),
-            }],
+            result: Some(AnalysedFunctionResult { typ: u64() }),
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "test3".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
-                typ: u64(),
-            }],
+            result: Some(AnalysedFunctionResult { typ: u64() }),
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "test4".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
+            result: Some(AnalysedFunctionResult {
                 typ: tuple(vec![list(str()), list(tuple(vec![str(), str()]))]),
-            }],
+            }),
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "test5".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
-                typ: list(u64()),
-            }],
+            result: Some(AnalysedFunctionResult { typ: list(u64()) }),
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "bug-wasm-rpc-i32".to_string(),
@@ -717,10 +682,9 @@ fn exports_caller_composed_component() {
                 name: "in".to_string(),
                 typ: variant(vec![unit_case("leaf")]),
             }],
-            results: vec![AnalysedFunctionResult {
-                name: None,
+            result: Some(AnalysedFunctionResult {
                 typ: variant(vec![unit_case("leaf")]),
-            }],
+            }),
         }),
     ];
 
@@ -745,42 +709,31 @@ fn exports_caller_component() {
         AnalysedExport::Function(AnalysedFunction {
             name: "test1".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
+            result: Some(AnalysedFunctionResult {
                 typ: list(tuple(vec![str(), u64()])),
-            }],
+            }),
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "test2".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
-                typ: u64(),
-            }],
+            result: Some(AnalysedFunctionResult { typ: u64() }),
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "test3".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
-                typ: u64(),
-            }],
+            result: Some(AnalysedFunctionResult { typ: u64() }),
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "test4".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
+            result: Some(AnalysedFunctionResult {
                 typ: tuple(vec![list(str()), list(tuple(vec![str(), str()]))]),
-            }],
+            }),
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "test5".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
-                typ: list(u64()),
-            }],
+            result: Some(AnalysedFunctionResult { typ: list(u64()) }),
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "bug-wasm-rpc-i32".to_string(),
@@ -788,18 +741,16 @@ fn exports_caller_component() {
                 name: "in".to_string(),
                 typ: variant(vec![unit_case("leaf")]),
             }],
-            results: vec![AnalysedFunctionResult {
-                name: None,
+            result: Some(AnalysedFunctionResult {
                 typ: variant(vec![unit_case("leaf")]),
-            }],
+            }),
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "ephemeral-test1".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
+            result: Some(AnalysedFunctionResult {
                 typ: list(tuple(vec![str(), str()])),
-            }],
+            }),
         }),
     ];
 

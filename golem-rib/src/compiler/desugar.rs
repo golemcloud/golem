@@ -640,7 +640,7 @@ mod desugar_tests {
                     name: "my_parameter".to_string(),
                     typ: AnalysedType::U64(TypeU64),
                 }],
-                results: vec![],
+                result: None,
             }),
             AnalysedExport::Function(AnalysedFunction {
                 name: "baz".to_string(),
@@ -648,7 +648,7 @@ mod desugar_tests {
                     name: "my_parameter".to_string(),
                     typ: AnalysedType::U32(TypeU32),
                 }],
-                results: vec![],
+                result: None,
             }),
         ];
         FunctionTypeRegistry::from_export_metadata(&metadata)

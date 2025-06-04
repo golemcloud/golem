@@ -115,7 +115,7 @@ async fn db_connection_durable_execute<Ctx, T, P, E>(
 ) -> anyhow::Result<Result<u64, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
+    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
@@ -147,7 +147,7 @@ async fn db_connection_durable_query<Ctx, T, P, R, E>(
 ) -> anyhow::Result<Result<R, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
+    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     R: FromRdbmsValue<crate::services::rdbms::DbResult<T>>,
@@ -187,7 +187,7 @@ async fn db_connection_durable_query_stream<Ctx, T, P, E>(
 ) -> anyhow::Result<Result<Resource<RdbmsResultStreamEntry<T>>, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
+    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
@@ -270,7 +270,7 @@ async fn db_result_stream_durable_get_columns<Ctx, T, R>(
 ) -> anyhow::Result<Vec<R>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
+    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     R: FromRdbmsValue<T::DbColumn>,
 {
@@ -315,7 +315,7 @@ async fn db_result_stream_durable_get_next<Ctx, T, R>(
 ) -> anyhow::Result<Option<Vec<R>>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
+    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     R: FromRdbmsValue<crate::services::rdbms::DbRow<T::DbValue>>,
 {
@@ -397,7 +397,7 @@ async fn db_transaction_durable_query<Ctx, T, P, R, E>(
 ) -> anyhow::Result<Result<R, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
+    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     R: FromRdbmsValue<crate::services::rdbms::DbResult<T>>,
@@ -439,7 +439,7 @@ async fn db_transaction_durable_execute<Ctx, T, P, E>(
 ) -> anyhow::Result<Result<u64, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
+    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
@@ -473,7 +473,7 @@ async fn db_transaction_durable_query_stream<Ctx, T, P, E>(
 ) -> anyhow::Result<Result<Resource<RdbmsResultStreamEntry<T>>, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
+    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
@@ -516,7 +516,7 @@ async fn db_transaction_durable_rollback<Ctx, T, E>(
 ) -> anyhow::Result<Result<(), E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
+    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     E: From<RdbmsError>,
 {
     let interface = get_db_transaction_interface::<T>();
@@ -548,7 +548,7 @@ async fn db_transaction_durable_commit<Ctx, T, E>(
 ) -> anyhow::Result<Result<(), E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Clone + bincode::Encode + bincode::Decode + 'static,
+    T: RdbmsType + Clone + bincode::Encode + bincode::Decode<()> + 'static,
     E: From<RdbmsError>,
 {
     let interface = get_db_transaction_interface::<T>();
