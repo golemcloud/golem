@@ -29,7 +29,7 @@ use golem_common::model::public_oplog::{
     SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters,
 };
 use golem_common::model::Timestamp;
-use golem_wasm_rpc::{NodeBuilder, WitValue, WitValueBuilderExtensions};
+use golem_wasm_rpc::WitValue;
 
 impl From<PublicOplogEntry> for oplog::OplogEntry {
     fn from(value: PublicOplogEntry) -> Self {
@@ -101,9 +101,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 consumed_fuel,
             }) => Self::ExportedFunctionCompleted(oplog::ExportedFunctionCompletedParameters {
                 timestamp: timestamp.into(),
-                response: response
-                    .map(WitValue::from)
-                    .unwrap_or(WitValue::builder().record().finish()), // NOTE: representing unit result value as empty record
+                response: response.map(WitValue::from),
                 consumed_fuel,
             }),
             PublicOplogEntry::Suspend(TimestampParameter { timestamp }) => {
