@@ -1962,7 +1962,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                    LIMIT 1)
               INSERT INTO component_versions
                   (component_id, version, size, metadata, created_at, component_type, available, object_store_key, transformed_object_store_key, root_package_name, root_package_version, env)
-                  SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version, prev.env FROM prev
+                  SELECT prev.component_id, prev.version + 1, prev.size, prev.metadata, $2, prev.component_type, FALSE, prev.object_store_key, prev.transformed_object_store_key, prev.root_package_name, prev.root_package_version, prev.env FROM prev
               RETURNING *
               "#,
         ).bind(component_id).bind(Utc::now());
