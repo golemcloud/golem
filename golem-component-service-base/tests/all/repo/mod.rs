@@ -639,7 +639,7 @@ async fn test_repo_component_constraints(
     let result_constraint_get = component_repo
         .get_constraint(
             &owner1.to_string(),
-            &component1.versioned_component_id.component_id.0,
+            component1.versioned_component_id.component_id.0,
         )
         .await
         .unwrap();
@@ -663,7 +663,7 @@ async fn test_repo_component_constraints(
     let result_constraint_get_updated = component_repo
         .get_constraint(
             &owner1.to_string(),
-            &component1.versioned_component_id.component_id.0,
+            component1.versioned_component_id.component_id.0,
         )
         .await
         .unwrap();
