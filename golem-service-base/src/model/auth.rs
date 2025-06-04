@@ -12,23 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::TokenSecret;
 use axum::http::header;
-use bincode::{Decode, Encode};
-use golem_common::model::{AccountId, ProjectId};
-use golem_service_base::auth::{GolemAuthCtx, GolemNamespace};
-use headers::authorization::Bearer as HBearer;
+use golem_common::model::auth::TokenSecret;
 use headers::Cookie as HCookie;
-use poem::web::headers::{Authorization, HeaderMapExt};
+use headers::HeaderMapExt;
 use poem::Request;
-use poem_openapi::{
-    auth::{ApiKey, Bearer},
-    SecurityScheme,
-};
-use serde::Deserialize;
-use std::fmt;
-use std::fmt::{Display, Formatter};
+use poem_openapi::auth::{ApiKey, Bearer};
+use poem_openapi::SecurityScheme;
 use std::str::FromStr;
+
+pub const COOKIE_KEY: &str = "GOLEM_SESSION";
+pub const AUTH_ERROR_MESSAGE: &str = "authorization error";
+
+#[derive(SecurityScheme)]
+#[oai(rename = "Token", ty = "bearer", checker = "bearer_checker")]
+pub struct GolemBearer(TokenSecret);
+
+#[derive(SecurityScheme)]
+#[oai(
+    rename = "Cookie",
+    ty = "api_key",
+    key_in = "cookie",
+    key_name = "GOLEM_SESSION",
+    checker = "cookie_checker"
+)]
+pub struct GolemCookie(TokenSecret);
+
+async fn bearer_checker(_: &Request, bearer: Bearer) -> Option<TokenSecret> {
+    TokenSecret::from_str(&bearer.token).ok()
+}
+
+async fn cookie_checker(_: &Request, cookie: ApiKey) -> Option<TokenSecret> {
+    TokenSecret::from_str(&cookie.key).ok()
+}
 
 #[derive(SecurityScheme)]
 pub enum GolemSecurityScheme {
@@ -44,7 +60,9 @@ impl GolemSecurityScheme {
     pub fn from_header_map(
         header_map: &header::HeaderMap,
     ) -> Result<GolemSecurityScheme, &'static str> {
-        if let Some(auth_bearer) = header_map.typed_get::<Authorization<HBearer>>() {
+        if let Some(auth_bearer) =
+            header_map.typed_get::<headers::Authorization<headers::authorization::Bearer>>()
+        {
             return TokenSecret::from_str(auth_bearer.token())
                 .map(|token| GolemSecurityScheme::Bearer(GolemBearer(token)))
                 .map_err(|_| "Invalid Bearer token");
@@ -119,108 +137,10 @@ impl<'a> poem::FromRequest<'a> for WrappedGolemSecuritySchema {
     }
 }
 
-#[derive(SecurityScheme)]
-#[oai(rename = "Token", ty = "bearer", checker = "bearer_checker")]
-pub struct GolemBearer(TokenSecret);
-
-#[derive(SecurityScheme)]
-#[oai(
-    rename = "Cookie",
-    ty = "api_key",
-    key_in = "cookie",
-    key_name = "GOLEM_SESSION",
-    checker = "cookie_checker"
-)]
-pub struct GolemCookie(TokenSecret);
-
-async fn bearer_checker(_: &Request, bearer: Bearer) -> Option<TokenSecret> {
-    TokenSecret::from_str(&bearer.token).ok()
-}
-
-async fn cookie_checker(_: &Request, cookie: ApiKey) -> Option<TokenSecret> {
-    TokenSecret::from_str(&cookie.key).ok()
-}
-
-pub const COOKIE_KEY: &str = "GOLEM_SESSION";
-pub const AUTH_ERROR_MESSAGE: &str = "authorization error";
-
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub struct CloudAuthCtx {
-    pub token_secret: TokenSecret,
-}
-
-impl CloudAuthCtx {
-    pub fn new(token_secret: TokenSecret) -> Self {
-        Self { token_secret }
-    }
-}
-
-impl IntoIterator for CloudAuthCtx {
-    type Item = (String, String);
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        vec![(
-            "authorization".to_string(),
-            format!("Bearer {}", self.token_secret.value),
-        )]
-        .into_iter()
-    }
-}
-
-impl GolemAuthCtx for CloudAuthCtx {}
-
-#[derive(Clone, Debug, Hash, Eq, PartialEq, Encode, Decode, Deserialize)]
-pub struct CloudNamespace {
-    pub project_id: ProjectId,
-    // project owner account
-    pub account_id: AccountId,
-}
-
-impl CloudNamespace {
-    pub fn new(project_id: ProjectId, account_id: AccountId) -> Self {
-        Self {
-            project_id,
-            account_id,
-        }
-    }
-}
-
-impl Display for CloudNamespace {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.account_id, self.project_id)
-    }
-}
-
-impl TryFrom<String> for CloudNamespace {
-    type Error = String;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 2 {
-            return Err(format!("Invalid namespace: {s}"));
-        }
-
-        Ok(Self {
-            project_id: ProjectId::try_from(parts[1])?,
-            account_id: AccountId::from(parts[0]),
-        })
-    }
-}
-
-impl GolemNamespace for CloudNamespace {
-    fn account_id(&self) -> AccountId {
-        self.account_id.clone()
-    }
-    fn project_id(&self) -> Option<ProjectId> {
-        Some(self.project_id.clone())
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use test_r::test;
-
+    use super::AUTH_ERROR_MESSAGE;
+    use super::{GolemSecurityScheme, WrappedGolemSecuritySchema, COOKIE_KEY};
     use http::StatusCode;
     use poem::{
         middleware::CookieJarManager,
@@ -229,10 +149,7 @@ mod test {
         EndpointExt, Request,
     };
     use poem_openapi::{payload::PlainText, OpenApi, OpenApiService};
-
-    use crate::auth::AUTH_ERROR_MESSAGE;
-
-    use super::{GolemSecurityScheme, WrappedGolemSecuritySchema, COOKIE_KEY};
+    use test_r::test;
 
     struct TestApi;
 

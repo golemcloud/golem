@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cloud_common::model::TokenSecret;
+use golem_common::model::auth::TokenSecret;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::WorkerId;

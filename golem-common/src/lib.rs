@@ -51,7 +51,7 @@ pub mod redis;
 #[cfg(feature = "sql")]
 pub mod repo;
 
-#[cfg(feature = "model")]
+#[cfg(feature = "tokio")]
 pub mod retriable_error;
 
 #[cfg(feature = "tokio")]
@@ -63,9 +63,8 @@ pub mod serialization;
 #[cfg(feature = "observability")]
 pub mod tracing;
 
+#[cfg(feature = "model")]
 pub mod virtual_exports;
-
-pub mod testing;
 
 #[cfg(test)]
 test_r::enable!();

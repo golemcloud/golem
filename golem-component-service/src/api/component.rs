@@ -17,8 +17,8 @@ use super::dto::CloudApiMapper;
 use crate::api::{ApiTags, ComponentError, Result};
 use crate::model::{ComponentQuery, ComponentSearch};
 use crate::service::component::CloudComponentService;
-use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
 use futures_util::{stream, StreamExt, TryStreamExt};
+use golem_common::model::auth::CloudAuthCtx;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
@@ -31,6 +31,7 @@ use golem_component_service_base::model::{
     BatchPluginInstallationUpdates, ComponentEnv, DynamicLinking,
     InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
+use golem_service_base::model::auth::GolemSecurityScheme;
 use golem_service_base::model::ComponentName;
 use golem_service_base::poem::TempFileUpload;
 use poem::Body;

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod auth;
+
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
 use golem_common::model::component::VersionedComponentId;

@@ -19,7 +19,6 @@ use crate::services::golem_config::PluginServiceConfig;
 use crate::services::plugins::{CachedPlugins, Plugins, PluginsObservations, PluginsUnavailable};
 use applying::Apply;
 use async_trait::async_trait;
-use cloud_common::model::{CloudPluginOwner, CloudPluginScope};
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
@@ -29,6 +28,7 @@ use golem_api_grpc::proto::golem::component::v1::{
     get_plugin_by_id_response, GetPluginByIdRequest,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
 use golem_common::model::plugin::{PluginDefinition, PluginInstallation};
 use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};

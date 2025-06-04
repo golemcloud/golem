@@ -17,7 +17,7 @@ use axum::extract::{FromRequest, Request};
 use axum::http::HeaderMap;
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use axum_jrpc::{JsonRpcExtractor, JsonRpcResponse};
-use cloud_common::auth::GolemSecurityScheme;
+use golem_service_base::model::auth::GolemSecurityScheme;
 use serde_json::Value;
 
 // A wrapper over JsonRpcExtractor to deal with extra authentication

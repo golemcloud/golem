@@ -20,7 +20,7 @@ use crate::from_value::{
 use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
 use bincode::Encode;
-use cloud_common::auth::CloudNamespace;
+use golem_common::model::auth::CloudNamespace;
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };

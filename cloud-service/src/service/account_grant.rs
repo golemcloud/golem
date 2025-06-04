@@ -17,7 +17,7 @@ use crate::repo::account::AccountRepo;
 use crate::repo::account_grant::AccountGrantRepo;
 use crate::{auth::AccountAuthorisation, model::AccountAction};
 use async_trait::async_trait;
-use cloud_common::model::Role;
+use golem_common::model::auth::Role;
 use golem_common::model::AccountId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;

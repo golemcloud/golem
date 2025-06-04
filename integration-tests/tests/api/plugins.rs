@@ -17,8 +17,8 @@ use axum::body::Bytes;
 use axum::extract::Multipart;
 use axum::routing::post;
 use axum::Router;
-use cloud_common::model::CloudPluginScope;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
+use golem_common::model::plugin::CloudPluginScope;
 use golem_common::model::plugin::{
     AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
     OplogProcessorDefinition, PluginTypeSpecificDefinition,

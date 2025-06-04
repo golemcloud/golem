@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::clients::auth::authorised_request;
-use crate::config::RemoteCloudServiceConfig;
-use crate::grpc::try_decode_plugin_definition;
-use crate::model::{CloudPluginOwner, CloudPluginScope, TokenSecret};
+use super::authorised_request;
+use super::RemoteCloudServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_error::Error;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::auth::TokenSecret;
 use golem_common::model::plugin::PluginDefinition;
+use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
 use golem_common::model::{PluginId, RetryConfig};
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
@@ -111,7 +111,7 @@ impl PluginServiceClient for PluginServiceClientDefault {
                         None => Err(PluginError::Unknown("Empty response".to_string())),
                         Some(golem_api_grpc::proto::golem::component::v1::get_plugin_response::Result::Success(plugin)) => {
                             if let Some(plugin) = plugin.plugin {
-                                Ok(Some(try_decode_plugin_definition(plugin)?))
+                                Ok(Some(plugin.try_into()?))
                             } else {
                                 Ok(None)
                             }
@@ -156,7 +156,7 @@ impl PluginServiceClient for PluginServiceClientDefault {
                         None => Err(PluginError::Unknown("Empty response".to_string())),
                         Some(golem_api_grpc::proto::golem::component::v1::get_plugin_by_id_response::Result::Success(plugin)) => {
                             if let Some(plugin) = plugin.plugin {
-                                Ok(Some(try_decode_plugin_definition(plugin)?))
+                                Ok(Some(plugin.try_into()?))
                             } else {
                                 Ok(None)
                             }

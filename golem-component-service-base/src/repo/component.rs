@@ -26,7 +26,7 @@ use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
     InitialComponentFileKey,
 };
-use golem_common::repo::plugin_installation::ComponentPluginInstallationRow;
+use golem_common::repo::ComponentPluginInstallationRow;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::model::ComponentName;
 use golem_service_base::repo::plugin_installation::{

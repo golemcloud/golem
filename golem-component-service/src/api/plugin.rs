@@ -14,13 +14,14 @@
 
 use crate::api::{ApiTags, ComponentError, Result};
 use crate::service::plugin::CloudPluginService;
-use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
-use cloud_common::model::{CloudPluginOwner, CloudPluginScope};
+use golem_common::model::auth::CloudAuthCtx;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::PluginDefinition;
+use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
 use golem_common::model::Empty;
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::api::dto;
+use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::OpenApi;

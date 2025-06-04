@@ -14,10 +14,11 @@
 
 use crate::api::common::ApiEndpointError;
 use crate::service::api_security::SecuritySchemeService;
-use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
+use golem_common::model::auth::CloudAuthCtx;
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::api_tags::ApiTags;
+use golem_service_base::model::auth::GolemSecurityScheme;
 use golem_worker_service_base::api::SecuritySchemeData;
 use golem_worker_service_base::gateway_security::{SecurityScheme, SecuritySchemeIdentifier};
 use poem_openapi::param::Path;

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cloud_common::config::RemoteCloudServiceConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, DbConfig, HasConfigExamples};
 use golem_common::tracing::TracingConfig;
 use golem_component_service_base::config::{
     ComponentCompilationConfig, PluginTransformationsConfig,
 };
+use golem_service_base::clients::RemoteCloudServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

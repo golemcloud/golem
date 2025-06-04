@@ -22,15 +22,15 @@ use crate::service::auth::AuthService;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
-use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
-use cloud_common::clients::auth::AuthServiceError;
-use cloud_common::model::ProjectAction;
 use derive_more::Display;
+use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
+use golem_service_base::clients::auth::AuthServiceError;
 use golem_service_base::repo::RepoError;
 use rusoto_acm::{
     Acm, AcmClient, DeleteCertificateError, DeleteCertificateRequest, DescribeCertificateRequest,

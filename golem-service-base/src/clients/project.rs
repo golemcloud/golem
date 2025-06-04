@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::clients::auth::authorised_request;
-use crate::config::RemoteCloudServiceConfig;
-use crate::model::{ProjectView, TokenSecret};
+use super::authorised_request;
+use super::RemoteCloudServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use golem_api_grpc::proto::golem::project::v1::project_error::Error;
@@ -22,6 +21,8 @@ use golem_api_grpc::proto::golem::project::v1::{
     get_default_project_response, get_project_response, GetDefaultProjectRequest, GetProjectRequest,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::auth::TokenSecret;
+use golem_common::model::project::ProjectView;
 use golem_common::model::ProjectId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;

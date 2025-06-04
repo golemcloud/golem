@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cloud_common::auth::CloudNamespace;
 use derive_more::FromStr;
+use golem_common::model::auth::CloudNamespace;
 use golem_common::model::{AccountId, PluginInstallationId, ScanCursor, WorkerId};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
 use golem_service_base::model::{ResourceMetadata, UpdateRecord};

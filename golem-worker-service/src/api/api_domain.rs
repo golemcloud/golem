@@ -15,9 +15,10 @@
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::model::{ApiDomain, DomainRequest};
 use crate::service::api_domain::ApiDomainService;
-use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
+use golem_common::model::auth::CloudAuthCtx;
 use golem_common::model::ProjectId;
 use golem_common::recorded_http_api_request;
+use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;

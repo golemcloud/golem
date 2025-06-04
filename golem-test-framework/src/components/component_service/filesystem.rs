@@ -27,8 +27,8 @@ use golem_common::model::{
     ComponentId, ComponentType, ComponentVersion, InitialComponentFile,
 };
 use golem_common::model::{AccountId, ProjectId};
-use golem_common::testing::LocalFileSystemComponentMetadata;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
+use golem_service_base::testing::LocalFileSystemComponentMetadata;
 use golem_wasm_ast::analysis::AnalysedExport;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

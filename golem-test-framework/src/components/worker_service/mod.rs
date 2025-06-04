@@ -22,7 +22,6 @@ use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
-use cloud_common::clients::auth::authorised_request;
 use futures_util::future::join_all;
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
@@ -84,6 +83,7 @@ use golem_client::model::{
 };
 use golem_client::{Context, Security};
 use golem_common::model::WorkerEvent;
+use golem_service_base::clients::authorised_request;
 use golem_wasm_rpc::protobuf::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::HashMap;

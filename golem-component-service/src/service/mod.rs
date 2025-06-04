@@ -16,12 +16,10 @@ use crate::api::dto::{CloudApiMapper, DefaultCloudApiMapper};
 use crate::config::ComponentServiceConfig;
 use crate::service::component::CloudComponentService;
 use crate::service::plugin::CloudPluginService;
-use cloud_common::clients::auth::{AuthServiceError, BaseAuthService, CloudAuthService};
-use cloud_common::clients::limit::{LimitError, LimitService, LimitServiceDefault};
-use cloud_common::clients::project::{ProjectError, ProjectService, ProjectServiceDefault};
-use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, CloudPluginScope};
 use golem_api_grpc::proto::golem::project::v1::project_error;
 use golem_common::config::DbConfig;
+use golem_common::model::component::CloudComponentOwner;
+use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
 use golem_common::SafeDisplay;
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_component_service_base::repo::component::{
@@ -43,6 +41,9 @@ use golem_component_service_base::service::plugin::{
     PluginError, PluginService, PluginServiceDefault,
 };
 use golem_component_service_base::service::transformer_plugin_caller::TransformerPluginCallerDefault;
+use golem_service_base::clients::auth::{AuthServiceError, BaseAuthService, CloudAuthService};
+use golem_service_base::clients::limit::{LimitError, LimitService, LimitServiceDefault};
+use golem_service_base::clients::project::{ProjectError, ProjectService, ProjectServiceDefault};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;

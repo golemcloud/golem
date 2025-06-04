@@ -14,9 +14,9 @@
 
 use crate::model::{OAuth2Provider, OAuth2Token};
 use async_trait::async_trait;
-use cloud_common::model::TokenId;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::AccountId;
+use golem_common::model::TokenId;
 use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
 use std::result::Result;

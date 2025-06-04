@@ -20,7 +20,6 @@ use crate::grpcapi::project::ProjectGrpcApi;
 use crate::grpcapi::token::TokenGrpcApi;
 use crate::service::Services;
 use auth::AuthGrpcApi;
-use cloud_common::model::TokenSecret as ModelTokenSecret;
 use golem_api_grpc::proto::golem::account::v1::cloud_account_service_server::CloudAccountServiceServer;
 use golem_api_grpc::proto::golem::accountsummary::v1::cloud_account_summary_service_server::CloudAccountSummaryServiceServer;
 use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_server::CloudAuthServiceServer;
@@ -28,6 +27,7 @@ use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_server::CloudL
 use golem_api_grpc::proto::golem::login::v1::cloud_login_service_server::CloudLoginServiceServer;
 use golem_api_grpc::proto::golem::project::v1::cloud_project_service_server::CloudProjectServiceServer;
 use golem_api_grpc::proto::golem::token::v1::cloud_token_service_server::CloudTokenServiceServer;
+use golem_common::model::auth::TokenSecret as ModelTokenSecret;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use tonic::codec::CompressionEncoding;
@@ -154,7 +154,7 @@ mod tests {
     use test_r::test;
 
     use crate::grpcapi::get_authorisation_token;
-    use cloud_common::model::TokenSecret as ModelTokenSecret;
+    use golem_common::model::auth::TokenSecret as ModelTokenSecret;
     use tonic::metadata::MetadataMap;
     use uuid::Uuid;
 

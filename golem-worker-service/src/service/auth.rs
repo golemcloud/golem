@@ -13,17 +13,17 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
-use cloud_common::clients::auth::{AuthServiceError, BaseAuthService};
-use cloud_common::model::ProjectAction;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
     get_component_metadata_response, GetLatestComponentRequest,
 };
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_common::retries::with_retries;
+use golem_service_base::clients::auth::{AuthServiceError, BaseAuthService};
 use golem_worker_service_base::app_config::ComponentServiceConfig;
 use golem_worker_service_base::service::component::ComponentServiceError;
 use golem_worker_service_base::service::with_metadata;
@@ -45,7 +45,7 @@ pub trait AuthService: BaseAuthService {
 }
 
 pub struct CloudAuthService {
-    common_auth: cloud_common::clients::auth::CloudAuthService,
+    common_auth: golem_service_base::clients::auth::CloudAuthService,
     component_service_config: ComponentServiceConfig,
     component_service_client: GrpcClient<ComponentServiceClient<Channel>>,
     component_project_cache: Cache<ComponentId, (), ProjectId, String>,
@@ -53,7 +53,7 @@ pub struct CloudAuthService {
 
 impl CloudAuthService {
     pub fn new(
-        common_auth: cloud_common::clients::auth::CloudAuthService,
+        common_auth: golem_service_base::clients::auth::CloudAuthService,
         component_service_config: ComponentServiceConfig,
     ) -> Self {
         let component_service_client = GrpcClient::new(

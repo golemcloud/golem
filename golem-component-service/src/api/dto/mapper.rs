@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use crate::api::dto;
-use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, CloudPluginScope};
 use futures::{stream, StreamExt, TryStreamExt};
+use golem_common::model::component::CloudComponentOwner;
 use golem_common::model::plugin::PluginInstallation;
+use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
 use golem_component_service_base::model as domain;
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
 use std::sync::Arc;

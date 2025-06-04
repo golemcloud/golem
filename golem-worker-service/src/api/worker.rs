@@ -18,14 +18,11 @@ use crate::service::auth::AuthService;
 use crate::service::worker::{
     ConnectWorkerStream, WorkerError as WorkerServiceError, WorkerService,
 };
-use cloud_common::auth::{
-    CloudAuthCtx, CloudNamespace, GolemSecurityScheme, WrappedGolemSecuritySchema,
-};
-use cloud_common::clients::auth::AuthServiceError;
-use cloud_common::model::{ProjectAction, TokenSecret};
 use futures::StreamExt;
 use futures_util::TryStreamExt;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
+use golem_common::model::auth::{ProjectAction, TokenSecret};
 use golem_common::model::error::{
     ErrorBody, ErrorsBody, GolemError, GolemErrorBody, GolemErrorUnknown,
 };
@@ -36,6 +33,8 @@ use golem_common::model::{
     TargetWorkerId, WorkerFilter, WorkerId,
 };
 use golem_common::{recorded_http_api_request, SafeDisplay};
+use golem_service_base::clients::auth::AuthServiceError;
+use golem_service_base::model::auth::{GolemSecurityScheme, WrappedGolemSecuritySchema};
 use golem_service_base::model::*;
 use golem_worker_service_base::service::component::{ComponentService, ComponentServiceError};
 use golem_worker_service_base::service::worker::{proxy_worker_connection, InvocationParameters};

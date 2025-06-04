@@ -16,8 +16,6 @@ use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::token;
-use cloud_common::grpc::proto_token_id_string;
-use cloud_common::model::TokenId;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::token::v1::cloud_token_service_server::CloudTokenService;
 use golem_api_grpc::proto::golem::token::v1::{
@@ -30,6 +28,7 @@ use golem_api_grpc::proto::golem::token::{Token, UnsafeToken};
 use golem_common::grpc::proto_account_id_string;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::AccountId;
+use golem_common::model::TokenId;
 use golem_common::recorded_grpc_api_request;
 use golem_common::SafeDisplay;
 use std::fmt::{Debug, Formatter};
@@ -335,4 +334,12 @@ impl TraceErrorKind for TokenTraceErrorKind<'_> {
             },
         }
     }
+}
+
+fn proto_token_id_string(
+    id: &Option<golem_api_grpc::proto::golem::token::TokenId>,
+) -> Option<String> {
+    (*id)
+        .and_then(|v| TryInto::<TokenId>::try_into(v).ok())
+        .map(|v| v.to_string())
 }

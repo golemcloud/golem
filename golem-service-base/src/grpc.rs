@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod auth;
-pub mod clients;
-pub mod config;
-pub mod grpc;
-pub mod model;
-pub mod repo;
+use golem_common::model::ProjectId;
 
-#[cfg(test)]
-test_r::enable!();
+pub fn proto_project_id_string(
+    id: &Option<golem_api_grpc::proto::golem::common::ProjectId>,
+) -> Option<String> {
+    (*id)
+        .and_then(|v| TryInto::<ProjectId>::try_into(v).ok())
+        .map(|v| v.to_string())
+}

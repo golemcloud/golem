@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
 use golem_common::model::{AccountId, ProjectId};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 pub trait GolemAuthCtx: Send + Sync + Clone + IntoIterator<Item = (String, String)> {}
+
+impl GolemAuthCtx for CloudAuthCtx {}
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmptyAuthCtx();
@@ -43,6 +46,15 @@ pub trait GolemNamespace:
 {
     fn account_id(&self) -> AccountId;
     fn project_id(&self) -> Option<ProjectId>;
+}
+
+impl GolemNamespace for CloudNamespace {
+    fn account_id(&self) -> AccountId {
+        self.account_id.clone()
+    }
+    fn project_id(&self) -> Option<ProjectId> {
+        Some(self.project_id.clone())
+    }
 }
 
 #[derive(

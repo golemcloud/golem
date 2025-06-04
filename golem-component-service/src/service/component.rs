@@ -15,17 +15,14 @@
 use crate::service::CloudComponentError;
 use async_trait::async_trait;
 use bytes::Bytes;
-use cloud_common::auth::CloudAuthCtx;
-use cloud_common::clients::auth::BaseAuthService;
-use cloud_common::clients::limit::LimitService;
-use cloud_common::clients::project::ProjectService;
-use cloud_common::model::{
-    CloudComponentOwner, CloudPluginOwner, CloudPluginScope, ComponentOwnershipQuery, ProjectAction,
-};
 use futures_util::stream::BoxStream;
+use golem_common::model::auth::CloudAuthCtx;
+use golem_common::model::auth::ProjectAction;
+use golem_common::model::component::CloudComponentOwner;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
+use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope, ComponentOwnershipQuery};
 use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationAction, PluginInstallationCreation,
     PluginInstallationUpdate,
@@ -40,6 +37,9 @@ use golem_component_service_base::service::component::{
     ComponentByNameAndVersion, ComponentError, ComponentService,
 };
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
+use golem_service_base::clients::auth::BaseAuthService;
+use golem_service_base::clients::limit::LimitService;
+use golem_service_base::clients::project::ProjectService;
 use golem_service_base::model::*;
 use std::collections::HashMap;
 use std::sync::Arc;

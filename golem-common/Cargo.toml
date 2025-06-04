@@ -24,7 +24,7 @@ default = [
 ]
 
 base-model = []
-config = ["dep:figment"]
+config = ["model", "dep:figment"]
 model = [
     "base-model",
     "dep:golem-wasm-rpc",
@@ -32,6 +32,7 @@ model = [
     "dep:golem-rib",
 ]
 observability = [
+    "config",
     "dep:console-subscriber",
     "dep:prometheus",
     "dep:tracing",
@@ -48,6 +49,8 @@ poem = [
     "golem-rib/poem",
 ]
 protobuf = [
+    "observability",
+    "tokio",
     "dep:prost",
     "dep:prost-types",
     "dep:tonic",
@@ -56,10 +59,21 @@ protobuf = [
     "golem-wasm-ast/protobuf",
     "golem-wasm-rpc/protobuf",
 ]
-redis = ["dep:fred"]
+redis = [
+    "observability",
+    "serialization",
+    "dep:fred"
+]
 serialization = []
-sql = ["dep:sqlx"]
-tokio = ["dep:tokio"]
+sql = [
+    "model",
+    "dep:sqlx"
+]
+tokio = [
+    "observability",
+    "model",
+    "dep:tokio"
+]
 
 [lib]
 harness = false
@@ -113,6 +127,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sqlx = { workspace = true, optional = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 tokio = { workspace = true, optional = true }

@@ -20,17 +20,17 @@ use crate::model::{
 use crate::repo::project::{ProjectRecord, ProjectRepo};
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
 use async_trait::async_trait;
-use cloud_common::clients::plugin::{PluginError, PluginServiceClient};
-use cloud_common::model::ProjectAction;
-use cloud_common::model::TokenSecret;
-use cloud_common::repo::CloudPluginOwnerRow;
+use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::TokenSecret;
 use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationAction, PluginInstallationCreation,
     PluginInstallationUpdate, PluginInstallationUpdateWithId, PluginUninstallation,
 };
 use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{PluginId, ProjectId};
+use golem_common::repo::CloudPluginOwnerRow;
 use golem_common::SafeDisplay;
+use golem_service_base::clients::plugin::{PluginError, PluginServiceClient};
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
 use std::fmt::Display;

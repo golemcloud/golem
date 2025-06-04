@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::auth::{CloudAuthCtx, CloudNamespace};
-use crate::config::RemoteCloudServiceConfig;
-use crate::model::{ProjectAction, TokenSecret};
+use super::authorised_request;
+use super::RemoteCloudServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::CloudAuthServiceClient;
 use golem_api_grpc::proto::golem::auth::v1::{
@@ -26,16 +25,15 @@ use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, UnknownError, WorkerExecutionError,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
 use golem_common::model::{AccountId, ProjectId, RetryConfig};
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
 use std::fmt::Display;
-use std::str::FromStr;
 use tonic::codec::CompressionEncoding;
-use tonic::metadata::MetadataMap;
 use tonic::transport::Channel;
 use tonic::Status;
-use uuid::Uuid;
 
 #[async_trait]
 pub trait BaseAuthService: Send + Sync {
@@ -310,27 +308,3 @@ impl Display for AuthClientError {
 }
 
 impl std::error::Error for AuthClientError {}
-
-pub fn authorised_request<T>(request: T, access_token: &Uuid) -> tonic::Request<T> {
-    let mut req = tonic::Request::new(request);
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {}", access_token).parse().unwrap(),
-    );
-    req
-}
-
-pub fn get_authorisation_token(metadata: MetadataMap) -> Option<TokenSecret> {
-    let auth = metadata
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_string());
-
-    match auth {
-        Some(a) if a.to_lowercase().starts_with("bearer ") => {
-            let t = &a[7..a.len()];
-            TokenSecret::from_str(t.trim()).ok()
-        }
-        _ => None,
-    }
-}

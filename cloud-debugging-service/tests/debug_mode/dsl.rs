@@ -1,10 +1,10 @@
 use crate::debug_mode::debug_worker_executor::DebugWorkerExecutorClient;
 use async_trait::async_trait;
-use cloud_common::model::TokenSecret;
 use cloud_debugging_service::model::params::{
     ConnectParams, ConnectResult, ForkParams, ForkResult, PlaybackOverride, PlaybackParams,
     PlaybackResult, RewindParams, RewindResult,
 };
+use golem_common::model::auth::TokenSecret;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::WorkerId;
 use uuid::Uuid;

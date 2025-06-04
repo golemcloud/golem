@@ -13,17 +13,17 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
-use cloud_common::clients::auth::{AuthServiceError, BaseAuthService, CloudAuthService};
-use cloud_common::model::ProjectAction;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
     get_component_metadata_response, GetLatestComponentRequest,
 };
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_common::retries::with_retries;
+use golem_service_base::clients::auth::{AuthServiceError, BaseAuthService, CloudAuthService};
 use golem_worker_executor::services::golem_config::ComponentServiceGrpcConfig;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;

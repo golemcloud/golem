@@ -17,7 +17,7 @@ use crate::model::params::*;
 use crate::services::debug_service::{DebugService, DebugServiceError};
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use axum_jrpc::{Id, JsonRpcRequest, JsonRpcResponse};
-use cloud_common::auth::CloudAuthCtx;
+use golem_common::model::auth::CloudAuthCtx;
 use golem_common::model::OwnedWorkerId;
 use serde_json::Value;
 use std::fmt::Display;

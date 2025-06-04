@@ -15,7 +15,7 @@
 use crate::model::ProjectPolicy;
 use crate::repo::project_policy::{ProjectPolicyRecord, ProjectPolicyRepo};
 use async_trait::async_trait;
-use cloud_common::model::ProjectPolicyId;
+use golem_common::model::ProjectPolicyId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;

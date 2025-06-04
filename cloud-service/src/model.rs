@@ -13,11 +13,10 @@
 // limitations under the License.
 
 use chrono::{TimeZone, Utc};
-use cloud_common::model::*;
-use cloud_common::model::{PlanId, ProjectPolicyId, TokenId};
 use golem_api_grpc::proto::golem::worker::Level;
+use golem_common::model::auth::{ProjectActions, ProjectPermisison, TokenSecret};
 use golem_common::model::plugin::PluginInstallationTarget;
-use golem_common::model::{AccountId, ProjectId};
+use golem_common::model::{AccountId, PlanId, ProjectGrantId, ProjectId, ProjectPolicyId, TokenId};
 use golem_service_base::model::*;
 use poem_openapi::{Enum, Object};
 use serde::{Deserialize, Serialize};

@@ -23,7 +23,7 @@ use anyhow::{Context, Error};
 use async_trait::async_trait;
 use axum::routing::any;
 use axum::Router;
-use cloud_common::clients::auth::CloudAuthService;
+use golem_service_base::clients::auth::CloudAuthService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::cloud::CloudGolemTypes;
 use golem_worker_executor::durable_host::DurableWorkerCtx;

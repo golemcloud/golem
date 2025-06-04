@@ -22,7 +22,7 @@ use crate::repo::project_grant::ProjectGrantRepo;
 use crate::repo::project_policy::ProjectPolicyRepo;
 use crate::service::token::{TokenService, TokenServiceError};
 use async_trait::async_trait;
-use cloud_common::model::{
+use golem_common::model::auth::{
     ProjectAction, ProjectActions, ProjectAuthorisedActions, ProjectPermisison, Role, TokenSecret,
 };
 use golem_common::model::{AccountId, ProjectId};

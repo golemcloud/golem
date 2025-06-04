@@ -14,7 +14,7 @@
 
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
-use cloud_common::auth::CloudNamespace;
+use golem_common::model::auth::CloudNamespace;
 use golem_common::model::{TargetWorkerId, WorkerId};
 use golem_worker_service_base::gateway_execution::{
     GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,

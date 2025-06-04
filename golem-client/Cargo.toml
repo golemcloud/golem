@@ -18,7 +18,6 @@ harness = false
 golem-common = { path = "../golem-common", version = "=0.0.0", default-features = false, features = [
     "model",
 ] }
-cloud-common = { path = "../cloud-common", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0", default-features = false, features = [
     "analysis",
 ] }
