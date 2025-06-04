@@ -1349,16 +1349,4 @@ where
         let transaction_status = self.get_transaction_status(transaction_id).await?;
         Ok(transaction_status == RdbmsTransactionStatus::RolledBack)
     }
-
-    async fn cleanup(&self, transaction_id: &str) -> Result<(), RdbmsError> {
-        self.rdbms_service
-            .deref()
-            .rdbms_type_service()
-            .cleanup_transaction(
-                &self.pool_key,
-                &self.worker_id,
-                &RdbmsTransactionId::new(transaction_id),
-            )
-            .await
-    }
 }

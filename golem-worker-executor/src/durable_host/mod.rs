@@ -2864,6 +2864,4 @@ where
     async fn is_committed(&self, transaction_id: &str) -> Result<bool, Err>;
 
     async fn is_rolled_back(&self, transaction_id: &str) -> Result<bool, Err>;
-
-    async fn cleanup(&self, transaction_id: &str) -> Result<(), Err>;
 }
