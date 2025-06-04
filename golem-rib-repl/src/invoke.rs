@@ -31,7 +31,7 @@ pub trait WorkerFunctionInvoke {
         worker_name: Option<String>,
         function_name: &str,
         args: Vec<ValueAndType>,
-    ) -> anyhow::Result<ValueAndType>;
+    ) -> anyhow::Result<Option<ValueAndType>>;
 }
 
 // Note: Currently, the Rib interpreter supports only one component, so the
@@ -48,7 +48,7 @@ impl ReplRibFunctionInvoke {
         Self { repl_state }
     }
 
-    fn get_cached_result(&self, instruction_id: &InstructionId) -> Option<ValueAndType> {
+    fn get_cached_result(&self, instruction_id: &InstructionId) -> Option<Option<ValueAndType>> {
         // If the current instruction index is greater than the last played index result,
         // then we shouldn't use the cache result no matter what.
         // This check is important because without this, loops end up reusing the cached invocation result

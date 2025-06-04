@@ -17,9 +17,8 @@ use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
-use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm_rpc::ValueAndType;
 use rib::{
     EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibByteCode,
     RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult,
@@ -178,27 +177,10 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
             namespace,
         };
 
-        let tav = executor.execute(worker_request).await.map(|v| v.result)?;
+        let tav_opt = executor.execute(worker_request).await.map(|v| v.result)?;
 
-        match tav {
-            Some(tav) => {
-                // Wrapping the return value in a tuple because unit is represented as an empty-tuple for Rib
-                let inner: ValueAndType = tav.try_into().map_err(|err: String| {
-                    let err: Box<dyn std::error::Error + Send + Sync> = err.into();
-                    err
-                })?;
-                Ok(ValueAndType::new(
-                    Value::Tuple(vec![inner.value]),
-                    analysed_type::tuple(vec![inner.typ]),
-                ))
-            }
-            None => {
-                // Representing the absence of return value as an empty tuple for Rib
-                Ok(ValueAndType::new(
-                    Value::Tuple(vec![]),
-                    analysed_type::tuple(vec![]),
-                ))
-            }
-        }
+        tav_opt
+            .map(|tav| ValueAndType::try_from(tav).map_err(|x| x.into()))
+            .transpose()
     }
 }

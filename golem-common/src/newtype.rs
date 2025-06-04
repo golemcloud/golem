@@ -38,7 +38,7 @@ macro_rules! newtype_uuid {
         }
 
         impl<Context> bincode::Decode<Context> for $name {
-            fn decode<D: bincode::de::Decoder<Context=Context>>(
+            fn decode<D: bincode::de::Decoder<Context = Context>>(
                 decoder: &mut D,
             ) -> Result<Self, bincode::error::DecodeError> {
                 use bincode::de::read::Reader;
@@ -50,7 +50,7 @@ macro_rules! newtype_uuid {
         }
 
         impl<'de, Context> bincode::BorrowDecode<'de, Context> for $name {
-            fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context=Context>>(
+            fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
                 decoder: &mut D,
             ) -> Result<Self, bincode::error::DecodeError> {
                 use bincode::de::read::Reader;

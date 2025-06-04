@@ -68,7 +68,7 @@ use std::path::Path;
 use std::time::Duration;
 use uuid::Uuid;
 
-fn is_deserializable<T: Encode + Decode + PartialEq + Debug>(old: &Path, new: &Path) {
+fn is_deserializable<T: Encode + Decode<()> + PartialEq + Debug>(old: &Path, new: &Path) {
     let old = std::fs::read(old).unwrap();
     let new = std::fs::read(new).unwrap();
 
@@ -80,7 +80,7 @@ fn is_deserializable<T: Encode + Decode + PartialEq + Debug>(old: &Path, new: &P
     assert_eq!(old_decoded, new_decoded);
 }
 
-pub(crate) fn backward_compatible_custom<T: Encode + Decode + Debug + 'static>(
+pub(crate) fn backward_compatible_custom<T: Encode + Decode<()> + Debug + 'static>(
     name: impl AsRef<str>,
     mint: &mut Mint,
     value: T,
@@ -94,7 +94,7 @@ pub(crate) fn backward_compatible_custom<T: Encode + Decode + Debug + 'static>(
     file.flush().unwrap();
 }
 
-pub(crate) fn backward_compatible<T: Encode + Decode + PartialEq + Debug + 'static>(
+pub(crate) fn backward_compatible<T: Encode + Decode<()> + PartialEq + Debug + 'static>(
     name: impl AsRef<str>,
     mint: &mut Mint,
     value: T,

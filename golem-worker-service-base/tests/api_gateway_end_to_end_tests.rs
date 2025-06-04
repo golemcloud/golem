@@ -2686,10 +2686,7 @@ mod internal {
                 );
 
                 let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
-
-                let worker_response = create_tuple(vec![type_annotated_value]);
-
-                return Ok(WorkerResponse::new(Some(worker_response)));
+                return Ok(WorkerResponse::new(Some(type_annotated_value)));
             } else if function_name == "bigw:shopping/api.{store(\"test-user\").get-currency}" {
                 let x = ValueAndType::new(
                     golem_wasm_rpc::Value::Result(Ok(Some(Box::new(
@@ -2700,9 +2697,7 @@ mod internal {
 
                 let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
 
-                let worker_response = create_tuple(vec![type_annotated_value]);
-
-                return Ok(WorkerResponse::new(Some(worker_response)));
+                return Ok(WorkerResponse::new(Some(type_annotated_value)));
             } else if function_name == "bigw:shopping/api.{store(\"test-user\").add-user}" {
                 let x = ValueAndType::new(
                     golem_wasm_rpc::Value::String("test-user-generated".to_string()),
@@ -2711,15 +2706,12 @@ mod internal {
 
                 let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
 
-                let worker_response = create_tuple(vec![type_annotated_value]);
-
-                return Ok(WorkerResponse::new(Some(worker_response)));
+                return Ok(WorkerResponse::new(Some(type_annotated_value)));
             }
 
             let type_annotated_value = convert_to_worker_response(&resolved_worker_request);
-            let worker_response = create_tuple(vec![type_annotated_value]);
 
-            Ok(WorkerResponse::new(Some(worker_response)))
+            Ok(WorkerResponse::new(Some(type_annotated_value)))
         }
     }
 
