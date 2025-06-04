@@ -22,7 +22,9 @@ use golem_worker_service_base::api::HttpApiDefinitionRequest;
 use golem_worker_service_base::api::HttpApiDefinitionResponseData;
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
 use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinition;
-use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
+use golem_worker_service_base::gateway_api_definition::{
+    ApiDefinitionId, ApiVersion, OpenApiHttpApiDefinitionResponse,
+};
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionService;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
@@ -382,6 +384,70 @@ impl RegisterApiDefinitionApi {
         })?;
 
         Ok(Json(values))
+    }
+
+    /// Export an API definition in OpenAPI format
+    ///
+    /// Exports an API definition by its API definition ID and version in OpenAPI format.
+    #[oai(
+        path = "/:id/:version/export",
+        method = "get",
+        operation_id = "export_definition"
+    )]
+    async fn export(
+        &self,
+        id: Path<ApiDefinitionId>,
+        version: Path<ApiVersion>,
+    ) -> Result<Json<OpenApiHttpApiDefinitionResponse>, ApiEndpointError> {
+        let record = recorded_http_api_request!(
+            "export_definition",
+            api_definition_id = id.0.to_string(),
+            version = version.0.to_string()
+        );
+
+        let response = self
+            .export_internal(id.0, version.0)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn export_internal(
+        &self,
+        api_definition_id: ApiDefinitionId,
+        api_version: ApiVersion,
+    ) -> Result<Json<OpenApiHttpApiDefinitionResponse>, ApiEndpointError> {
+        let auth_ctx = EmptyAuthCtx::default();
+
+        let data = self
+            .definition_service
+            .get(
+                &api_definition_id,
+                &api_version,
+                &DefaultNamespace::default(),
+                &auth_ctx,
+            )
+            .await?;
+
+        let compiled_definition = data.ok_or(ApiEndpointError::not_found(safe(format!(
+            "Can't find api definition with id {api_definition_id}, and version {api_version}"
+        ))))?;
+
+        let conversion_context = self
+            .definition_service
+            .conversion_context(&DefaultNamespace(), &auth_ctx);
+
+        let response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
+            &compiled_definition,
+            &conversion_context,
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to convert to OpenAPI: {}", e);
+            ApiEndpointError::internal(safe(e.to_string()))
+        })?;
+
+        Ok(Json(response))
     }
 }
 
@@ -784,5 +850,39 @@ mod test {
             .await;
 
         response.assert_status_is_ok();
+    }
+
+    #[test]
+    async fn test_export_generates_yaml() {
+        let (api, _db) = make_route().await;
+        let client = TestClient::new(api);
+
+        // Create a sample API definition
+        let definition = HttpApiDefinitionRequest {
+            id: ApiDefinitionId("test-export".to_string()),
+            version: ApiVersion("1.0".to_string()),
+            routes: vec![],
+            draft: false,
+            security: None,
+        };
+
+        // Create the definition first
+        let response = client
+            .post("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+        response.assert_status_is_ok();
+
+        // Test the export endpoint
+        let export_response = client
+            .get(format!(
+                "/v1/api/definitions/{}/{}/export",
+                definition.id.0, definition.version.0
+            ))
+            .send()
+            .await;
+
+        export_response.assert_status_is_ok();
     }
 }

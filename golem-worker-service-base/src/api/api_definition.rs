@@ -443,6 +443,8 @@ impl GatewayBindingData {
                     }
                 }
             }
+
+            Some(GatewayBindingType::SwaggerUi) => Ok(GatewayBinding::SwaggerUi),
         }
     }
 }
@@ -590,6 +592,19 @@ impl GatewayBindingResponseData {
                     response_mapping_output: None,
                 })
             }
+            GatewayBindingCompiled::SwaggerUi(_) => Ok(GatewayBindingResponseData {
+                component: None,
+                worker_name: None,
+                idempotency_key: None,
+                invocation_context: None,
+                response: None,
+                binding_type: Some(GatewayBindingType::SwaggerUi),
+                response_mapping_input: None,
+                worker_name_input: None,
+                idempotency_key_input: None,
+                cors_preflight: None,
+                response_mapping_output: None,
+            }),
         }
     }
 

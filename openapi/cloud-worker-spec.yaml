@@ -3942,6 +3942,7 @@ components:
       - file-server
       - http-handler
       - cors-preflight
+      - swagger-ui
     GetFilesResponse:
       type: object
       title: GetFilesResponse

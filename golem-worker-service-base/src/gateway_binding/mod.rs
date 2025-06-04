@@ -13,10 +13,11 @@
 // limitations under the License.
 
 pub(crate) use self::http_handler_binding::*;
-pub(crate) use self::worker_binding::*;
+pub use self::worker_binding::*;
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
 use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
+pub use gateway_binding_compiled::SwaggerUiBinding;
 pub(crate) use gateway_binding_compiled::*;
 use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType;
 use golem_common::model::component::VersionedComponentId;
@@ -24,7 +25,7 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibCompilationError, RibInputTypeInfo};
 pub use static_binding::*;
 
-mod gateway_binding_compiled;
+pub mod gateway_binding_compiled;
 mod http_handler_binding;
 mod static_binding;
 mod worker_binding;
@@ -41,6 +42,7 @@ pub enum GatewayBinding {
     FileServer(WorkerBinding),
     Static(StaticBinding),
     HttpHandler(HttpHandlerBinding),
+    SwaggerUi,
 }
 
 impl GatewayBinding {
@@ -49,6 +51,7 @@ impl GatewayBinding {
             Self::Default(_) => false,
             Self::FileServer(_) => false,
             Self::HttpHandler(_) => false,
+            Self::SwaggerUi => false,
             Self::Static(s) => match s {
                 StaticBinding::HttpCorsPreflight(_) => true,
                 StaticBinding::HttpAuthCallBack(_) => false,
@@ -61,6 +64,7 @@ impl GatewayBinding {
             Self::Default(_) => false,
             Self::FileServer(_) => false,
             Self::HttpHandler(_) => false,
+            Self::SwaggerUi => false,
             Self::Static(s) => match s {
                 StaticBinding::HttpCorsPreflight(_) => false,
                 StaticBinding::HttpAuthCallBack(_) => true,
@@ -79,6 +83,7 @@ impl GatewayBinding {
             Self::HttpHandler(http_handler_binding) => {
                 Some(http_handler_binding.component_id.clone())
             }
+            Self::SwaggerUi => None,
             Self::Static(_) => None,
         }
     }
@@ -145,6 +150,17 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
                     worker_name: worker_binding.worker_name.map(|x| x.into()),
                     response: None,
                     idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
+                    static_binding: None,
+                    invocation_context: None,
+                },
+            ),
+            GatewayBinding::SwaggerUi => Ok(
+                golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
+                    binding_type: Some(GatewayBindingType::SwaggerUi.into()),
+                    component: None,
+                    worker_name: None,
+                    response: None,
+                    idempotency_key: None,
                     static_binding: None,
                     invocation_context: None,
                 },
@@ -229,6 +245,9 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 Ok(GatewayBinding::static_binding(StaticBinding::try_from(
                     static_binding,
                 )?))
+            }
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::SwaggerUi => {
+                Ok(GatewayBinding::SwaggerUi)
             }
         }
     }
