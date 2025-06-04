@@ -27,14 +27,10 @@ use futures_util::future::join_all;
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::apidefinition::api_definition::Definition;
-use golem_api_grpc::proto::golem::apidefinition::v1::api_definition_service_client::ApiDefinitionServiceClient as ApiDefinitionServiceGrpcClient;
 use golem_api_grpc::proto::golem::apidefinition::v1::{
-    api_definition_request, create_api_definition_request, create_api_definition_response,
-    get_all_api_definitions_response, get_api_definition_response,
-    get_api_definition_versions_response, update_api_definition_request,
-    update_api_definition_response, ApiDefinitionRequest, CreateApiDefinitionRequest,
-    DeleteApiDefinitionRequest, GetAllApiDefinitionsRequest, GetApiDefinitionRequest,
-    GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
+    api_definition_request, create_api_definition_request, update_api_definition_request,
+    ApiDefinitionRequest, CreateApiDefinitionRequest, DeleteApiDefinitionRequest,
+    GetApiDefinitionRequest, GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
 };
 use golem_api_grpc::proto::golem::apidefinition::{
     static_binding, ApiDefinition, ApiDefinitionId, CorsPreflight, GatewayBinding,
@@ -122,7 +118,7 @@ pub enum WorkerServiceClient {
 
 #[derive(Clone)]
 pub enum ApiDefinitionServiceClient {
-    Grpc(ApiDefinitionServiceGrpcClient<Channel>),
+    Grpc,
     Http(Arc<ApiDefinitionServiceHttpClientLive>),
 }
 
@@ -980,22 +976,7 @@ pub trait WorkerService: WorkerServiceInternal {
         request: CreateApiDefinitionRequest,
     ) -> crate::Result<ApiDefinition> {
         match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
-
-                match client
-                    .create_api_definition(request)
-                    .await?
-                    .into_inner()
-                    .result
-                    .ok_or_else(|| anyhow!("create_api_definition: empty result"))?
-                {
-                    create_api_definition_response::Result::Success(result) => Ok(result),
-                    create_api_definition_response::Result::Error(error) => {
-                        Err(anyhow!("{error:?}"))
-                    }
-                }
-            }
+            ApiDefinitionServiceClient::Grpc => not_available_on_grpc_api("create_api_definition"),
             ApiDefinitionServiceClient::Http(client) => {
                 let default_project = self.cloud_service().get_default_project().await?;
                 match request.api_definition.unwrap() {
@@ -1038,22 +1019,7 @@ pub trait WorkerService: WorkerServiceInternal {
         request: UpdateApiDefinitionRequest,
     ) -> crate::Result<ApiDefinition> {
         match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
-
-                match client
-                    .update_api_definition(request)
-                    .await?
-                    .into_inner()
-                    .result
-                    .ok_or_else(|| anyhow!("update_api_definition: empty result"))?
-                {
-                    update_api_definition_response::Result::Success(result) => Ok(result),
-                    update_api_definition_response::Result::Error(error) => {
-                        Err(anyhow!("{error:?}"))
-                    }
-                }
-            }
+            ApiDefinitionServiceClient::Grpc => not_available_on_grpc_api("update_api_definition"),
             ApiDefinitionServiceClient::Http(client) => {
                 let default_project = self.cloud_service().get_default_project().await?;
                 match request.api_definition.unwrap() {
@@ -1097,20 +1063,7 @@ pub trait WorkerService: WorkerServiceInternal {
         request: GetApiDefinitionRequest,
     ) -> crate::Result<ApiDefinition> {
         match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
-
-                match client
-                    .get_api_definition(request)
-                    .await?
-                    .into_inner()
-                    .result
-                    .ok_or_else(|| anyhow!("get_api_definition: empty result"))?
-                {
-                    get_api_definition_response::Result::Success(result) => Ok(result),
-                    get_api_definition_response::Result::Error(error) => Err(anyhow!("{error:?}")),
-                }
-            }
+            ApiDefinitionServiceClient::Grpc => not_available_on_grpc_api("get_api_definition"),
             ApiDefinitionServiceClient::Http(client) => {
                 let default_project = self.cloud_service().get_default_project().await?;
                 match client
@@ -1135,23 +1088,8 @@ pub trait WorkerService: WorkerServiceInternal {
         request: GetApiDefinitionVersionsRequest,
     ) -> crate::Result<Vec<ApiDefinition>> {
         match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
-
-                match client
-                    .get_api_definition_versions(request)
-                    .await?
-                    .into_inner()
-                    .result
-                    .ok_or_else(|| anyhow!("get_api_definition_versions: empty result"))?
-                {
-                    get_api_definition_versions_response::Result::Success(result) => {
-                        Ok(result.definitions)
-                    }
-                    get_api_definition_versions_response::Result::Error(error) => {
-                        Err(anyhow!("{error:?}"))
-                    }
-                }
+            ApiDefinitionServiceClient::Grpc => {
+                not_available_on_grpc_api("get_api_definition_versions")
             }
             ApiDefinitionServiceClient::Http(client) => {
                 let default_project = self.cloud_service().get_default_project().await?;
@@ -1175,26 +1113,8 @@ pub trait WorkerService: WorkerServiceInternal {
 
     async fn get_all_api_definitions(&self) -> crate::Result<Vec<ApiDefinition>> {
         match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc(mut client) => {
-                let request = authorised_request(
-                    GetAllApiDefinitionsRequest {},
-                    &self.cloud_service().admin_token(),
-                );
-
-                match client
-                    .get_all_api_definitions(request)
-                    .await?
-                    .into_inner()
-                    .result
-                    .ok_or_else(|| anyhow!("get_all_api_definitions: empty result"))?
-                {
-                    get_all_api_definitions_response::Result::Success(result) => {
-                        Ok(result.definitions)
-                    }
-                    get_all_api_definitions_response::Result::Error(error) => {
-                        Err(anyhow!("{error:?}"))
-                    }
-                }
+            ApiDefinitionServiceClient::Grpc => {
+                not_available_on_grpc_api("get_all_api_definitions")
             }
             ApiDefinitionServiceClient::Http(client) => {
                 let default_project = self.cloud_service().get_default_project().await?;
@@ -1214,20 +1134,7 @@ pub trait WorkerService: WorkerServiceInternal {
         request: DeleteApiDefinitionRequest,
     ) -> crate::Result<()> {
         match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc(mut client) => {
-                let request = authorised_request(request, &self.cloud_service().admin_token());
-
-                match client
-                    .delete_api_definition(request)
-                    .await?
-                    .into_inner()
-                    .result
-                    .ok_or_else(|| anyhow!("delete_api_definition: empty result"))
-                {
-                    Ok(_) => Ok(()),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
-            }
+            ApiDefinitionServiceClient::Grpc => not_available_on_grpc_api("delete_api_definition"),
             ApiDefinitionServiceClient::Http(client) => {
                 let default_project = self.cloud_service().get_default_project().await?;
                 match client
@@ -1423,22 +1330,6 @@ async fn new_worker_client(
     }
 }
 
-async fn new_api_definition_grpc_client(
-    host: &str,
-    grpc_port: u16,
-) -> ApiDefinitionServiceGrpcClient<Channel> {
-    let endpoint = Endpoint::new(format!("http://{host}:{grpc_port}"))
-        .expect("Failed to create api definition service endpoint")
-        .connect_timeout(Duration::from_secs(10));
-    let channel = endpoint
-        .connect()
-        .await
-        .expect("Failed to connect to api definition service");
-    ApiDefinitionServiceGrpcClient::new(channel)
-        .send_compressed(CompressionEncoding::Gzip)
-        .accept_compressed(CompressionEncoding::Gzip)
-}
-
 fn new_api_definition_http_client(
     host: &str,
     http_port: u16,
@@ -1457,14 +1348,12 @@ fn new_api_definition_http_client(
 async fn new_api_definition_client(
     protocol: GolemClientProtocol,
     host: &str,
-    grpc_port: u16,
+    _grpc_port: u16,
     http_port: u16,
     cloud_service: &Arc<dyn CloudService>,
 ) -> ApiDefinitionServiceClient {
     match protocol {
-        GolemClientProtocol::Grpc => {
-            ApiDefinitionServiceClient::Grpc(new_api_definition_grpc_client(host, grpc_port).await)
-        }
+        GolemClientProtocol::Grpc => ApiDefinitionServiceClient::Grpc,
         GolemClientProtocol::Http => ApiDefinitionServiceClient::Http(
             new_api_definition_http_client(host, http_port, cloud_service),
         ),
