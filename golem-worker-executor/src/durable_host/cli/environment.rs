@@ -16,7 +16,7 @@ use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::DurableFunctionType;
-use wasmtime_wasi::bindings::cli::environment::Host;
+use wasmtime_wasi::p2::bindings::cli::environment::Host;
 
 // NOTE: No need to persist the results of these functions as the result values are persisted as part of the initial Create oplog entry
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {

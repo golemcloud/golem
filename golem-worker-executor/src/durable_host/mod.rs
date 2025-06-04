@@ -94,11 +94,9 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
-use wasmtime_wasi::bindings::filesystem::preopens::Descriptor;
-use wasmtime_wasi::{
-    FsResult, I32Exit, IoCtx, IoImpl, IoView, ResourceTable, ResourceTableError, Stderr, Stdout,
-    WasiCtx, WasiImpl, WasiView,
-};
+use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
+use wasmtime_wasi::p2::{FsResult, Stderr, Stdout, WasiCtx, WasiImpl, WasiView};
+use wasmtime_wasi::{I32Exit, IoCtx, IoImpl, IoView, ResourceTable, ResourceTableError};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
@@ -274,7 +272,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     fn fail_if_read_only(&mut self, fd: &Resource<Descriptor>) -> FsResult<()> {
         if self.is_read_only(fd)? {
-            Err(wasmtime_wasi::bindings::filesystem::types::ErrorCode::NotPermitted.into())
+            Err(wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode::NotPermitted.into())
         } else {
             Ok(())
         }
@@ -616,16 +614,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                         Ok(InvokeResult::Succeeded { output, .. }) => {
                                             if let Some(output) = output {
                                                 match output {
-                                                        Value::Result(Err(Some(boxed_error_value))) => {
-                                                            match &*boxed_error_value {
-                                                                Value::String(error) =>
-                                                                    Some(format!("Manual update failed to load snapshot: {error}")),
-                                                                _ =>
-                                                                    Some("Unexpected result value from the snapshot load function".to_string())
-                                                            }
+                                                    Value::Result(Err(Some(boxed_error_value))) => {
+                                                        match &*boxed_error_value {
+                                                            Value::String(error) =>
+                                                                Some(format!("Manual update failed to load snapshot: {error}")),
+                                                            _ =>
+                                                                Some("Unexpected result value from the snapshot load function".to_string())
                                                         }
-                                                        _ => None
                                                     }
+                                                    _ => None
+                                                }
                                             } else {
                                                 Some("Unexpected result value from the snapshot load function".to_string())
                                             }

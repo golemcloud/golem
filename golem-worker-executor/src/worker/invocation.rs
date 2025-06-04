@@ -142,7 +142,7 @@ fn find_function<'a, Ctx: WorkerCtx>(
 
     match &parsed_function_name.site().interface_name() {
         Some(interface_name) => {
-            let exported_instance_idx = instance
+            let (_, exported_instance_idx) = instance
                 .get_export(&mut store, None, interface_name)
                 .ok_or(GolemError::invalid_request(format!(
                     "could not load exports for interface {}",
@@ -155,7 +155,7 @@ fn find_function<'a, Ctx: WorkerCtx>(
                     Some(&exported_instance_idx),
                     &parsed_function_name.function().function_name(),
                 )
-                .and_then(|idx| instance.get_func(&mut store, idx));
+                .and_then(|(_, idx)| instance.get_func(&mut store, idx));
 
             match func {
                 Some(func) => Ok(FindFunctionResult::ExportedFunction(func)),
@@ -171,7 +171,7 @@ fn find_function<'a, Ctx: WorkerCtx>(
                             Some(&exported_instance_idx),
                             &parsed_static.function().function_name(),
                         )
-                        .and_then(|idx| instance.get_func(&mut store, idx))
+                        .and_then(|(_, idx)| instance.get_func(&mut store, idx))
                         .ok_or(GolemError::invalid_request(format!(
                             "could not load function {} or {} for interface {}",
                             &parsed_function_name.function().function_name(),
