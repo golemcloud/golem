@@ -22,18 +22,15 @@ use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use cloud_common::clients::auth::authorised_request;
 use futures_util::future::join_all;
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::apidefinition::api_definition::Definition;
-use golem_api_grpc::proto::golem::apidefinition::v1::api_definition_service_client::ApiDefinitionServiceClient as ApiDefinitionServiceGrpcClient;
 use golem_api_grpc::proto::golem::apidefinition::v1::{
-    api_definition_request, create_api_definition_request, create_api_definition_response,
-    get_all_api_definitions_response, get_api_definition_response,
-    get_api_definition_versions_response, update_api_definition_request,
-    update_api_definition_response, ApiDefinitionRequest, CreateApiDefinitionRequest,
-    DeleteApiDefinitionRequest, GetAllApiDefinitionsRequest, GetApiDefinitionRequest,
-    GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
+    api_definition_request, create_api_definition_request, update_api_definition_request,
+    ApiDefinitionRequest, CreateApiDefinitionRequest, DeleteApiDefinitionRequest,
+    GetApiDefinitionRequest, GetApiDefinitionVersionsRequest, UpdateApiDefinitionRequest,
 };
 use golem_api_grpc::proto::golem::apidefinition::{
     static_binding, ApiDefinition, ApiDefinitionId, CorsPreflight, GatewayBinding,
@@ -85,7 +82,7 @@ use golem_client::api::WorkerClientLive as WorkerServiceHttpClientLive;
 use golem_client::model::{
     ApiDeployment, ApiDeploymentRequest, GatewayBindingComponent, SecuritySchemeData,
 };
-use golem_client::Context;
+use golem_client::{Context, Security};
 use golem_common::model::WorkerEvent;
 use golem_wasm_rpc::protobuf::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -105,6 +102,8 @@ use tracing::Level;
 use url::Url;
 use uuid::Uuid;
 
+use super::cloud_service::CloudService;
+
 pub mod docker;
 pub mod forwarding;
 pub mod k8s;
@@ -119,7 +118,7 @@ pub enum WorkerServiceClient {
 
 #[derive(Clone)]
 pub enum ApiDefinitionServiceClient {
-    Grpc(ApiDefinitionServiceGrpcClient<Channel>),
+    Grpc,
     Http(Arc<ApiDefinitionServiceHttpClientLive>),
 }
 
@@ -142,6 +141,7 @@ pub trait WorkerServiceInternal: Send + Sync {
     fn api_deployment_client(&self) -> ApiDeploymentServiceClient;
     fn api_security_client(&self) -> ApiSecurityServiceClient;
     fn component_service(&self) -> &Arc<dyn ComponentService>;
+    fn cloud_service(&self) -> &Arc<dyn CloudService>;
 }
 
 #[async_trait]
@@ -155,6 +155,8 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<LaunchNewWorkerResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
+
                 Ok(client.launch_new_worker(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => {
@@ -189,6 +191,7 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<DeleteWorkerResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
                 Ok(client.delete_worker(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => {
@@ -222,6 +225,7 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<GetWorkerMetadataResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
                 Ok(client.get_worker_metadata(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => {
@@ -257,6 +261,7 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<GetWorkersMetadataResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
                 Ok(client.get_workers_metadata(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => {
@@ -307,16 +312,21 @@ pub trait WorkerService: WorkerServiceInternal {
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeResponse> {
         match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => Ok(client
-                .invoke(InvokeRequest {
-                    worker_id: Some(worker_id),
-                    idempotency_key,
-                    function,
-                    invoke_parameters: invoke_parameters_to_grpc(invoke_parameters),
-                    context,
-                })
-                .await?
-                .into_inner()),
+            WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(
+                    InvokeRequest {
+                        worker_id: Some(worker_id),
+                        idempotency_key,
+                        function,
+                        invoke_parameters: invoke_parameters_to_grpc(invoke_parameters),
+                        context,
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
+                let response = client.invoke(request).await?.into_inner();
+                Ok(response)
+            }
             WorkerServiceClient::Http(client) => {
                 match client
                     .invoke_function(
@@ -340,6 +350,7 @@ pub trait WorkerService: WorkerServiceInternal {
     async fn invoke_json(&self, request: InvokeJsonRequest) -> crate::Result<InvokeResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
                 Ok(client.invoke_json(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => {
@@ -379,16 +390,22 @@ pub trait WorkerService: WorkerServiceInternal {
         context: Option<InvocationContext>,
     ) -> crate::Result<InvokeAndAwaitResponse> {
         match self.worker_client() {
-            WorkerServiceClient::Grpc(mut client) => Ok(client
-                .invoke_and_await(InvokeAndAwaitRequest {
-                    worker_id: Some(worker_id),
-                    idempotency_key,
-                    function,
-                    invoke_parameters: invoke_parameters_to_grpc(invoke_parameters),
-                    context,
-                })
-                .await?
-                .into_inner()),
+            WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(
+                    InvokeAndAwaitRequest {
+                        worker_id: Some(worker_id),
+                        idempotency_key,
+                        function,
+                        invoke_parameters: invoke_parameters_to_grpc(invoke_parameters),
+                        context,
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
+                let response = client.invoke_and_await(request).await?.into_inner();
+
+                Ok(response)
+            }
             WorkerServiceClient::Http(client) => {
                 match client
                     .invoke_and_await_function(
@@ -424,13 +441,16 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<InvokeAndAwaitTypedResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
-                let request = InvokeAndAwaitRequest {
-                    worker_id: Some(worker_id),
-                    idempotency_key,
-                    function,
-                    invoke_parameters: invoke_parameters_to_grpc(invoke_parameters),
-                    context,
-                };
+                let request = authorised_request(
+                    InvokeAndAwaitRequest {
+                        worker_id: Some(worker_id),
+                        idempotency_key,
+                        function,
+                        invoke_parameters: invoke_parameters_to_grpc(invoke_parameters),
+                        context,
+                    },
+                    &self.cloud_service().admin_token(),
+                );
 
                 Ok(client.invoke_and_await_typed(request).await?.into_inner())
             }
@@ -466,6 +486,8 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<InvokeAndAwaitJsonResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
+
                 Ok(client.invoke_and_await_json(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => {
@@ -503,9 +525,13 @@ pub trait WorkerService: WorkerServiceInternal {
         request: ConnectWorkerRequest,
     ) -> crate::Result<Box<dyn WorkerLogEventStream>> {
         match self.worker_client() {
-            WorkerServiceClient::Grpc(client) => Ok(Box::new(
-                GrpcWorkerLogEventStream::new(client, request).await?,
-            )),
+            WorkerServiceClient::Grpc(client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
+
+                Ok(Box::new(
+                    GrpcWorkerLogEventStream::new(client, request).await?,
+                ))
+            }
             WorkerServiceClient::Http(client) => Ok(Box::new(
                 HttpWorkerLogEventStream::new(client, request).await?,
             )),
@@ -518,6 +544,7 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<ResumeWorkerResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
                 Ok(client.resume_worker(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => match client
@@ -549,6 +576,8 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<InterruptWorkerResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
+
                 Ok(client.interrupt_worker(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => match client
@@ -581,6 +610,7 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<UpdateWorkerResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
                 Ok(client.update_worker(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => match client
@@ -618,6 +648,7 @@ pub trait WorkerService: WorkerServiceInternal {
     async fn get_oplog(&self, request: GetOplogRequest) -> crate::Result<GetOplogResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
                 Ok(client.get_oplog(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => match client
@@ -673,6 +704,7 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<SearchOplogResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
                 Ok(client.search_oplog(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => {
@@ -732,6 +764,7 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<ListDirectoryResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
                 Ok(client.list_directory(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => {
@@ -795,6 +828,7 @@ pub trait WorkerService: WorkerServiceInternal {
     async fn get_file_contents(&self, request: GetFileContentsRequest) -> crate::Result<Bytes> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
                 let mut stream = client.get_file_contents(request).await?.into_inner();
                 let mut bytes = Vec::new();
                 while let Some(chunk) = stream.message().await? {
@@ -842,7 +876,9 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<ForkWorkerResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
-                Ok(client.fork_worker(fork_worker_request).await?.into_inner())
+                let request =
+                    authorised_request(fork_worker_request, &self.cloud_service().admin_token());
+                Ok(client.fork_worker(request).await?.into_inner())
             }
             WorkerServiceClient::Http(_client) => {
                 panic!("Fork worker is not available on HTTP API");
@@ -856,6 +892,10 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<RevertWorkerResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(
+                    request,
+                    &self.cloud_service().admin_token(),
+                );
                 Ok(client.revert_worker(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => {
@@ -900,6 +940,7 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<CancelInvocationResponse> {
         match self.worker_client() {
             WorkerServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
                 Ok(client.cancel_invocation(request).await?.into_inner())
             }
             WorkerServiceClient::Http(client) => {
@@ -935,45 +976,41 @@ pub trait WorkerService: WorkerServiceInternal {
         request: CreateApiDefinitionRequest,
     ) -> crate::Result<ApiDefinition> {
         match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc(mut client) => {
-                match client
-                    .create_api_definition(request)
-                    .await?
-                    .into_inner()
-                    .result
-                    .ok_or_else(|| anyhow!("create_api_definition: empty result"))?
-                {
-                    create_api_definition_response::Result::Success(result) => Ok(result),
-                    create_api_definition_response::Result::Error(error) => {
-                        Err(anyhow!("{error:?}"))
-                    }
-                }
-            }
-            ApiDefinitionServiceClient::Http(client) => match request.api_definition.unwrap() {
-                create_api_definition_request::ApiDefinition::Definition(request) => {
-                    match client
-                        .create_definition_json(
-                            &grpc_api_definition_request_to_http(request, self.component_service())
+            ApiDefinitionServiceClient::Grpc => not_available_on_grpc_api("create_api_definition"),
+            ApiDefinitionServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+                match request.api_definition.unwrap() {
+                    create_api_definition_request::ApiDefinition::Definition(request) => {
+                        match client
+                            .create_definition_json(
+                                &default_project.0,
+                                &grpc_api_definition_request_to_http(
+                                    request,
+                                    self.component_service(),
+                                )
                                 .await,
-                        )
+                            )
+                            .await
+                        {
+                            Ok(result) => Ok(http_api_definition_to_grpc(
+                                result,
+                                self.component_service(),
+                            )
+                            .await),
+                            Err(error) => Err(anyhow!("{error:?}")),
+                        }
+                    }
+                    create_api_definition_request::ApiDefinition::Openapi(open_api) => match client
+                        .import_open_api_yaml(&default_project.0, &serde_yaml::from_str(&open_api)?)
                         .await
                     {
                         Ok(result) => {
                             Ok(http_api_definition_to_grpc(result, self.component_service()).await)
                         }
                         Err(error) => Err(anyhow!("{error:?}")),
-                    }
+                    },
                 }
-                create_api_definition_request::ApiDefinition::Openapi(open_api) => match client
-                    .import_open_api_yaml(&serde_yaml::from_str(&open_api)?)
-                    .await
-                {
-                    Ok(result) => {
-                        Ok(http_api_definition_to_grpc(result, self.component_service()).await)
-                    }
-                    Err(error) => Err(anyhow!("{error:?}")),
-                },
-            },
+            }
         }
     }
 
@@ -982,49 +1019,42 @@ pub trait WorkerService: WorkerServiceInternal {
         request: UpdateApiDefinitionRequest,
     ) -> crate::Result<ApiDefinition> {
         match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc(mut client) => {
-                match client
-                    .update_api_definition(request)
-                    .await?
-                    .into_inner()
-                    .result
-                    .ok_or_else(|| anyhow!("update_api_definition: empty result"))?
-                {
-                    update_api_definition_response::Result::Success(result) => Ok(result),
-                    update_api_definition_response::Result::Error(error) => {
-                        Err(anyhow!("{error:?}"))
+            ApiDefinitionServiceClient::Grpc => not_available_on_grpc_api("update_api_definition"),
+            ApiDefinitionServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+                match request.api_definition.unwrap() {
+                    update_api_definition_request::ApiDefinition::Definition(request) => {
+                        match client
+                            .update_definition_yaml(
+                                &default_project.0,
+                                &request.id.clone().unwrap().value,
+                                &request.clone().version,
+                                &grpc_api_definition_request_to_http(
+                                    ApiDefinitionRequest {
+                                        id: request.id,
+                                        version: request.version,
+                                        draft: request.draft,
+                                        definition: request.definition,
+                                    },
+                                    self.component_service(),
+                                )
+                                .await,
+                            )
+                            .await
+                        {
+                            Ok(result) => Ok(http_api_definition_to_grpc(
+                                result,
+                                self.component_service(),
+                            )
+                            .await),
+                            Err(error) => Err(anyhow!("{error:?}")),
+                        }
+                    }
+                    update_api_definition_request::ApiDefinition::Openapi(_) => {
+                        todo!() // TODO: see worker-service-base for how this is interpreted
                     }
                 }
             }
-            ApiDefinitionServiceClient::Http(client) => match request.api_definition.unwrap() {
-                update_api_definition_request::ApiDefinition::Definition(request) => {
-                    match client
-                        .update_definition_yaml(
-                            &request.id.clone().unwrap().value,
-                            &request.clone().version,
-                            &grpc_api_definition_request_to_http(
-                                ApiDefinitionRequest {
-                                    id: request.id,
-                                    version: request.version,
-                                    draft: request.draft,
-                                    definition: request.definition,
-                                },
-                                self.component_service(),
-                            )
-                            .await,
-                        )
-                        .await
-                    {
-                        Ok(result) => {
-                            Ok(http_api_definition_to_grpc(result, self.component_service()).await)
-                        }
-                        Err(error) => Err(anyhow!("{error:?}")),
-                    }
-                }
-                update_api_definition_request::ApiDefinition::Openapi(_) => {
-                    todo!() // TODO: see worker-service-base for how this is interpreted
-                }
-            },
         }
     }
 
@@ -1033,19 +1063,15 @@ pub trait WorkerService: WorkerServiceInternal {
         request: GetApiDefinitionRequest,
     ) -> crate::Result<ApiDefinition> {
         match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc(mut client) => match client
-                .get_api_definition(request)
-                .await?
-                .into_inner()
-                .result
-                .ok_or_else(|| anyhow!("get_api_definition: empty result"))?
-            {
-                get_api_definition_response::Result::Success(result) => Ok(result),
-                get_api_definition_response::Result::Error(error) => Err(anyhow!("{error:?}")),
-            },
+            ApiDefinitionServiceClient::Grpc => not_available_on_grpc_api("get_api_definition"),
             ApiDefinitionServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
                 match client
-                    .get_definition(&request.api_definition_id.unwrap().value, &request.version)
+                    .get_definition(
+                        &default_project.0,
+                        &request.api_definition_id.unwrap().value,
+                        &request.version,
+                    )
                     .await
                 {
                     Ok(definition) => {
@@ -1062,23 +1088,17 @@ pub trait WorkerService: WorkerServiceInternal {
         request: GetApiDefinitionVersionsRequest,
     ) -> crate::Result<Vec<ApiDefinition>> {
         match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc(mut client) => match client
-                .get_api_definition_versions(request)
-                .await?
-                .into_inner()
-                .result
-                .ok_or_else(|| anyhow!("get_api_definition_versions: empty result"))?
-            {
-                get_api_definition_versions_response::Result::Success(result) => {
-                    Ok(result.definitions)
-                }
-                get_api_definition_versions_response::Result::Error(error) => {
-                    Err(anyhow!("{error:?}"))
-                }
-            },
+            ApiDefinitionServiceClient::Grpc => {
+                not_available_on_grpc_api("get_api_definition_versions")
+            }
             ApiDefinitionServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+
                 match client
-                    .list_definitions(request.api_definition_id.map(|id| id.value).as_deref())
+                    .list_definitions(
+                        &default_project.0,
+                        request.api_definition_id.map(|id| id.value).as_deref(),
+                    )
                     .await
                 {
                     Ok(result) => Ok(join_all(result.into_iter().map(async |def| {
@@ -1093,23 +1113,19 @@ pub trait WorkerService: WorkerServiceInternal {
 
     async fn get_all_api_definitions(&self) -> crate::Result<Vec<ApiDefinition>> {
         match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc(mut client) => match client
-                .get_all_api_definitions(GetAllApiDefinitionsRequest {})
-                .await?
-                .into_inner()
-                .result
-                .ok_or_else(|| anyhow!("get_all_api_definitions: empty result"))?
-            {
-                get_all_api_definitions_response::Result::Success(result) => Ok(result.definitions),
-                get_all_api_definitions_response::Result::Error(error) => Err(anyhow!("{error:?}")),
-            },
-            ApiDefinitionServiceClient::Http(client) => match client.list_definitions(None).await {
-                Ok(result) => Ok(join_all(result.into_iter().map(async |def| {
-                    http_api_definition_to_grpc(def, self.component_service()).await
-                }))
-                .await),
-                Err(error) => Err(anyhow!("{error:?}")),
-            },
+            ApiDefinitionServiceClient::Grpc => {
+                not_available_on_grpc_api("get_all_api_definitions")
+            }
+            ApiDefinitionServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+                match client.list_definitions(&default_project.0, None).await {
+                    Ok(result) => Ok(join_all(result.into_iter().map(async |def| {
+                        http_api_definition_to_grpc(def, self.component_service()).await
+                    }))
+                    .await),
+                    Err(error) => Err(anyhow!("{error:?}")),
+                }
+            }
         }
     }
 
@@ -1118,21 +1134,15 @@ pub trait WorkerService: WorkerServiceInternal {
         request: DeleteApiDefinitionRequest,
     ) -> crate::Result<()> {
         match self.api_definition_client() {
-            ApiDefinitionServiceClient::Grpc(mut client) => {
-                match client
-                    .delete_api_definition(request)
-                    .await?
-                    .into_inner()
-                    .result
-                    .ok_or_else(|| anyhow!("delete_api_definition: empty result"))
-                {
-                    Ok(_) => Ok(()),
-                    Err(error) => Err(anyhow!("{error:?}")),
-                }
-            }
+            ApiDefinitionServiceClient::Grpc => not_available_on_grpc_api("delete_api_definition"),
             ApiDefinitionServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
                 match client
-                    .delete_definition(&request.api_definition_id.unwrap().value, &request.version)
+                    .delete_definition(
+                        &default_project.0,
+                        &request.api_definition_id.unwrap().value,
+                        &request.version,
+                    )
                     .await
                 {
                     Ok(_) => Ok(()),
@@ -1158,10 +1168,13 @@ pub trait WorkerService: WorkerServiceInternal {
     async fn get_api_deployment(&self, site: &str) -> crate::Result<ApiDeployment> {
         match self.api_deployment_client() {
             ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("get_api_deployment"),
-            ApiDeploymentServiceClient::Http(client) => client
-                .get_deployment(site)
-                .await
-                .map_err(|error| anyhow!("{error:?}")),
+            ApiDeploymentServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+                client
+                    .get_deployment(&default_project.0, site)
+                    .await
+                    .map_err(|error| anyhow!("{error:?}"))
+            }
         }
     }
 
@@ -1171,10 +1184,14 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<Vec<ApiDeployment>> {
         match self.api_deployment_client() {
             ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("list_api_deployments"),
-            ApiDeploymentServiceClient::Http(client) => client
-                .list_deployments(api_definition_id)
-                .await
-                .map_err(|error| anyhow!("{error:?}")),
+            ApiDeploymentServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await.unwrap();
+
+                client
+                    .list_deployments(&default_project.0, api_definition_id)
+                    .await
+                    .map_err(|error| anyhow!("{error:?}"))
+            }
         }
     }
 
@@ -1182,7 +1199,8 @@ pub trait WorkerService: WorkerServiceInternal {
         match self.api_deployment_client() {
             ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("delete_api_deployment"),
             ApiDeploymentServiceClient::Http(client) => {
-                match client.delete_deployment(site).await {
+                let default_project = self.cloud_service().get_default_project().await?;
+                match client.delete_deployment(&default_project.0, site).await {
                     Ok(_) => Ok(()),
                     Err(error) => Err(anyhow!("{error:?}")),
                 }
@@ -1198,10 +1216,14 @@ pub trait WorkerService: WorkerServiceInternal {
             ApiSecurityServiceClient::Grpc => {
                 not_available_on_grpc_api("create_api_security_scheme")
             }
-            ApiSecurityServiceClient::Http(client) => client
-                .create(&request)
-                .await
-                .map_err(|error| anyhow!("{error:?}")),
+            ApiSecurityServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+
+                client
+                    .create(&default_project.0, &request)
+                    .await
+                    .map_err(|error| anyhow!("{error:?}"))
+            }
         }
     }
 
@@ -1211,10 +1233,14 @@ pub trait WorkerService: WorkerServiceInternal {
     ) -> crate::Result<SecuritySchemeData> {
         match self.api_security_client() {
             ApiSecurityServiceClient::Grpc => not_available_on_grpc_api("get_api_security_scheme"),
-            ApiSecurityServiceClient::Http(client) => client
-                .get(security_scheme_id)
-                .await
-                .map_err(|error| anyhow!("{error:?}")),
+            ApiSecurityServiceClient::Http(client) => {
+                let default_project = self.cloud_service().get_default_project().await?;
+
+                client
+                    .get(&default_project.0, security_scheme_id)
+                    .await
+                    .map_err(|error| anyhow!("{error:?}"))
+            }
         }
     }
 
@@ -1245,7 +1271,12 @@ pub trait WorkerService: WorkerServiceInternal {
         match self.api_deployment_client() {
             ApiDeploymentServiceClient::Grpc => not_available_on_grpc_api("undeploy_api"),
             ApiDeploymentServiceClient::Http(client) => {
-                match client.undeploy_api(site, id, version).await {
+                let default_project = self.cloud_service().get_default_project().await?;
+
+                match client
+                    .undeploy_api(&default_project.0, site, id, version)
+                    .await
+                {
                     Ok(_) => Ok(()),
                     Err(error) => Err(anyhow!("{error:?}")),
                 }
@@ -1267,12 +1298,17 @@ async fn new_worker_grpc_client(host: &str, grpc_port: u16) -> WorkerServiceGrpc
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-fn new_worker_http_client(host: &str, http_port: u16) -> Arc<WorkerServiceHttpClientLive> {
+fn new_worker_http_client(
+    host: &str,
+    http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
+) -> Arc<WorkerServiceHttpClientLive> {
     Arc::new(WorkerServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
+            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
         },
     })
 }
@@ -1282,42 +1318,29 @@ async fn new_worker_client(
     host: &str,
     grpc_port: u16,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
 ) -> WorkerServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => {
             WorkerServiceClient::Grpc(new_worker_grpc_client(host, grpc_port).await)
         }
         GolemClientProtocol::Http => {
-            WorkerServiceClient::Http(new_worker_http_client(host, http_port))
+            WorkerServiceClient::Http(new_worker_http_client(host, http_port, cloud_service))
         }
     }
-}
-
-async fn new_api_definition_grpc_client(
-    host: &str,
-    grpc_port: u16,
-) -> ApiDefinitionServiceGrpcClient<Channel> {
-    let endpoint = Endpoint::new(format!("http://{host}:{grpc_port}"))
-        .expect("Failed to create api definition service endpoint")
-        .connect_timeout(Duration::from_secs(10));
-    let channel = endpoint
-        .connect()
-        .await
-        .expect("Failed to connect to api definition service");
-    ApiDefinitionServiceGrpcClient::new(channel)
-        .send_compressed(CompressionEncoding::Gzip)
-        .accept_compressed(CompressionEncoding::Gzip)
 }
 
 fn new_api_definition_http_client(
     host: &str,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
 ) -> Arc<ApiDefinitionServiceHttpClientLive> {
     Arc::new(ApiDefinitionServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
+            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
         },
     })
 }
@@ -1325,28 +1348,29 @@ fn new_api_definition_http_client(
 async fn new_api_definition_client(
     protocol: GolemClientProtocol,
     host: &str,
-    grpc_port: u16,
+    _grpc_port: u16,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
 ) -> ApiDefinitionServiceClient {
     match protocol {
-        GolemClientProtocol::Grpc => {
-            ApiDefinitionServiceClient::Grpc(new_api_definition_grpc_client(host, grpc_port).await)
-        }
-        GolemClientProtocol::Http => {
-            ApiDefinitionServiceClient::Http(new_api_definition_http_client(host, http_port))
-        }
+        GolemClientProtocol::Grpc => ApiDefinitionServiceClient::Grpc,
+        GolemClientProtocol::Http => ApiDefinitionServiceClient::Http(
+            new_api_definition_http_client(host, http_port, cloud_service),
+        ),
     }
 }
 
 fn new_api_deployment_http_client(
     host: &str,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
 ) -> Arc<ApiDeploymentServiceHttpClientLive> {
     Arc::new(ApiDeploymentServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
+            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
         },
     })
 }
@@ -1354,26 +1378,28 @@ fn new_api_deployment_http_client(
 async fn new_api_deployment_client(
     protocol: GolemClientProtocol,
     host: &str,
-    _grpc_port: u16,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
 ) -> ApiDeploymentServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => ApiDeploymentServiceClient::Grpc,
-        GolemClientProtocol::Http => {
-            ApiDeploymentServiceClient::Http(new_api_deployment_http_client(host, http_port))
-        }
+        GolemClientProtocol::Http => ApiDeploymentServiceClient::Http(
+            new_api_deployment_http_client(host, http_port, cloud_service),
+        ),
     }
 }
 
 fn new_api_security_http_client(
     host: &str,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
 ) -> Arc<ApiSecurityServiceHttpClientLive> {
     Arc::new(ApiSecurityServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
+            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
         },
     })
 }
@@ -1381,14 +1407,16 @@ fn new_api_security_http_client(
 async fn new_api_security_client(
     protocol: GolemClientProtocol,
     host: &str,
-    _grpc_port: u16,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
 ) -> ApiSecurityServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => ApiSecurityServiceClient::Grpc,
-        GolemClientProtocol::Http => {
-            ApiSecurityServiceClient::Http(new_api_security_http_client(host, http_port))
-        }
+        GolemClientProtocol::Http => ApiSecurityServiceClient::Http(new_api_security_http_client(
+            host,
+            http_port,
+            cloud_service,
+        )),
     }
 }
 
@@ -1418,6 +1446,7 @@ async fn env_vars(
     rdb: &Arc<dyn Rdb + Send + Sync>,
     verbosity: Level,
     rdb_private_connection: bool,
+    cloud_service: &Arc<dyn CloudService>,
 ) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
@@ -1433,12 +1462,11 @@ async fn env_vars(
             "GOLEM__COMPONENT_SERVICE__PORT",
             component_service.private_grpc_port().to_string(),
         )
-        .with_str(
+        .with(
             "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
-            "5C832D93-FF85-4A8F-9803-513950FDFDB1",
+            cloud_service.admin_token().to_string(),
         )
-        .with_str("ENVIRONMENT", "local")
-        .with_str("GOLEM__ENVIRONMENT", "ittest")
+        .with_str("GOLEM__ENVIRONMENT", "local")
         .with("GOLEM__ROUTING_TABLE__HOST", shard_manager.private_host())
         .with(
             "GOLEM__ROUTING_TABLE__PORT",
@@ -1447,6 +1475,15 @@ async fn env_vars(
         .with(
             "GOLEM__CUSTOM_REQUEST_PORT",
             custom_request_port.to_string(),
+        )
+        .with("GOLEM__CLOUD_SERVICE__HOST", cloud_service.private_host())
+        .with(
+            "GOLEM__CLOUD_SERVICE__PORT",
+            cloud_service.private_grpc_port().to_string(),
+        )
+        .with(
+            "GOLEM__CLOUD_SERVICE__ACCESS_TOKEN",
+            cloud_service.admin_token().to_string(),
         )
         .with("GOLEM__WORKER_GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__PORT", http_port.to_string())
@@ -1864,7 +1901,7 @@ pub struct GrpcWorkerLogEventStream {
 impl GrpcWorkerLogEventStream {
     async fn new(
         mut client: WorkerServiceGrpcClient<Channel>,
-        request: ConnectWorkerRequest,
+        request: tonic::Request<ConnectWorkerRequest>,
     ) -> crate::Result<Self> {
         Ok(Self {
             streaming: client.connect_worker(request).await?.into_inner(),

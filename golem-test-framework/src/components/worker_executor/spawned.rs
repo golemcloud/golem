@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
+use crate::components::component_service::ComponentService;
 use crate::components::redis::Redis;
+use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::{new_client, wait_for_startup, WorkerExecutor};
+use crate::components::worker_service::WorkerService;
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
-
-use crate::components::component_service::ComponentService;
-use crate::components::shard_manager::ShardManager;
-use crate::components::worker_service::WorkerService;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -44,6 +44,7 @@ pub struct SpawnedWorkerExecutor {
     out_level: Level,
     err_level: Level,
     client: Option<WorkerExecutorClient<Channel>>,
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl SpawnedWorkerExecutor {
@@ -60,6 +61,7 @@ impl SpawnedWorkerExecutor {
         out_level: Level,
         err_level: Level,
         shared_client: bool,
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting golem-worker-executor process");
 
@@ -79,6 +81,7 @@ impl SpawnedWorkerExecutor {
             verbosity,
             out_level,
             err_level,
+            &cloud_service,
         )
         .await;
 
@@ -105,6 +108,7 @@ impl SpawnedWorkerExecutor {
             } else {
                 None
             },
+            cloud_service,
         }
     }
 
@@ -120,6 +124,7 @@ impl SpawnedWorkerExecutor {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
+        cloud_service: &Arc<dyn CloudService>,
     ) -> (Child, ChildProcessLogger) {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
@@ -131,6 +136,7 @@ impl SpawnedWorkerExecutor {
                     shard_manager,
                     worker_service,
                     redis,
+                    cloud_service,
                     verbosity,
                 )
                 .await,
@@ -202,6 +208,7 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             self.verbosity,
             self.out_level,
             self.err_level,
+            &self.cloud_service,
         )
         .await;
 

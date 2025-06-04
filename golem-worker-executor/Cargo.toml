@@ -24,7 +24,6 @@ test = false
 [features]
 
 [dependencies]
-cloud-api-grpc = { path = "../cloud-api-grpc", version = "=0.0.0" }
 cloud-common = { path = "../cloud-common", version = "=0.0.0" }
 golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
 golem-common = { path = "../golem-common", version = "=0.0.0" }

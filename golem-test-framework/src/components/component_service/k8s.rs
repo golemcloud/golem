@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::{
     new_component_client, new_plugin_client, wait_for_startup, ComponentService,
     ComponentServiceClient, PluginServiceClient,
@@ -50,6 +51,7 @@ pub struct K8sComponentService {
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl K8sComponentService {
@@ -68,6 +70,7 @@ impl K8sComponentService {
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
         client_protocol: GolemClientProtocol,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting Golem Component Service pod");
 
@@ -78,6 +81,7 @@ impl K8sComponentService {
             rdb,
             verbosity,
             true,
+            &cloud_service,
         )
         .await;
         let env_vars = env_vars
@@ -201,6 +205,7 @@ impl K8sComponentService {
                 &grpc_routing.hostname,
                 grpc_routing.port,
                 http_routing.port,
+                &cloud_service,
             )
             .await,
             plugin_client: new_plugin_client(
@@ -208,9 +213,11 @@ impl K8sComponentService {
                 &grpc_routing.hostname,
                 grpc_routing.port,
                 http_routing.port,
+                &cloud_service,
             )
             .await,
             plugin_wasm_files_service,
+            cloud_service,
         }
     }
 }
@@ -227,6 +234,10 @@ impl ComponentServiceInternal for K8sComponentService {
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
+    }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        self.cloud_service.clone()
     }
 }
 

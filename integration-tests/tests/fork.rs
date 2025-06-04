@@ -315,11 +315,8 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let source_oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
 
-    let oplog_index_of_function_completed_g1001 = OplogIndex::from_u64(11);
-
-    // Minus 1 as oplog index starts from 1
     let log_record = source_oplog
-        .get(u64::from(oplog_index_of_function_completed_g1001) as usize - 1)
+        .last()
         .expect("Expect at least one entry in source oplog");
 
     assert!(matches!(
@@ -331,7 +328,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .fork_worker(
             &source_worker_id,
             &target_worker_id,
-            oplog_index_of_function_completed_g1001,
+            OplogIndex::from_u64(source_oplog.len() as u64),
         )
         .await;
 
@@ -365,8 +362,8 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .search_oplog(&target_worker_id, "G1001 AND NOT pending")
         .await;
 
-    assert_eq!(result1.len(), 4); //  two invocations for G1002 and two log messages preceded
-    assert_eq!(result2.len(), 2); //  two invocations for G1001 which was in the original source oplog
+    assert_eq!(result1.len(), 6); //  three invocations for G1002 and three log messages
+    assert_eq!(result2.len(), 2); //  one invocation and one log for G1001 which was in the original source oplog
 }
 
 #[test]
@@ -537,6 +534,8 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         worker_name: target_worker_name,
     };
 
+    let oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
+
     // We fork the worker post the completion and see if oplog corresponding to environment value
     // has the same value as foo. As far as the fork cut off point is post the completion, there
     // shouldn't be any divergence for worker information even if forked worker name
@@ -545,15 +544,11 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         .fork_worker(
             &source_worker_id,
             &target_worker_id,
-            OplogIndex::from_u64(7),
+            OplogIndex::from_u64(oplog.len() as u64),
         )
         .await;
 
-    let result = deps
-        .get_oplog(&target_worker_id, OplogIndex::from_u64(7))
-        .await;
-
-    let entry = result.last().unwrap().clone();
+    let entry = oplog.last().unwrap().clone();
 
     match entry {
         PublicOplogEntry::ExportedFunctionCompleted(parameters) => {

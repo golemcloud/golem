@@ -12,103 +12,67 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
+use crate::service::worker::WorkerService;
 use async_trait::async_trait;
+use cloud_common::auth::CloudNamespace;
 use golem_common::model::{TargetWorkerId, WorkerId};
-use golem_service_base::auth::DefaultNamespace;
-use golem_worker_service_base::empty_worker_metadata;
 use golem_worker_service_base::gateway_execution::{
     GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
     WorkerResponse,
 };
-use golem_worker_service_base::service::worker::WorkerService;
-use tracing::{debug, info};
+use std::sync::Arc;
+use tracing::debug;
 
-// The open source deviates from the proprietary codebase here, only in terms of authorisation
-pub struct UnauthorisedWorkerRequestExecutor {
-    pub worker_service: Arc<dyn WorkerService + Sync + Send>,
+pub struct CloudGatewayWorkerRequestExecutor {
+    worker_service: Arc<dyn WorkerService + Sync + Send>,
 }
 
-impl UnauthorisedWorkerRequestExecutor {
+impl CloudGatewayWorkerRequestExecutor {
     pub fn new(worker_service: Arc<dyn WorkerService + Sync + Send>) -> Self {
         Self { worker_service }
     }
 }
 
 #[async_trait]
-impl GatewayWorkerRequestExecutor<DefaultNamespace> for UnauthorisedWorkerRequestExecutor {
+impl GatewayWorkerRequestExecutor<CloudNamespace> for CloudGatewayWorkerRequestExecutor {
     async fn execute(
         &self,
-        worker_request_params: GatewayResolvedWorkerRequest<DefaultNamespace>,
+        resolved_worker_request: GatewayResolvedWorkerRequest<CloudNamespace>,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-        let worker_name_opt_validated = worker_request_params
+        let worker_name_opt_validated = resolved_worker_request
             .worker_name
-            .map(|w| WorkerId::validate_worker_name(w.as_str()).map(|_| w.to_string()))
+            .map(|w| WorkerId::validate_worker_name(w.as_str()).map(|_| w))
             .transpose()?;
 
-        let component_id = worker_request_params.component_id;
+        debug!(
+            component_id = resolved_worker_request.component_id.to_string(),
+            function_name = resolved_worker_request.function_name,
+            worker_name_opt_validated,
+            "Executing invocation",
+        );
 
         let worker_id = TargetWorkerId {
-            component_id: component_id.clone(),
+            component_id: resolved_worker_request.component_id.clone(),
             worker_name: worker_name_opt_validated.clone(),
         };
-
-        info!(
-            "Executing request for component: {}, worker: {}, function: {:?}",
-            component_id,
-            worker_name_opt_validated
-                .as_deref()
-                .unwrap_or("<NA/ephemeral>"),
-            worker_request_params.function_name
-        );
-
-        let invoke_parameters = worker_request_params.function_params;
-
-        let idempotency_key_str = worker_request_params
-            .idempotency_key
-            .clone()
-            .map(|k| k.to_string())
-            .unwrap_or("N/A".to_string());
-
-        // TODO: check if these are already added from span
-        info!(
-            component_id = %component_id,
-            worker_name = %worker_name_opt_validated
-                .as_deref()
-                .unwrap_or("<NA/ephemeral>"),
-            function_name = %worker_request_params.function_name,
-            idempotency_key = %idempotency_key_str,
-            "Executing request",
-        );
-
-        // TODO: check if these are already added from span
-        debug!(
-            component_id = component_id.to_string(),
-            worker_name_opt_validated,
-            function_name = worker_request_params.function_name.to_string(),
-            idempotency_key = idempotency_key_str,
-            invocation_params = format!("{:?}", invoke_parameters),
-            "Invocation parameters"
-        );
 
         let type_annotated_value = self
             .worker_service
             .validate_and_invoke_and_await_typed(
                 &worker_id,
-                worker_request_params.idempotency_key,
-                worker_request_params.function_name,
-                invoke_parameters,
+                resolved_worker_request.idempotency_key,
+                resolved_worker_request.function_name.to_string(),
+                resolved_worker_request.function_params,
                 Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                     parent: None,
                     args: vec![],
                     env: Default::default(),
-                    tracing: Some(worker_request_params.invocation_context.into()),
+                    tracing: Some(resolved_worker_request.invocation_context.into()),
                 }),
-                empty_worker_metadata(),
+                resolved_worker_request.namespace,
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("Error when executing resolved worker request. Error: {e}"))?;
 
         Ok(WorkerResponse {
             result: type_annotated_value,

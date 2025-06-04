@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::clients::auth::authorised_request;
 use crate::config::RemoteCloudServiceConfig;
 use crate::grpc::try_decode_plugin_definition;
@@ -32,7 +46,11 @@ pub trait PluginServiceClient {
 
 #[derive(Clone)]
 pub struct PluginServiceClientDefault {
-    plugin_service_client: GrpcClient<cloud_api_grpc::proto::golem::cloud::component::v1::plugin_service_client::PluginServiceClient<Channel>>,
+    plugin_service_client: GrpcClient<
+        golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient<
+            Channel,
+        >,
+    >,
     retry_config: RetryConfig,
 }
 
@@ -41,7 +59,7 @@ impl PluginServiceClientDefault {
         let plugin_service_client = GrpcClient::new(
             "plugin",
             |channel| {
-                cloud_api_grpc::proto::golem::cloud::component::v1::plugin_service_client::PluginServiceClient::new(channel)
+                golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
             },
@@ -91,14 +109,14 @@ impl PluginServiceClient for PluginServiceClientDefault {
 
                     match response.result {
                         None => Err(PluginError::Unknown("Empty response".to_string())),
-                        Some(cloud_api_grpc::proto::golem::cloud::component::v1::get_plugin_response::Result::Success(plugin)) => {
+                        Some(golem_api_grpc::proto::golem::component::v1::get_plugin_response::Result::Success(plugin)) => {
                             if let Some(plugin) = plugin.plugin {
                                 Ok(Some(try_decode_plugin_definition(plugin)?))
                             } else {
                                 Ok(None)
                             }
                         }
-                        Some(cloud_api_grpc::proto::golem::cloud::component::v1::get_plugin_response::Result::Error(error)) => {
+                        Some(golem_api_grpc::proto::golem::component::v1::get_plugin_response::Result::Error(error)) => {
                             Err(PluginError::from(error))
                         }
                     }
@@ -124,7 +142,7 @@ impl PluginServiceClient for PluginServiceClientDefault {
                     let response = client
                         .call("get_by_id", move |client| {
                             let request = authorised_request(
-                                cloud_api_grpc::proto::golem::cloud::component::v1::GetPluginByIdRequest {
+                                golem_api_grpc::proto::golem::component::v1::GetPluginByIdRequest {
                                     id: Some(id.clone().into()),
                                 },
                                 &token.value,
@@ -136,14 +154,14 @@ impl PluginServiceClient for PluginServiceClientDefault {
 
                     match response.result {
                         None => Err(PluginError::Unknown("Empty response".to_string())),
-                        Some(cloud_api_grpc::proto::golem::cloud::component::v1::get_plugin_by_id_response::Result::Success(plugin)) => {
+                        Some(golem_api_grpc::proto::golem::component::v1::get_plugin_by_id_response::Result::Success(plugin)) => {
                             if let Some(plugin) = plugin.plugin {
                                 Ok(Some(try_decode_plugin_definition(plugin)?))
                             } else {
                                 Ok(None)
                             }
                         }
-                        Some(cloud_api_grpc::proto::golem::cloud::component::v1::get_plugin_by_id_response::Result::Error(error)) => {
+                        Some(golem_api_grpc::proto::golem::component::v1::get_plugin_by_id_response::Result::Error(error)) => {
                             Err(PluginError::from(error))
                         }
                     }

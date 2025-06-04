@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
-
 use futures::future::BoxFuture;
 use sqlx::{
     error::BoxDynError,
     migrate::{Migration, MigrationSource},
 };
+use std::path::PathBuf;
 
 pub trait Migrations {
     type Output<'a>: MigrationSource<'a>

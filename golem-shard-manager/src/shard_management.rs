@@ -12,21 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
-use std::sync::Arc;
-
-use async_rwlock::RwLock;
-use itertools::Itertools;
-use tokio::sync::{Mutex, Notify};
-use tokio::task::JoinHandle;
-use tracing::{debug, info, warn, Instrument};
-
 use crate::error::ShardManagerError;
 use crate::healthcheck::{get_unhealthy_pods, HealthCheck};
 use crate::model::{Pod, RoutingTable};
 use crate::persistence::RoutingTablePersistence;
 use crate::rebalancing::Rebalance;
 use crate::worker_executor::{assign_shards, revoke_shards, WorkerExecutorService};
+use async_rwlock::RwLock;
+use itertools::Itertools;
+use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::sync::{Mutex, Notify};
+use tokio::task::JoinHandle;
+use tracing::{debug, info, warn, Instrument};
 
 #[derive(Clone)]
 pub struct ShardManagement {

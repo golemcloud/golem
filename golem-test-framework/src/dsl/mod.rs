@@ -265,7 +265,11 @@ pub trait TestDsl {
         added_files
     }
 
-    async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey>;
+    async fn add_plugin_wasm(
+        &self,
+        account_id: &AccountId,
+        name: &str,
+    ) -> crate::Result<PluginWasmFileKey>;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str)
         -> crate::Result<WorkerId>;
@@ -599,7 +603,11 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .expect("Failed to add initial component file")
     }
 
-    async fn add_plugin_wasm(&self, name: &str) -> crate::Result<PluginWasmFileKey> {
+    async fn add_plugin_wasm(
+        &self,
+        account_id: &AccountId,
+        name: &str,
+    ) -> crate::Result<PluginWasmFileKey> {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         let data = tokio::fs::read(&source_path)
             .await
@@ -613,7 +621,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         let key = self
             .plugin_wasm_files_service()
-            .put_if_not_exists(&AccountId::placeholder(), stream)
+            .put_if_not_exists(account_id, stream)
             .await
             .map_err(|e| anyhow!("Failed to store plugin wasm: {e}"))?;
 
@@ -1957,7 +1965,7 @@ pub trait TestDslUnsafe {
         files: &[(&str, &str, ComponentFilePermissions)],
     ) -> Vec<(PathBuf, InitialComponentFile)>;
 
-    async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey;
+    async fn add_plugin_wasm(&self, account_id: &AccountId, name: &str) -> PluginWasmFileKey;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
     async fn try_start_worker(
@@ -2163,8 +2171,8 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to get latest component metadata")
     }
 
-    async fn add_plugin_wasm(&self, name: &str) -> PluginWasmFileKey {
-        <T as TestDsl>::add_plugin_wasm(self, name)
+    async fn add_plugin_wasm(&self, account_id: &AccountId, name: &str) -> PluginWasmFileKey {
+        <T as TestDsl>::add_plugin_wasm(self, account_id, name)
             .await
             .expect("Failed to add plugin wasm")
     }

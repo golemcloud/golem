@@ -1,10 +1,24 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::auth::{CloudAuthCtx, CloudNamespace};
 use crate::repo::component::CloudComponentOwnerRow;
 use crate::repo::plugin::CloudPluginScopeRow;
 use crate::repo::CloudPluginOwnerRow;
 use async_trait::async_trait;
-use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
-use cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectAction as GrpcProjectAction;
+use golem_api_grpc::proto::golem::project::{Project, ProjectData};
+use golem_api_grpc::proto::golem::projectpolicy::ProjectAction as GrpcProjectAction;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::plugin::{ComponentPluginScope, PluginOwner, PluginScope};
 use golem_common::model::{AccountId, ComponentId, Empty, ProjectId};
@@ -23,16 +37,16 @@ use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, FromRepr};
 use uuid::Uuid;
 
-newtype_uuid!(PlanId, cloud_api_grpc::proto::golem::cloud::plan::PlanId);
+newtype_uuid!(PlanId, golem_api_grpc::proto::golem::plan::PlanId);
 newtype_uuid!(
     ProjectGrantId,
-    cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantId
+    golem_api_grpc::proto::golem::projectgrant::ProjectGrantId
 );
 newtype_uuid!(
     ProjectPolicyId,
-    cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectPolicyId
+    golem_api_grpc::proto::golem::projectpolicy::ProjectPolicyId
 );
-newtype_uuid!(TokenId, cloud_api_grpc::proto::golem::cloud::token::TokenId);
+newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
@@ -47,11 +61,11 @@ impl TokenSecret {
     }
 }
 
-impl TryFrom<cloud_api_grpc::proto::golem::cloud::token::TokenSecret> for TokenSecret {
+impl TryFrom<golem_api_grpc::proto::golem::token::TokenSecret> for TokenSecret {
     type Error = String;
 
     fn try_from(
-        value: cloud_api_grpc::proto::golem::cloud::token::TokenSecret,
+        value: golem_api_grpc::proto::golem::token::TokenSecret,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             value: value.value.ok_or("Missing field: value")?.into(),
@@ -59,7 +73,7 @@ impl TryFrom<cloud_api_grpc::proto::golem::cloud::token::TokenSecret> for TokenS
     }
 }
 
-impl From<TokenSecret> for cloud_api_grpc::proto::golem::cloud::token::TokenSecret {
+impl From<TokenSecret> for golem_api_grpc::proto::golem::token::TokenSecret {
     fn from(value: TokenSecret) -> Self {
         Self {
             value: Some(value.value.into()),
@@ -592,24 +606,24 @@ impl ParseFromMultipartField for CloudPluginScope {
     }
 }
 
-impl From<CloudPluginScope> for cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope {
+impl From<CloudPluginScope> for golem_api_grpc::proto::golem::component::CloudPluginScope {
     fn from(scope: CloudPluginScope) -> Self {
         match scope {
-            CloudPluginScope::Global(_) => cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope {
-                scope: Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Global(
+            CloudPluginScope::Global(_) => golem_api_grpc::proto::golem::component::CloudPluginScope {
+                scope: Some(golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Global(
                     golem_api_grpc::proto::golem::common::Empty {},
                 )),
             },
-            CloudPluginScope::Component(scope) => cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope {
-                scope: Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Component(
+            CloudPluginScope::Component(scope) => golem_api_grpc::proto::golem::component::CloudPluginScope {
+                scope: Some(golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Component(
                     golem_api_grpc::proto::golem::component::ComponentPluginScope {
                         component_id: Some(scope.component_id.into()),
                     },
                 )),
             },
-            CloudPluginScope::Project(scope) => cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope {
-                scope: Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Project(
-                    cloud_api_grpc::proto::golem::cloud::component::ProjectPluginScope {
+            CloudPluginScope::Project(scope) => golem_api_grpc::proto::golem::component::CloudPluginScope {
+                scope: Some(golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Project(
+                    golem_api_grpc::proto::golem::component::ProjectPluginScope {
                         project_id: Some(scope.project_id.into()),
                     },
                 )),
@@ -618,24 +632,31 @@ impl From<CloudPluginScope> for cloud_api_grpc::proto::golem::cloud::component::
     }
 }
 
-impl TryFrom<cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope>
-    for CloudPluginScope
-{
+impl TryFrom<golem_api_grpc::proto::golem::component::CloudPluginScope> for CloudPluginScope {
     type Error = String;
 
     fn try_from(
-        proto: cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope,
+        proto: golem_api_grpc::proto::golem::component::CloudPluginScope,
     ) -> Result<Self, Self::Error> {
         match proto.scope {
-            Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Global(
-                     _,
-                 )) => Ok(Self::global()),
-            Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Component(
-                     scope,
-                 )) => Ok(Self::component(scope.component_id.ok_or("Missing component_id")?.try_into()?)),
-            Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Project(
-                     scope,
-                 )) => Ok(Self::project(scope.project_id.ok_or("Missing project_id")?.try_into()?)),
+            Some(golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Global(_)) => {
+                Ok(Self::global())
+            }
+            Some(
+                golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Component(
+                    scope,
+                ),
+            ) => Ok(Self::component(
+                scope
+                    .component_id
+                    .ok_or("Missing component_id")?
+                    .try_into()?,
+            )),
+            Some(golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Project(
+                scope,
+            )) => Ok(Self::project(
+                scope.project_id.ok_or("Missing project_id")?.try_into()?,
+            )),
             None => Err("Missing scope".to_string()),
         }
     }

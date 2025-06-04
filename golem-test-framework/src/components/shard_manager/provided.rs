@@ -14,7 +14,6 @@
 
 use crate::components::shard_manager::ShardManager;
 use async_trait::async_trait;
-
 use tracing::info;
 
 pub struct ProvidedShardManager {

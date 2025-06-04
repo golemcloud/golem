@@ -276,6 +276,7 @@ pub trait OplogOps: Oplog {
             trace_id: invocation_context.trace_id,
             trace_states: invocation_context.trace_states,
         };
+
         self.add(entry.clone()).await;
         Ok(entry)
     }

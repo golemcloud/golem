@@ -23,14 +23,15 @@ use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
 use crate::metrics::component::record_compilation_time;
 use crate::services::compiled_component;
 use crate::services::compiled_component::CompiledComponentService;
-use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::component::{
+    ComponentMetadata, ComponentService, ComponentServiceLocalFileSystem,
+};
 use crate::services::golem_config::{
     CompiledComponentServiceConfig, ComponentCacheConfig, ComponentServiceConfig,
     ProjectServiceConfig,
 };
 use crate::services::plugins::PluginsObservations;
 use async_trait::async_trait;
-use cloud_api_grpc::proto::golem::cloud::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use cloud_common::model::CloudComponentOwner;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
@@ -39,6 +40,7 @@ use golem_api_grpc::proto::golem::component::v1::{
     DownloadComponentRequest, GetComponentsRequest, GetLatestComponentRequest,
     GetVersionedComponentRequest,
 };
+use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
@@ -88,7 +90,16 @@ pub fn configured(
                 plugin_observations,
             ))
         }
-        _ => panic!("Unsupported cloud component and project service configuration. Currently only gRPC is supported for both")
+        (ComponentServiceConfig::Local(config), ProjectServiceConfig::Disabled(_)) => {
+            info!("Using local component server at {:?}", config.root);
+            Arc::new(ComponentServiceLocalFileSystem::new(
+                &config.root,
+                cache_config.max_capacity,
+                cache_config.time_to_idle,
+                compiled_component_service,
+            ))
+        }
+        _ => panic!("Unsupported cloud component and project service configuration"),
     }
 }
 
@@ -182,10 +193,10 @@ impl ComponentServiceCloudGrpc {
         account_id: &AccountId,
         project_name: &str,
     ) -> impl Future<Output = Result<Option<ProjectId>, GolemError>> + 'static {
-        use cloud_api_grpc::proto::golem::cloud::project::v1::{
+        use golem_api_grpc::proto::golem::project::v1::{
             get_projects_response, GetProjectsRequest, ProjectError,
         };
-        use cloud_api_grpc::proto::golem::cloud::project::Project as GrpcProject;
+        use golem_api_grpc::proto::golem::project::Project as GrpcProject;
 
         let client = self.project_client.clone();
         let retry_config = self.retry_config.clone();

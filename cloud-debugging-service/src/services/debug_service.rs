@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::auth::AuthService;
 use crate::debug_context::DebugContext;
 use crate::debug_session::{ActiveSession, PlaybackOverridesInternal};
@@ -713,7 +727,7 @@ impl<T: GolemTypes> DebugService for DebugServiceDefault<T> {
 #[cfg(test)]
 mod tests {
     use axum::body::Bytes;
-    use golem_worker_executor::DefaultGolemTypes;
+    use golem_worker_executor::cloud::CloudGolemTypes;
     use std::fmt::{Debug, Formatter};
     use std::time::Duration;
     use test_r::test;
@@ -729,12 +743,13 @@ mod tests {
         let target_oplog_index = OplogIndex::from_u64(1);
         let original_last_oplog_index = OplogIndex::from_u64(10);
 
-        let result = DebugServiceDefault::<DefaultGolemTypes>::get_target_oplog_index_at_invocation_boundary(
-            Arc::new(TestOplog::new(5)),
-            target_oplog_index,
-            original_last_oplog_index,
-        )
-        .await;
+        let result =
+            DebugServiceDefault::<CloudGolemTypes>::get_target_oplog_index_at_invocation_boundary(
+                Arc::new(TestOplog::new(5)),
+                target_oplog_index,
+                original_last_oplog_index,
+            )
+            .await;
 
         assert_eq!(result, Ok(OplogIndex::from_u64(5)));
     }
@@ -744,12 +759,13 @@ mod tests {
         let target_oplog_index = OplogIndex::from_u64(1);
         let original_last_oplog_index = OplogIndex::from_u64(10);
 
-        let result = DebugServiceDefault::<DefaultGolemTypes>::get_target_oplog_index_at_invocation_boundary(
-            Arc::new(TestOplog::new(11)),
-            target_oplog_index,
-            original_last_oplog_index,
-        )
-        .await;
+        let result =
+            DebugServiceDefault::<CloudGolemTypes>::get_target_oplog_index_at_invocation_boundary(
+                Arc::new(TestOplog::new(11)),
+                target_oplog_index,
+                original_last_oplog_index,
+            )
+            .await;
 
         assert!(result.is_err());
     }

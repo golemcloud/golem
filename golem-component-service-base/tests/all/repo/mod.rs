@@ -13,18 +13,20 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::model::component::{ComponentOwner, DefaultComponentOwner, VersionedComponentId};
+use cloud_common::model::{CloudComponentOwner, CloudPluginOwner, CloudPluginScope};
+use cloud_common::repo::component::CloudComponentOwnerRow;
+use cloud_common::repo::plugin::CloudPluginScopeRow;
+use cloud_common::repo::CloudPluginOwnerRow;
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::plugin::{
     ComponentPluginInstallationTarget, ComponentPluginScope, ComponentTransformerDefinition,
-    DefaultPluginOwner, DefaultPluginScope, OplogProcessorDefinition, PluginDefinition,
-    PluginInstallation, PluginOwner, PluginTypeSpecificDefinition,
+    OplogProcessorDefinition, PluginDefinition, PluginInstallation, PluginOwner,
+    PluginTypeSpecificDefinition,
 };
 use golem_common::model::{
-    AccountId, ComponentId, ComponentType, Empty, PluginId, PluginInstallationId,
+    AccountId, ComponentId, ComponentType, Empty, PluginId, PluginInstallationId, ProjectId,
 };
-use golem_common::repo::component::DefaultComponentOwnerRow;
-use golem_common::repo::plugin::{DefaultPluginOwnerRow, DefaultPluginScopeRow};
 use golem_common::repo::plugin_installation::ComponentPluginInstallationRow;
 use golem_common::repo::RowMeta;
 use golem_component_service_base::model::Component;
@@ -141,6 +143,15 @@ where
 pub(crate) fn get_component_data(name: &str) -> Vec<u8> {
     let path = format!("../test-components/{}.wasm", name);
     std::fs::read(path).unwrap()
+}
+
+pub(crate) fn test_component_owner() -> CloudComponentOwner {
+    CloudComponentOwner {
+        project_id: ProjectId(uuid!("981d4914-6992-4237-a2b3-06d7b53ed6d4")),
+        account_id: AccountId {
+            value: "7857d4f5-a7e1-4a26-9ff9-7755898f6dce".to_string(),
+        },
+    }
 }
 
 async fn test_repo_component_id_unique(
@@ -264,7 +275,7 @@ async fn test_repo_component_name_unique_in_namespace(
 }
 
 async fn test_repo_component_find_by_names(
-    component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
+    component_repo: Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
 ) {
     let component_name1 = ComponentName("shopping-cart".to_string());
     let data = get_component_data("shopping-cart");
@@ -277,7 +288,7 @@ async fn test_repo_component_find_by_names(
         vec![],
         vec![],
         HashMap::new(),
-        DefaultComponentOwner,
+        test_component_owner(),
         HashMap::new(),
     )
     .unwrap();
@@ -298,7 +309,7 @@ async fn test_repo_component_find_by_names(
         vec![],
         vec![],
         HashMap::new(),
-        DefaultComponentOwner,
+        test_component_owner(),
         HashMap::new(),
     )
     .unwrap();
@@ -312,8 +323,8 @@ async fn test_repo_component_find_by_names(
     // rust-echo: version: 1
     component_repo
         .update(
-            &DefaultComponentOwnerRow {},
-            "default",
+            &test_component_owner().into(),
+            &test_component_owner().to_string(),
             component2.versioned_component_id.component_id.0,
             data.len() as i32,
             record_metadata_serde::serialize(&component2.metadata)
@@ -330,7 +341,7 @@ async fn test_repo_component_find_by_names(
     // only when activated component2 becomes available in the search
     component_repo
         .activate(
-            "default",
+            &test_component_owner().to_string(),
             component2.versioned_component_id.component_id.0,
             1,
             "",
@@ -343,7 +354,7 @@ async fn test_repo_component_find_by_names(
     // component 1 has only version 0
     let component1_latest = component_repo
         .get_by_names(
-            "default",
+            &test_component_owner().to_string(),
             &[ComponentByNameAndVersion {
                 component_name: component1.component_name.clone(),
                 version_type: VersionType::Latest,
@@ -358,7 +369,7 @@ async fn test_repo_component_find_by_names(
 
     let component1_version0 = component_repo
         .get_by_names(
-            "default",
+            &test_component_owner().to_string(),
             &[ComponentByNameAndVersion {
                 component_name: component1.component_name.clone(),
                 version_type: VersionType::Exact(0),
@@ -373,7 +384,7 @@ async fn test_repo_component_find_by_names(
 
     let component1_version1 = component_repo
         .get_by_names(
-            "default",
+            &test_component_owner().to_string(),
             &[ComponentByNameAndVersion {
                 component_name: component1.component_name.clone(),
                 version_type: VersionType::Exact(1),
@@ -387,7 +398,7 @@ async fn test_repo_component_find_by_names(
     // component 2 (this has version 0 and latest version 1)
     let component2_latest = component_repo
         .get_by_names(
-            "default",
+            &test_component_owner().to_string(),
             &[ComponentByNameAndVersion {
                 component_name: component2.component_name.clone(),
                 version_type: VersionType::Latest,
@@ -402,7 +413,7 @@ async fn test_repo_component_find_by_names(
 
     let component2_version0 = component_repo
         .get_by_names(
-            "default",
+            &test_component_owner().to_string(),
             &[ComponentByNameAndVersion {
                 component_name: component2.component_name.clone(),
                 version_type: VersionType::Exact(0),
@@ -417,7 +428,7 @@ async fn test_repo_component_find_by_names(
 
     let component2_version1 = component_repo
         .get_by_names(
-            "default",
+            &test_component_owner().to_string(),
             &[ComponentByNameAndVersion {
                 component_name: component2.component_name.clone(),
                 version_type: VersionType::Exact(1),
@@ -432,7 +443,7 @@ async fn test_repo_component_find_by_names(
 
     let component1_and_component_2_latest = component_repo
         .get_by_names(
-            "default",
+            &test_component_owner().to_string(),
             &[
                 ComponentByNameAndVersion {
                     component_name: component1.component_name.clone(),
@@ -461,7 +472,7 @@ async fn test_repo_component_find_by_names(
 
     let component1_and_component_2_exact = component_repo
         .get_by_names(
-            "default",
+            &test_component_owner().to_string(),
             &[
                 ComponentByNameAndVersion {
                     component_name: component1.component_name.clone(),
@@ -490,7 +501,7 @@ async fn test_repo_component_find_by_names(
 
     let component1_component_2_latest_and_exact = component_repo
         .get_by_names(
-            "default",
+            &test_component_owner().to_string(),
             &[
                 ComponentByNameAndVersion {
                     component_name: component1.component_name.clone(),
@@ -520,7 +531,7 @@ async fn test_repo_component_find_by_names(
     // invalid search
     let invalid_search = component_repo
         .get_by_names(
-            "default",
+            &test_component_owner().to_string(),
             &[
                 ComponentByNameAndVersion {
                     component_name: component1.component_name.clone(),
@@ -539,7 +550,7 @@ async fn test_repo_component_find_by_names(
 }
 
 async fn test_repo_component_delete(
-    component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
+    component_repo: Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
 ) {
     let component_name1 = ComponentName("shopping-cart1-component-delete".to_string());
     let data = get_component_data("shopping-cart");
@@ -552,7 +563,7 @@ async fn test_repo_component_delete(
         vec![],
         vec![],
         HashMap::new(),
-        DefaultComponentOwner,
+        test_component_owner(),
         HashMap::new(),
     )
     .unwrap();
@@ -563,21 +574,21 @@ async fn test_repo_component_delete(
 
     let result2 = component_repo
         .get(
-            &DefaultComponentOwner.to_string(),
+            &test_component_owner().to_string(),
             component1.versioned_component_id.component_id.0,
         )
         .await;
 
     let result3 = component_repo
         .delete(
-            &DefaultComponentOwner.to_string(),
+            &test_component_owner().to_string(),
             component1.versioned_component_id.component_id.0,
         )
         .await;
 
     let result4 = component_repo
         .get(
-            &DefaultComponentOwner.to_string(),
+            &test_component_owner().to_string(),
             component1.versioned_component_id.component_id.0,
         )
         .await;
@@ -686,15 +697,17 @@ async fn test_repo_component_constraints(
 }
 
 async fn test_default_plugin_repo(
-    component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
-    plugin_repo: Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+    component_repo: Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
+    plugin_repo: Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync>,
 ) -> Result<(), RepoError> {
-    let owner: DefaultComponentOwner = DefaultComponentOwner;
-    let plugin_owner_row: DefaultPluginOwnerRow = DefaultPluginOwner.into();
+    let owner: CloudComponentOwner = test_component_owner();
+    let plugin_owner_row: CloudPluginOwnerRow = CloudPluginOwnerRow {
+        account_id: owner.account_id.value.clone(),
+    };
 
     let component_id = ComponentId::new_v4();
     let component_id2 = ComponentId::new_v4();
-    let scope1: DefaultPluginScopeRow = DefaultPluginScope::Component(ComponentPluginScope {
+    let scope1: CloudPluginScopeRow = CloudPluginScope::Component(ComponentPluginScope {
         component_id: component_id.clone(),
     })
     .into();
@@ -752,8 +765,8 @@ async fn test_default_plugin_repo(
             validate_url: "https://plugin1.com/validate".to_string(),
             transform_url: "https://plugin1.com/transform".to_string(),
         }),
-        scope: DefaultPluginScope::Global(Empty {}),
-        owner: DefaultPluginOwner,
+        scope: CloudPluginScope::Global(Empty {}),
+        owner: test_component_owner().into(),
         deleted: false,
     };
     let plugin1_row = plugin1.clone().into();
@@ -769,10 +782,10 @@ async fn test_default_plugin_repo(
             component_id: component_id2.clone(),
             component_version: 0,
         }),
-        scope: DefaultPluginScope::Component(ComponentPluginScope {
+        scope: CloudPluginScope::Component(ComponentPluginScope {
             component_id: component_id.clone(),
         }),
-        owner: DefaultPluginOwner,
+        owner: test_component_owner().into(),
         deleted: false,
     };
     let plugin2_row = plugin2.clone().into();
@@ -797,26 +810,26 @@ async fn test_default_plugin_repo(
     let mut defs = all2
         .into_iter()
         .map(|p| p.try_into())
-        .collect::<Result<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>, String>>()
+        .collect::<Result<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, String>>()
         .unwrap();
     defs.sort_by_key(|def| def.name.clone());
 
     let scoped = scoped2
         .into_iter()
         .map(|p| p.try_into())
-        .collect::<Result<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>, String>>()
+        .collect::<Result<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, String>>()
         .unwrap();
 
     let named = named2
         .into_iter()
         .map(|p| p.try_into())
-        .collect::<Result<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>, String>>()
+        .collect::<Result<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, String>>()
         .unwrap();
 
     let after_delete = all3
         .into_iter()
         .map(|p| p.try_into())
-        .collect::<Result<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>, String>>()
+        .collect::<Result<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, String>>()
         .unwrap();
 
     assert!(scoped1.is_empty());
@@ -839,14 +852,14 @@ async fn test_default_plugin_repo(
 }
 
 async fn test_default_component_plugin_installation(
-    component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
-    plugin_repo: Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+    component_repo: Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
+    plugin_repo: Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync>,
 ) -> Result<(), RepoError> {
-    let component_owner: DefaultComponentOwner = DefaultComponentOwner;
-    let component_owner_row: DefaultComponentOwnerRow = component_owner.clone().into();
-    let plugin_owner_row: DefaultPluginOwnerRow = component_owner_row.into();
+    let component_owner: CloudComponentOwner = test_component_owner();
+    let component_owner_row: CloudComponentOwnerRow = component_owner.clone().into();
+    let plugin_owner_row: CloudPluginOwnerRow = component_owner_row.into();
 
-    let plugin_owner: DefaultPluginOwner = DefaultPluginOwner;
+    let plugin_owner: CloudPluginOwner = test_component_owner().into();
 
     let component_id = ComponentId::new_v4();
 
@@ -876,7 +889,7 @@ async fn test_default_component_plugin_installation(
             validate_url: "https://plugin2.com/validate".to_string(),
             transform_url: "https://plugin2.com/transform".to_string(),
         }),
-        scope: DefaultPluginScope::Global(Empty {}),
+        scope: CloudPluginScope::Global(Empty {}),
         owner: plugin_owner.clone(),
         deleted: false,
     };

@@ -1,12 +1,27 @@
 ## Generated from default config
-grpc_port = 9090
-http_port = 8083
+cors_origin_regex = "https://*.golem.cloud"
+environment = "dev"
+grpc_port = 9091
+http_port = 8081
+workspace = "release"
 
 [blob_storage]
 type = "LocalFileSystem"
 
 [blob_storage.config]
 root = "../data/blob_storage"
+
+[cloud_service]
+access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+host = "localhost"
+port = 8080
+
+[cloud_service.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
 
 [compilation]
 type = "Enabled"
@@ -27,7 +42,7 @@ multiplier = 2.0
 type = "Sqlite"
 
 [db.config]
-database = "../data/golem_component.sqlite"
+database = "golem_service.db"
 max_connections = 10
 
 [plugin_transformations.retries]
@@ -67,82 +82,3 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-
-## Generated from example config: with postgres, s3 and disabled compilation
-# grpc_port = 9090
-# http_port = 8083
-# 
-# [blob_storage]
-# type = "S3"
-# 
-# [blob_storage.config]
-# compilation_cache_bucket = "golem-compiled-components"
-# components_bucket = "component-store"
-# compressed_oplog_buckets = ["oplog-archive-1"]
-# custom_data_bucket = "custom-data"
-# initial_component_files_bucket = "golem-initial-component-files"
-# object_prefix = ""
-# oplog_payload_bucket = "oplog-payload"
-# plugin_wasm_files_bucket = "golem-plugin-wasm-files"
-# region = "us-east-1"
-# use_minio_credentials = false
-# 
-# [blob_storage.config.retries]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
-# 
-# [compilation]
-# type = "Disabled"
-# 
-# [compilation.config]
-# 
-# [db]
-# type = "Postgres"
-# 
-# [db.config]
-# database = "postgres"
-# host = "localhost"
-# max_connections = 10
-# password = "postgres"
-# port = 5432
-# username = "postgres"
-# 
-# [plugin_transformations.retries]
-# max_attempts = 5
-# max_delay = "2s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 2.0
-# 
-# [tracing]
-# console = false
-# dtor_friendly = false
-# file_name = "component-service.log"
-# file_truncate = true
-# 
-# [tracing.file]
-# ansi = false
-# compact = false
-# enabled = false
-# json = true
-# json_flatten = true
-# json_flatten_span = true
-# pretty = false
-# span_events_active = false
-# span_events_full = false
-# without_time = false
-# 
-# [tracing.stdout]
-# ansi = true
-# compact = false
-# enabled = true
-# json = false
-# json_flatten = true
-# json_flatten_span = true
-# pretty = false
-# span_events_active = false
-# span_events_full = false
-# without_time = false

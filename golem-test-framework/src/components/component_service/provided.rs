@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::{
     new_component_client, new_plugin_client, ComponentService, ComponentServiceClient,
     PluginServiceClient,
@@ -33,6 +34,7 @@ pub struct ProvidedComponentService {
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl ProvidedComponentService {
@@ -43,6 +45,7 @@ impl ProvidedComponentService {
         grpc_port: u16,
         client_protocol: GolemClientProtocol,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Using already running golem-component-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {
@@ -50,10 +53,24 @@ impl ProvidedComponentService {
             host: host.clone(),
             http_port,
             grpc_port,
-            component_client: new_component_client(client_protocol, &host, grpc_port, http_port)
-                .await,
-            plugin_client: new_plugin_client(client_protocol, &host, grpc_port, http_port).await,
+            component_client: new_component_client(
+                client_protocol,
+                &host,
+                grpc_port,
+                http_port,
+                &cloud_service,
+            )
+            .await,
+            plugin_client: new_plugin_client(
+                client_protocol,
+                &host,
+                grpc_port,
+                http_port,
+                &cloud_service,
+            )
+            .await,
             plugin_wasm_files_service,
+            cloud_service,
         }
     }
 }
@@ -70,6 +87,10 @@ impl ComponentServiceInternal for ProvidedComponentService {
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
+    }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        self.cloud_service.clone()
     }
 }
 

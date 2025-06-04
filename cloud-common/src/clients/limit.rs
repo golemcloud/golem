@@ -1,13 +1,27 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::clients::auth::authorised_request;
 use crate::config::RemoteCloudServiceConfig;
 use async_trait::async_trait;
-use cloud_api_grpc::proto::golem::cloud::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
-use cloud_api_grpc::proto::golem::cloud::limit::v1::limits_error::Error;
-use cloud_api_grpc::proto::golem::cloud::limit::v1::{
+use golem_api_grpc::proto::golem::common::ResourceLimits;
+use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
+use golem_api_grpc::proto::golem::limit::v1::limits_error::Error;
+use golem_api_grpc::proto::golem::limit::v1::{
     get_resource_limits_response, update_component_limit_response, update_worker_limit_response,
     GetResourceLimitsRequest, UpdateComponentLimitRequest, UpdateWorkerLimitRequest,
 };
-use golem_api_grpc::proto::golem::common::ResourceLimits;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, ComponentId, WorkerId};
@@ -318,7 +332,7 @@ impl SafeDisplay for LimitError {
 
 #[derive(Debug)]
 pub enum LimitClientError {
-    Server(cloud_api_grpc::proto::golem::cloud::limit::v1::LimitsError),
+    Server(golem_api_grpc::proto::golem::limit::v1::LimitsError),
     Connection(Status),
     Transport(tonic::transport::Error),
     Unknown(String),
@@ -349,8 +363,8 @@ impl From<LimitClientError> for LimitError {
     }
 }
 
-impl From<cloud_api_grpc::proto::golem::cloud::limit::v1::LimitsError> for LimitClientError {
-    fn from(value: cloud_api_grpc::proto::golem::cloud::limit::v1::LimitsError) -> Self {
+impl From<golem_api_grpc::proto::golem::limit::v1::LimitsError> for LimitClientError {
+    fn from(value: golem_api_grpc::proto::golem::limit::v1::LimitsError) -> Self {
         Self::Server(value)
     }
 }

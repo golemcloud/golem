@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::{Path, PathBuf};
-
 use crate::error::ShardManagerError;
 use crate::model::{RoutingTable, ShardManagerState};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::redis::RedisPool;
 use golem_common::serialization::{deserialize, serialize};
+use std::path::{Path, PathBuf};
 
 #[async_trait]
 pub trait RoutingTablePersistence {

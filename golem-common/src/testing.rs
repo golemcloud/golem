@@ -18,11 +18,15 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 
 use crate::model::component_metadata::{DynamicLinkedInstance, LinearMemory};
-use crate::model::{ComponentId, ComponentType, ComponentVersion, InitialComponentFile};
+use crate::model::{
+    AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile, ProjectId,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalFileSystemComponentMetadata {
+    pub account_id: AccountId,
+    pub project_id: ProjectId,
     pub component_id: ComponentId,
     pub version: ComponentVersion,
     pub size: u64,

@@ -23,12 +23,12 @@ use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
 use crate::model::CurrentResourceLimits;
 use crate::services::golem_config::ResourceLimitsConfig;
 use async_trait::async_trait;
-use cloud_api_grpc::proto::golem::cloud::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
-use cloud_api_grpc::proto::golem::cloud::limit::v1::{
+use dashmap::DashMap;
+use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
+use golem_api_grpc::proto::golem::limit::v1::{
     batch_update_resource_limits_response, get_resource_limits_response, BatchUpdateResourceLimits,
     BatchUpdateResourceLimitsRequest, GetResourceLimitsRequest,
 };
-use dashmap::DashMap;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::AccountId;
 use golem_common::model::RetryConfig;
@@ -372,7 +372,7 @@ pub fn configured(config: &ResourceLimitsConfig) -> Arc<dyn ResourceLimits + Sen
             config.retries.clone(),
             config.batch_update_interval,
         ),
-        ResourceLimitsConfig::Disabled => ResourceLimitsDisabled::new(),
+        ResourceLimitsConfig::Disabled(_) => ResourceLimitsDisabled::new(),
     }
 }
 

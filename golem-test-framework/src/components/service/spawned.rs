@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::service::{env_vars, Service};
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 use std::collections::HashMap;
-
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-
-use crate::components::service::{env_vars, Service};
 use tracing::info;
 use tracing::Level;
 

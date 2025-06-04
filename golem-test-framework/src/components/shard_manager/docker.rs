@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use async_trait::async_trait;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{Image, ImageExt};

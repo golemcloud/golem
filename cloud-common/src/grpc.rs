@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::model::{CloudPluginOwner, CloudPluginScope, ProjectGrantId, ProjectPolicyId, TokenId};
 use golem_api_grpc::proto::golem::common;
 use golem_common::model::plugin::PluginDefinition;
@@ -10,31 +24,31 @@ pub fn proto_project_id_string(id: &Option<common::ProjectId>) -> Option<String>
 }
 
 pub fn proto_project_policy_id_string(
-    id: &Option<cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectPolicyId>,
+    id: &Option<golem_api_grpc::proto::golem::projectpolicy::ProjectPolicyId>,
 ) -> Option<String> {
-    id.clone()
+    (*id)
         .and_then(|v| TryInto::<ProjectPolicyId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
 
 pub fn proto_project_grant_id_string(
-    id: &Option<cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantId>,
+    id: &Option<golem_api_grpc::proto::golem::projectgrant::ProjectGrantId>,
 ) -> Option<String> {
-    id.clone()
+    (*id)
         .and_then(|v| TryInto::<ProjectGrantId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
 
 pub fn proto_token_id_string(
-    id: &Option<cloud_api_grpc::proto::golem::cloud::token::TokenId>,
+    id: &Option<golem_api_grpc::proto::golem::token::TokenId>,
 ) -> Option<String> {
-    id.clone()
+    (*id)
         .and_then(|v| TryInto::<TokenId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
 
 pub fn try_decode_plugin_definition(
-    value: cloud_api_grpc::proto::golem::cloud::component::PluginDefinition,
+    value: golem_api_grpc::proto::golem::component::PluginDefinition,
 ) -> Result<PluginDefinition<CloudPluginOwner, CloudPluginScope>, String> {
     Ok(PluginDefinition {
         id: value.id.ok_or("Missing plugin id")?.try_into()?,
@@ -55,8 +69,8 @@ pub fn try_decode_plugin_definition(
 // NOTE: Can't define a `From` instance because the gRPC type is defined in `cloud-api-grpc` and the model is defined in `golem-component-service-base`
 pub fn plugin_definition_to_grpc(
     plugin_definition: PluginDefinition<CloudPluginOwner, CloudPluginScope>,
-) -> cloud_api_grpc::proto::golem::cloud::component::PluginDefinition {
-    cloud_api_grpc::proto::golem::cloud::component::PluginDefinition {
+) -> golem_api_grpc::proto::golem::component::PluginDefinition {
+    golem_api_grpc::proto::golem::component::PluginDefinition {
         id: Some(plugin_definition.id.into()),
         name: plugin_definition.name,
         version: plugin_definition.version,

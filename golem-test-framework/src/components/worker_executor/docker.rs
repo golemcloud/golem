@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
 use crate::components::redis::Redis;
@@ -49,6 +50,7 @@ impl DockerWorkerExecutor {
         worker_service: Arc<dyn WorkerService + 'static>,
         verbosity: Level,
         shared_client: bool,
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting golem-worker-executor container");
 
@@ -59,6 +61,7 @@ impl DockerWorkerExecutor {
             shard_manager,
             worker_service,
             redis,
+            &cloud_service,
             verbosity,
         )
         .await;

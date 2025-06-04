@@ -13,7 +13,6 @@ name = "cloud-debugging-service"
 path = "src/server.rs"
 
 [dependencies]
-cloud-api-grpc = { path = "../cloud-api-grpc", version = "=0.0.0" }
 cloud-common = { path = "../cloud-common", version = "=0.0.0" }
 golem-worker-executor = { path = "../golem-worker-executor", version = "=0.0.0" }
 golem-common = { path = "../golem-common", version = "=0.0.0" }

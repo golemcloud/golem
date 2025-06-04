@@ -16,6 +16,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::component_service::ComponentService;
 use crate::components::docker::{network, ContainerHandle};
@@ -40,6 +41,7 @@ impl DockerComponentCompilationService {
         unique_network_id: &str,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         verbosity: Level,
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting golem-component-compilation-service container");
 
@@ -47,6 +49,7 @@ impl DockerComponentCompilationService {
             Self::HTTP_PORT.as_u16(),
             Self::GRPC_PORT.as_u16(),
             component_service,
+            &cloud_service,
             verbosity,
         )
         .await;

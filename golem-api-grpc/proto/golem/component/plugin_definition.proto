@@ -2,9 +2,11 @@ syntax = "proto3";
 
 package golem.component;
 
-import public "golem/common/empty.proto";
-import public "golem/component/component_id.proto";
 import "golem/common/uuid.proto";
+import "golem/common/account_id.proto";
+import "golem/common/empty.proto";
+import "golem/component/component_id.proto";
+import "golem/common/project_id.proto";
 
 message PluginId {
   golem.common.UUID value = 1;
@@ -16,31 +18,37 @@ message PluginDefinitionCreation {
   string description = 3;
   bytes icon = 4;
   string homepage = 5;
-  PluginTypeSpecificDefinition specs = 6;
-  DefaultPluginScope scope = 7;
+  golem.component.PluginTypeSpecificDefinition specs = 6;
+  golem.component.CloudPluginScope scope = 7;
 }
 
 message PluginDefinition {
-  PluginId id = 1;
+  golem.component.PluginId id = 1;
   string name = 2;
   string version = 3;
   string description = 4;
   bytes icon = 5;
   string homepage = 6;
-  PluginTypeSpecificDefinition specs = 7;
-  DefaultPluginScope scope = 8;
-  bool deleted = 9;
+  golem.component.PluginTypeSpecificDefinition specs = 7;
+  golem.component.CloudPluginScope scope = 8;
+  golem.common.AccountId account_id = 9;
+  bool deleted = 10;
 }
 
-message DefaultPluginScope {
+message CloudPluginScope {
   oneof scope {
     golem.common.Empty global = 1;
-    ComponentPluginScope component = 2;
+    golem.component.ComponentPluginScope component = 2;
+    ProjectPluginScope project = 3;
   }
 }
 
 message ComponentPluginScope {
   golem.component.ComponentId component_id = 1;
+}
+
+message ProjectPluginScope {
+  golem.common.ProjectId project_id = 1;
 }
 
 message PluginTypeSpecificDefinition {

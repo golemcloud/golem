@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::cloud_service::CloudService;
 use crate::components::rdb::Rdb;
 use crate::components::{
     new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder,
@@ -22,6 +23,7 @@ use anyhow::{anyhow, Context as AnyhowContext};
 use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
+use cloud_common::clients::auth::authorised_request;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient as ComponentServiceGrpcClient;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient as PluginServiceGrpcClient;
@@ -43,11 +45,12 @@ use golem_client::api::ComponentClient as ComponentServiceHttpClient;
 use golem_client::api::ComponentClientLive as ComponentServiceHttpClientLive;
 use golem_client::api::PluginClient as PluginServiceHttpClient;
 use golem_client::api::PluginClientLive as PluginServiceHttpClientLive;
-use golem_client::Context;
+use golem_client::model::ComponentQuery;
+use golem_client::{Context, Security};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::PluginTypeSpecificDefinition;
 use golem_common::model::{
-    AccountId, ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion,
+    ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion,
     InitialComponentFile, PluginId, PluginInstallationId,
 };
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -88,6 +91,7 @@ pub enum PluginServiceClient {
 
 #[async_trait]
 pub trait ComponentServiceInternal: Send + Sync {
+    fn cloud_service(&self) -> Arc<dyn CloudService>;
     fn component_client(&self) -> ComponentServiceClient;
     fn plugin_client(&self) -> PluginServiceClient;
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService>;
@@ -95,12 +99,15 @@ pub trait ComponentServiceInternal: Send + Sync {
     async fn get_plugin_id(&self, name: &str, version: &str) -> crate::Result<Option<PluginId>> {
         match self.plugin_client() {
             PluginServiceClient::Grpc(mut client) => {
-                let response = client
-                    .get_plugin(GetPluginRequest {
+                let request = authorised_request(
+                    GetPluginRequest {
                         name: name.to_string(),
                         version: version.to_string(),
-                    })
-                    .await?;
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
+                let response = client.get_plugin(request).await?;
                 let converted = response.into_inner().result.and_then(|r| match r {
                     get_plugin_response::Result::Success(result) => result
                         .plugin
@@ -172,6 +179,8 @@ pub trait ComponentService: ComponentServiceInternal {
     async fn get_components(&self, request: GetComponentsRequest) -> crate::Result<Vec<Component>> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
+
                 match client
                     .get_components(request)
                     .await?
@@ -188,7 +197,7 @@ pub trait ComponentService: ComponentServiceInternal {
                     panic!("get_components: project id is not supported")
                 }
                 match client
-                    .get_components(request.component_name.as_deref())
+                    .get_components(None, request.component_name.as_deref())
                     .await
                 {
                     Ok(components) => {
@@ -209,6 +218,8 @@ pub trait ComponentService: ComponentServiceInternal {
     ) -> crate::Result<Vec<Component>> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
+
                 match client
                     .get_component_metadata_all_versions(request)
                     .await?
@@ -247,6 +258,8 @@ pub trait ComponentService: ComponentServiceInternal {
     ) -> crate::Result<Component> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
+                let request = authorised_request(request, &self.cloud_service().admin_token());
+
                 match client
                     .get_latest_component_metadata(request)
                     .await?
@@ -286,11 +299,16 @@ pub trait ComponentService: ComponentServiceInternal {
         loop {
             let latest_component: Option<Component> = match self.component_client() {
                 ComponentServiceClient::Grpc(mut client) => {
-                    match client
-                        .get_components(GetComponentsRequest {
+                    let request = authorised_request(
+                        GetComponentsRequest {
                             project_id: None,
                             component_name: Some(name.to_string()),
-                        })
+                        },
+                        &self.cloud_service().admin_token(),
+                    );
+
+                    match client
+                        .get_components(request)
                         .await
                         .expect("Failed to call get-components")
                         .into_inner()
@@ -316,7 +334,7 @@ pub trait ComponentService: ComponentServiceInternal {
                     }
                 }
                 ComponentServiceClient::Http(client) => {
-                    match client.get_components(Some(name)).await {
+                    match client.get_components(None, Some(name)).await {
                         Ok(result) => {
                             debug!("Response from get_components (HTTP) was {result:?}");
                             let max = result
@@ -443,8 +461,13 @@ pub trait ComponentService: ComponentServiceInternal {
                         });
                     }
                 }
+                let request = authorised_request(
+                    tokio_stream::iter(chunks),
+                    &self.cloud_service().admin_token(),
+                );
+
                 let response = client
-                    .create_component(tokio_stream::iter(chunks))
+                    .create_component(request)
                     .await
                     .map_err(|status| {
                         AddComponentError::Other(format!(
@@ -490,9 +513,12 @@ pub trait ComponentService: ComponentServiceInternal {
 
                 match client
                     .create_component(
-                        name,
-                        Some(&component_type),
+                        &ComponentQuery {
+                            project_id: None,
+                            component_name: name.to_string(),
+                        },
                         file,
+                        Some(&component_type),
                         to_http_file_permissions(files).as_ref(),
                         archive_file,
                         to_http_dynamic_linking(Some(dynamic_linking)).as_ref(),
@@ -588,11 +614,17 @@ pub trait ComponentService: ComponentServiceInternal {
                         });
                     }
                 }
+                let request = authorised_request(
+                    tokio_stream::iter(chunks),
+                    &self.cloud_service().admin_token(),
+                );
+
                 let response = client
-                    .update_component(tokio_stream::iter(chunks))
+                    .update_component(request)
                     .await
                     .expect("Failed to update component")
                     .into_inner();
+
                 match response.result {
                     None => {
                         panic!("Missing response from golem-component-service for create-component")
@@ -659,10 +691,15 @@ pub trait ComponentService: ComponentServiceInternal {
     async fn get_latest_version(&self, component_id: &ComponentId) -> u64 {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
-                let response = client
-                    .get_latest_component_metadata(GetLatestComponentRequest {
+                let request = authorised_request(
+                    GetLatestComponentRequest {
                         component_id: Some(component_id.clone().into()),
-                    })
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
+                let response = client
+                    .get_latest_component_metadata(request)
                     .await
                     .expect("Failed to get latest component metadata (GRPC)")
                     .into_inner();
@@ -697,12 +734,14 @@ pub trait ComponentService: ComponentServiceInternal {
     async fn create_plugin(&self, definition: PluginDefinitionCreation) -> crate::Result<()> {
         match self.plugin_client() {
             PluginServiceClient::Grpc(mut client) => {
-                let response = client
-                    .create_plugin(CreatePluginRequest {
+                let request = authorised_request(
+                    CreatePluginRequest {
                         plugin: Some(definition.into()),
-                    })
-                    .await?
-                    .into_inner();
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
+                let response = client.create_plugin(request).await?.into_inner();
                 match response.result {
                     None => Err(anyhow!(
                         "Missing response from golem-component-service for create-plugin"
@@ -728,7 +767,7 @@ pub trait ComponentService: ComponentServiceInternal {
 
                         client
                             .create_plugin(
-                                &golem_client::model::PluginDefinitionCreationDefaultPluginScope {
+                                &golem_client::model::PluginDefinitionCreationCloudPluginScope {
                                     name: definition.name,
                                     version: definition.version,
                                     description: definition.description,
@@ -750,7 +789,7 @@ pub trait ComponentService: ComponentServiceInternal {
 
                         client
                             .create_plugin(
-                                &golem_client::model::PluginDefinitionCreationDefaultPluginScope {
+                                &golem_client::model::PluginDefinitionCreationCloudPluginScope {
                                     name: definition.name,
                                     version: definition.version,
                                     description: definition.description,
@@ -766,7 +805,10 @@ pub trait ComponentService: ComponentServiceInternal {
                         // TODO: This round trip trough the blob storage is redundant, but ensure the same api works both grpc and http. Improve this
                         let data = self
                             .plugin_wasm_files_service()
-                            .get(&AccountId::placeholder(), &def.blob_storage_key)
+                            .get(
+                                &self.cloud_service().admin_account_id(),
+                                &def.blob_storage_key,
+                            )
                             .await
                             .map_err(|e| anyhow!(e))?
                             .ok_or(anyhow!("plugin wasm file not found in blob storage"))?;
@@ -787,7 +829,10 @@ pub trait ComponentService: ComponentServiceInternal {
                         // TODO: This round trip trough the blob storage is redundant, but ensure the same api works both grpc and http. Improve this
                         let data = self
                             .plugin_wasm_files_service()
-                            .get(&AccountId::placeholder(), &def.blob_storage_key)
+                            .get(
+                                &self.cloud_service().admin_account_id(),
+                                &def.blob_storage_key,
+                            )
                             .await
                             .map_err(|e| anyhow!(e))?
                             .expect("plugin wasm file not found in blob storage");
@@ -819,13 +864,15 @@ pub trait ComponentService: ComponentServiceInternal {
     async fn delete_plugin(&self, name: &str, version: &str) -> crate::Result<()> {
         match self.plugin_client() {
             PluginServiceClient::Grpc(mut client) => {
-                let response = client
-                    .delete_plugin(DeletePluginRequest {
+                let request = authorised_request(
+                    DeletePluginRequest {
                         name: name.to_string(),
                         version: version.to_string(),
-                    })
-                    .await?
-                    .into_inner();
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
+                let response = client.delete_plugin(request).await?.into_inner();
                 match response.result {
                     None => Err(anyhow!(
                         "Missing response from golem-component-service for create-plugin"
@@ -859,18 +906,18 @@ pub trait ComponentService: ComponentServiceInternal {
     ) -> crate::Result<PluginInstallationId> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
-                let response = client
-                    .install_plugin(
-                        golem_api_grpc::proto::golem::component::v1::InstallPluginRequest {
-                            component_id: Some(component_id.clone().into()),
-                            name: plugin_name.to_string(),
-                            version: plugin_version.to_string(),
-                            priority,
-                            parameters,
-                        },
-                    )
-                    .await?
-                    .into_inner();
+                let request = authorised_request(
+                    golem_api_grpc::proto::golem::component::v1::InstallPluginRequest {
+                        component_id: Some(component_id.clone().into()),
+                        name: plugin_name.to_string(),
+                        version: plugin_version.to_string(),
+                        priority,
+                        parameters,
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
+                let response = client.install_plugin(request).await?.into_inner();
 
                 match response.result {
                     None => Err(anyhow!(
@@ -920,15 +967,15 @@ pub trait ComponentService: ComponentServiceInternal {
     ) -> crate::Result<u64> {
         match self.component_client() {
             ComponentServiceClient::Grpc(mut client) => {
-                let response = client
-                    .download_component(
-                        golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest {
-                            component_id: Some(component_id.clone().into()),
-                            version: Some(component_version),
-                        },
-                    )
-                    .await?
-                    .into_inner();
+                let request = authorised_request(
+                    golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest {
+                        component_id: Some(component_id.clone().into()),
+                        version: Some(component_version),
+                    },
+                    &self.cloud_service().admin_token(),
+                );
+
+                let response = client.download_component(request).await?.into_inner();
 
                 let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
                 let bytes = chunks
@@ -985,12 +1032,17 @@ async fn new_component_grpc_client(
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-fn new_component_http_client(host: &str, http_port: u16) -> Arc<ComponentServiceHttpClientLive> {
+fn new_component_http_client(
+    host: &str,
+    http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
+) -> Arc<ComponentServiceHttpClientLive> {
     Arc::new(ComponentServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
+            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
         },
     })
 }
@@ -1000,13 +1052,14 @@ async fn new_component_client(
     host: &str,
     grpc_port: u16,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
 ) -> ComponentServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => {
             ComponentServiceClient::Grpc(new_component_grpc_client(host, grpc_port).await)
         }
         GolemClientProtocol::Http => {
-            ComponentServiceClient::Http(new_component_http_client(host, http_port))
+            ComponentServiceClient::Http(new_component_http_client(host, http_port, cloud_service))
         }
     }
 }
@@ -1019,12 +1072,17 @@ async fn new_plugin_grpc_client(host: &str, grpc_port: u16) -> PluginServiceGrpc
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-fn new_plugin_http_client(host: &str, http_port: u16) -> Arc<PluginServiceHttpClientLive> {
+fn new_plugin_http_client(
+    host: &str,
+    http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
+) -> Arc<PluginServiceHttpClientLive> {
     Arc::new(PluginServiceHttpClientLive {
         context: Context {
             client: new_reqwest_client(),
             base_url: Url::parse(&format!("http://{host}:{http_port}"))
                 .expect("Failed to parse url"),
+            security_token: Security::Bearer(cloud_service.admin_token().to_string()),
         },
     })
 }
@@ -1034,13 +1092,14 @@ async fn new_plugin_client(
     host: &str,
     grpc_port: u16,
     http_port: u16,
+    cloud_service: &Arc<dyn CloudService>,
 ) -> PluginServiceClient {
     match protocol {
         GolemClientProtocol::Grpc => {
             PluginServiceClient::Grpc(new_plugin_grpc_client(host, grpc_port).await)
         }
         GolemClientProtocol::Http => {
-            PluginServiceClient::Http(new_plugin_http_client(host, http_port))
+            PluginServiceClient::Http(new_plugin_http_client(host, http_port, cloud_service))
         }
     }
 }
@@ -1069,6 +1128,7 @@ async fn env_vars(
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     verbosity: Level,
     private_rdb_connection: bool,
+    cloud_service: &Arc<dyn CloudService>,
 ) -> HashMap<String, String> {
     let mut builder = EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__COMPONENT_STORE__TYPE", "Local")
@@ -1081,6 +1141,15 @@ async fn env_vars(
         .with_str(
             "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
             "/tmp/ittest-local-object-store/golem",
+        )
+        .with("GOLEM__CLOUD_SERVICE__HOST", cloud_service.private_host())
+        .with(
+            "GOLEM__CLOUD_SERVICE__PORT",
+            cloud_service.private_grpc_port().to_string(),
+        )
+        .with(
+            "GOLEM__CLOUD_SERVICE__ACCESS_TOKEN",
+            cloud_service.admin_token().to_string(),
         )
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())

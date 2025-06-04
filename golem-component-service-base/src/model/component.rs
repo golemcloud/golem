@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use chrono::Utc;
-use golem_common::model::component::{ComponentOwner, DefaultComponentOwner, VersionedComponentId};
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{
     FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
 };
@@ -29,7 +29,6 @@ use rib::WorkerFunctionsInRib;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::time::SystemTime;
 use tempfile::NamedTempFile;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,32 +117,6 @@ impl<Owner: ComponentOwner> From<Component<Owner>> for golem_service_base::model
             component_type: Some(value.component_type),
             files: value.files,
             installed_plugins: value.installed_plugins,
-            env: value.env,
-        }
-    }
-}
-
-impl From<Component<DefaultComponentOwner>> for golem_api_grpc::proto::golem::component::Component {
-    fn from(value: Component<DefaultComponentOwner>) -> Self {
-        let component_type: golem_api_grpc::proto::golem::component::ComponentType =
-            value.component_type.into();
-        Self {
-            versioned_component_id: Some(value.versioned_component_id.into()),
-            component_name: value.component_name.0,
-            component_size: value.component_size,
-            metadata: Some(value.metadata.into()),
-            account_id: None,
-            project_id: None,
-            created_at: Some(prost_types::Timestamp::from(SystemTime::from(
-                value.created_at,
-            ))),
-            component_type: Some(component_type.into()),
-            files: value.files.into_iter().map(|file| file.into()).collect(),
-            installed_plugins: value
-                .installed_plugins
-                .into_iter()
-                .map(|plugin| plugin.into())
-                .collect(),
             env: value.env,
         }
     }

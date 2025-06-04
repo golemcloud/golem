@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ComponentServiceInternal;
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::{
     AddComponentError, ComponentService, ComponentServiceClient, PluginServiceClient,
 };
+use crate::components::{PLACEHOLDER_ACCOUNT, PLACEHOLDER_PROJECT};
 use anyhow::Context;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::{Component, ComponentMetadata, VersionedComponentId};
@@ -23,6 +26,7 @@ use golem_common::model::{
     component_metadata::{LinearMemory, RawComponentMetadata},
     ComponentId, ComponentType, ComponentVersion, InitialComponentFile,
 };
+use golem_common::model::{AccountId, ProjectId};
 use golem_common::testing::LocalFileSystemComponentMetadata;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_wasm_ast::analysis::AnalysedExport;
@@ -32,8 +36,6 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tracing::{debug, info};
 use uuid::Uuid;
-
-use super::ComponentServiceInternal;
 
 const WASMS_DIRNAME: &str = "wasms";
 
@@ -118,6 +120,10 @@ impl FileSystemComponentService {
             .len();
 
         let metadata = LocalFileSystemComponentMetadata {
+            account_id: AccountId {
+                value: PLACEHOLDER_ACCOUNT.to_string(),
+            },
+            project_id: ProjectId(PLACEHOLDER_PROJECT),
             component_id: component_id.clone(),
             component_name: component_name.to_string(),
             version: component_version,
@@ -218,6 +224,10 @@ impl ComponentServiceInternal for FileSystemComponentService {
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
+    }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        panic!("No real cloud service running")
     }
 }
 

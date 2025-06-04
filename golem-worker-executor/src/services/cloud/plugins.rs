@@ -19,14 +19,14 @@ use crate::services::golem_config::PluginServiceConfig;
 use crate::services::plugins::{CachedPlugins, Plugins, PluginsObservations, PluginsUnavailable};
 use applying::Apply;
 use async_trait::async_trait;
-use cloud_api_grpc::proto::golem::cloud::component::v1::plugin_service_client::PluginServiceClient;
-use cloud_api_grpc::proto::golem::cloud::component::v1::{
-    get_plugin_by_id_response, GetPluginByIdRequest,
-};
 use cloud_common::model::{CloudPluginOwner, CloudPluginScope};
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
     get_installed_plugins_response, GetInstalledPluginsRequest,
+};
+use golem_api_grpc::proto::golem::component::v1::{
+    get_plugin_by_id_response, GetPluginByIdRequest,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::plugin::{PluginDefinition, PluginInstallation};
@@ -216,7 +216,7 @@ impl Plugins<CloudGolemTypes> for CloudGrpcPlugins {
 }
 
 fn convert_grpc_plugin_definition(
-    value: cloud_api_grpc::proto::golem::cloud::component::PluginDefinition,
+    value: golem_api_grpc::proto::golem::component::PluginDefinition,
 ) -> Result<PluginDefinition<CloudPluginOwner, CloudPluginScope>, String> {
     let account_id: AccountId = value.account_id.ok_or("Missing account id")?.into();
 

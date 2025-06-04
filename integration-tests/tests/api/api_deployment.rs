@@ -65,7 +65,10 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
     )
     .await;
 
+    let project_id = deps.cloud_service().get_default_project().await.unwrap();
+
     let request = ApiDeploymentRequest {
+        project_id: project_id.0,
         api_definitions: vec![
             ApiDefinitionInfo {
                 id: api_definition_1.id.as_ref().unwrap().value.clone(),
@@ -107,7 +110,10 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
     )
     .await;
 
+    let project_id = deps.cloud_service().get_default_project().await.unwrap();
+
     let request = ApiDeploymentRequest {
+        project_id: project_id.0,
         api_definitions: vec![
             ApiDefinitionInfo {
                 id: api_definition_2.id.as_ref().unwrap().value.clone(),
@@ -124,8 +130,11 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
         },
     };
 
+    let project_id = deps.cloud_service().get_default_project().await.unwrap();
+
     // NOTE: create_or_update does not delete previous defs
     let expected_merged = ApiDeploymentRequest {
+        project_id: project_id.0,
         api_definitions: vec![
             ApiDefinitionInfo {
                 id: api_definition_1.id.as_ref().unwrap().value.clone(),
@@ -201,7 +210,10 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
     )
     .await;
 
+    let project_id = deps.cloud_service().get_default_project().await.unwrap();
+
     let request = ApiDeploymentRequest {
+        project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
             id: api_definition_1.id.as_ref().unwrap().value.clone(),
             version: api_definition_1.version.clone(),
@@ -282,8 +294,11 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
     )
     .await;
 
+    let project_id = deps.cloud_service().get_default_project().await.unwrap();
+
     // Same API definition but different subdomain
     let request1 = ApiDeploymentRequest {
+        project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
             id: api_definition.id.as_ref().unwrap().value.clone(),
             version: api_definition.version.clone(),
@@ -295,6 +310,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
     };
 
     let request2 = ApiDeploymentRequest {
+        project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
             id: api_definition.id.as_ref().unwrap().value.clone(),
             version: api_definition.version.clone(),
@@ -413,8 +429,11 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
     )
     .await;
 
+    let project_id = deps.cloud_service().get_default_project().await.unwrap();
+
     //
     let request1 = ApiDeploymentRequest {
+        project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
             id: api_definition1.id.as_ref().unwrap().value.clone(),
             version: api_definition1.version.clone(),
@@ -426,6 +445,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
     };
 
     let request2 = ApiDeploymentRequest {
+        project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
             id: api_definition2.id.as_ref().unwrap().value.clone(),
             version: api_definition2.version.clone(),
@@ -516,8 +536,11 @@ async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
     )
     .await;
 
+    let project_id = deps.cloud_service().get_default_project().await.unwrap();
+
     deps.worker_service()
         .create_or_update_api_deployment(ApiDeploymentRequest {
+            project_id: project_id.0,
             api_definitions: vec![ApiDefinitionInfo {
                 id: api_definition_1.id.as_ref().unwrap().value.clone(),
                 version: api_definition_1.version.clone(),
@@ -531,6 +554,7 @@ async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
         .unwrap();
     deps.worker_service()
         .create_or_update_api_deployment(ApiDeploymentRequest {
+            project_id: project_id.0,
             api_definitions: vec![ApiDefinitionInfo {
                 id: api_definition_1.id.as_ref().unwrap().value.clone(),
                 version: api_definition_1.version.clone(),
@@ -544,6 +568,7 @@ async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
         .unwrap();
     deps.worker_service()
         .create_or_update_api_deployment(ApiDeploymentRequest {
+            project_id: project_id.0,
             api_definitions: vec![ApiDefinitionInfo {
                 id: api_definition_2.id.as_ref().unwrap().value.clone(),
                 version: api_definition_2.version.clone(),
@@ -734,9 +759,12 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
     )
     .await;
 
+    let project_id = deps.cloud_service().get_default_project().await.unwrap();
+
     // Deploy both APIs to the same site
     deps.worker_service()
         .create_or_update_api_deployment(ApiDeploymentRequest {
+            project_id: project_id.0,
             api_definitions: vec![
                 ApiDefinitionInfo {
                     id: api_definition_1.id.as_ref().unwrap().value.clone(),
@@ -842,7 +870,10 @@ async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
     )
     .await;
 
+    let project_id = deps.cloud_service().get_default_project().await.unwrap();
+
     let request = ApiDeploymentRequest {
+        project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
             id: api_definition_1.id.as_ref().unwrap().value.clone(),
             version: api_definition_1.version.clone(),

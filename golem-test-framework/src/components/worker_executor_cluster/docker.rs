@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::ComponentService;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::docker::DockerWorkerExecutor;
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
+use crate::components::{cloud_service::CloudService, component_service::ComponentService};
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -39,6 +39,7 @@ impl DockerWorkerExecutorCluster {
         worker_service: Arc<dyn WorkerService + 'static>,
         verbosity: Level,
         shared_client: bool,
+        cloud_service: Arc<dyn CloudService>,
     ) -> Arc<DockerWorkerExecutor> {
         Arc::new(
             DockerWorkerExecutor::new(
@@ -49,6 +50,7 @@ impl DockerWorkerExecutorCluster {
                 worker_service,
                 verbosity,
                 shared_client,
+                cloud_service,
             )
             .await,
         )
@@ -63,6 +65,7 @@ impl DockerWorkerExecutorCluster {
         worker_service: Arc<dyn WorkerService + 'static>,
         verbosity: Level,
         shared_client: bool,
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors_joins = Vec::new();
@@ -73,6 +76,7 @@ impl DockerWorkerExecutorCluster {
             let component_service = component_service.clone();
             let shard_manager = shard_manager.clone();
             let worker_service = worker_service.clone();
+            let cloud_service = cloud_service.clone();
             let worker_executor_join = tokio::spawn(
                 async move {
                     let unique_network_id_clone = unique_network_id_clone.clone();
@@ -84,6 +88,7 @@ impl DockerWorkerExecutorCluster {
                         worker_service.clone(),
                         verbosity,
                         shared_client,
+                        cloud_service.clone(),
                     )
                     .await
                 }

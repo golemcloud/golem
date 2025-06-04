@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-import "golem/common/uuid.proto";
-
 package golem.common;
+
+import "golem/common/uuid.proto";
 
 message PluginInstallationId {
   golem.common.UUID value = 1;

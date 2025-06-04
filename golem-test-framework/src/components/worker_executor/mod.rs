@@ -12,22 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-
-use async_trait::async_trait;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::{Channel, Endpoint};
-use tracing::Level;
-
-use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-
+use super::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::WorkerService;
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
+use async_trait::async_trait;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tonic::codec::CompressionEncoding;
+use tonic::transport::{Channel, Endpoint};
+use tracing::Level;
 
 pub mod docker;
 pub mod k8s;
@@ -86,6 +84,7 @@ async fn env_vars(
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + 'static>,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
+    cloud_service: &Arc<dyn CloudService>,
     verbosity: Level,
 ) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
@@ -115,10 +114,11 @@ async fn env_vars(
             "GOLEM__PUBLIC_WORKER_API__PORT",
             worker_service.private_grpc_port().to_string(),
         )
-        .with_str(
+        .with(
             "GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN",
-            "2A354594-7A63-4091-A46B-CC58D379F677",
+            cloud_service.admin_token().to_string(),
         )
+        .with_str("GOLEM__COMPONENT_SERVICE__TYPE", "Grpc")
         .with_str(
             "GOLEM__COMPONENT_SERVICE__CONFIG__HOST",
             &component_service.private_host(),
@@ -127,10 +127,11 @@ async fn env_vars(
             "GOLEM__COMPONENT_SERVICE__CONFIG__PORT",
             component_service.private_grpc_port().to_string(),
         )
-        .with_str(
+        .with(
             "GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN",
-            "2A354594-7A63-4091-A46B-CC58D379F677",
+            cloud_service.admin_token().to_string(),
         )
+        .with_str("GOLEM__PLUGIN_SERVICE__TYPE", "Grpc")
         .with_str(
             "GOLEM__PLUGIN_SERVICE__CONFIG__HOST",
             &component_service.private_host(),
@@ -139,9 +140,9 @@ async fn env_vars(
             "GOLEM__PLUGIN_SERVICE__CONFIG__PORT",
             component_service.private_grpc_port().to_string(),
         )
-        .with_str(
+        .with(
             "GOLEM__PLUGIN_SERVICE__CONFIG__ACCESS_TOKEN",
-            "2A354594-7A63-4091-A46B-CC58D379F677",
+            cloud_service.admin_token().to_string(),
         )
         .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")
         .with_str("GOLEM__SHARD_MANAGER_SERVICE__TYPE", "Grpc")
@@ -168,6 +169,21 @@ async fn env_vars(
         .with_str(
             "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER",
             "2",
+        )
+        .with_str("GOLEM__RESOURCE_LIMITS__TYPE", "Disabled")
+        .with_str("GOLEM__LIMITS__FUEL_TO_BORROW", "100000")
+        .with_str("GOLEM__PROJECT_SERVICE__TYPE", "Grpc")
+        .with(
+            "GOLEM__PROJECT_SERVICE__CONFIG__HOST",
+            cloud_service.private_host(),
+        )
+        .with(
+            "GOLEM__PROJECT_SERVICE__CONFIG__PORT",
+            cloud_service.private_grpc_port().to_string(),
+        )
+        .with(
+            "GOLEM__PROJECT_SERVICE__CONFIG__ACCESS_TOKEN",
+            cloud_service.admin_token().to_string(),
         )
         .with("GOLEM__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
