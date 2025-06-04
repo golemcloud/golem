@@ -325,11 +325,12 @@ async fn test_repo_component_find_by_names(
         .update(
             &test_component_owner().into(),
             &test_component_owner().to_string(),
-            &component2.versioned_component_id.component_id.0,
-            data,
+            component2.versioned_component_id.component_id.0,
+            data.len() as i32,
             record_metadata_serde::serialize(&component2.metadata)
                 .unwrap()
                 .to_vec(),
+            component2.metadata.root_package_version.as_deref(),
             Some(0),
             None,
             Json(HashMap::new()),
@@ -341,7 +342,7 @@ async fn test_repo_component_find_by_names(
     component_repo
         .activate(
             &test_component_owner().to_string(),
-            &component2.versioned_component_id.component_id.0,
+            component2.versioned_component_id.component_id.0,
             1,
             "",
             "",
@@ -574,21 +575,21 @@ async fn test_repo_component_delete(
     let result2 = component_repo
         .get(
             &test_component_owner().to_string(),
-            &component1.versioned_component_id.component_id.0,
+            component1.versioned_component_id.component_id.0,
         )
         .await;
 
     let result3 = component_repo
         .delete(
             &test_component_owner().to_string(),
-            &component1.versioned_component_id.component_id.0,
+            component1.versioned_component_id.component_id.0,
         )
         .await;
 
     let result4 = component_repo
         .get(
             &test_component_owner().to_string(),
-            &component1.versioned_component_id.component_id.0,
+            component1.versioned_component_id.component_id.0,
         )
         .await;
 
@@ -649,7 +650,7 @@ async fn test_repo_component_constraints(
     let result_constraint_get = component_repo
         .get_constraint(
             &owner1.to_string(),
-            &component1.versioned_component_id.component_id.0,
+            component1.versioned_component_id.component_id.0,
         )
         .await
         .unwrap();
@@ -673,7 +674,7 @@ async fn test_repo_component_constraints(
     let result_constraint_get_updated = component_repo
         .get_constraint(
             &owner1.to_string(),
-            &component1.versioned_component_id.component_id.0,
+            component1.versioned_component_id.component_id.0,
         )
         .await
         .unwrap();
@@ -907,7 +908,7 @@ async fn test_default_component_plugin_installation(
     let target1_row: ComponentPluginInstallationRow = target1.clone().into();
 
     let installations1 = component_repo
-        .get_installed_plugins(&plugin_owner_row, &component_id.0, 0)
+        .get_installed_plugins(&plugin_owner_row, component_id.0, 0)
         .await?;
 
     let installation1 = PluginInstallation {
@@ -926,7 +927,7 @@ async fn test_default_component_plugin_installation(
     component_repo
         .apply_plugin_installation_changes(
             &plugin_owner_row,
-            &component_id.0,
+            component_id.0,
             &[PluginInstallationRepoAction::Install {
                 record: installation1_row,
             }],
@@ -949,7 +950,7 @@ async fn test_default_component_plugin_installation(
     component_repo
         .apply_plugin_installation_changes(
             &plugin_owner_row,
-            &component_id.0,
+            component_id.0,
             &[PluginInstallationRepoAction::Install {
                 record: installation2_row,
             }],
@@ -957,7 +958,7 @@ async fn test_default_component_plugin_installation(
         .await?;
 
     let installations2 = component_repo
-        .get_installed_plugins(&plugin_owner_row, &component_id.0, 2)
+        .get_installed_plugins(&plugin_owner_row, component_id.0, 2)
         .await?;
 
     info!("{:?}", installations2);
@@ -973,7 +974,7 @@ async fn test_default_component_plugin_installation(
     component_repo
         .apply_plugin_installation_changes(
             &plugin_owner_row,
-            &component_id.0,
+            component_id.0,
             &[PluginInstallationRepoAction::Update {
                 plugin_installation_id: latest_installation2_id,
                 new_priority: 600,
@@ -983,7 +984,7 @@ async fn test_default_component_plugin_installation(
         .await?;
 
     let installations3 = component_repo
-        .get_installed_plugins(&plugin_owner_row, &component_id.0, 3)
+        .get_installed_plugins(&plugin_owner_row, component_id.0, 3)
         .await?;
 
     let latest_installation1_id = installations3
@@ -995,7 +996,7 @@ async fn test_default_component_plugin_installation(
     component_repo
         .apply_plugin_installation_changes(
             &plugin_owner_row,
-            &component_id.0,
+            component_id.0,
             &[PluginInstallationRepoAction::Uninstall {
                 plugin_installation_id: latest_installation1_id,
             }],
@@ -1003,7 +1004,7 @@ async fn test_default_component_plugin_installation(
         .await?;
 
     let installations4 = component_repo
-        .get_installed_plugins(&plugin_owner_row, &component_id.0, 4)
+        .get_installed_plugins(&plugin_owner_row, component_id.0, 4)
         .await?;
 
     assert_eq!(installations1.len(), 0);
