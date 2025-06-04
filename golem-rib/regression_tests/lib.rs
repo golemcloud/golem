@@ -2027,9 +2027,9 @@ mod mock_interpreter {
         RibFunctionInvokeResult, RibInput,
     };
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::tuple;
+
     use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
-    use golem_wasm_rpc::{Value, ValueAndType};
+    use golem_wasm_rpc::ValueAndType;
     use rib::InstructionId;
     use std::collections::HashMap;
     use std::sync::Arc;

@@ -339,7 +339,7 @@ mod internal {
     };
     use crate::type_inference::GetTypeHint;
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::{tuple, u64};
+    use golem_wasm_ast::analysis::analysed_type::u64;
     use std::ops::Deref;
 
     pub(crate) struct NoopRibFunctionInvoke;

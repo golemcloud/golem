@@ -314,7 +314,7 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
         worker_name: Option<String>,
         function_name: &str,
         args: Vec<ValueAndType>,
-    ) -> anyhow::Result<ValueAndType> {
+    ) -> anyhow::Result<Option<ValueAndType>> {
         let target_worker_id = worker_name
             .map(|w| TargetWorkerId {
                 component_id: ComponentId(component_id),
@@ -328,6 +328,7 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
         self.embedded_worker_executor
             .invoke_and_await_typed(target_worker_id, function_name, args)
             .await
+            .map(Some) // TODO; tests framework should be returning optional ValueAndType too
             .map_err(|e| anyhow!("Failed to invoke function: {:?}", e))
     }
 }
