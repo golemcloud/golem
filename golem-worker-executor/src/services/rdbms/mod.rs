@@ -41,8 +41,8 @@ pub trait RdbmsType: Debug + Display + Default + Send {
         + Sync
         + PartialEq
         + Debug
-        + Decode
-        + for<'de> BorrowDecode<'de>
+        + Decode<()>
+        + for<'de> BorrowDecode<'de, ()>
         + Encode
         + RdbmsIntoValueAndType
         + 'static;
@@ -51,8 +51,8 @@ pub trait RdbmsType: Debug + Display + Default + Send {
         + Sync
         + PartialEq
         + Debug
-        + Decode
-        + for<'de> BorrowDecode<'de>
+        + Decode<()>
+        + for<'de> BorrowDecode<'de, ()>
         + Encode
         + RdbmsIntoValueAndType
         + 'static;
@@ -337,10 +337,35 @@ pub trait DbResultStream<T: RdbmsType> {
     async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, Error>;
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Encode)]
 pub struct DbResult<T: RdbmsType + 'static> {
     pub columns: Vec<T::DbColumn>,
     pub rows: Vec<DbRow<T::DbValue>>,
+}
+
+impl<T: RdbmsType + 'static> Decode<()> for DbResult<T> {
+    fn decode<D: bincode::de::Decoder<Context = ()>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        Ok(Self {
+            columns: bincode::Decode::decode(decoder)?,
+            rows: bincode::Decode::decode(decoder)?,
+        })
+    }
+}
+
+impl<'de, T: RdbmsType + 'static> BorrowDecode<'de, ()> for DbResult<T>
+where
+    T: bincode::de::BorrowDecode<'de, ()>,
+{
+    fn borrow_decode<__D: bincode::de::BorrowDecoder<'de, Context = ()>>(
+        decoder: &mut __D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        Ok(Self {
+            columns: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
+            rows: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
+        })
+    }
 }
 
 impl<T: RdbmsType> DbResult<T> {

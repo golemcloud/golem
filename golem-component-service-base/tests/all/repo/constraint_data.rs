@@ -30,7 +30,7 @@ pub(crate) fn get_shopping_cart_worker_functions_constraint1() -> FunctionConstr
                     function_name: "initialize-cart".to_string(),
                 },
                 vec![str()],
-                vec![],
+                None,
             ),
             usage_count: 1,
         }],
@@ -46,7 +46,7 @@ pub(crate) fn get_shopping_cart_worker_functions_constraint2() -> FunctionConstr
                     function_name: "get-cart-contents".to_string(),
                 },
                 vec![],
-                vec![list(record(vec![
+                Some(list(record(vec![
                     NameTypePair {
                         name: "product-id".to_string(),
                         typ: str(),
@@ -63,7 +63,7 @@ pub(crate) fn get_shopping_cart_worker_functions_constraint2() -> FunctionConstr
                         name: "quantity".to_string(),
                         typ: u32(),
                     },
-                ]))],
+                ]))),
             ),
             usage_count: 1,
         }],
@@ -79,7 +79,7 @@ pub(crate) fn get_shopping_cart_worker_functions_constraint_incompatible() -> Fu
                     function_name: "initialize-cart".to_string(),
                 },
                 vec![u64()],
-                vec![str()],
+                Some(str()),
             ),
             usage_count: 1,
         }],
@@ -92,7 +92,7 @@ pub(crate) fn get_random_worker_functions_constraint() -> FunctionConstraints {
             function_signature: FunctionSignature::new(
                 RegistryKey::FunctionName("foo".to_string()),
                 vec![],
-                vec![list(record(vec![
+                Some(list(record(vec![
                     NameTypePair {
                         name: "bar".to_string(),
                         typ: str(),
@@ -101,7 +101,7 @@ pub(crate) fn get_random_worker_functions_constraint() -> FunctionConstraints {
                         name: "baz".to_string(),
                         typ: str(),
                     },
-                ]))],
+                ]))),
             ),
             usage_count: 1,
         }],

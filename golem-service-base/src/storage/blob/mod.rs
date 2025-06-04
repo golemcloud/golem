@@ -321,7 +321,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
             .await
     }
 
-    pub async fn get<T: Decode>(
+    pub async fn get<T: Decode<()>>(
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,

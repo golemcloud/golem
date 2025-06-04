@@ -553,12 +553,12 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                     parameter_conflict = true;
                 }
 
-                let new_return_types = match new_registry_value.clone() {
-                    RegistryValue::Function { return_types, .. } => return_types,
-                    _ => vec![],
+                let new_return_type = match new_registry_value.clone() {
+                    RegistryValue::Function { return_type, .. } => return_type,
+                    _ => None,
                 };
 
-                if existing_function_call.return_types() != &new_return_types {
+                if existing_function_call.return_type() != &new_return_type {
                     return_conflict = true;
                 }
 
@@ -573,8 +573,8 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
 
                 let return_conflict = if return_conflict {
                     Some(ReturnTypeConflict {
-                        existing: existing_function_call.return_types().clone(),
-                        new: new_return_types,
+                        existing: existing_function_call.return_type().clone(),
+                        new: new_return_type,
                     })
                 } else {
                     None
@@ -2242,8 +2242,8 @@ pub struct ParameterTypeConflict {
 
 #[derive(Debug)]
 pub struct ReturnTypeConflict {
-    pub existing: Vec<AnalysedType>,
-    pub new: Vec<AnalysedType>,
+    pub existing: Option<AnalysedType>,
+    pub new: Option<AnalysedType>,
 }
 
 impl Display for ConflictingFunction {
@@ -2275,12 +2275,12 @@ impl Display for ConflictingFunction {
                 writeln!(
                     f,
                     "    Existing: {}",
-                    internal::convert_to_pretty_types(&conflict.existing)
+                    internal::convert_to_pretty_type(&conflict.existing)
                 )?;
                 writeln!(
                     f,
                     "    New:      {}",
-                    internal::convert_to_pretty_types(&conflict.new)
+                    internal::convert_to_pretty_type(&conflict.new)
                 )?;
             }
             None => {
@@ -2443,6 +2443,15 @@ mod internal {
             .collect::<Vec<_>>();
 
         type_names.join(", ")
+    }
+
+    pub(crate) fn convert_to_pretty_type(analysed_type: &Option<AnalysedType>) -> String {
+        analysed_type
+            .as_ref()
+            .map(|x| {
+                rib::TypeName::try_from(x.clone()).map_or("unknown".to_string(), |x| x.to_string())
+            })
+            .unwrap_or("unit".to_string())
     }
 }
 

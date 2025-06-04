@@ -4611,7 +4611,6 @@ components:
           format: int64
       required:
       - timestamp
-      - response
       - consumedFuel
     ExportedFunctionInvokedParameters:
       title: ExportedFunctionInvokedParameters
@@ -5560,8 +5559,6 @@ components:
       properties:
         result:
           $ref: '#/components/schemas/TypeAnnotatedValue'
-      required:
-      - result
     JumpParameters:
       title: JumpParameters
       type: object
@@ -7585,14 +7582,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AnalysedFunctionParameter'
-        results:
-          type: array
-          items:
-            $ref: '#/components/schemas/AnalysedFunctionResult'
+        result:
+          $ref: '#/components/schemas/AnalysedFunctionResult'
       required:
       - name
       - parameters
-      - results
     AnalysedFunctionParameter:
       title: AnalysedFunctionParameter
       type: object
@@ -7608,8 +7602,6 @@ components:
       title: AnalysedFunctionResult
       type: object
       properties:
-        name:
-          type: string
         typ:
           $ref: '#/components/schemas/AnalysedType'
       required:

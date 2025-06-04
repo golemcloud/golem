@@ -366,7 +366,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
-    pub async fn get<V: Decode>(
+    pub async fn get<V: Decode<()>>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
@@ -405,7 +405,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
-    pub async fn get_many<V: Decode>(
+    pub async fn get_many<V: Decode<()>>(
         &self,
         namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
@@ -486,7 +486,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
-    pub async fn members_of_set<V: Decode>(
+    pub async fn members_of_set<V: Decode<()>>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
@@ -549,7 +549,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
-    pub async fn get_sorted_set<V: Decode>(
+    pub async fn get_sorted_set<V: Decode<()>>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
@@ -572,7 +572,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         Ok(values)
     }
 
-    pub async fn query_sorted_set<V: Decode>(
+    pub async fn query_sorted_set<V: Decode<()>>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,

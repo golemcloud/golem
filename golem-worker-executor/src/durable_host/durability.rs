@@ -608,8 +608,8 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         ctx: &mut impl DurabilityHost,
     ) -> Result<Result<SOk, SErr>, GolemError>
     where
-        SOk: Decode,
-        SErr: Decode,
+        SOk: Decode<()>,
+        SErr: Decode<()>,
     {
         let (bytes, _) = self.replay_raw(ctx).await?;
         let result: Result<SOk, SErr> = try_deserialize(&bytes)
@@ -624,8 +624,8 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     where
         Ok: From<SOk>,
         Err: From<SErr> + From<GolemError>,
-        SErr: Debug + Encode + Decode + From<GolemError> + Send + Sync,
-        SOk: Debug + Encode + Decode + Send + Sync,
+        SErr: Debug + Encode + Decode<()> + From<GolemError> + Send + Sync,
+        SOk: Debug + Encode + Decode<()> + Send + Sync,
     {
         Self::replay_serializable(self, ctx)
             .await?

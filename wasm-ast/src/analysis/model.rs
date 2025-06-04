@@ -40,15 +40,15 @@ pub enum AnalysedExport {
 pub struct AnalysedFunction {
     pub name: String,
     pub parameters: Vec<AnalysedFunctionParameter>,
-    pub results: Vec<AnalysedFunctionResult>,
+    pub result: Option<AnalysedFunctionResult>,
 }
 
 impl AnalysedFunction {
     pub fn is_constructor(&self) -> bool {
         self.name.starts_with("[constructor]")
-            && self.results.len() == 1
+            && self.result.is_some()
             && matches!(
-                &self.results[0].typ,
+                &self.result.as_ref().unwrap().typ,
                 AnalysedType::Handle(TypeHandle {
                     mode: AnalysedResourceMode::Owned,
                     ..
@@ -481,7 +481,6 @@ pub struct AnalysedFunctionParameter {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct AnalysedFunctionResult {
-    pub name: Option<String>,
     pub typ: AnalysedType,
 }
 
@@ -582,10 +581,7 @@ mod tests {
                     name: "param1".to_string(),
                     typ: bool(),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
-                    typ: list(str()),
-                }],
+                result: Some(AnalysedFunctionResult { typ: list(str()) }),
             }],
         });
         let poem_serialized = export1.to_json_string();

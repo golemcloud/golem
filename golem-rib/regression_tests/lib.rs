@@ -2027,9 +2027,9 @@ mod mock_interpreter {
         RibFunctionInvokeResult, RibInput,
     };
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::tuple;
+
     use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
-    use golem_wasm_rpc::{Value, ValueAndType};
+    use golem_wasm_rpc::ValueAndType;
     use rib::InstructionId;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -2241,20 +2241,14 @@ mod mock_interpreter {
             _args: EvaluatedFnArgs,
         ) -> RibFunctionInvokeResult {
             let function_name = FunctionName(function_name.0);
-            let value = self
+
+            let result = self
                 .functions_and_result
                 .get(&function_name)
                 .cloned()
                 .flatten();
 
-            if let Some(value) = value {
-                Ok(ValueAndType::new(
-                    Value::Tuple(vec![value.value]),
-                    tuple(vec![value.typ]),
-                ))
-            } else {
-                Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])))
-            }
+            Ok(result)
         }
     }
 }
@@ -2308,20 +2302,12 @@ mod test_utils {
             })
             .collect();
 
-        let results = if let Some(output) = output {
-            vec![AnalysedFunctionResult {
-                name: None,
-                typ: output,
-            }]
-        } else {
-            // Representing Unit
-            vec![]
-        };
+        let result = output.map(|typ| AnalysedFunctionResult { typ });
 
         vec![AnalysedExport::Function(AnalysedFunction {
             name: function_name.to_string(),
             parameters: analysed_function_parameters,
-            results,
+            result,
         })]
     }
 }

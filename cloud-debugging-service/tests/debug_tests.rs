@@ -465,7 +465,7 @@ async fn test_playback_with_overrides(
     let public_oplog_entry =
         PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParameters {
             timestamp: Timestamp::now_utc(),
-            response: new_checkout_result,
+            response: Some(new_checkout_result),
             consumed_fuel: 0,
         });
 
@@ -515,7 +515,10 @@ async fn test_playback_with_overrides(
     let entry = oplogs_in_forked_worker.last();
 
     if let Some(PublicOplogEntry::ExportedFunctionCompleted(completed)) = entry {
-        assert_eq!(completed.response, new_shopping_cart_checkout_result());
+        assert_eq!(
+            completed.response,
+            Some(new_shopping_cart_checkout_result())
+        );
     } else {
         panic!("Expected ExportedFunctionCompleted entry");
     }
