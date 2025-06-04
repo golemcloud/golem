@@ -51,7 +51,7 @@ impl InterpreterEnv {
         worker_name: Option<String>,
         function_name: String,
         args: Vec<ValueAndType>,
-    ) -> Result<ValueAndType, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<ValueAndType>, Box<dyn std::error::Error + Send + Sync>> {
         self.call_worker_function_async
             .invoke(
                 instruction_id,
@@ -118,10 +118,10 @@ impl EnvironmentKey {
 
 mod internal {
     use crate::interpreter::env::RibFunctionInvoke;
-    use crate::{EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId};
+    use crate::{
+        EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibFunctionInvokeResult,
+    };
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::tuple;
-    use golem_wasm_rpc::{Value, ValueAndType};
 
     pub(crate) struct NoopRibFunctionInvoke;
 
@@ -133,8 +133,8 @@ mod internal {
             _worker_name: Option<EvaluatedWorkerName>,
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
-        ) -> Result<ValueAndType, Box<dyn std::error::Error + Send + Sync>> {
-            Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])))
+        ) -> RibFunctionInvokeResult {
+            Ok(None)
         }
     }
 }

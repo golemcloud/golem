@@ -353,10 +353,7 @@ mod internal {
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
         ) -> RibFunctionInvokeResult {
-            Ok(ValueAndType {
-                value: Value::Tuple(vec![]),
-                typ: tuple(vec![]),
-            })
+            Ok(None)
         }
     }
 
@@ -1260,7 +1257,7 @@ mod internal {
             })
             .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
-        let result = interpreter_env
+        let value_and_type_opt = interpreter_env
             .invoke_worker_function_async(
                 instruction_id,
                 worker_name,
@@ -1270,29 +1267,12 @@ mod internal {
             .await
             .map_err(|err| function_invoke_fail(function_name.as_str(), err))?;
 
-        let interpreter_result = match result {
-            ValueAndType {
-                value: Value::Tuple(value),
-                ..
-            } if value.is_empty() => Ok(RibInterpreterStackValue::Unit),
-            ValueAndType {
-                value: Value::Tuple(value),
-                typ: AnalysedType::Tuple(typ),
-            } if value.len() == 1 => {
-                let inner_value = value[0].clone();
-                let inner_type = typ.items[0].clone();
-                Ok(RibInterpreterStackValue::Val(ValueAndType::new(
-                    inner_value,
-                    inner_type,
-                )))
-            }
-            _ => Err(function_invoke_fail(
-                function_name.as_str(),
-                "named multiple results are not supported yet".into(),
-            )),
+        let interpreter_result = match value_and_type_opt {
+            Some(value_and_type) => RibInterpreterStackValue::Val(value_and_type),
+            None => RibInterpreterStackValue::Unit,
         };
 
-        interpreter_stack.push(interpreter_result?);
+        interpreter_stack.push(interpreter_result);
 
         Ok(())
     }
@@ -5062,10 +5042,7 @@ mod tests {
                 _args: EvaluatedFnArgs,
             ) -> RibFunctionInvokeResult {
                 let value = self.value.clone();
-                Ok(ValueAndType::new(
-                    Value::Tuple(vec![value.value]),
-                    tuple(vec![value.typ]),
-                ))
+                Ok(Some(value))
             }
         }
 
@@ -5110,11 +5087,10 @@ mod tests {
                     values.push(arg_value.value);
                 }
 
-                let value = ValueAndType::new(
-                    Value::Tuple(vec![Value::Record(values)]),
-                    tuple(vec![record(analysed_type_pairs)]),
-                );
-                Ok(value)
+                let value_and_type =
+                    ValueAndType::new(Value::Record(values), record(analysed_type_pairs));
+
+                Ok(Some(value_and_type))
             }
         }
 
@@ -5202,10 +5178,7 @@ mod tests {
                         let result = (arg1 + arg2).unwrap();
                         let u32 = result.cast_to(&u32()).unwrap();
 
-                        Ok(ValueAndType::new(
-                            Value::Tuple(vec![u32.value]),
-                            tuple(vec![u32.typ]),
-                        ))
+                        Ok(Some(u32))
                     }
                     "add-u64" => {
                         let args = args.0;
@@ -5213,10 +5186,7 @@ mod tests {
                         let arg2 = args[1].get_literal().and_then(|x| x.get_number()).unwrap();
                         let result = (arg1 + arg2).unwrap();
                         let u64 = result.cast_to(&u64()).unwrap();
-                        Ok(ValueAndType::new(
-                            Value::Tuple(vec![u64.value]),
-                            tuple(vec![u64.typ]),
-                        ))
+                        Ok(Some(u64))
                     }
                     "add-enum" => {
                         let args = args.0;
@@ -5227,10 +5197,7 @@ mod tests {
                                 if x == y {
                                     let result =
                                         ValueAndType::new(Value::Enum(x), r#enum(&["x", "y", "z"]));
-                                    Ok(ValueAndType::new(
-                                        Value::Tuple(vec![result.value]),
-                                        tuple(vec![result.typ]),
-                                    ))
+                                    Ok(Some(result))
                                 } else {
                                     Err(format!("Enums are not equal: {} and {}", x, y).into())
                                 }
@@ -5265,10 +5232,7 @@ mod tests {
                                         },
                                         get_analysed_type_variant(),
                                     );
-                                    Ok(ValueAndType::new(
-                                        Value::Tuple(vec![result.value]),
-                                        tuple(vec![result.typ]),
-                                    ))
+                                    Ok(Some(result))
                                 } else {
                                     Err(format!(
                                         "Variants are not equal: {} and {}",

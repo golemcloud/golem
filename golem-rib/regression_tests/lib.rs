@@ -2241,20 +2241,14 @@ mod mock_interpreter {
             _args: EvaluatedFnArgs,
         ) -> RibFunctionInvokeResult {
             let function_name = FunctionName(function_name.0);
-            let value = self
+
+            let result = self
                 .functions_and_result
                 .get(&function_name)
                 .cloned()
                 .flatten();
 
-            if let Some(value) = value {
-                Ok(ValueAndType::new(
-                    Value::Tuple(vec![value.value]),
-                    tuple(vec![value.typ]),
-                ))
-            } else {
-                Ok(ValueAndType::new(Value::Tuple(vec![]), tuple(vec![])))
-            }
+            Ok(result)
         }
     }
 }

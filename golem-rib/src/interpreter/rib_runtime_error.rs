@@ -198,7 +198,7 @@ impl Display for RibRuntimeError {
             RibRuntimeError::InvariantViolation(violation) => {
                 write!(f, "internal error: {:?}", violation)
             }
-            RibRuntimeError::ThrownError(message) => write!(f, "Thrown error: {}", message),
+            RibRuntimeError::ThrownError(message) => write!(f, "error: {}", message),
             RibRuntimeError::CastError { from, to } => {
                 write!(f, "cast error from {} to {}", from, to)
             }

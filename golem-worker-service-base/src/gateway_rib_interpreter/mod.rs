@@ -178,17 +178,10 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
             namespace,
         };
 
-        let tav = executor.execute(worker_request).await.map(|v| v.result)?;
+        let tav_opt = executor.execute(worker_request).await.map(|v| v.result)?;
 
-        match tav {
-            Some(tav) => tav.try_into().map_err(|err: String| err.into()),
-            None => {
-                // Representing the absence of return value as an empty record for Rib
-                Ok(ValueAndType::new(
-                    Value::Record(vec![]),
-                    analysed_type::record(vec![]),
-                ))
-            }
-        }
+        tav_opt
+            .map(|tav| ValueAndType::try_from(tav).map_err(|x| x.into()))
+            .transpose()
     }
 }
