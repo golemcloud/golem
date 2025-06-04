@@ -517,9 +517,9 @@ fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, na
         .find(|f| f.name == format!("[constructor]{name}"))
         .unwrap_or_else(|| panic!("missing constructor for {name}"));
 
-    assert_eq!(fun.results.len(), 1);
+    assert!(fun.result.is_some());
     assert!(matches!(
-        fun.results[0].typ,
+        fun.result.as_ref().unwrap().typ,
         AnalysedType::Handle(TypeHandle {
             mode: AnalysedResourceMode::Owned,
             ..
@@ -539,9 +539,9 @@ fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, na
         .find(|f| f.name == format!("[static]{name}.custom"))
         .unwrap_or_else(|| panic!("missing custom constructor for {name}"));
 
-    assert_eq!(custom_fun.results.len(), 1);
+    assert!(custom_fun.result.is_some());
     assert!(matches!(
-        custom_fun.results[0].typ,
+        custom_fun.result.as_ref().unwrap().typ,
         AnalysedType::Handle(TypeHandle {
             mode: AnalysedResourceMode::Owned,
             ..
@@ -576,9 +576,9 @@ fn assert_has_resource(
         .find(|f| f.name == format!("[constructor]{name}"))
         .unwrap_or_else(|| panic!("missing constructor for {name}"));
 
-    assert_eq!(fun.results.len(), 1);
+    assert!(fun.result.is_some());
     assert!(matches!(
-        fun.results[0].typ,
+        fun.result.as_ref().unwrap().typ,
         AnalysedType::Handle(TypeHandle {
             mode: AnalysedResourceMode::Owned,
             ..
@@ -602,9 +602,9 @@ fn assert_has_resource(
         .find(|f| f.name == format!("[static]{name}.custom"))
         .unwrap_or_else(|| panic!("missing custom constructor for {name}"));
 
-    assert_eq!(custom_fun.results.len(), 1);
+    assert!(custom_fun.result.is_some());
     assert!(matches!(
-        custom_fun.results[0].typ,
+        &custom_fun.result.as_ref().unwrap().typ,
         AnalysedType::Handle(TypeHandle {
             mode: AnalysedResourceMode::Owned,
             ..
@@ -645,7 +645,7 @@ fn assert_has_stub(
         .find(|f| f.name == format!("[constructor]{resource_name}"))
         .unwrap_or_else(|| panic!("missing constructor for {resource_name}"));
 
-    let resource_id = match &constructor.results[0].typ {
+    let resource_id = match &constructor.result.as_ref().unwrap().typ {
         AnalysedType::Handle(TypeHandle {
             mode: AnalysedResourceMode::Owned,
             resource_id,
@@ -716,11 +716,11 @@ fn assert_has_stub(
     assert_eq!(scheduled_parameter_types, scheduled_function_parameters);
 
     if let Some(return_type) = return_type {
-        assert_eq!(async_fun.results.len(), 1);
-        assert_eq!(blocking_fun.results.len(), 1);
-        assert_eq!(blocking_fun.results[0].typ, return_type);
+        assert!(async_fun.result.is_some());
+        assert!(blocking_fun.result.is_some());
+        assert_eq!(blocking_fun.result.as_ref().unwrap().typ, return_type);
 
-        let async_result_resource_id = match &async_fun.results[0].typ {
+        let async_result_resource_id = match &async_fun.result.as_ref().unwrap().typ {
             AnalysedType::Handle(TypeHandle {
                 mode: AnalysedResourceMode::Owned,
                 resource_id,
@@ -730,13 +730,13 @@ fn assert_has_stub(
 
         assert_valid_polling_resource(exported_interface, async_result_resource_id, return_type);
     } else {
-        assert_eq!(async_fun.results.len(), 0);
-        assert_eq!(blocking_fun.results.len(), 0);
+        assert!(async_fun.result.is_none());
+        assert!(blocking_fun.result.is_none());
     }
 
-    assert_eq!(scheduled_fun.results.len(), 1);
+    assert!(scheduled_fun.result.is_some());
     assert!(matches!(
-        scheduled_fun.results[0].typ,
+        scheduled_fun.result.as_ref().unwrap().typ,
         AnalysedType::Handle(TypeHandle {
             mode: AnalysedResourceMode::Owned,
             ..
@@ -771,18 +771,18 @@ fn assert_valid_polling_resource(
         .find(|f| f.name.ends_with(".get"))
         .expect("missing get function");
 
-    assert_eq!(subscribe_function.results.len(), 1);
+    assert!(subscribe_function.result.is_some());
     assert!(matches!(
-        subscribe_function.results[0].typ,
+        subscribe_function.result.as_ref().unwrap().typ,
         AnalysedType::Handle(TypeHandle {
             mode: AnalysedResourceMode::Owned,
             ..
         })
     ));
 
-    assert_eq!(get_function.results.len(), 1);
+    assert!(get_function.result.is_some());
     assert_eq!(
-        get_function.results[0].typ,
+        get_function.result.as_ref().unwrap().typ,
         AnalysedType::Option(TypeOption {
             inner: Box::new(return_type)
         })

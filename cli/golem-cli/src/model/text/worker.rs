@@ -358,7 +358,11 @@ impl TextView for PublicOplogEntry {
                 ));
                 logln(format!(
                     "{pad}result:            {}",
-                    value_to_string(&params.response)
+                    params
+                        .response
+                        .as_ref()
+                        .map(value_to_string)
+                        .unwrap_or_else(|| "()".to_string())
                 ));
             }
             PublicOplogEntry::Suspend(params) => {

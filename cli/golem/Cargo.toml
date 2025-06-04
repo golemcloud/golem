@@ -23,16 +23,15 @@ golem-cli = { path = "../golem-cli", features = [
 ], version = "=0.0.0" }
 
 # Golem - git deps
-golem-common = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.6" }
-golem-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.6" }
-golem-component-compilation-service = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.6" }
-golem-component-service = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.6" }
-golem-component-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.6" }
-golem-shard-manager = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.6" }
-golem-worker-executor = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.6" }
-golem-worker-executor-base = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.6" }
-golem-worker-service = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.6" }
-golem-worker-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.6" }
+golem-common = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.8" }
+golem-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.8" }
+golem-component-compilation-service = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.8" }
+golem-component-service = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.8" }
+golem-component-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.8" }
+golem-shard-manager = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.8" }
+golem-worker-executor = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.8" }
+golem-worker-service = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.8" }
+golem-worker-service-base = { git = "https://github.com/golemcloud/golem", tag = "v1.3.0-dev.8" }
 
 
 # External deps

@@ -47,7 +47,7 @@ impl InvokeResultView {
 
         Self {
             idempotency_key: idempotency_key.0,
-            result_json: Some(result.result),
+            result_json: result.result,
             result_wave: wave,
         }
     }
@@ -61,23 +61,11 @@ impl InvokeResultView {
     }
 
     fn try_parse_wave(
-        result: &TypeAnnotatedValue,
+        result: &Option<TypeAnnotatedValue>,
         component: &Component,
         function: &str,
     ) -> anyhow::Result<Vec<String>> {
-        let results = match result {
-            TypeAnnotatedValue::Tuple(tuple) => tuple
-                .value
-                .iter()
-                .map(|t| t.clone().type_annotated_value.unwrap())
-                .collect::<Vec<_>>(),
-            // TODO: need to support multi-result case when it's a Record
-            _ => {
-                bail!("Can't parse InvokeResult - tuple expected.");
-            }
-        };
-
-        // TODO: we don't need this, as the result is always a TypeAnnotatedValue
+        let results: Vec<_> = result.iter().cloned().collect();
         let result_types = function_result_types(component, function)?;
 
         if results.len() != result_types.len() {

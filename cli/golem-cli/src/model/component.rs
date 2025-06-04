@@ -349,7 +349,7 @@ fn render_non_wave_compatible_exported_function(
         .join(", ");
 
     let results = f
-        .results
+        .result
         .iter()
         .map(|res| render_type(&res.typ))
         .collect::<Vec<String>>();
@@ -419,7 +419,7 @@ pub fn function_result_types<'t>(
 ) -> anyhow::Result<Vec<&'t AnalysedType>> {
     let (func, _) = resolve_function(component, function)?;
 
-    Ok(func.results.iter().map(|r| &r.typ).collect())
+    Ok(func.result.iter().map(|r| &r.typ).collect())
 }
 
 pub fn function_params_types<'t>(
@@ -455,10 +455,9 @@ mod tests {
         let f = AnalysedFunction {
             name: "n".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
+            result: Some(AnalysedFunctionResult {
                 typ: handle(AnalysedResourceId(1), AnalysedResourceMode::Borrowed),
-            }],
+            }),
         };
         let repr = render_exported_function(None, &f, true);
 
@@ -470,7 +469,7 @@ mod tests {
         let f = AnalysedFunction {
             name: "abc".to_string(),
             parameters: vec![],
-            results: vec![],
+            result: None,
         };
 
         let repr = render_exported_function(None, &f, true);
@@ -486,7 +485,7 @@ mod tests {
                 name: "n".to_string(),
                 typ: handle(AnalysedResourceId(1), AnalysedResourceMode::Owned),
             }],
-            results: vec![],
+            result: None,
         };
 
         let repr = render_exported_function(None, &f, true);
@@ -499,10 +498,7 @@ mod tests {
         let f = AnalysedFunction {
             name: "abc".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
-                typ: bool(),
-            }],
+            result: Some(AnalysedFunctionResult { typ: bool() }),
         };
 
         let repr = render_exported_function(None, &f, true);
@@ -515,10 +511,9 @@ mod tests {
         let f = AnalysedFunction {
             name: "abc".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
+            result: Some(AnalysedFunctionResult {
                 typ: handle(AnalysedResourceId(1), AnalysedResourceMode::Owned),
-            }],
+            }),
         };
 
         let repr = render_exported_function(None, &f, true);
@@ -540,21 +535,14 @@ mod tests {
                     typ: bool(),
                 },
             ],
-            results: vec![
-                AnalysedFunctionResult {
-                    name: Some("r1".to_string()),
-                    typ: bool(),
-                },
-                AnalysedFunctionResult {
-                    name: None,
-                    typ: bool(),
-                },
-            ],
+            result: Some(AnalysedFunctionResult {
+                typ: tuple(vec![bool(), bool()]),
+            }),
         };
 
         let repr = render_exported_function(None, &f, true);
 
-        assert_eq!(repr, "abc(n1: bool, n2: bool) -> (bool, bool)")
+        assert_eq!(repr, "abc(n1: bool, n2: bool) -> tuple<bool, bool>")
     }
 
     #[test]
@@ -571,21 +559,14 @@ mod tests {
                     typ: handle(AnalysedResourceId(1), AnalysedResourceMode::Owned),
                 },
             ],
-            results: vec![
-                AnalysedFunctionResult {
-                    name: Some("r1".to_string()),
-                    typ: bool(),
-                },
-                AnalysedFunctionResult {
-                    name: None,
-                    typ: bool(),
-                },
-            ],
+            result: Some(AnalysedFunctionResult {
+                typ: tuple(vec![bool(), bool()]),
+            }),
         };
 
         let repr = render_exported_function(None, &f, true);
 
-        assert_eq!(repr, "abc(n1: bool, n2: handle<1>) -> (bool, bool)")
+        assert_eq!(repr, "abc(n1: bool, n2: handle<1>) -> tuple<bool, bool>")
     }
 
     fn ensure_same_export(typ: AnalysedType, expected: &str) {
@@ -595,10 +576,7 @@ mod tests {
         let wave_f = AnalysedFunction {
             name: "wn".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
-                typ: typ.clone(),
-            }],
+            result: Some(AnalysedFunctionResult { typ: typ.clone() }),
         };
         let wave_res = render_exported_function(None, &wave_f, true);
         assert_eq!(wave_res, expected_wave);
@@ -606,13 +584,12 @@ mod tests {
         let custom_f = AnalysedFunction {
             name: "cn".to_string(),
             parameters: vec![],
-            results: vec![AnalysedFunctionResult {
-                name: None,
+            result: Some(AnalysedFunctionResult {
                 typ: tuple(vec![
                     handle(AnalysedResourceId(1), AnalysedResourceMode::Owned),
                     typ,
                 ]),
-            }],
+            }),
         };
         let custom_res = render_exported_function(None, &custom_f, true);
         assert_eq!(custom_res, expected_custom);

@@ -28,19 +28,16 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::{
     FileSystemPersistenceConfig, HealthCheckConfig, PersistenceConfig, ShardManagerConfig,
 };
-use golem_worker_executor_base::services::additional_config::{
-    ComponentServiceGrpcConfig, DefaultAdditionalGolemConfig,
+use golem_worker_executor::services::golem_config::{
+    CompiledComponentServiceConfig, ComponentServiceGrpcConfig, IndexedStorageKVStoreSqliteConfig,
 };
-use golem_worker_executor_base::services::golem_config::{
-    CompiledComponentServiceConfig, IndexedStorageKVStoreSqliteConfig,
-};
-use golem_worker_executor_base::services::golem_config::{
+use golem_worker_executor::services::golem_config::{
     CompiledComponentServiceEnabledConfig, ShardManagerServiceConfig,
 };
-use golem_worker_executor_base::services::golem_config::{
+use golem_worker_executor::services::golem_config::{
     GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
 };
-use golem_worker_executor_base::services::golem_config::{
+use golem_worker_executor::services::golem_config::{
     PluginServiceConfig, PluginServiceGrpcConfig, ShardManagerServiceGrpcConfig,
 };
 use golem_worker_service::WorkerService;
@@ -115,9 +112,8 @@ async fn start_components(
     )
     .await?;
     let worker_executor = {
-        let (config, additional_config) =
-            worker_executor_config(args, &shard_manager, &component_service);
-        run_worker_executor(config, additional_config, join_set).await?
+        let config = worker_executor_config(args, &shard_manager, &component_service);
+        run_worker_executor(config, join_set).await?
     };
     let worker_service = run_worker_service(
         worker_service_config(args, &shard_manager, &component_service),
@@ -205,7 +201,7 @@ fn worker_executor_config(
     args: &LaunchArgs,
     shard_manager_run_details: &golem_shard_manager::RunDetails,
     component_service_run_details: &golem_component_service::TrafficReadyEndpoints,
-) -> (GolemConfig, DefaultAdditionalGolemConfig) {
+) -> GolemConfig {
     let mut config = GolemConfig {
         port: 0,
         http_port: 0,
@@ -232,14 +228,8 @@ fn worker_executor_config(
             port: component_service_run_details.grpc_port,
             ..Default::default()
         }),
-        ..Default::default()
-    };
-
-    config.add_port_to_tracing_file_name_if_enabled();
-
-    let additional_config = DefaultAdditionalGolemConfig {
         component_service:
-            golem_worker_executor_base::services::additional_config::ComponentServiceConfig::Grpc(
+            golem_worker_executor::services::golem_config::ComponentServiceConfig::Grpc(
                 ComponentServiceGrpcConfig {
                     host: args.router_addr.clone(),
                     port: component_service_run_details.grpc_port,
@@ -249,7 +239,8 @@ fn worker_executor_config(
         ..Default::default()
     };
 
-    (config, additional_config)
+    config.add_port_to_tracing_file_name_if_enabled();
+    config
 }
 
 fn worker_service_config(
@@ -334,28 +325,21 @@ async fn run_component_service(
 
 async fn run_worker_executor(
     config: GolemConfig,
-    additional_config: DefaultAdditionalGolemConfig,
     join_set: &mut JoinSet<anyhow::Result<()>>,
-) -> Result<golem_worker_executor_base::RunDetails, anyhow::Error> {
-    let prometheus_registry = golem_worker_executor_base::metrics::register_all();
+) -> Result<golem_worker_executor::RunDetails, anyhow::Error> {
+    let prometheus_registry = golem_worker_executor::metrics::register_all();
 
     let span = tracing::info_span!("worker-executor");
-    golem_worker_executor::run(
-        config,
-        additional_config,
-        prometheus_registry,
-        Handle::current(),
-        join_set,
-    )
-    .instrument(span)
-    .await
+    golem_worker_executor::oss::run(config, prometheus_registry, Handle::current(), join_set)
+        .instrument(span)
+        .await
 }
 
 async fn run_worker_service(
     config: WorkerServiceBaseConfig,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<golem_worker_service::TrafficReadyEndpoints, anyhow::Error> {
-    let prometheus_registry = golem_worker_executor_base::metrics::register_all();
+    let prometheus_registry = golem_worker_executor::metrics::register_all();
     let migration_path = IncludedMigrationsDir::new(WorkerService::db_migrations());
     let span = tracing::info_span!("worker-service");
     WorkerService::new(config, prometheus_registry, migration_path)

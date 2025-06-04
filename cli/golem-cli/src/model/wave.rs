@@ -64,5 +64,5 @@ pub fn type_wave_compatible(typ: &AnalysedType) -> bool {
 
 pub fn function_wave_compatible(func: &AnalysedFunction) -> bool {
     func.parameters.iter().all(|p| type_wave_compatible(&p.typ))
-        && func.results.iter().all(|r| type_wave_compatible(&r.typ))
+        && func.result.iter().all(|r| type_wave_compatible(&r.typ))
 }

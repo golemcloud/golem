@@ -93,6 +93,7 @@ impl RibReplHandler {
             printer: None,
             component_source: None,
             prompt: None,
+            command_registry: None,
         })
         .await?;
 
@@ -136,7 +137,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
         worker_name: Option<String>,
         function_name: &str,
         args: Vec<ValueAndType>,
-    ) -> anyhow::Result<ValueAndType> {
+    ) -> anyhow::Result<Option<ValueAndType>> {
         let worker_name = worker_name.map(WorkerName::from);
 
         let component = self
@@ -176,7 +177,8 @@ impl WorkerFunctionInvoke for RibReplHandler {
 
         result
             .result
-            .try_into()
+            .map(|tav| tav.try_into())
+            .transpose()
             .map_err(|err| anyhow!("Failed to convert result: {}", err))
     }
 }
