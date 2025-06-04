@@ -80,12 +80,10 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
                 worker_name: None,
             });
 
-        // RibREPL works already if we try `cargo run --bin rib-repl shopping-cart` in integration tests
-        // and experiment with values that returns unit
         self.embedded_worker_executor
             .invoke_and_await_typed(target_worker_id, function_name, args)
             .await
-            .map(Some)
+            .map(Some) // TODO; Remove this once the invoke_and_await_typed retrns Option
             .map_err(|e| anyhow!("Failed to invoke function: {:?}", e))
     }
 }

@@ -23,6 +23,7 @@ use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{Value, ValueAndType};
 use rib::RibResult;
 use std::path::Path;
@@ -325,10 +326,37 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
                 worker_name: None,
             });
 
-        self.embedded_worker_executor
+        let result = self
+            .embedded_worker_executor
             .invoke_and_await_typed(target_worker_id, function_name, args)
-            .await
-            .map(Some) // TODO; tests framework should be returning optional ValueAndType too
-            .map_err(|e| anyhow!("Failed to invoke function: {:?}", e))
+            .await;
+
+        // TODO; remove this once the tests are changed
+        // remove this logic once `invoke_and_await_typed` returns `Option<ValueAndType>`
+        // and simply return result
+        match result {
+            Ok(value_and_type) => {
+                let value = value_and_type.value;
+                let value_type = value_and_type.typ;
+
+                match value {
+                    Value::Tuple(values) if values.is_empty() => Ok(None),
+                    Value::Tuple(mut values) => {
+                        let inner_type = match value_type {
+                            AnalysedType::Tuple(tuple_type) => tuple_type.items[0].clone(),
+                            _ => panic!("Expected a tuple type for non-empty tuple value"),
+                        };
+
+                        Ok(Some(ValueAndType::new(values.pop().unwrap(), inner_type)))
+                    }
+                    _ => panic!("Expected a tuple value, got: {:?}", value),
+                }
+            }
+
+            Err(e) => {
+                tracing::error!("Failed to invoke function: {:?}", e);
+                Err(anyhow!("Failed to invoke function: {:?}", e))
+            }
+        }
     }
 }
