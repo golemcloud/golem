@@ -8,5 +8,5 @@ import "golem/component/function_result.proto";
 message ExportFunction {
   string name = 1;
   repeated FunctionParameter parameters = 2;
-  repeated FunctionResult results = 3;
+  optional FunctionResult result = 3;
 }

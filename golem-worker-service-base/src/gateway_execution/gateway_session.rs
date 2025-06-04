@@ -106,8 +106,8 @@ impl bincode::Encode for DataValue {
     }
 }
 
-impl bincode::Decode for DataValue {
-    fn decode<D: bincode::de::Decoder>(
+impl<Context> bincode::Decode<Context> for DataValue {
+    fn decode<D: bincode::de::Decoder<Context = Context>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
         let serialized: Vec<u8> = bincode::Decode::decode(decoder)?;

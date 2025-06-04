@@ -328,7 +328,7 @@ pub trait OplogOps: Oplog {
         }
     }
 
-    async fn get_payload_of_entry<T: Decode>(
+    async fn get_payload_of_entry<T: Decode<()>>(
         &self,
         entry: &OplogEntry,
     ) -> Result<Option<T>, String> {

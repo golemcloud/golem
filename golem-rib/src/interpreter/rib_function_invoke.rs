@@ -27,7 +27,8 @@ pub trait RibFunctionInvoke {
     ) -> RibFunctionInvokeResult;
 }
 
-pub type RibFunctionInvokeResult = Result<ValueAndType, Box<dyn std::error::Error + Send + Sync>>;
+pub type RibFunctionInvokeResult =
+    Result<Option<ValueAndType>, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Debug)]
 pub struct EvaluatedFqFn(pub String);

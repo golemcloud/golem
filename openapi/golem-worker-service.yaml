@@ -3727,7 +3727,6 @@ components:
       title: ExportedFunctionCompletedParameters
       required:
       - timestamp
-      - response
       - consumedFuel
       properties:
         timestamp:
@@ -4682,8 +4681,6 @@ components:
     InvokeResult:
       type: object
       title: InvokeResult
-      required:
-      - result
       properties:
         result:
           $ref: '#/components/schemas/TypeAnnotatedValue'

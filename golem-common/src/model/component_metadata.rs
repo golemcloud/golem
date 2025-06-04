@@ -385,14 +385,14 @@ fn drop_from_constructor(constructor: &AnalysedFunction) -> AnalysedFunction {
     AnalysedFunction {
         name: drop_name,
         parameters: constructor
-            .results
+            .result
             .iter()
             .map(|result| AnalysedFunctionParameter {
                 name: "self".to_string(),
                 typ: result.typ.clone(),
             })
             .collect(),
-        results: vec![],
+        result: None,
     }
 }
 

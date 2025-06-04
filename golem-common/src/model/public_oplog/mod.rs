@@ -352,8 +352,8 @@ pub struct ExportedFunctionInvokedParameters {
 #[serde(rename_all = "camelCase")]
 pub struct ExportedFunctionCompletedParameters {
     pub timestamp: Timestamp,
-    #[wit_field(convert = WitValue)]
-    pub response: ValueAndType,
+    #[wit_field(convert_option = WitValue)]
+    pub response: Option<ValueAndType>,
     pub consumed_fuel: i64,
 }
 
@@ -780,7 +780,10 @@ impl PublicOplogEntry {
                 Self::string_match("exportedfunctioncompleted", &[], query_path, query)
                     || Self::string_match("exported-function-completed", &[], query_path, query)
                     || Self::string_match("exported-function", &[], query_path, query)
-                    || Self::match_value(&params.response, &[], query_path, query)
+                    || match &params.response {
+                        Some(response) => Self::match_value(response, &[], query_path, query),
+                        None => false,
+                    }
                 // TODO: should we store function name and idempotency key in ExportedFunctionCompleted?
             }
             PublicOplogEntry::Suspend(_params) => {

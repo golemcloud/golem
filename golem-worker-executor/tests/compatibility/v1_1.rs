@@ -142,15 +142,16 @@ pub fn oplog_entry() {
 }
 
 #[test]
+#[ignore] // compatibility has been broken in 1.3
 pub fn serializable_invoke_result() {
     let sir1 = SerializableInvokeResult::Pending;
     let sir2 = SerializableInvokeResult::Failed(SerializableError::Generic {
         message: "hello world".to_string(),
     });
     let sir3 =
-        SerializableInvokeResult::Completed(Ok(ValueAndType::new(Value::Bool(true), bool())
-            .try_into()
-            .unwrap()));
+        SerializableInvokeResult::Completed(
+            Ok(ValueAndType::new(Value::Bool(true), bool()).into()),
+        );
     let sir4 = SerializableInvokeResult::Completed(Err(RpcError::Denied {
         details: "not now".to_string(),
     }));

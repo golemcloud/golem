@@ -414,10 +414,7 @@ impl TestComponentService {
                     name: "a".to_string(),
                     typ: str(),
                 }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
-                    typ: str(),
-                }],
+                result: Some(AnalysedFunctionResult { typ: str() }),
             }],
         });
 

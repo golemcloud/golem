@@ -1120,7 +1120,7 @@ impl WorkerGrpcApi {
 
         Ok(InvokeResultTyped {
             result: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                type_annotated_value: Some(result),
+                type_annotated_value: result,
             }),
         })
     }

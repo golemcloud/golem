@@ -34,12 +34,12 @@ pub fn serialize<T: Encode>(value: &T) -> Result<Bytes, String> {
     serialize_with_version(value, SERIALIZATION_VERSION_V2)
 }
 
-pub fn deserialize<T: Decode>(bytes: &[u8]) -> Result<T, String> {
+pub fn deserialize<T: Decode<()>>(bytes: &[u8]) -> Result<T, String> {
     let (version, data) = bytes.split_at(1);
     deserialize_with_version(data, version[0])
 }
 
-pub fn try_deserialize<T: Decode>(bytes: &[u8]) -> Result<Option<T>, String> {
+pub fn try_deserialize<T: Decode<()>>(bytes: &[u8]) -> Result<Option<T>, String> {
     if bytes.is_empty() {
         Ok(None)
     } else {
@@ -48,7 +48,7 @@ pub fn try_deserialize<T: Decode>(bytes: &[u8]) -> Result<Option<T>, String> {
     }
 }
 
-pub fn deserialize_with_version<T: Decode>(data: &[u8], version: u8) -> Result<T, String> {
+pub fn deserialize_with_version<T: Decode<()>>(data: &[u8], version: u8) -> Result<T, String> {
     match try_deserialize_with_version(data, version)? {
         Some(value) => Ok(value),
         None => {
@@ -63,7 +63,7 @@ pub fn deserialize_with_version<T: Decode>(data: &[u8], version: u8) -> Result<T
     }
 }
 
-pub fn try_deserialize_with_version<T: Decode>(
+pub fn try_deserialize_with_version<T: Decode<()>>(
     data: &[u8],
     version: u8,
 ) -> Result<Option<T>, String> {

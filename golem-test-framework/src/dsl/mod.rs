@@ -13,7 +13,7 @@
 // limitations under the License.
 
 pub mod benchmark;
-mod debug_render;
+pub mod debug_render;
 
 use crate::config::TestDependencies;
 use crate::dsl::debug_render::debug_render_oplog_entry;
@@ -369,27 +369,27 @@ pub trait TestDsl {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> crate::Result<Result<ValueAndType, Error>>;
+    ) -> crate::Result<Result<Option<ValueAndType>, Error>>;
     async fn invoke_and_await_typed_custom(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> crate::Result<Result<ValueAndType, Error>>;
+    ) -> crate::Result<Result<Option<ValueAndType>, Error>>;
     async fn invoke_and_await_typed_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> crate::Result<Result<ValueAndType, Error>>;
+    ) -> crate::Result<Result<Option<ValueAndType>, Error>>;
     async fn invoke_and_await_typed_custom_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> crate::Result<Result<ValueAndType, Error>>;
+    ) -> crate::Result<Result<Option<ValueAndType>, Error>>;
     async fn invoke_and_await_json(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
@@ -969,7 +969,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> crate::Result<Result<ValueAndType, Error>> {
+    ) -> crate::Result<Result<Option<ValueAndType>, Error>> {
         TestDsl::invoke_and_await_typed_custom(self, worker_id, function_name, params).await
     }
 
@@ -978,7 +978,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> crate::Result<Result<ValueAndType, Error>> {
+    ) -> crate::Result<Result<Option<ValueAndType>, Error>> {
         let idempotency_key = IdempotencyKey::fresh();
         TestDsl::invoke_and_await_typed_custom_with_key(
             self,
@@ -996,7 +996,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> crate::Result<Result<ValueAndType, Error>> {
+    ) -> crate::Result<Result<Option<ValueAndType>, Error>> {
         TestDsl::invoke_and_await_typed_custom_with_key(
             self,
             worker_id,
@@ -1013,7 +1013,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> crate::Result<Result<ValueAndType, Error>> {
+    ) -> crate::Result<Result<Option<ValueAndType>, Error>> {
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .worker_service()
@@ -1029,14 +1029,17 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         match invoke_response.result {
             None => Err(anyhow!("No response from invoke_and_await_typed")),
             Some(invoke_and_await_typed_response::Result::Success(response)) => {
-                match response.result.and_then(|v| v.type_annotated_value) {
-                    None => Err(anyhow!("Empty error response from invoke_and_await_typed")),
-                    Some(response) => {
-                        let response: ValueAndType = response.try_into().map_err(|err| {
-                            anyhow!("Invocation result had unexpected format: {err}")
-                        })?;
-                        Ok(Ok(response))
-                    }
+                match response.result {
+                    None => Ok(Ok(None)),
+                    Some(response) => match response.type_annotated_value {
+                        Some(response) => {
+                            let response: ValueAndType = response.try_into().map_err(|err| {
+                                anyhow!("Invocation result had unexpected format: {err}")
+                            })?;
+                            Ok(Ok(Some(response)))
+                        }
+                        None => Err(anyhow!("Missing type_annotated_value field")),
+                    },
                 }
             }
             Some(invoke_and_await_typed_response::Result::Error(WorkerError {
@@ -2044,14 +2047,14 @@ pub trait TestDslUnsafe {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> Result<ValueAndType, Error>;
+    ) -> Result<Option<ValueAndType>, Error>;
     async fn invoke_and_await_typed_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> Result<ValueAndType, Error>;
+    ) -> Result<Option<ValueAndType>, Error>;
     async fn invoke_and_await_json(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
@@ -2347,7 +2350,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> Result<ValueAndType, Error> {
+    ) -> Result<Option<ValueAndType>, Error> {
         <T as TestDsl>::invoke_and_await_typed(self, worker_id, function_name, params)
             .await
             .expect("Failed to invoke function")
@@ -2358,7 +2361,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> Result<ValueAndType, Error> {
+    ) -> Result<Option<ValueAndType>, Error> {
         <T as TestDsl>::invoke_and_await_typed_with_key(
             self,
             worker_id,

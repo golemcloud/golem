@@ -131,7 +131,7 @@ pub trait WorkerService {
         params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         namespace: CloudNamespace,
-    ) -> Result<TypeAnnotatedValue, WorkerError> {
+    ) -> Result<Option<TypeAnnotatedValue>, WorkerError> {
         let params = self.validate_typed_parameters(params)?;
         self.invoke_and_await_typed(
             worker_id,
@@ -154,7 +154,7 @@ pub trait WorkerService {
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         namespace: CloudNamespace,
-    ) -> Result<TypeAnnotatedValue, WorkerError>;
+    ) -> Result<Option<TypeAnnotatedValue>, WorkerError>;
 
     /// Invokes a worker using raw `Val` parameter values and awaits its results returning
     /// a `Val` values (without type information)
@@ -179,7 +179,7 @@ pub trait WorkerService {
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
         namespace: CloudNamespace,
-    ) -> Result<TypeAnnotatedValue, WorkerError>;
+    ) -> Result<Option<TypeAnnotatedValue>, WorkerError>;
 
     /// Validates the provided list of `TypeAnnotatedValue` parameters, and then enqueues
     /// an invocation for the worker without awaiting its results.
@@ -467,7 +467,7 @@ impl WorkerService for WorkerServiceDefault {
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         namespace: CloudNamespace,
-    ) -> Result<TypeAnnotatedValue, WorkerError> {
+    ) -> Result<Option<TypeAnnotatedValue>, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
         let result = self
@@ -519,7 +519,7 @@ impl WorkerService for WorkerServiceDefault {
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
         namespace: CloudNamespace,
-    ) -> Result<TypeAnnotatedValue, WorkerError> {
+    ) -> Result<Option<TypeAnnotatedValue>, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
         let result = self

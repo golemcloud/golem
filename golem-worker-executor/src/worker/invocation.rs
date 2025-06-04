@@ -239,7 +239,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
                 consumed_fuel,
                 output,
             } => {
-                function_input = [output, function_input].concat();
+                function_input = [output.into_iter().collect(), function_input].concat();
                 extra_fuel = consumed_fuel;
             }
             other => {
@@ -389,10 +389,10 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
             debug!("Using existing indexed resource with id {resource_id}");
             Ok(InvokeResult::from_success(
                 0,
-                vec![Value::Handle {
+                Some(Value::Handle {
                     uri: store.data().self_uri().value,
                     resource_id: resource_id.0,
-                }],
+                }),
             ))
         }
         None => {
@@ -424,7 +424,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
             .await?;
 
             if let InvokeResult::Succeeded { output, .. } = &constructor_result {
-                if let Some(Value::Handle { resource_id, .. }) = output.first() {
+                if let Some(Value::Handle { resource_id, .. }) = output {
                     debug!("Storing indexed resource with id {resource_id}");
                     store
                         .data_mut()
@@ -476,15 +476,22 @@ async fn invoke<Ctx: WorkerCtx>(
     match results {
         Ok(results) => {
             let types = function.results(&store);
-            let mut output: Vec<Value> = Vec::new();
-            for (val, typ) in results.iter().zip(types.iter()) {
-                let result_value = encode_output(val, typ, store.data_mut())
-                    .await
-                    .map_err(GolemError::from)?;
-                output.push(result_value);
-            }
 
-            Ok(InvokeResult::from_success(consumed_fuel, output))
+            if results.len() > 1 {
+                Err(GolemError::runtime(
+                    "Function returned with more than one values, which is not supported",
+                ))
+            } else {
+                match results.iter().zip(types.iter()).next() {
+                    Some((val, typ)) => {
+                        let output = encode_output(val, typ, store.data_mut())
+                            .await
+                            .map_err(GolemError::from)?;
+                        Ok(InvokeResult::from_success(consumed_fuel, Some(output)))
+                    }
+                    None => Ok(InvokeResult::from_success(consumed_fuel, None)),
+                }
+            }
         }
         Err(err) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &err)),
     }
@@ -582,7 +589,7 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
     .await?;
 
     match res_or_error {
-        Ok(resp) => Ok(InvokeResult::from_success(consumed_fuel, vec![resp])),
+        Ok(resp) => Ok(InvokeResult::from_success(consumed_fuel, Some(resp))),
         Err(e) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &e)),
     }
 }
@@ -626,11 +633,11 @@ async fn drop_resource<Ctx: WorkerCtx>(
             .await?;
 
         match result {
-            Ok(_) => Ok(InvokeResult::from_success(consumed_fuel, vec![])),
+            Ok(_) => Ok(InvokeResult::from_success(consumed_fuel, None)),
             Err(err) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &err)),
         }
     } else {
-        Ok(InvokeResult::from_success(0, vec![]))
+        Ok(InvokeResult::from_success(0, None))
     }
 }
 
@@ -719,7 +726,7 @@ pub enum InvokeResult {
     /// The invoked function succeeded and produced a result
     Succeeded {
         consumed_fuel: i64,
-        output: Vec<Value>,
+        output: Option<Value>,
     },
     /// The function was running but got interrupted
     Interrupted {
@@ -729,7 +736,7 @@ pub enum InvokeResult {
 }
 
 impl InvokeResult {
-    pub fn from_success(consumed_fuel: i64, output: Vec<Value>) -> Self {
+    pub fn from_success(consumed_fuel: i64, output: Option<Value>) -> Self {
         InvokeResult::Succeeded {
             consumed_fuel,
             output,

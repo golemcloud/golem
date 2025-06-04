@@ -353,33 +353,15 @@ async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing:
 
     // counter1 is a JSON response containing a tuple with a single element holding the resource handle:
     // {
-    //   "typ":  {"items":[{"mode":{"type":"Owned"},"resource_id":0,"type":"Handle"}],"type":"Tuple"},
-    //   "value":["urn:worker:fcb5d2d4-d6db-4eca-99ec-6260ae9270db/CLI_short_name_worker_invoke_and_await/0"]}
+    //   "typ":{"mode":"Owned","resource_id":0,"type":"Handle"}
+    //   "value":"urn:worker:3e8cc61d-7490-4d23-a516-36bc825365a5/counters-1j/0"
     // }
-    // we only need this inner element and it's type:
+    // we only need this inner element, and it's type:
 
-    let counter1_type = counter1
-        .as_object()
-        .unwrap()
-        .get("typ")
-        .unwrap()
-        .as_object()
-        .unwrap()
-        .get("items")
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .first()
-        .unwrap();
-    let counter1_value = counter1
-        .as_object()
-        .unwrap()
-        .get("value")
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .first()
-        .unwrap();
+    println!("Counter1: {counter1}");
+
+    let counter1_type = counter1.as_object().unwrap().get("typ").unwrap();
+    let counter1_value = counter1.as_object().unwrap().get("value").unwrap();
     let counter1 = json!(
         {
             "typ": counter1_type,
@@ -433,10 +415,9 @@ async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing:
             == Ok(json!(
                 {
                     "typ": {
-                        "type": "Tuple",
-                        "items": [ { "type": "U64" } ]
+                        "type": "U64",
                     },
-                    "value": [5]
+                    "value": 5
                 }
             ))
     );
@@ -444,31 +425,24 @@ async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing:
     check!(
         result2
             == Ok(json!(
-            {
-              "typ": {
-                "type": "Tuple",
-                "items": [
-                  {
-                    "type": "List",
-                    "inner": {
-                      "type": "Tuple",
-                      "items": [
-                        {
-                          "type": "Str"
-                        },
-                        {
-                          "type": "U64"
+                {
+                  "typ": {
+                        "type": "List",
+                        "inner": {
+                          "type": "Tuple",
+                          "items": [
+                            {
+                              "type": "Str"
+                            },
+                            {
+                              "type": "U64"
+                            }
+                          ]
                         }
-                      ]
-                    }
-                  }
-                ]
-              },
-                "value": [
-                            [
-                                ["counter1",5]
-                            ]
-                        ]
+                  },
+                  "value": [
+                    ["counter1",5]
+                  ]
             }))
     );
 
@@ -681,11 +655,8 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
         result1
             == Ok(json!(
                 {
-                    "typ": {
-                        "type": "Tuple",
-                        "items": [ { "type": "U64" } ]
-                    },
-                    "value": [5]
+                    "typ": { "type": "U64" },
+                    "value": 5
                 }
             ))
     );
@@ -693,11 +664,8 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
         result2
             == Ok(json!(
                 {
-                    "typ": {
-                        "type": "Tuple",
-                        "items": [ { "type": "U64" } ]
-                    },
-                    "value": [3]
+                    "typ": { "type": "U64" },
+                    "value": 3
                 }
             ))
     );
@@ -707,9 +675,6 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
             == Ok(json!(
                 {
               "typ": {
-                "type": "Tuple",
-                "items": [
-                  {
                     "type": "List",
                     "inner": {
                       "type": "Tuple",
@@ -722,15 +687,11 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
                         }
                       ]
                     }
-                  }
-                ]
-              },
+                },
                 "value": [
-                            [
-                                ["counter1",5],
-                                ["counter2",3]
-                            ]
-                        ]
+                    ["counter1",5],
+                    ["counter2",3]
+                ]
             }
             ))
     );
@@ -825,10 +786,9 @@ async fn counter_resource_test_2_json_no_types(
             == Ok(json!(
                 {
                     "typ": {
-                        "type": "Tuple",
-                        "items": [ { "type": "U64" } ]
+                        "type": "U64",
                     },
-                    "value": [5]
+                    "value": 5
                 }
             ))
     );
@@ -837,22 +797,17 @@ async fn counter_resource_test_2_json_no_types(
             == Ok(json!(
                 {
                     "typ": {
-                        "type": "Tuple",
-                        "items": [ { "type": "U64" } ]
+                        "type": "U64",
                     },
-                    "value": [3]
+                    "value": 3
                 }
             ))
     );
 
     check!(
         result3
-            == Ok(json!(
-                {
+            == Ok(json!({
               "typ": {
-                "type": "Tuple",
-                "items": [
-                  {
                     "type": "List",
                     "inner": {
                       "type": "Tuple",
@@ -865,17 +820,12 @@ async fn counter_resource_test_2_json_no_types(
                         }
                       ]
                     }
-                  }
-                ]
               },
-                "value": [
-                            [
-                                ["counter1",5],
-                                ["counter2",3]
-                            ]
-                        ]
-            }
-            ))
+              "value": [
+                ["counter1",5],
+                ["counter2",3]
+              ]
+            }))
     );
 }
 
@@ -1523,9 +1473,9 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .search_oplog(&worker_id, "product-id:G1001 OR product-id:G1000")
         .await;
 
-    assert_eq!(result1.len(), 4); // two invocations and two log messages
+    assert_eq!(result1.len(), 5); // two invocations and two log messages, and the get-cart-contents results
     assert_eq!(result2.len(), 2); // get_preopened_directories, get_random_bytes
-    assert_eq!(result3.len(), 2); // two invocations
+    assert_eq!(result3.len(), 3); // two invocations, and the get-cart-contents results
 }
 
 #[test]

@@ -161,11 +161,11 @@ message InvokeAndAwaitWorkerResponseTyped {
 }
 
 message InvokeAndAwaitWorkerSuccess {
-  repeated wasm.rpc.Val output = 1;
+  optional wasm.rpc.Val output = 1;
 }
 
 message InvokeAndAwaitWorkerSuccessTyped {
-  wasm.rpc.TypeAnnotatedValue output = 1;
+  optional wasm.rpc.TypeAnnotatedValue output = 1;
 }
 
 

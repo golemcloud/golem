@@ -195,18 +195,19 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
             })
         }
 
-        let mut results: Vec<AnalysedFunctionResult> = Vec::new();
-        if let Some(tpe) = &func_type.result {
-            results.push(AnalysedFunctionResult {
-                name: None,
-                typ: self.analyse_component_val_type(tpe)?,
-            });
-        }
+        let result: Option<AnalysedFunctionResult> = func_type
+            .result
+            .as_ref()
+            .map(|tpe| {
+                self.analyse_component_val_type(tpe)
+                    .map(|typ| AnalysedFunctionResult { typ })
+            })
+            .transpose()?;
 
         Ok(AnalysedFunction {
             name,
             parameters: params,
-            results,
+            result,
         })
     }
 
@@ -706,10 +707,9 @@ mod tests {
                 name: "user-id".to_string(),
                 typ: str(),
             }],
-            results: vec![AnalysedFunctionResult {
-                name: None,
+            result: Some(AnalysedFunctionResult {
                 typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
-            }],
+            }),
         };
         let method = AnalysedFunction {
             name: "[method]cart.add-item".to_string(),
@@ -728,7 +728,7 @@ mod tests {
                     ]),
                 },
             ],
-            results: vec![],
+            result: None,
         };
         let static_method = AnalysedFunction {
             name: "[static]cart.merge".to_string(),
@@ -742,10 +742,9 @@ mod tests {
                     typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 },
             ],
-            results: vec![AnalysedFunctionResult {
-                name: None,
+            result: Some(AnalysedFunctionResult {
                 typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
-            }],
+            }),
         };
         let fun = AnalysedFunction {
             name: "hash".to_string(),
@@ -753,13 +752,12 @@ mod tests {
                 name: "path".to_string(),
                 typ: str(),
             }],
-            results: vec![AnalysedFunctionResult {
-                name: None,
+            result: Some(AnalysedFunctionResult {
                 typ: result(
                     record(vec![field("lower", u64()), field("upper", u64())]),
                     str(),
                 ),
-            }],
+            }),
         };
 
         assert!(cons.is_constructor());
