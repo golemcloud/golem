@@ -1058,14 +1058,10 @@ fn check_test_result(
         "result {fn_name} for worker {worker_id} is ok"
     );
 
-    let response = result.unwrap();
-    let response = serde_json::to_value(response).unwrap();
-
-    let response = response
-        .get("value")
-        .and_then(|v| v.as_array())
-        .and_then(|v| v.first())
-        .cloned();
+    let response = result
+        .unwrap()
+        .map(|response| serde_json::to_value(response).unwrap())
+        .and_then(|response| response.get("value").cloned());
 
     if test.has_expected() {
         let ok_response = response

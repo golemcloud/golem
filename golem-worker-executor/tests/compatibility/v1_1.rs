@@ -142,6 +142,7 @@ pub fn oplog_entry() {
 }
 
 #[test]
+#[ignore] // compatibility has been broken in 1.3
 pub fn serializable_invoke_result() {
     let sir1 = SerializableInvokeResult::Pending;
     let sir2 = SerializableInvokeResult::Failed(SerializableError::Generic {
