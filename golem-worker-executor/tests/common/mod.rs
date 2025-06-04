@@ -111,6 +111,7 @@ use golem_worker_executor::services::worker_enumeration::{
 use golem_worker_executor::services::worker_fork::{DefaultWorkerFork, WorkerForkService};
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::worker::{RetryDecision, Worker};
+use regex::Regex;
 use tonic::transport::Channel;
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -1198,47 +1199,44 @@ impl TestOplog {
             _ => "Other",
         };
 
-        let pattern = format!("FailOn{}", entry_name);
+        // Fail{times}On{entry}
+        let re = Regex::new(r"Fail(\d+)On([A-Za-z]+)").unwrap();
 
-        if self
-            .owned_worker_id
-            .worker_id
-            .worker_name
-            .contains("FailOn")
-        {
-            println!(
-                "worker {} entry {}",
-                self.owned_worker_id.worker_id.worker_name, entry_name
-            );
-        }
+        let worker_name = self.owned_worker_id.worker_id.worker_name.as_str();
+        if let Some(captures) = re.captures(worker_name) {
+            let times = &captures[1].parse::<usize>().unwrap_or_default();
+            let entry = &captures[2];
+            if entry == entry_name {
+                println!("worker {} entry {}", worker_name, entry_name);
 
-        if self
-            .owned_worker_id
-            .worker_id
-            .worker_name
-            .contains(pattern.as_str())
-        {
-            let failed_before = self
-                .additional_test_deps
-                .get_oplog_failures_count(self.owned_worker_id.clone(), entry_name.to_string());
+                let failed_before = self
+                    .additional_test_deps
+                    .get_oplog_failures_count(self.owned_worker_id.clone(), entry_name.to_string());
 
-            if failed_before > 0 {
-                println!(
-                    "worker {} failed on {} before {} times",
-                    self.owned_worker_id.worker_id.worker_name, entry_name, failed_before
-                );
-                Ok(())
+                if failed_before >= *times {
+                    println!(
+                        "worker {} failed on {} before {} times",
+                        worker_name, entry_name, failed_before
+                    );
+                    Ok(())
+                } else {
+                    self.additional_test_deps
+                        .add_oplog_failure(self.owned_worker_id.clone(), entry_name.to_string());
+                    println!(
+                        "worker {} failed on {} {} times",
+                        worker_name,
+                        entry_name,
+                        failed_before + 1
+                    );
+                    Err(format!(
+                        "worker {} failed on {} {} times",
+                        worker_name,
+                        entry_name,
+                        failed_before + 1
+                    ))
+                }
             } else {
-                self.additional_test_deps
-                    .add_oplog_failure(self.owned_worker_id.clone(), entry_name.to_string());
-                println!(
-                    "worker {} failed on {}",
-                    self.owned_worker_id.worker_id.worker_name, entry_name
-                );
-                Err(format!(
-                    "worker {} failed on {}",
-                    self.owned_worker_id.worker_id.worker_name, entry_name
-                ))
+                Ok(())
             }
         } else {
             Ok(())

@@ -3888,6 +3888,7 @@ dependencies = [
  "prost",
  "rand 0.9.1",
  "redis",
+ "regex",
  "ringbuf",
  "serde",
  "serde_json",

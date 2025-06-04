@@ -420,6 +420,7 @@ async fn postgres_transaction_recovery_test(
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
     fail_on_oplog_entry: &str,
+    fail_count: u8,
     commit: bool,
     expected_restart: bool,
 ) {
@@ -432,7 +433,7 @@ async fn postgres_transaction_recovery_test(
         &executor,
         &component_id,
         &db_address,
-        format!("-FailOn{}", fail_on_oplog_entry).as_str(),
+        format!("-Fail{}On{}", fail_count, fail_on_oplog_entry).as_str(),
         1,
     )
     .await;
@@ -551,7 +552,11 @@ async fn postgres_transaction_recovery_test(
     check_transaction_oplog_entries::<PostgresType>(
         oplog,
         Some(1),
-        if expected_restart { Some(1) } else { None },
+        if expected_restart {
+            Some(fail_count as usize)
+        } else {
+            None
+        },
     );
 
     drop(executor);
@@ -565,15 +570,18 @@ async fn rdbms_postgres_commit_recovery(
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
-    postgres_transaction_recovery_test(
-        last_unique_id,
-        deps,
-        postgres,
-        "CommitedRemoteTransaction",
-        true,
-        false,
-    )
-    .await;
+    for fail_count in 1..=2 {
+        postgres_transaction_recovery_test(
+            last_unique_id,
+            deps,
+            postgres,
+            "CommitedRemoteTransaction",
+            fail_count,
+            true,
+            false,
+        )
+        .await;
+    }
 }
 
 #[test]
@@ -584,15 +592,18 @@ async fn rdbms_postgres_pre_commit_recovery(
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
-    postgres_transaction_recovery_test(
-        last_unique_id,
-        deps,
-        postgres,
-        "PreCommitRemoteTransaction",
-        true,
-        true,
-    )
-    .await;
+    for fail_count in 1..=2 {
+        postgres_transaction_recovery_test(
+            last_unique_id,
+            deps,
+            postgres,
+            "PreCommitRemoteTransaction",
+            fail_count,
+            true,
+            true,
+        )
+        .await;
+    }
 }
 
 #[test]
@@ -603,15 +614,18 @@ async fn rdbms_postgres_rollback_recovery(
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
-    postgres_transaction_recovery_test(
-        last_unique_id,
-        deps,
-        postgres,
-        "RolledBackRemoteTransaction",
-        false,
-        false,
-    )
-    .await;
+    for fail_count in 1..=2 {
+        postgres_transaction_recovery_test(
+            last_unique_id,
+            deps,
+            postgres,
+            "RolledBackRemoteTransaction",
+            fail_count,
+            false,
+            false,
+        )
+        .await;
+    }
 }
 
 #[test]
@@ -622,15 +636,18 @@ async fn rdbms_postgres_pre_rollback_recovery(
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
-    postgres_transaction_recovery_test(
-        last_unique_id,
-        deps,
-        postgres,
-        "PreRollbackRemoteTransaction",
-        false,
-        true,
-    )
-    .await;
+    for fail_count in 1..=2 {
+        postgres_transaction_recovery_test(
+            last_unique_id,
+            deps,
+            postgres,
+            "PreRollbackRemoteTransaction",
+            fail_count,
+            false,
+            true,
+        )
+        .await;
+    }
 }
 
 fn postgres_create_table_statement(table_name: &str) -> String {
@@ -1051,6 +1068,7 @@ async fn mysql_transaction_recovery_test(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     fail_on_oplog_entry: &str,
+    fail_count: u8,
     commit: bool,
     expected_restart: bool,
 ) {
@@ -1063,7 +1081,7 @@ async fn mysql_transaction_recovery_test(
         &executor,
         &component_id,
         &db_address,
-        format!("-FailOn{}", fail_on_oplog_entry).as_str(),
+        format!("-Fail{}On{}", fail_count, fail_on_oplog_entry).as_str(),
         1,
     )
     .await;
@@ -1174,7 +1192,11 @@ async fn mysql_transaction_recovery_test(
     check_transaction_oplog_entries::<MysqlType>(
         oplog,
         Some(1),
-        if expected_restart { Some(1) } else { None },
+        if expected_restart {
+            Some(fail_count as usize)
+        } else {
+            None
+        },
     );
 
     drop(executor);
@@ -1188,15 +1210,18 @@ async fn rdbms_mysql_commit_recovery(
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
-    mysql_transaction_recovery_test(
-        last_unique_id,
-        deps,
-        mysql,
-        "CommitedRemoteTransaction",
-        true,
-        false,
-    )
-    .await;
+    for fail_count in 1..=2 {
+        mysql_transaction_recovery_test(
+            last_unique_id,
+            deps,
+            mysql,
+            "CommitedRemoteTransaction",
+            fail_count,
+            true,
+            false,
+        )
+        .await;
+    }
 }
 
 #[test]
@@ -1207,15 +1232,18 @@ async fn rdbms_mysql_pre_commit_recovery(
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
-    mysql_transaction_recovery_test(
-        last_unique_id,
-        deps,
-        mysql,
-        "PreCommitRemoteTransaction",
-        true,
-        true,
-    )
-    .await;
+    for fail_count in 1..=2 {
+        mysql_transaction_recovery_test(
+            last_unique_id,
+            deps,
+            mysql,
+            "PreCommitRemoteTransaction",
+            fail_count,
+            true,
+            true,
+        )
+        .await;
+    }
 }
 
 #[test]
@@ -1226,15 +1254,18 @@ async fn rdbms_mysql_rollback_recovery(
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
-    mysql_transaction_recovery_test(
-        last_unique_id,
-        deps,
-        mysql,
-        "RolledBackRemoteTransaction",
-        false,
-        false,
-    )
-    .await;
+    for fail_count in 1..=2 {
+        mysql_transaction_recovery_test(
+            last_unique_id,
+            deps,
+            mysql,
+            "RolledBackRemoteTransaction",
+            fail_count,
+            false,
+            false,
+        )
+        .await;
+    }
 }
 
 #[test]
@@ -1245,15 +1276,18 @@ async fn rdbms_mysql_pre_rollback_recovery(
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
-    mysql_transaction_recovery_test(
-        last_unique_id,
-        deps,
-        mysql,
-        "PreRollbackRemoteTransaction",
-        false,
-        true,
-    )
-    .await;
+    for fail_count in 1..=2 {
+        mysql_transaction_recovery_test(
+            last_unique_id,
+            deps,
+            mysql,
+            "PreRollbackRemoteTransaction",
+            fail_count,
+            false,
+            true,
+        )
+        .await;
+    }
 }
 
 fn mysql_create_table_statement(table_name: &str) -> String {
@@ -1631,46 +1665,6 @@ async fn workers_interrupt_test(executor: &TestWorkerExecutor, worker_ids: Vec<W
                     .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
                     .await;
 
-                let status = metadata.last_known_status.status;
-
-                (worker_id_clone, status)
-            }
-            .in_current_span(),
-        );
-    }
-
-    while let Some(res) = fibers.join_next().await {
-        let (worker_id, status) = res.unwrap();
-        workers_results.insert(worker_id, status);
-    }
-
-    for (worker_id, status) in workers_results {
-        check!(
-            status == WorkerStatus::Idle,
-            "status for worker {worker_id} is Idle"
-        );
-    }
-}
-
-async fn workers_resume_test(executor: &TestWorkerExecutor, worker_ids: Vec<WorkerId>) {
-    let mut workers_results: HashMap<WorkerId, WorkerStatus> = HashMap::new();
-
-    let mut fibers = JoinSet::new();
-
-    for worker_id in worker_ids {
-        let worker_id_clone = worker_id.clone();
-        let executor_clone = executor.clone();
-        let _ = fibers.spawn(
-            async move {
-                executor_clone.interrupt(&worker_id_clone).await;
-                executor_clone.resume(&worker_id_clone, false).await;
-                let _result = executor_clone
-                    .invoke_and_await(&worker_id_clone, "golem:it/api.{check}", vec![])
-                    .await
-                    .unwrap();
-                let metadata = executor_clone
-                    .wait_for_status(&worker_id_clone, WorkerStatus::Idle, Duration::from_secs(3))
-                    .await;
                 let status = metadata.last_known_status.status;
 
                 (worker_id_clone, status)

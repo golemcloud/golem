@@ -2319,7 +2319,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
                 let mut restart = false;
 
-                if let Some((pre_index, pre_entry)) = pre_entry {
+                if let Some((_pre_index, pre_entry)) = pre_entry {
                     let end_entry = self
                         .replay_state
                         .lookup_oplog_entry_with_condition(
@@ -2348,8 +2348,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                             // );
                             aborted = !rolled_back;
                         }
-
-                        let _ = handler.cleanup(&tx_id).await;
 
                         if aborted {
                             self.replay_state.switch_to_live();
@@ -2402,7 +2400,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
                         .await
                         .map_err(GolemError::runtime)?;
-                    // let begin_index = self.oplog.current_oplog_index().await;
                     Ok((begin_index, tx))
                 } else {
                     Ok((begin_index, tx))

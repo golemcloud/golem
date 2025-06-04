@@ -17,7 +17,7 @@ pub mod wit;
 use crate::durable_host::http::serialized::{
     SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
 };
-use crate::durable_host::rdbms::serialized::{RdbmsRequest, RdbmsTransactionRequest};
+use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::serialized::{
     SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddress,
     SerializableIpAddresses, SerializableStreamError,
