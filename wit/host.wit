@@ -19,3 +19,7 @@ world golem {
   import golem:rdbms/postgres@0.0.1;
   import golem:rdbms/types@0.0.1;
 }
+
+world golem-worker-executor {
+  export golem:services/executor@1.3.0;
+}

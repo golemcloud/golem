@@ -1,0 +1,175 @@
+package golem:services@1.3.0;
+
+interface executor {
+  use golem:api/context@1.1.7.{attribute-value, trace-id, span-id};
+  use golem:api/host@1.1.7.{account-id, component-id, component-version, promise-id, revert-worker-target, update-mode, uuid, worker-any-filter, worker-id, worker-metadata};
+  use golem:api/oplog@1.1.7.{oplog-index, oplog-entry};
+  use golem:rpc/types@0.2.1.{wit-value};
+  use wasi:clocks/wall-clock@0.2.3.{datetime};
+
+  variant executor-error {
+    already-exists(worker-id)
+  }
+
+  /// Represents a target Golem worker, supporting ephemeral workers with no name
+  record target-worker-id {
+    component-id: component-id,
+    worker-name: option<string>
+  }
+
+  record resource-limits {
+    available-fuel: u64,
+    max-memory-per-worker: u64
+  }
+
+  record worker-context {
+    account-id: account-id,
+    resource-limits: resource-limits
+  }
+
+  record invocation-context {
+    parent: option<worker-id>,
+    inherited-args: option<list<string>>,
+    inherited-env: option<list<tuple<string, string>>>,
+    tracing-context: option<tracing-invocation-context>
+  }
+
+  record tracing-invocation-context {
+    trace-id: trace-id,
+    spans: list<u64>,
+    span-data: list<invocation-span>,
+    trace-state: list<string>
+  }
+
+  variant invocation-span {
+    local(local-invocation-span),
+    external(external-parent-span)
+  }
+
+  record local-invocation-span {
+    span-id: span-id,
+    start: datetime,
+    attributes: list<tuple<string, attribute-value>>,
+    inherited: bool,
+    linked-context: list<u64>
+  }
+
+  record external-parent-span {
+    span-id: span-id
+  }
+
+  resource get-oplog-iterator {
+      get-next: func() -> option<list<oplog-entry>>;
+  }
+
+  resource search-oplog-iterator {
+      get-next: func() -> option<list<tuple<oplog-index, oplog-entry>>>;
+  }
+
+  enum component-file-permissions {
+    read-only,
+    read-write
+  }
+
+  record file-file-system-node {
+    name: string,
+    last-modified: datetime,
+    size: u64,
+    permissions: component-file-permissions
+  }
+
+  record directory-file-system-node {
+    name: string,
+    last-modified: datetime
+  }
+
+  variant file-system-node {
+    file(file-file-system-node),
+    directory(directory-file-system-node)
+  }
+
+  type plugin-installation-id = uuid;
+  type shard-id = u64;
+
+  resource worker-metadata-iterator {
+      get-next: func() -> option<list<worker-metadata>>;
+  }
+
+  // Q1: idempotency-key, worker-context, invocation-context:
+  //   we cannot add them as parameters to the generated stub, but we need them
+  //   on the server side to map the dynamic linked function to the generic `invoke`.
+  //   should we have them as parameters on the server side?
+  //     -> if yes how do we transform the call in the linker?
+  //     -> or can we attach them as some metadata?
+
+  resource worker {
+    metadata: func() -> result<worker-metadata, executor-error>;
+
+    invoke: func(
+        idempotency-key: uuid,
+        function-name: string,
+        args: list<wit-value>,
+        context: worker-context,
+        invocation-context: invocation-context) -> result<_, executor-error>;
+
+    invoke-and-await: func(
+        idempotency-key: uuid,
+        function-name: string,
+        args: list<wit-value>,
+        context: worker-context,
+        invocation-context: invocation-context) -> result<option<wit-value>, executor-error>;
+
+    interrupt: func(recover-immediately: bool, context: worker-context) -> result<_, executor-error>;
+    resume: func(context: worker-context) -> result<_, executor-error>;
+
+    complete-promise: func(promise-id: promise-id, data: list<u8>) -> result<bool, executor-error>;
+
+    update: func(target-version: component-version, mode: update-mode, context: worker-context) -> result<_, executor-error>;
+
+    oplog: func(start-index: oplog-index, context: worker-context) -> result<get-oplog-iterator, executor-error>;
+    search-oplog: func(query: string, context: worker-context) -> result<search-oplog-iterator, executor-error>;
+
+    fork: func(target-worker-id: worker-id, oplog-index-cutoff: oplog-index, context: worker-context) -> result<_, executor-error>;
+
+    revert: func(target: revert-worker-target, context: worker-context) -> result<_, executor-error>;
+    cancel-invocation: func(idempotency-key: uuid, context: worker-context) -> result<_, executor-error>;
+
+    list-directory: func(path: string, context: worker-context) -> result<list<file-system-node>, executor-error>;
+
+    // Q6: do we want a temporary "streaming" version or wait for P3
+    get-file-contents: func(path: string, context: worker-context) -> result<list<u8>, executor-error>;
+
+    activate-plugin: func(installation-id: plugin-installation-id, context: worker-context) -> result<_, executor-error>;
+    deactivate-plugin: func(installation-id: plugin-installation-id, context: worker-context) -> result<_, executor-error>;
+
+    delete: func(context: worker-context) -> result<_, executor-error>;
+
+    // Q3: the worker's exported functions and resources are available as members of the resource.
+    //     or maybe it should be a different resource to avoid collisions. Then which component
+    //     would be the outer?
+    //       -> when using for s2s communication the resource handles will have to be cached in the
+    //          caller services otherwise we always have to do two (or three) wRPC calls for everything
+
+    // Q4: do we want to support `connect` before P3 streams?
+
+    // Q5: context: worker-context is ok for s2s and matches the protobuf api, but is not good
+    //     if we want to directly provide this for guests. so maybe it should be some kind of metadata
+  }
+
+  /// Gets an existing worker.
+  /// If it does not exist, it starts a new one with the latest component version.
+  get-worker: func(id: target-worker-id) -> result<worker, executor-error>;
+
+  /// Creates a new worker with custom settings. If the worker already exists, it fails.
+  create-worker: func(
+    id: target-worker-id,
+    component-version: component-version,
+    args: list<string>,
+    env: list<tuple<string, string>>,
+    context: worker-context) -> result<worker, executor-error>;
+
+  revoke-shards: func(shard-ids: list<shard-id>) -> result<_, executor-error>;
+  assign-shards: func(shard-ids: list<shard-id>) -> result<_, executor-error>;
+
+  get-worker-metadata: func(component-id: component-id, filter: option<worker-any-filter>, precise: bool) -> result<worker-metadata-iterator, executor-error>;
+}

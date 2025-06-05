@@ -26,6 +26,7 @@ pub mod virtual_export_compat;
 pub mod wasi_host;
 pub mod worker;
 pub mod workerctx;
+pub mod wrpc;
 
 #[cfg(test)]
 test_r::enable!();

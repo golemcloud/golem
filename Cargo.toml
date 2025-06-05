@@ -265,8 +265,11 @@ wasmtime = { version = "=33.0.0", features = ["component-model"] }
 wasmtime-wasi = { version = "=33.0.0" }
 wasmtime-wasi-http = { version = "=33.0.0" }
 webpki-roots = { version = "0.26.7" }
+wit-bindgen-wrpc = "0.10.0"
 wit-component = "0.229"
 wit-parser = "0.229"
+wrpc = { version = "=0.15.0", default-features = false, features = ["net"] }
+wrpc-transport = { version = "0.28.4", default-features = false, features = ["net"] }
 
 [patch.crates-io]
 redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }
