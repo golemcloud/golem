@@ -39,8 +39,12 @@ http {
             proxy_pass http://$GOLEM_COMPONENT_SERVICE_HOST:$GOLEM_COMPONENT_SERVICE_PORT;
         }
 
-        location / {
+        location /v1/plugins {
             proxy_pass http://$GOLEM_COMPONENT_SERVICE_HOST:$GOLEM_COMPONENT_SERVICE_PORT;
+        }
+
+        location / {
+            proxy_pass http://$GOLEM_COMPONENT_SERVICE_HOST:$GOLEM_CLOUD_SERVICE_PORT;
         }
     }
 }
