@@ -98,12 +98,12 @@ impl FunctionConstraints {
                         }
 
                         // Check for return type conflicts
-                        if existing_constraint.return_types() != constraint_usage.return_types() {
+                        if existing_constraint.return_type() != constraint_usage.return_type() {
                             return Err(format!(
                                 "Return type conflict for function key {:?}: {:?} vs {:?}",
                                 constraint_usage.function_key(),
-                                existing_constraint.return_types(),
-                                constraint_usage.return_types()
+                                existing_constraint.return_type(),
+                                constraint_usage.return_type()
                             ));
                         }
 
@@ -136,19 +136,19 @@ impl FunctionConstraints {
 pub struct FunctionSignature {
     function_key: RegistryKey,
     parameter_types: Vec<AnalysedType>,
-    return_types: Vec<AnalysedType>,
+    return_type: Option<AnalysedType>,
 }
 
 impl FunctionSignature {
     pub fn new(
         function_key: RegistryKey,
         parameter_types: Vec<AnalysedType>,
-        return_types: Vec<AnalysedType>,
+        return_type: Option<AnalysedType>,
     ) -> Self {
         FunctionSignature {
             function_key,
             parameter_types,
-            return_types,
+            return_type,
         }
     }
 }
@@ -166,7 +166,7 @@ impl From<FunctionUsageConstraint> for WorkerFunctionType {
         WorkerFunctionType {
             function_key: value.function_signature.function_key.clone(),
             parameter_types: value.function_signature.parameter_types.clone(),
-            return_types: value.function_signature.return_types.clone(),
+            return_type: value.function_signature.return_type.clone(),
         }
     }
 }
@@ -180,8 +180,8 @@ impl FunctionUsageConstraint {
         &self.function_signature.parameter_types
     }
 
-    pub fn return_types(&self) -> &Vec<AnalysedType> {
-        &self.function_signature.return_types
+    pub fn return_type(&self) -> &Option<AnalysedType> {
+        &self.function_signature.return_type
     }
 
     pub fn from_worker_function_type(
@@ -191,7 +191,7 @@ impl FunctionUsageConstraint {
             function_signature: FunctionSignature {
                 function_key: worker_function_type.function_key.clone(),
                 parameter_types: worker_function_type.parameter_types.clone(),
-                return_types: worker_function_type.return_types.clone(),
+                return_type: worker_function_type.return_type.clone(),
             },
             usage_count: 1,
         }
@@ -252,11 +252,11 @@ mod protobuf {
         type Error = String;
 
         fn try_from(value: FunctionConstraintProto) -> Result<Self, Self::Error> {
-            let return_types = value
-                .return_types
-                .iter()
+            let return_type = value
+                .return_type
+                .as_ref()
                 .map(AnalysedType::try_from)
-                .collect::<Result<_, _>>()?;
+                .transpose()?;
 
             let parameter_types = value
                 .parameter_types
@@ -272,7 +272,7 @@ mod protobuf {
                 function_signature: FunctionSignature {
                     function_key,
                     parameter_types,
-                    return_types,
+                    return_type,
                 },
                 usage_count,
             })
@@ -290,11 +290,10 @@ mod protobuf {
                     .iter()
                     .map(|analysed_type| analysed_type.into())
                     .collect(),
-                return_types: value
-                    .return_types()
-                    .iter()
-                    .map(|analysed_type| analysed_type.into())
-                    .collect(),
+                return_type: value
+                    .return_type()
+                    .as_ref()
+                    .map(|analysed_type| analysed_type.into()),
                 usage_count: value.usage_count,
             }
         }

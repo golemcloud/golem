@@ -1,8 +1,0 @@
-syntax = "proto3";
-
-package golem.cloud.token;
-
-
-message CreateTokenDTO {
-  string expires_at = 1;
-}

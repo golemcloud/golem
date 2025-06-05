@@ -38,6 +38,7 @@ conditional-trait-gen = { workspace = true }
 dashmap = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
+headers = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
@@ -68,6 +69,7 @@ tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
+url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]

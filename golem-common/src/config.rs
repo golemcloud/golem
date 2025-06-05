@@ -17,7 +17,6 @@ use figment::providers::{Env, Format, Serialized, Toml};
 use figment::value::Value;
 use figment::Figment;
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteJournalMode;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use url::Url;
@@ -452,7 +451,7 @@ impl DbSqliteConfig {
     pub fn connect_options(&self) -> sqlx::sqlite::SqliteConnectOptions {
         sqlx::sqlite::SqliteConnectOptions::new()
             .filename(&self.database)
-            .journal_mode(SqliteJournalMode::Wal)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             .create_if_missing(true)
     }
 }

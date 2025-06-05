@@ -12,18 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::redis::Redis;
+use crate::components::shard_manager::{wait_for_startup, ShardManager};
+use crate::components::ChildProcessLogger;
+use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-use async_trait::async_trait;
 use tracing::info;
 use tracing::Level;
-
-use crate::components::redis::Redis;
-use crate::components::shard_manager::{wait_for_startup, ShardManager};
-use crate::components::ChildProcessLogger;
 
 pub struct SpawnedShardManager {
     http_port: u16,

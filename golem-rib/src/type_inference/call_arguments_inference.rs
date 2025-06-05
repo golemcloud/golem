@@ -287,7 +287,7 @@ mod internal {
                 }
                 RegistryValue::Function {
                     parameter_types,
-                    return_types,
+                    return_type,
                 } => {
                     let mut parameter_types = parameter_types.clone();
 
@@ -302,12 +302,10 @@ mod internal {
 
                         if let Some(function_result_type) = function_result_inferred_type {
                             *function_result_type = {
-                                if return_types.len() == 1 {
-                                    return_types.first().unwrap().into()
+                                if let Some(tpe) = return_type {
+                                    tpe.into()
                                 } else {
-                                    InferredType::sequence(
-                                        return_types.iter().map(|t| t.into()).collect(),
-                                    )
+                                    InferredType::sequence(vec![])
                                 }
                             }
                         };
@@ -459,7 +457,7 @@ mod function_parameters_inference_tests {
                     name: "my_parameter".to_string(),
                     typ: AnalysedType::U64(TypeU64),
                 }],
-                results: vec![],
+                result: None,
             }),
             AnalysedExport::Function(AnalysedFunction {
                 name: "baz".to_string(),
@@ -467,7 +465,7 @@ mod function_parameters_inference_tests {
                     name: "my_parameter".to_string(),
                     typ: AnalysedType::U32(TypeU32),
                 }],
-                results: vec![],
+                result: None,
             }),
         ];
         FunctionTypeRegistry::from_export_metadata(&metadata)

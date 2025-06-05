@@ -1,6 +1,18 @@
-use std::str::FromStr;
-use std::sync::Arc;
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
+use super::token::UnsafeTokenWithMetadata;
 use crate::auth::AccountAuthorisation;
 use crate::config::{AccountConfig, AccountsConfig};
 use crate::model::{AccountData, ExternalLogin, OAuth2Provider, UnsafeToken};
@@ -11,12 +23,13 @@ use crate::service::oauth2_token::{OAuth2TokenError, OAuth2TokenService};
 use crate::service::token::{TokenService, TokenServiceError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use cloud_common::model::{TokenId, TokenSecret};
+use golem_common::model::auth::TokenSecret;
 use golem_common::model::AccountId;
+use golem_common::model::TokenId;
 use golem_common::SafeDisplay;
+use std::str::FromStr;
+use std::sync::Arc;
 use tracing::info;
-
-use super::token::UnsafeTokenWithMetadata;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoginError {

@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::additional_deps::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
@@ -13,9 +27,8 @@ use golem_common::model::{
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{CancellationTokenEntry, ComponentId, Value};
+use golem_wasm_rpc::{CancellationTokenEntry, ComponentId, Value, ValueAndType};
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, WitValue};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
@@ -54,7 +67,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
-use wasmtime_wasi::WasiView;
+use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 pub struct DebugContext<T: GolemTypes> {
@@ -239,7 +252,7 @@ impl<T: GolemTypes> InvocationHooks for DebugContext<T> {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: TypeAnnotatedValue,
+        output: Option<ValueAndType>,
     ) -> Result<(), GolemError> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
@@ -632,7 +645,7 @@ impl<T: GolemTypes> WorkerCtx for DebugContext<T> {
             .await
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync> {
+    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types>> {
         self.durable_ctx().component_service()
     }
 }

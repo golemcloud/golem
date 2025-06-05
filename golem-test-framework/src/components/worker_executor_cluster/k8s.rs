@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::k8s::{K8sNamespace, K8sRoutingType};
 use crate::components::redis::Redis;
@@ -45,6 +46,7 @@ impl K8sWorkerExecutorCluster {
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
         shared_client: bool,
+        cloud_service: Arc<dyn CloudService>,
     ) -> Arc<dyn WorkerExecutor + Send + Sync + 'static> {
         Arc::new(
             K8sWorkerExecutor::new(
@@ -59,6 +61,7 @@ impl K8sWorkerExecutorCluster {
                 timeout,
                 service_annotations,
                 shared_client,
+                cloud_service,
             )
             .await,
         )
@@ -76,6 +79,7 @@ impl K8sWorkerExecutorCluster {
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
         shared_client: bool,
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors_joins = Vec::new();
@@ -94,6 +98,7 @@ impl K8sWorkerExecutorCluster {
                     timeout,
                     service_annotations.clone(),
                     shared_client,
+                    cloud_service.clone(),
                 )
                 .in_current_span(),
             );

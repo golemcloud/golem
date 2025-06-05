@@ -190,15 +190,11 @@ impl FunctionTypeRegistry {
                             })
                             .collect::<Vec<_>>();
 
-                        let return_types = fun
-                            .results
-                            .into_iter()
-                            .map(|result| {
-                                let analysed_type = result.typ;
-                                types.insert(analysed_type.clone());
-                                analysed_type
-                            })
-                            .collect::<Vec<_>>();
+                        let return_type = fun.result.map(|result| {
+                            let analysed_type = result.typ;
+                            types.insert(analysed_type.clone());
+                            analysed_type
+                        });
 
                         let registry_key = RegistryKey::FunctionNameWithInterface {
                             interface_name: interface_name.clone(),
@@ -207,7 +203,7 @@ impl FunctionTypeRegistry {
 
                         let registry_value = RegistryValue::Function {
                             parameter_types,
-                            return_types,
+                            return_type,
                         };
 
                         map.insert(registry_key, registry_value);
@@ -226,19 +222,15 @@ impl FunctionTypeRegistry {
                         })
                         .collect::<Vec<_>>();
 
-                    let return_types = fun
-                        .results
-                        .into_iter()
-                        .map(|result| {
-                            let analysed_type = result.typ;
-                            types.insert(analysed_type.clone());
-                            analysed_type
-                        })
-                        .collect::<Vec<_>>();
+                    let return_type = fun.result.map(|result| {
+                        let analysed_type = result.typ;
+                        types.insert(analysed_type.clone());
+                        analysed_type
+                    });
 
                     let registry_value = RegistryValue::Function {
                         parameter_types,
-                        return_types,
+                        return_type,
                     };
 
                     let registry_key = RegistryKey::FunctionName(function_name.clone());
@@ -390,7 +382,7 @@ pub enum RegistryValue {
     },
     Function {
         parameter_types: Vec<AnalysedType>,
-        return_types: Vec<AnalysedType>,
+        return_type: Option<AnalysedType>,
     },
 }
 
@@ -399,7 +391,7 @@ impl RegistryValue {
         match self {
             RegistryValue::Function {
                 parameter_types,
-                return_types: _,
+                return_type: _,
             } => parameter_types.clone(),
             RegistryValue::Variant {
                 parameter_types,

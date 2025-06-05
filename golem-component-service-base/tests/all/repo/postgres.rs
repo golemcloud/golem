@@ -31,8 +31,8 @@ mod tests {
     use crate::Tracing;
 
     use crate::all::repo::UuidOwner;
-    use golem_common::model::component::DefaultComponentOwner;
-    use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+    use golem_common::model::component::CloudComponentOwner;
+    use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
     use golem_component_service_base::repo::component::{
         ComponentRepo, DbComponentRepo, LoggedComponentRepo,
     };
@@ -51,7 +51,7 @@ mod tests {
     #[test_dep]
     fn postgres_component_repo(
         db: &PostgresDb,
-    ) -> Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send> {
+    ) -> Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send> {
         Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
             db.pool.clone(),
         )))
@@ -69,7 +69,7 @@ mod tests {
     #[test_dep]
     fn postgres_plugin_repo(
         db: &PostgresDb,
-    ) -> Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync> {
+    ) -> Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync> {
         Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db.pool.clone())))
     }
 
@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     async fn repo_component_delete(
-        component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
+        component_repo: &Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
     ) {
         crate::all::repo::test_repo_component_delete(component_repo.clone()).await
     }
@@ -107,8 +107,8 @@ mod tests {
     #[test]
     #[tracing::instrument]
     async fn default_plugin_repo(
-        component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
-        plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+        component_repo: &Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
+        plugin_repo: &Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync>,
     ) -> Result<(), RepoError> {
         crate::all::repo::test_default_plugin_repo(component_repo.clone(), plugin_repo.clone())
             .await
@@ -117,8 +117,8 @@ mod tests {
     #[test]
     #[tracing::instrument]
     async fn default_component_plugin_installation(
-        component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
-        plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+        component_repo: &Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
+        plugin_repo: &Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync>,
     ) -> Result<(), RepoError> {
         crate::all::repo::test_default_component_plugin_installation(
             component_repo.clone(),
@@ -130,7 +130,7 @@ mod tests {
     #[test]
     #[tracing::instrument]
     async fn component_find_by_names(
-        component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
+        component_repo: &Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
     ) {
         crate::all::repo::test_repo_component_find_by_names(component_repo.clone()).await
     }

@@ -16,7 +16,7 @@ use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::DurableFunctionType;
-use wasmtime_wasi::bindings::random::insecure_seed::Host;
+use wasmtime_wasi::p2::bindings::random::insecure_seed::Host;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn insecure_seed(&mut self) -> anyhow::Result<(u64, u64)> {

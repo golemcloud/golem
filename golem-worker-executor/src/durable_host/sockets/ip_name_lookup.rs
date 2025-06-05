@@ -20,11 +20,12 @@ use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::error::GolemError;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::DurableFunctionType;
-use wasmtime_wasi::bindings::sockets::ip_name_lookup::{
+use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::{
     Host, HostResolveAddressStream, IpAddress, Network, ResolveAddressStream,
 };
-use wasmtime_wasi::bindings::sockets::network::ErrorCode;
-use wasmtime_wasi::{DynPollable, Pollable, SocketError};
+use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
+use wasmtime_wasi::p2::SocketError;
+use wasmtime_wasi::{DynPollable, Pollable};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostResolveAddressStream for DurableWorkerCtx<Ctx> {

@@ -43,12 +43,11 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
-use crate::worker::function_result_interpreter::interpret_function_results;
 use crate::worker::invocation::{
     find_first_available_function, invoke_observed_and_traced, InvokeResult,
 };
 use crate::worker::status::calculate_last_known_status;
-use crate::worker::{is_worker_error_retriable, RetryDecision, Worker};
+use crate::worker::{interpret_function_result, is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, IndexedResourceStore, InvocationContextManagement,
     InvocationHooks, InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement,
@@ -80,9 +79,8 @@ use golem_common::model::{
 };
 use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{Uri, Value};
+use golem_wasm_rpc::{Uri, Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -96,11 +94,9 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
-use wasmtime_wasi::bindings::filesystem::preopens::Descriptor;
-use wasmtime_wasi::{
-    FsResult, I32Exit, IoCtx, IoImpl, IoView, ResourceTable, ResourceTableError, Stderr, Stdout,
-    WasiCtx, WasiImpl, WasiView,
-};
+use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
+use wasmtime_wasi::p2::{FsResult, Stderr, Stdout, WasiCtx, WasiImpl, WasiView};
+use wasmtime_wasi::{I32Exit, IoCtx, IoImpl, IoView, ResourceTable, ResourceTableError};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
@@ -276,7 +272,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     fn fail_if_read_only(&mut self, fd: &Resource<Descriptor>) -> FsResult<()> {
         if self.is_read_only(fd)? {
-            Err(wasmtime_wasi::bindings::filesystem::types::ErrorCode::NotPermitted.into())
+            Err(wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode::NotPermitted.into())
         } else {
             Ok(())
         }
@@ -616,18 +612,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                             ))
                                         }
                                         Ok(InvokeResult::Succeeded { output, .. }) => {
-                                            if output.len() == 1 {
-                                                match &output[0] {
-                                                        Value::Result(Err(Some(boxed_error_value))) => {
-                                                            match &**boxed_error_value {
-                                                                Value::String(error) =>
-                                                                    Some(format!("Manual update failed to load snapshot: {error}")),
-                                                                _ =>
-                                                                    Some("Unexpected result value from the snapshot load function".to_string())
-                                                            }
+                                            if let Some(output) = output {
+                                                match output {
+                                                    Value::Result(Err(Some(boxed_error_value))) => {
+                                                        match &*boxed_error_value {
+                                                            Value::String(error) =>
+                                                                Some(format!("Manual update failed to load snapshot: {error}")),
+                                                            _ =>
+                                                                Some("Unexpected result value from the snapshot load function".to_string())
                                                         }
-                                                        _ => None
                                                     }
+                                                    _ => None
+                                                }
                                             } else {
                                                 Some("Unexpected result value from the snapshot load function".to_string())
                                             }
@@ -1020,7 +1016,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: TypeAnnotatedValue,
+        output: Option<ValueAndType>,
     ) -> Result<(), GolemError> {
         let is_live_after = self.state.is_live();
 
@@ -1532,10 +1528,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                     Ok(value) => {
                                         if let Some(value) = value {
                                             let result =
-                                                interpret_function_results(output, value.results)
+                                                interpret_function_result(output, value.result)
                                                     .map_err(|e| GolemError::ValueMismatch {
-                                                    details: e.join(", "),
-                                                })?;
+                                                        details: e.join(", "),
+                                                    })?;
                                             if let Err(err) = store
                                                 .as_context_mut()
                                                 .data_mut()

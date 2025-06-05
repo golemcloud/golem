@@ -15,9 +15,8 @@
 use bytes::Bytes;
 use golem_common::model::{
     plugin::{
-        ComponentTransformerDefinition, DefaultPluginScope, OplogProcessorDefinition,
-        PluginDefinition, PluginOwner, PluginScope, PluginTypeSpecificDefinition,
-        PluginWasmFileKey,
+        ComponentTransformerDefinition, OplogProcessorDefinition, PluginDefinition, PluginOwner,
+        PluginScope, PluginTypeSpecificDefinition, PluginWasmFileKey,
     },
     PluginId,
 };
@@ -72,26 +71,6 @@ impl<Scope: PluginScope> PluginDefinitionCreation<Scope> {
             specs,
             deleted: false,
         }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::PluginDefinitionCreation>
-    for PluginDefinitionCreation<DefaultPluginScope>
-{
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::PluginDefinitionCreation,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            name: value.name,
-            version: value.version,
-            description: value.description,
-            icon: value.icon,
-            homepage: value.homepage,
-            specs: value.specs.ok_or("Missing plugin specs")?.try_into()?,
-            scope: value.scope.ok_or("Missing plugin scope")?.try_into()?,
-        })
     }
 }
 

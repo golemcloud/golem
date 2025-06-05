@@ -2,22 +2,15 @@
 resolver = "2"
 
 members = [
-    "cloud-api-grpc",
-    "cloud-common",
-    "cloud-component-compilation-service",
-    "cloud-component-service",
     "cloud-debugging-service",
     "cloud-service",
-    "cloud-shard-manager",
-    "cloud-worker-service",
     "golem-api-grpc",
     "golem-client",
-    "golem-cloud-client",
     "golem-common",
     "golem-service-base",
+    "golem-component-service",
     "golem-component-compilation-service",
     "golem-component-service-base",
-    "golem-component-service",
     "golem-rib",
     "golem-rib-repl",
     "golem-test-framework",
@@ -103,8 +96,8 @@ axum = { version = "0.7.9", features = ["multipart"] }
 axum-jrpc = "0.7.1"
 base64 = "0.22.1"
 bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
-bincode = { version = "=2.0.0-rc.3", features = ["serde"] }
-bincode_derive = { version = "=2.0.0-rc.3" }
+bincode = { version = "2.0.1", features = ["serde"] }
+bincode_derive = { version = "2.0.1" }
 bit-vec = { version = "0.6.3", features = ["serde"] }
 bytes = "1.10.1"
 cap-std = "3.4.2" # keep in sync with wasmtime
@@ -122,7 +115,7 @@ conditional-trait-gen = "0.4.1"
 console-subscriber = "0.4.1"
 convert_case = "0.8.0"
 crossterm = "0.28.1"
-darling = "=0.20.10"
+darling = "0.20.11"
 dashmap = "6.1.0"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 dirs = "4.0.0"
@@ -170,7 +163,7 @@ poem = { version = "=3.1.10", features = [
     "prometheus",
     "test",
 ] }
-poem-derive = { version = "=3.1.10"}
+poem-derive = { version = "=3.1.10" }
 poem-openapi = { version = "=5.1.14", features = [
     "chrono",
     "cookie",
@@ -180,7 +173,7 @@ poem-openapi = { version = "=5.1.14", features = [
     "url",
     "uuid",
     "websocket",
-    ] }
+] }
 poem-openapi-derive = "=5.1.14"
 postgres = "0.19.10"
 prometheus = { version = "0.13.4", features = ["process"] }
@@ -231,7 +224,7 @@ testcontainers-modules = { version = "0.11.6", features = [
     "minio",
     "mysql",
 ] }
-test-r = { version = "2.1.0", default-features = true }
+test-r = { version = "2.2.0", default-features = true }
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["default", "macros"] }
 tokio = { version = "1.44", features = [
@@ -267,16 +260,16 @@ url = { version = "2.5.4", features = ["serde"] }
 urlencoding = "2.1.3"
 uuid = { version = "1.15.1", features = ["serde", "v4", "v5"] }
 wac-graph = "=0.6.1"
-wasm-wave = "0.228"
-wasmtime = { version = "=32.0.0", features = ["component-model"] }
-wasmtime-wasi = { version = "=32.0.0" }
-wasmtime-wasi-http = { version = "=32.0.0" }
+wasm-wave = "0.229"
+wasmtime = { version = "=33.0.0", features = ["component-model"] }
+wasmtime-wasi = { version = "=33.0.0" }
+wasmtime-wasi-http = { version = "=33.0.0" }
 webpki-roots = { version = "0.26.7" }
-wit-component = "0.228"
-wit-parser = "0.228"
+wit-component = "0.229"
+wit-parser = "0.229"
 
 [patch.crates-io]
 redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }
-wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v32.0.0" }
-wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v32.0.0" }
-wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v32.0.0" }
+wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }
+wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }
+wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }

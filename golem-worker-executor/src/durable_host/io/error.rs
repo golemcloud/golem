@@ -15,7 +15,7 @@
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use wasmtime::component::Resource;
-use wasmtime_wasi::bindings::io::error::{Error, Host, HostError};
+use wasmtime_wasi::p2::bindings::io::error::{Error, Host, HostError};
 
 impl<Ctx: WorkerCtx> HostError for DurableWorkerCtx<Ctx> {
     fn to_debug_string(&mut self, self_: Resource<Error>) -> anyhow::Result<String> {

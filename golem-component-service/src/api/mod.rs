@@ -16,34 +16,38 @@ use crate::service::Services;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
-use golem_component_service_base::service::component::ComponentError as ComponentServiceError;
+use golem_component_service_base::service::component::ComponentError as BaseComponentError;
 use golem_component_service_base::service::plugin::PluginError;
-use poem::endpoint::PrometheusExporter;
 use poem::error::ReadBodyError;
 use poem::Route;
 use poem_openapi::payload::Json;
-use poem_openapi::{ApiResponse, OpenApiService};
-use prometheus::Registry;
+use poem_openapi::{ApiResponse, OpenApiService, Tags};
 
 pub mod component;
+pub mod dto;
 pub mod healthcheck;
 pub mod plugin;
 
-pub fn combined_routes(prometheus_registry: Registry, services: &Services) -> Route {
+#[derive(Tags)]
+enum ApiTags {
+    Component,
+    HealthCheck,
+    Plugin,
+}
+
+pub fn combined_routes(services: &Services) -> Route {
     let api_service = make_open_api_service(services);
 
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint_yaml();
-    let metrics = PrometheusExporter::new(prometheus_registry.clone());
 
     Route::new()
         .nest("/", api_service)
         .nest("/docs", ui)
         .nest("/specs", spec)
-        .nest("/metrics", metrics)
 }
 
-pub type ApiServices = (
+type ApiServices = (
     component::ComponentApi,
     healthcheck::HealthcheckApi,
     plugin::PluginApi,
@@ -54,13 +58,10 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
         (
             component::ComponentApi::new(
                 services.component_service.clone(),
-                services.plugin_service.clone(),
                 services.api_mapper.clone(),
             ),
             healthcheck::HealthcheckApi,
-            plugin::PluginApi {
-                plugin_service: services.plugin_service.clone(),
-            },
+            plugin::PluginApi::new(services.plugin_service.clone()),
         ),
         "Golem API",
         "1.0",
@@ -69,16 +70,22 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
 
 #[derive(ApiResponse, Debug, Clone)]
 pub enum ComponentError {
+    /// Invalid request, returning with a list of issues detected in the request
     #[oai(status = 400)]
     BadRequest(Json<ErrorsBody>),
+    /// Unauthorized
     #[oai(status = 401)]
     Unauthorized(Json<ErrorBody>),
+    /// Maximum number of components exceeded
     #[oai(status = 403)]
     LimitExceeded(Json<ErrorBody>),
+    /// Component not found
     #[oai(status = 404)]
     NotFound(Json<ErrorBody>),
+    /// Component already exists
     #[oai(status = 409)]
     AlreadyExists(Json<ErrorBody>),
+    /// Internal server error
     #[oai(status = 500)]
     InternalError(Json<ErrorBody>),
 }
@@ -103,101 +110,6 @@ impl TraceErrorKind for ComponentError {
             ComponentError::LimitExceeded(_) => true,
             ComponentError::Unauthorized(_) => true,
             ComponentError::InternalError(_) => false,
-        }
-    }
-}
-
-type Result<T> = std::result::Result<T, ComponentError>;
-
-impl From<ComponentServiceError> for ComponentError {
-    fn from(error: ComponentServiceError) -> Self {
-        match error {
-            ComponentServiceError::UnknownComponentId(_)
-            | ComponentServiceError::UnknownVersionedComponentId(_) => {
-                ComponentError::NotFound(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::AlreadyExists(_) => {
-                ComponentError::AlreadyExists(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::ComponentProcessingError(error) => {
-                ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![error.to_safe_string()],
-                }))
-            }
-            ComponentServiceError::InternalRepoError(_) => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::InternalConversionError { .. } => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::ComponentStoreError { .. } => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::ComponentConstraintConflictError(_) => {
-                ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![error.to_safe_string()],
-                }))
-            }
-            ComponentServiceError::ComponentConstraintCreateError(_) => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::MalformedComponentArchiveError { .. } => {
-                ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![error.to_safe_string()],
-                }))
-            }
-            ComponentServiceError::InitialComponentFileUploadError { .. } => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::InitialComponentFileNotFound { .. } => {
-                ComponentError::NotFound(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::InternalPluginError(_) => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::TransformationFailed(_) => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::PluginApplicationFailed(_) => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::FailedToDownloadFile => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::InvalidFilePath(_) => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::InvalidComponentName { .. } => {
-                ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![error.to_safe_string()],
-                }))
-            }
         }
     }
 }
@@ -238,6 +150,56 @@ impl From<PluginError> for ComponentError {
             PluginError::InvalidOplogProcessorPlugin => {
                 ComponentError::BadRequest(Json(ErrorsBody {
                     errors: vec![value.to_safe_string()],
+                }))
+            }
+        }
+    }
+}
+
+type Result<T> = std::result::Result<T, ComponentError>;
+
+impl From<crate::service::CloudComponentError> for ComponentError {
+    fn from(value: crate::service::CloudComponentError) -> Self {
+        match value {
+            crate::service::CloudComponentError::Unauthorized(_) => {
+                ComponentError::Unauthorized(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+            crate::service::CloudComponentError::BaseComponentError(
+                BaseComponentError::ComponentProcessingError(_),
+            ) => ComponentError::BadRequest(Json(ErrorsBody {
+                errors: vec![value.to_safe_string()],
+            })),
+            crate::service::CloudComponentError::BaseComponentError(
+                BaseComponentError::UnknownComponentId(_),
+            )
+            | crate::service::CloudComponentError::BaseComponentError(
+                BaseComponentError::UnknownVersionedComponentId(_),
+            )
+            | crate::service::CloudComponentError::UnknownProject(_)
+            | crate::service::CloudComponentError::BasePluginError(
+                PluginError::ComponentNotFound { .. },
+            ) => ComponentError::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            crate::service::CloudComponentError::LimitExceeded(_) => {
+                ComponentError::LimitExceeded(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+            crate::service::CloudComponentError::BaseComponentError(
+                BaseComponentError::AlreadyExists(_),
+            ) => ComponentError::AlreadyExists(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            crate::service::CloudComponentError::InternalAuthServiceError(_)
+            | crate::service::CloudComponentError::BaseComponentError(_)
+            | crate::service::CloudComponentError::BasePluginError(_)
+            | crate::service::CloudComponentError::InternalLimitError(_)
+            | crate::service::CloudComponentError::InternalProjectError(_) => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
                 }))
             }
         }

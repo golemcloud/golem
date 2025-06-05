@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::WorkerServiceInternal;
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
@@ -30,8 +32,6 @@ use std::time::Duration;
 use tracing::info;
 use tracing::Level;
 
-use super::WorkerServiceInternal;
-
 pub struct SpawnedWorkerService {
     http_port: u16,
     grpc_port: u16,
@@ -44,6 +44,7 @@ pub struct SpawnedWorkerService {
     api_deployment_client: ApiDeploymentServiceClient,
     api_security_client: ApiSecurityServiceClient,
     component_service: Arc<dyn ComponentService>,
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl SpawnedWorkerService {
@@ -60,6 +61,7 @@ impl SpawnedWorkerService {
         out_level: Level,
         err_level: Level,
         client_protocol: GolemClientProtocol,
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting golem-worker-service process");
 
@@ -79,6 +81,7 @@ impl SpawnedWorkerService {
                     &rdb,
                     verbosity,
                     false,
+                    &cloud_service,
                 )
                 .await,
             )
@@ -107,30 +110,38 @@ impl SpawnedWorkerService {
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
             client_protocol,
-            worker_client: new_worker_client(client_protocol, "localhost", grpc_port, http_port)
-                .await,
+            worker_client: new_worker_client(
+                client_protocol,
+                "localhost",
+                grpc_port,
+                http_port,
+                &cloud_service,
+            )
+            .await,
             api_definition_client: new_api_definition_client(
                 client_protocol,
                 "localhost",
                 grpc_port,
                 http_port,
+                &cloud_service,
             )
             .await,
             api_deployment_client: new_api_deployment_client(
                 client_protocol,
                 "localhost",
-                grpc_port,
                 http_port,
+                &cloud_service,
             )
             .await,
             api_security_client: new_api_security_client(
                 client_protocol,
                 "localhost",
-                grpc_port,
                 http_port,
+                &cloud_service,
             )
             .await,
-            component_service: component_service.clone(),
+            component_service,
+            cloud_service,
         }
     }
 
@@ -165,6 +176,10 @@ impl WorkerServiceInternal for SpawnedWorkerService {
 
     fn component_service(&self) -> &Arc<dyn ComponentService> {
         &self.component_service
+    }
+
+    fn cloud_service(&self) -> &Arc<dyn CloudService> {
+        &self.cloud_service
     }
 }
 

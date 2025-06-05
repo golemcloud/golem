@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_compilation_service::{
     wait_for_startup, ComponentCompilationService,
 };
@@ -52,25 +53,7 @@ impl K8sComponentCompilationService {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
-    ) -> Self {
-        Self::new_base(
-            namespace,
-            routing_type,
-            verbosity,
-            component_service,
-            timeout,
-            service_annotations,
-        )
-        .await
-    }
-
-    pub async fn new_base(
-        namespace: &K8sNamespace,
-        routing_type: &K8sRoutingType,
-        verbosity: Level,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        timeout: Duration,
-        service_annotations: Option<std::collections::BTreeMap<String, String>>,
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting Golem Component Compilation Service pod");
 
@@ -78,6 +61,7 @@ impl K8sComponentCompilationService {
             Self::HTTP_PORT,
             Self::GRPC_PORT,
             component_service,
+            &cloud_service,
             verbosity,
         )
         .await;

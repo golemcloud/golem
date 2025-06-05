@@ -40,16 +40,19 @@ use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
 
+pub mod auth;
 pub mod base64;
 pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
+pub mod config;
 pub mod error;
 pub mod exports;
 pub mod invocation_context;
 pub mod lucene;
 pub mod oplog;
 pub mod plugin;
+pub mod project;
 pub mod public_oplog;
 pub mod regions;
 pub mod trim_date;
@@ -163,8 +166,8 @@ impl bincode::Encode for Timestamp {
     }
 }
 
-impl bincode::Decode for Timestamp {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<Context> bincode::Decode<Context> for Timestamp {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let timestamp: i64 = bincode::Decode::decode(decoder)?;
         Ok(Timestamp(
             iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(timestamp as u64)),
@@ -172,8 +175,10 @@ impl bincode::Decode for Timestamp {
     }
 }
 
-impl<'de> bincode::BorrowDecode<'de> for Timestamp {
-    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<'de, Context> bincode::BorrowDecode<'de, Context> for Timestamp {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
         let timestamp: i64 = bincode::BorrowDecode::borrow_decode(decoder)?;
         Ok(Timestamp(
             iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(timestamp as u64)),
@@ -599,8 +604,8 @@ pub enum WorkerStatusRecordExtensions {
     },
 }
 
-impl ::bincode::Decode for WorkerStatusRecord {
-    fn decode<__D: Decoder>(decoder: &mut __D) -> Result<Self, DecodeError> {
+impl<Context> bincode::Decode<Context> for WorkerStatusRecord {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
         Ok(Self {
             status: Decode::decode(decoder)?,
             skipped_regions: Decode::decode(decoder)?,
@@ -620,8 +625,10 @@ impl ::bincode::Decode for WorkerStatusRecord {
         })
     }
 }
-impl<'__de> BorrowDecode<'__de> for WorkerStatusRecord {
-    fn borrow_decode<__D: BorrowDecoder<'__de>>(decoder: &mut __D) -> Result<Self, DecodeError> {
+impl<'de, Context> BorrowDecode<'de, Context> for WorkerStatusRecord {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
         Ok(Self {
             status: BorrowDecode::borrow_decode(decoder)?,
             skipped_regions: BorrowDecode::borrow_decode(decoder)?,
@@ -957,15 +964,17 @@ impl Encode for WorkerInvocation {
     }
 }
 
-impl Decode for WorkerInvocation {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<Context> Decode<Context> for WorkerInvocation {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let serialized: SerializedWorkerInvocation = Decode::decode(decoder)?;
         Ok(serialized.into())
     }
 }
 
-impl<'de> BorrowDecode<'de> for WorkerInvocation {
-    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<'de, Context> BorrowDecode<'de, Context> for WorkerInvocation {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
         let serialized: SerializedWorkerInvocation = BorrowDecode::borrow_decode(decoder)?;
         Ok(serialized.into())
     }

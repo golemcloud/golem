@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package golem.projectpolicy;
+
+import "golem/common/uuid.proto";
+
+message ProjectPolicyId {
+  golem.common.UUID value = 1;
+}

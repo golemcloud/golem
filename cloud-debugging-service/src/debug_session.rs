@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::from_value::{
     Bucket, BucketAndKey, BucketAndKeys, BucketKeyValue, BucketKeyValues, Container,
     ContainerAndObject, ContainerAndObjects, ContainerCopyObjectInfo, ContainerObjectBeginEnd,
@@ -6,7 +20,7 @@ use crate::from_value::{
 use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
 use bincode::Encode;
-use cloud_common::auth::CloudNamespace;
+use golem_common::model::auth::CloudNamespace;
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
@@ -240,11 +254,8 @@ fn get_oplog_entry_from_public_oplog_entry(
             consumed_fuel,
             response,
         }) => {
-            let type_annotated_value =
-                TypeAnnotatedValue::try_from(response).map_err(|e| e.join(", "))?;
-
-            let serialize = golem_common::serialization::serialize(&type_annotated_value)
-                .map_err(|e| e.to_string())?;
+            let serialize =
+                golem_common::serialization::serialize(&response).map_err(|e| e.to_string())?;
 
             Ok(OplogEntry::ExportedFunctionCompleted {
                 timestamp,
@@ -1198,12 +1209,9 @@ fn get_serializable_invoke_result(
                             let value_and_type =
                                 ValueAndType::new(value_of_type_annotated_value.clone(), typ);
 
-                            let type_annotated_value = TypeAnnotatedValue::try_from(value_and_type)
-                                .map_err(|err| err.join(", "))?;
-
-                            Ok(SerializableInvokeResult::Completed(Ok(
-                                type_annotated_value,
-                            )))
+                            Ok(SerializableInvokeResult::Completed(Ok(Some(
+                                value_and_type,
+                            ))))
                         }
 
                         _ => Err("Failed to get SerializableInvokeResult from Value".to_string()),
@@ -1249,7 +1257,6 @@ mod tests {
     use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
     use golem_wasm_ast::analysis::analysed_type::{case, str, variant};
     use golem_wasm_ast::analysis::NameOptionTypePair;
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use golem_worker_executor::durable_host::wasm_rpc::serialized::{
         SerializableInvokeRequest, SerializableInvokeResult,
@@ -1309,9 +1316,9 @@ mod tests {
         let result = get_serializable_invoke_result(&value_and_type);
         assert_eq!(
             result,
-            Ok(SerializableInvokeResult::Completed(Ok(
-                TypeAnnotatedValue::Str("foo".to_string())
-            )))
+            Ok(SerializableInvokeResult::Completed(Ok(Some(
+                "foo".into_value_and_type()
+            ))))
         );
     }
 

@@ -25,9 +25,10 @@ use golem_wasm_rpc_derive::IntoValue;
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
-use wasmtime_wasi::bindings::sockets::ip_name_lookup::IpAddress;
-use wasmtime_wasi::bindings::{filesystem, sockets};
-use wasmtime_wasi::{FsError, SocketError, StreamError};
+use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
+use wasmtime_wasi::p2::bindings::{filesystem, sockets};
+use wasmtime_wasi::p2::{FsError, SocketError};
+use wasmtime_wasi::StreamError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
 pub struct SerializableDateTime {
@@ -35,8 +36,8 @@ pub struct SerializableDateTime {
     pub nanoseconds: u32,
 }
 
-impl From<wasmtime_wasi::bindings::clocks::wall_clock::Datetime> for SerializableDateTime {
-    fn from(value: wasmtime_wasi::bindings::clocks::wall_clock::Datetime) -> Self {
+impl From<wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> for SerializableDateTime {
+    fn from(value: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime) -> Self {
         Self {
             seconds: value.seconds,
             nanoseconds: value.nanoseconds,
@@ -44,7 +45,7 @@ impl From<wasmtime_wasi::bindings::clocks::wall_clock::Datetime> for Serializabl
     }
 }
 
-impl From<SerializableDateTime> for wasmtime_wasi::bindings::clocks::wall_clock::Datetime {
+impl From<SerializableDateTime> for wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime {
     fn from(value: SerializableDateTime) -> Self {
         Self {
             seconds: value.seconds,
@@ -658,14 +659,15 @@ mod tests {
     use std::ops::Add;
     use std::time::{Duration, SystemTime};
     use uuid::Uuid;
-    use wasmtime_wasi::bindings::sockets::network::IpAddress;
-    use wasmtime_wasi::bindings::{filesystem, sockets};
-    use wasmtime_wasi::{FsError, SocketError, StreamError};
+    use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
+    use wasmtime_wasi::p2::bindings::{filesystem, sockets};
+    use wasmtime_wasi::p2::{FsError, SocketError};
+    use wasmtime_wasi::StreamError;
 
     fn datetime_strat(
-    ) -> impl Strategy<Value = wasmtime_wasi::bindings::clocks::wall_clock::Datetime> {
+    ) -> impl Strategy<Value = wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> {
         (0..(u64::MAX / 1_000_000_000), 0..999_999_999u32).prop_map(|(seconds, nanoseconds)| {
-            wasmtime_wasi::bindings::clocks::wall_clock::Datetime {
+            wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime {
                 seconds,
                 nanoseconds,
             }
@@ -842,7 +844,7 @@ mod tests {
         #[test]
         fn roundtrip_wall_clock_datetime(value in datetime_strat()) {
             let serialized: SerializableDateTime = value.into();
-            let result: wasmtime_wasi::bindings::clocks::wall_clock::Datetime = serialized.into();
+            let result: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime = serialized.into();
             prop_assert_eq!(value.seconds, result.seconds);
             prop_assert_eq!(value.nanoseconds, result.nanoseconds);
         }

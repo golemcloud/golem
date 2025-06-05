@@ -58,17 +58,16 @@ use golem_common::model::{
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{
-    CancellationTokenEntry, ComponentId, HostWasmRpc, RpcError, Uri, Value, WitValue,
+    CancellationTokenEntry, ComponentId, HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use tracing::debug;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
-use wasmtime_wasi::WasiView;
+use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 pub struct Context {
@@ -241,7 +240,7 @@ impl InvocationHooks for Context {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: TypeAnnotatedValue,
+        output: Option<ValueAndType>,
     ) -> Result<(), GolemError> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
@@ -699,7 +698,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.worker_proxy()
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync> {
+    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types>> {
         self.durable_ctx.component_service()
     }
 

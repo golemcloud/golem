@@ -2686,10 +2686,7 @@ mod internal {
                 );
 
                 let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
-
-                let worker_response = create_tuple(vec![type_annotated_value]);
-
-                return Ok(WorkerResponse::new(worker_response));
+                return Ok(WorkerResponse::new(Some(type_annotated_value)));
             } else if function_name == "bigw:shopping/api.{store(\"test-user\").get-currency}" {
                 let x = ValueAndType::new(
                     golem_wasm_rpc::Value::Result(Ok(Some(Box::new(
@@ -2700,9 +2697,7 @@ mod internal {
 
                 let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
 
-                let worker_response = create_tuple(vec![type_annotated_value]);
-
-                return Ok(WorkerResponse::new(worker_response));
+                return Ok(WorkerResponse::new(Some(type_annotated_value)));
             } else if function_name == "bigw:shopping/api.{store(\"test-user\").add-user}" {
                 let x = ValueAndType::new(
                     golem_wasm_rpc::Value::String("test-user-generated".to_string()),
@@ -2711,15 +2706,12 @@ mod internal {
 
                 let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
 
-                let worker_response = create_tuple(vec![type_annotated_value]);
-
-                return Ok(WorkerResponse::new(worker_response));
+                return Ok(WorkerResponse::new(Some(type_annotated_value)));
             }
 
             let type_annotated_value = convert_to_worker_response(&resolved_worker_request);
-            let worker_response = create_tuple(vec![type_annotated_value]);
 
-            Ok(WorkerResponse::new(worker_response))
+            Ok(WorkerResponse::new(Some(type_annotated_value)))
         }
     }
 
@@ -2857,10 +2849,7 @@ mod internal {
                 name: "arg1".to_string(),
                 typ: str(),
             }],
-            results: vec![AnalysedFunctionResult {
-                name: None,
-                typ: str(),
-            }],
+            result: Some(AnalysedFunctionResult { typ: str() }),
         };
 
         let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
@@ -2899,10 +2888,9 @@ mod internal {
                         name: "initial".to_string(),
                         typ: str(),
                     }],
-                    results: vec![AnalysedFunctionResult {
-                        name: None,
+                    result: Some(AnalysedFunctionResult {
                         typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
-                    }],
+                    }),
                 },
                 AnalysedFunction {
                     name: "[method]store.get-currency".to_string(),
@@ -2910,10 +2898,9 @@ mod internal {
                         name: "self".to_string(),
                         typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                     }],
-                    results: vec![AnalysedFunctionResult {
-                        name: None,
+                    result: Some(AnalysedFunctionResult {
                         typ: result(str(), str()),
-                    }],
+                    }),
                 },
                 AnalysedFunction {
                     name: "[method]store.add-user".to_string(),
@@ -2927,10 +2914,9 @@ mod internal {
                             typ: str(),
                         },
                     ],
-                    results: vec![AnalysedFunctionResult {
-                        name: None,
+                    result: Some(AnalysedFunctionResult {
                         typ: result(str(), str()),
-                    }],
+                    }),
                 },
                 AnalysedFunction {
                     name: "[drop]store".to_string(),
@@ -2938,7 +2924,7 @@ mod internal {
                         name: "self".to_string(),
                         typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
                     }],
-                    results: vec![],
+                    result: None,
                 },
             ],
         });
@@ -2962,10 +2948,7 @@ mod internal {
                             typ: str(),
                         },
                     ],
-                    results: vec![AnalysedFunctionResult {
-                        name: None,
-                        typ: str(),
-                    }],
+                    result: Some(AnalysedFunctionResult { typ: str() }),
                 },
                 AnalysedFunction {
                     name: "get-cart-contents".to_string(),
@@ -2979,15 +2962,14 @@ mod internal {
                             typ: str(),
                         },
                     ],
-                    results: vec![AnalysedFunctionResult {
-                        name: None,
+                    result: Some(AnalysedFunctionResult {
                         typ: record(vec![
                             field("component_id", str()),
                             field("function_name", str()),
                             field("function_params", tuple(vec![str(), str()])),
                             field("worker_name", str()),
                         ]),
-                    }],
+                    }),
                 },
             ],
         });

@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::additional_deps::AdditionalDeps;
 use crate::auth::{AuthService, AuthServiceDefault};
 use crate::config::DebugConfig;
@@ -9,7 +23,7 @@ use anyhow::{Context, Error};
 use async_trait::async_trait;
 use axum::routing::any;
 use axum::Router;
-use cloud_common::clients::auth::CloudAuthService;
+use golem_service_base::clients::auth::CloudAuthService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::cloud::CloudGolemTypes;
 use golem_worker_executor::durable_host::DurableWorkerCtx;

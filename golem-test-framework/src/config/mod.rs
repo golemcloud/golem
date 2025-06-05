@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
@@ -44,22 +45,20 @@ pub enum GolemClientProtocol {
 
 #[async_trait]
 pub trait TestDependencies {
-    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static>;
-    fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static>;
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static>;
-    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static>;
-    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static>;
+    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync>;
+    fn redis(&self) -> Arc<dyn Redis + Send + Sync>;
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync>;
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync>;
+    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync>;
     fn component_directory(&self) -> &Path;
     fn component_temp_directory(&self) -> &Path;
     fn component_service(&self) -> Arc<dyn ComponentService>;
-    fn component_compilation_service(
-        &self,
-    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static>;
-    fn worker_service(&self) -> Arc<dyn WorkerService + 'static>;
-    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>;
-
+    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService + Send + Sync>;
+    fn worker_service(&self) -> Arc<dyn WorkerService>;
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync>;
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService>;
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService>;
+    fn cloud_service(&self) -> Arc<dyn CloudService>;
 
     async fn kill_all(&self) {
         self.worker_executor_cluster().kill_all().await;

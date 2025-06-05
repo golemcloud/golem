@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
+use golem_test_framework::components::cloud_service::{CloudService, StubCloudService};
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
@@ -169,6 +170,10 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
     fn component_temp_directory(&self) -> &Path {
         self.component_temp_directory.path()
     }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        panic!("Not supported")
+    }
 }
 
 pub struct WorkerExecutorTestDependencies {
@@ -248,9 +253,12 @@ impl WorkerExecutorTestDependencies {
             ProvidedWorkerExecutor::new("localhost".to_string(), http_port, grpc_port, true),
         );
         // Fake worker service forwarding all requests to the worker executor directly
-        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
-            ForwardingWorkerService::new(worker_executor.clone(), self.component_service()),
-        );
+        let worker_service: Arc<dyn WorkerService + 'static> =
+            Arc::new(ForwardingWorkerService::new(
+                worker_executor.clone(),
+                self.component_service(),
+                Arc::new(StubCloudService),
+            ));
         WorkerExecutorPerTestDependencies {
             redis,
             redis_monitor: self.redis_monitor.clone(),
@@ -320,6 +328,10 @@ impl TestDependencies for WorkerExecutorTestDependencies {
 
     fn component_temp_directory(&self) -> &Path {
         self.component_temp_directory.path()
+    }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        panic!("Not supported")
     }
 }
 

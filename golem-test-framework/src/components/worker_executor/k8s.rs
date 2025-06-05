@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
@@ -61,35 +62,7 @@ impl K8sWorkerExecutor {
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
         shared_client: bool,
-    ) -> Self {
-        Self::new_base(
-            namespace,
-            routing_type,
-            idx,
-            verbosity,
-            redis,
-            component_service,
-            shard_manager,
-            worker_service,
-            timeout,
-            service_annotations,
-            shared_client,
-        )
-        .await
-    }
-
-    pub async fn new_base(
-        namespace: &K8sNamespace,
-        routing_type: &K8sRoutingType,
-        idx: usize,
-        verbosity: Level,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        worker_service: Arc<dyn WorkerService + 'static>,
-        timeout: Duration,
-        service_annotations: Option<std::collections::BTreeMap<String, String>>,
-        shared_client: bool,
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting Golem Worker Executor {idx} pod");
 
@@ -102,6 +75,7 @@ impl K8sWorkerExecutor {
             shard_manager,
             worker_service,
             redis,
+            &cloud_service,
             verbosity,
         )
         .await;

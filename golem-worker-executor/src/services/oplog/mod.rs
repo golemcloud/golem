@@ -276,6 +276,7 @@ pub trait OplogOps: Oplog {
             trace_id: invocation_context.trace_id,
             trace_states: invocation_context.trace_states,
         };
+
         self.add(entry.clone()).await;
         Ok(entry)
     }
@@ -327,7 +328,7 @@ pub trait OplogOps: Oplog {
         }
     }
 
-    async fn get_payload_of_entry<T: Decode>(
+    async fn get_payload_of_entry<T: Decode<()>>(
         &self,
         entry: &OplogEntry,
     ) -> Result<Option<T>, String> {

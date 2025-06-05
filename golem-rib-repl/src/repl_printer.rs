@@ -152,7 +152,7 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
                 output.push_str(&format!(
                     "           ↳ {}: {}\n",
                     "Returns".blue(),
-                    format_type_list(&ftype.return_type).truecolor(180, 180, 180)
+                    format_return_type(&ftype.return_type).truecolor(180, 180, 180)
                 ));
             }
 
@@ -192,7 +192,7 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
                         output.push_str(&format!(
                             "             ↳ {}: {}\n",
                             "Returns".blue(),
-                            format_type_list(&mtype.return_type).truecolor(180, 180, 180)
+                            format_return_type(&mtype.return_type).truecolor(180, 180, 180)
                         ));
                     }
                 }
@@ -213,6 +213,12 @@ fn format_type_list(types: &[InferredType]) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     }
+}
+
+fn format_return_type(typ: &Option<InferredType>) -> String {
+    typ.as_ref()
+        .map(|t| wasm_wave::wasm::DisplayType(&AnalysedType::try_from(t).unwrap()).to_string())
+        .unwrap_or_else(|| "()".to_string())
 }
 
 #[derive(Default)]

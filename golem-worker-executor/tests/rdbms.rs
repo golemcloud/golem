@@ -953,7 +953,8 @@ async fn rdbms_workers_test<T: RdbmsType>(
     worker_ids: Vec<WorkerId>,
     test: RdbmsTest,
 ) {
-    let mut workers_results: HashMap<WorkerId, Result<ValueAndType, Error>> = HashMap::new(); // <worker_id, results>
+    let mut workers_results: HashMap<WorkerId, Result<Option<ValueAndType>, Error>> =
+        HashMap::new(); // <worker_id, results>
 
     let mut fibers = JoinSet::new();
 
@@ -995,7 +996,7 @@ async fn execute_worker_test<T: RdbmsType>(
     worker_id: &WorkerId,
     idempotency_key: &IdempotencyKey,
     test: RdbmsTest,
-) -> Result<ValueAndType, Error> {
+) -> Result<Option<ValueAndType>, Error> {
     let db_type = T::default().to_string();
 
     let fn_name = test.fn_name();
@@ -1045,7 +1046,11 @@ async fn execute_worker_test<T: RdbmsType>(
         .await
 }
 
-fn check_test_result(worker_id: &WorkerId, result: Result<ValueAndType, Error>, test: RdbmsTest) {
+fn check_test_result(
+    worker_id: &WorkerId,
+    result: Result<Option<ValueAndType>, Error>,
+    test: RdbmsTest,
+) {
     let fn_name = test.fn_name();
 
     check!(
@@ -1053,14 +1058,10 @@ fn check_test_result(worker_id: &WorkerId, result: Result<ValueAndType, Error>, 
         "result {fn_name} for worker {worker_id} is ok"
     );
 
-    let response = result.unwrap();
-    let response = serde_json::to_value(response).unwrap();
-
-    let response = response
-        .get("value")
-        .and_then(|v| v.as_array())
-        .and_then(|v| v.first())
-        .cloned();
+    let response = result
+        .unwrap()
+        .map(|response| serde_json::to_value(response).unwrap())
+        .and_then(|response| response.get("value").cloned());
 
     if test.has_expected() {
         let ok_response = response

@@ -90,5 +90,5 @@ message FullyQualifiedResourceMethod {
 
 message FunctionType {
   repeated wasm.ast.Type parameter_types = 1;
-  repeated wasm.ast.Type return_type = 2;
+  optional wasm.ast.Type return_type = 2;
 }

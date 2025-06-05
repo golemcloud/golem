@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
+use golem_test_framework::components::cloud_service::CloudService;
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::rdb::Rdb;
 use golem_test_framework::components::redis::Redis;
@@ -101,5 +102,9 @@ impl TestDependencies for TestRegularWorkerExecutor {
 
     fn component_temp_directory(&self) -> &Path {
         self.deps.component_temp_directory()
+    }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        self.deps.cloud_service()
     }
 }

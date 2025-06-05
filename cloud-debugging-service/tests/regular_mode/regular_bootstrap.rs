@@ -2,14 +2,17 @@ use crate::regular_mode::worker_ctx::TestWorkerCtx;
 use crate::{get_component_cache_config, get_component_service_config};
 use async_trait::async_trait;
 use golem_service_base::storage::blob::BlobStorage;
+use golem_worker_executor::cloud::CloudGolemTypes;
 use golem_worker_executor::durable_host::DurableWorkerCtx;
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::blob_store::BlobStoreService;
-use golem_worker_executor::services::component::{self, ComponentService};
+use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
-use golem_worker_executor::services::golem_config::{GolemConfig, ResourceLimitsConfig};
+use golem_worker_executor::services::golem_config::{
+    GolemConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
+};
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::OplogService;
@@ -27,9 +30,9 @@ use golem_worker_executor::services::worker_enumeration::{
 };
 use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{plugins, resource_limits, All};
+use golem_worker_executor::services::{resource_limits, All};
 use golem_worker_executor::wasi_host::create_linker;
-use golem_worker_executor::{Bootstrap, DefaultGolemTypes};
+use golem_worker_executor::Bootstrap;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use wasmtime::component::Linker;
@@ -50,10 +53,13 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         &self,
         golem_config: &GolemConfig,
     ) -> (
-        Arc<dyn Plugins<DefaultGolemTypes>>,
+        Arc<dyn Plugins<CloudGolemTypes>>,
         Arc<dyn PluginsObservations>,
     ) {
-        plugins::default_configured(&golem_config.plugin_service)
+        let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(
+            &golem_config.plugin_service,
+        );
+        (plugins.clone(), plugins)
     }
 
     fn create_component_service(
@@ -61,9 +67,10 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         plugin_observations: Arc<dyn PluginsObservations>,
-    ) -> Arc<dyn ComponentService<DefaultGolemTypes>> {
-        component::configured(
+    ) -> Arc<dyn ComponentService<CloudGolemTypes>> {
+        golem_worker_executor::services::cloud::component::configured(
             &get_component_service_config(),
+            &golem_config.project_service,
             &get_component_cache_config(),
             &golem_config.compiled_component_service,
             blob_storage,
@@ -77,7 +84,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<TestWorkerCtx>>,
         runtime: Handle,
-        component_service: Arc<dyn ComponentService<DefaultGolemTypes>>,
+        component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
         shard_manager_service: Arc<dyn ShardManagerService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -94,10 +101,12 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<DefaultGolemTypes>>,
+        plugins: Arc<dyn Plugins<CloudGolemTypes>>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
-        let resource_limits = resource_limits::configured(&ResourceLimitsConfig::Disabled);
+        let resource_limits = resource_limits::configured(&ResourceLimitsConfig::Disabled(
+            ResourceLimitsDisabledConfig {},
+        ));
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),

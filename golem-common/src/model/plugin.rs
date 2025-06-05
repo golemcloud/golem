@@ -1,14 +1,30 @@
-use super::{PluginId, PoemMultipartTypeRequirements};
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::component::CloudComponentOwner;
+use super::{Empty, PluginId, PoemMultipartTypeRequirements, ProjectId};
+use crate::model::auth::CloudAuthCtx;
 use crate::model::{
-    AccountId, ComponentId, ComponentVersion, Empty, PluginInstallationId, PoemTypeRequirements,
+    AccountId, ComponentId, ComponentVersion, PluginInstallationId, PoemTypeRequirements,
 };
 use async_trait::async_trait;
-use serde::de::{MapAccess, Visitor};
-use serde::ser::SerializeStruct;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use core::fmt;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
@@ -16,80 +32,6 @@ use std::str::FromStr;
 #[serde(rename_all = "camelCase")]
 pub struct ComponentPluginScope {
     pub component_id: ComponentId,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-pub enum DefaultPluginScope {
-    Global(Empty),
-    Component(ComponentPluginScope),
-}
-
-impl DefaultPluginScope {
-    pub fn global() -> Self {
-        DefaultPluginScope::Global(Empty {})
-    }
-
-    pub fn component(component_id: ComponentId) -> Self {
-        DefaultPluginScope::Component(ComponentPluginScope { component_id })
-    }
-
-    pub fn valid_in_component(&self, component_id: &ComponentId) -> bool {
-        match self {
-            DefaultPluginScope::Global(_) => true,
-            DefaultPluginScope::Component(scope) => &scope.component_id == component_id,
-        }
-    }
-}
-
-impl Default for DefaultPluginScope {
-    fn default() -> Self {
-        DefaultPluginScope::global()
-    }
-}
-
-impl Display for DefaultPluginScope {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DefaultPluginScope::Global(_) => write!(f, "global"),
-            DefaultPluginScope::Component(scope) => write!(f, "component:{}", scope.component_id),
-        }
-    }
-}
-
-#[cfg(feature = "poem")]
-impl poem_openapi::types::ParseFromParameter for DefaultPluginScope {
-    fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
-        if value == "global" {
-            Ok(Self::global())
-        } else if let Some(id_part) = value.strip_prefix("component:") {
-            let component_id = ComponentId::try_from(id_part);
-            match component_id {
-                Ok(component_id) => Ok(Self::component(component_id)),
-                Err(err) => Err(poem_openapi::types::ParseError::<Self>::custom(err)),
-            }
-        } else {
-            Err(poem_openapi::types::ParseError::<Self>::custom("Unexpected representation of plugin scope - must be 'global' or 'component:<component_id>'".to_string()))
-        }
-    }
-}
-
-#[cfg(feature = "poem")]
-impl poem_openapi::types::ParseFromMultipartField for DefaultPluginScope {
-    async fn parse_from_multipart(
-        field: Option<poem::web::Field>,
-    ) -> poem_openapi::types::ParseResult<Self> {
-        use poem_openapi::types::ParseFromParameter;
-        match field {
-            Some(field) => {
-                let s = field.text().await?;
-                Self::parse_from_parameter(&s)
-            }
-            None => Err(poem_openapi::types::ParseError::expected_input()),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,71 +152,44 @@ pub trait PluginOwner:
     fn account_id(&self) -> AccountId;
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct DefaultPluginOwner;
+#[serde(rename_all = "camelCase")]
+pub struct CloudPluginOwner {
+    pub account_id: AccountId,
+}
 
-impl Display for DefaultPluginOwner {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "default")
+impl Display for CloudPluginOwner {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.account_id)
     }
 }
 
-impl FromStr for DefaultPluginOwner {
+impl FromStr for CloudPluginOwner {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "default" {
-            Ok(DefaultPluginOwner)
-        } else {
-            Err("Failed to parse empty namespace".to_string())
+        Ok(Self {
+            account_id: AccountId::from(s),
+        })
+    }
+}
+
+impl From<CloudComponentOwner> for CloudPluginOwner {
+    fn from(value: CloudComponentOwner) -> Self {
+        CloudPluginOwner {
+            account_id: value.account_id,
         }
     }
 }
 
-impl PluginOwner for DefaultPluginOwner {
+impl PluginOwner for CloudPluginOwner {
     #[cfg(feature = "sql")]
-    type Row = crate::repo::plugin::DefaultPluginOwnerRow;
+    type Row = crate::repo::CloudPluginOwnerRow;
 
     fn account_id(&self) -> AccountId {
-        AccountId::placeholder()
-    }
-}
-
-impl Serialize for DefaultPluginOwner {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let s = serializer.serialize_struct("DefaultPluginOwner", 0)?;
-        s.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for DefaultPluginOwner {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct UnitVisitor;
-
-        impl<'de> Visitor<'de> for UnitVisitor {
-            type Value = DefaultPluginOwner;
-
-            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-                formatter.write_str("struct DefaultPluginOwner")
-            }
-
-            fn visit_map<A>(self, _map: A) -> Result<Self::Value, A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                Ok(DefaultPluginOwner)
-            }
-        }
-
-        deserializer.deserialize_struct("DefaultPluginOwner", &[], UnitVisitor)
+        self.account_id.clone()
     }
 }
 
@@ -401,18 +316,112 @@ pub trait PluginScope:
     async fn accessible_scopes(&self, context: Self::RequestContext) -> Result<Vec<Self>, String>;
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectPluginScope {
+    pub project_id: ProjectId,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+pub enum CloudPluginScope {
+    Global(Empty),
+    Component(ComponentPluginScope),
+    Project(ProjectPluginScope),
+}
+
+impl CloudPluginScope {
+    pub fn global() -> Self {
+        CloudPluginScope::Global(Empty {})
+    }
+
+    pub fn component(component_id: ComponentId) -> Self {
+        CloudPluginScope::Component(ComponentPluginScope { component_id })
+    }
+
+    pub fn project(project_id: ProjectId) -> Self {
+        CloudPluginScope::Project(ProjectPluginScope { project_id })
+    }
+
+    pub fn valid_in_component(&self, component_id: &ComponentId, project_id: &ProjectId) -> bool {
+        match self {
+            CloudPluginScope::Global(_) => true,
+            CloudPluginScope::Component(scope) => &scope.component_id == component_id,
+            CloudPluginScope::Project(scope) => &scope.project_id == project_id,
+        }
+    }
+}
+
+impl Default for CloudPluginScope {
+    fn default() -> Self {
+        CloudPluginScope::global()
+    }
+}
+
+impl Display for CloudPluginScope {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            CloudPluginScope::Global(_) => write!(f, "global"),
+            CloudPluginScope::Component(scope) => write!(f, "component:{}", scope.component_id),
+            CloudPluginScope::Project(scope) => write!(f, "project:{}", scope.project_id),
+        }
+    }
+}
+
 #[async_trait]
-impl PluginScope for DefaultPluginScope {
+pub trait ComponentOwnershipQuery: Send + Sync {
+    async fn get_project(
+        &self,
+        component_id: &ComponentId,
+        auth_ctx: &CloudAuthCtx,
+    ) -> Result<Option<ProjectId>, String>;
+}
+
+#[async_trait]
+impl PluginScope for CloudPluginScope {
     #[cfg(feature = "sql")]
-    type Row = crate::repo::plugin::DefaultPluginScopeRow;
+    type Row = crate::repo::CloudPluginScopeRow;
 
-    type RequestContext = ();
+    type RequestContext = (Arc<dyn ComponentOwnershipQuery>, CloudAuthCtx);
 
-    async fn accessible_scopes(&self, _context: ()) -> Result<Vec<Self>, String> {
-        Ok(match self {
-            DefaultPluginScope::Global(_) => vec![self.clone()],
-            DefaultPluginScope::Component(_) => vec![Self::global(), self.clone()],
-        })
+    async fn accessible_scopes(&self, context: Self::RequestContext) -> Result<Vec<Self>, String> {
+        match self {
+            CloudPluginScope::Global(_) =>
+            // In global scope we only have access to plugins in global scope
+            {
+                Ok(vec![self.clone()])
+            }
+            CloudPluginScope::Component(component) => {
+                // In a component scope we have access to
+                // - plugins in that particular scope
+                // - plugins of the component's owner project
+                // - and all the global ones
+
+                let (component_service, auth_ctx) = context;
+                let project = component_service
+                    .get_project(&component.component_id, &auth_ctx)
+                    .await?;
+
+                if let Some(project_id) = project {
+                    Ok(vec![
+                        Self::global(),
+                        Self::project(project_id),
+                        self.clone(),
+                    ])
+                } else {
+                    Ok(vec![Self::global(), self.clone()])
+                }
+            }
+            CloudPluginScope::Project(_) =>
+            // In a project scope we have access to plugins in that particular scope, and all the global ones
+            {
+                Ok(vec![Self::global(), self.clone()])
+            }
+        }
     }
 }
 
@@ -433,7 +442,7 @@ impl Display for ComponentPluginInstallationTarget {
 
 impl PluginInstallationTarget for ComponentPluginInstallationTarget {
     #[cfg(feature = "sql")]
-    type Row = crate::repo::plugin_installation::ComponentPluginInstallationRow;
+    type Row = crate::repo::ComponentPluginInstallationRow;
 
     #[cfg(feature = "sql")]
     fn table_name() -> &'static str {
@@ -441,98 +450,57 @@ impl PluginInstallationTarget for ComponentPluginInstallationTarget {
     }
 }
 
-#[cfg(feature = "protobuf")]
-mod protobuf {
-    use crate::model::plugin::{
-        AppPluginDefinition, ComponentTransformerDefinition, DefaultPluginOwner,
-        DefaultPluginScope, LibraryPluginDefinition, OplogProcessorDefinition, PluginDefinition,
-        PluginInstallation, PluginTypeSpecificDefinition, PluginWasmFileKey,
+#[cfg(feature = "poem")]
+mod poem {
+    use super::{CloudPluginScope, ComponentId, ProjectId};
+    use poem::web::Field;
+    use poem_openapi::types::{
+        ParseError, ParseFromMultipartField, ParseFromParameter, ParseResult,
     };
 
-    impl From<DefaultPluginScope> for golem_api_grpc::proto::golem::component::DefaultPluginScope {
-        fn from(scope: DefaultPluginScope) -> Self {
-            match scope {
-                DefaultPluginScope::Global(_) => golem_api_grpc::proto::golem::component::DefaultPluginScope {
-                    scope: Some(golem_api_grpc::proto::golem::component::default_plugin_scope::Scope::Global(
-                        golem_api_grpc::proto::golem::common::Empty {},
-                    )),
-                },
-                DefaultPluginScope::Component(scope) => golem_api_grpc::proto::golem::component::DefaultPluginScope {
-                    scope: Some(golem_api_grpc::proto::golem::component::default_plugin_scope::Scope::Component(
-                        golem_api_grpc::proto::golem::component::ComponentPluginScope {
-                            component_id: Some(scope.component_id.into()),
-                        },
-                    )),
-                },
+    impl ParseFromParameter for CloudPluginScope {
+        fn parse_from_parameter(value: &str) -> ParseResult<Self> {
+            if value == "global" {
+                Ok(Self::global())
+            } else if let Some(id_part) = value.strip_prefix("component:") {
+                let component_id = ComponentId::try_from(id_part);
+                match component_id {
+                    Ok(component_id) => Ok(Self::component(component_id)),
+                    Err(err) => Err(ParseError::custom(err)),
+                }
+            } else if let Some(id_part) = value.strip_prefix("project:") {
+                let project_id = ProjectId::try_from(id_part);
+                match project_id {
+                    Ok(project_id) => Ok(Self::project(project_id)),
+                    Err(err) => Err(ParseError::custom(err)),
+                }
+            } else {
+                Err(ParseError::custom("Unexpected representation of plugin scope - must be 'global', 'component:<component_id>' or 'project:<project_id>'"))
             }
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::component::DefaultPluginScope> for DefaultPluginScope {
-        type Error = String;
-
-        fn try_from(
-            proto: golem_api_grpc::proto::golem::component::DefaultPluginScope,
-        ) -> Result<Self, Self::Error> {
-            match proto.scope {
-                Some(
-                    golem_api_grpc::proto::golem::component::default_plugin_scope::Scope::Global(_),
-                ) => Ok(Self::global()),
-                Some(
-                    golem_api_grpc::proto::golem::component::default_plugin_scope::Scope::Component(
-                        proto,
-                    ),
-                ) => Ok(Self::component(
-                    proto
-                        .component_id
-                        .ok_or("Missing component_id".to_string())?
-                        .try_into()?,
-                )),
-                None => Err("Missing scope".to_string()),
+    impl ParseFromMultipartField for CloudPluginScope {
+        async fn parse_from_multipart(field: Option<Field>) -> ParseResult<Self> {
+            use poem_openapi::types::ParseFromParameter;
+            match field {
+                Some(field) => {
+                    let s = field.text().await?;
+                    Self::parse_from_parameter(&s)
+                }
+                None => Err(ParseError::expected_input()),
             }
         }
     }
+}
 
-    impl From<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>
-        for golem_api_grpc::proto::golem::component::PluginDefinition
-    {
-        fn from(value: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>) -> Self {
-            golem_api_grpc::proto::golem::component::PluginDefinition {
-                id: Some(value.id.into()),
-                name: value.name,
-                version: value.version,
-                description: value.description,
-                icon: value.icon,
-                homepage: value.homepage,
-                specs: Some(value.specs.into()),
-                scope: Some(value.scope.into()),
-                deleted: value.deleted,
-            }
-        }
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::component::PluginDefinition>
-        for PluginDefinition<DefaultPluginOwner, DefaultPluginScope>
-    {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::component::PluginDefinition,
-        ) -> Result<Self, Self::Error> {
-            Ok(PluginDefinition {
-                id: value.id.ok_or("Missing plugin id")?.try_into()?,
-                name: value.name,
-                version: value.version,
-                description: value.description,
-                icon: value.icon,
-                homepage: value.homepage,
-                specs: value.specs.ok_or("Missing plugin specs")?.try_into()?,
-                scope: value.scope.ok_or("Missing plugin scope")?.try_into()?,
-                owner: DefaultPluginOwner,
-                deleted: value.deleted,
-            })
-        }
-    }
+#[cfg(feature = "protobuf")]
+mod protobuf {
+    use super::{
+        AppPluginDefinition, CloudPluginOwner, CloudPluginScope, ComponentTransformerDefinition,
+        LibraryPluginDefinition, OplogProcessorDefinition, PluginDefinition, PluginInstallation,
+        PluginTypeSpecificDefinition, PluginWasmFileKey,
+    };
 
     impl From<PluginInstallation> for golem_api_grpc::proto::golem::component::PluginInstallation {
         fn from(plugin_installation: PluginInstallation) -> Self {
@@ -700,19 +668,106 @@ mod protobuf {
             })
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use crate::model::plugin::DefaultPluginOwner;
-    use poem_openapi::types::ToJSON;
-    use test_r::test;
+    impl TryFrom<golem_api_grpc::proto::golem::component::PluginDefinition>
+        for PluginDefinition<CloudPluginOwner, CloudPluginScope>
+    {
+        type Error = String;
 
-    #[test]
-    fn default_plugin_owner_serialization_poem_serde_equivalence() {
-        let owner = DefaultPluginOwner;
-        let serialized = owner.to_json_string();
-        let deserialized: DefaultPluginOwner = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(owner, deserialized);
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::PluginDefinition,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                id: value.id.ok_or("Missing plugin id")?.try_into()?,
+                name: value.name,
+                version: value.version,
+                description: value.description,
+                icon: value.icon,
+                homepage: value.homepage,
+                specs: value.specs.ok_or("Missing plugin specs")?.try_into()?,
+                scope: value.scope.ok_or("Missing plugin scope")?.try_into()?,
+                owner: CloudPluginOwner {
+                    account_id: value.account_id.ok_or("Missing plugin owner")?.into(),
+                },
+                deleted: value.deleted,
+            })
+        }
+    }
+
+    impl From<PluginDefinition<CloudPluginOwner, CloudPluginScope>>
+        for golem_api_grpc::proto::golem::component::PluginDefinition
+    {
+        fn from(value: PluginDefinition<CloudPluginOwner, CloudPluginScope>) -> Self {
+            golem_api_grpc::proto::golem::component::PluginDefinition {
+                id: Some(value.id.into()),
+                name: value.name,
+                version: value.version,
+                scope: Some(value.scope.into()),
+                account_id: Some(value.owner.account_id.into()),
+                description: value.description,
+                icon: value.icon,
+                homepage: value.homepage,
+                specs: Some(value.specs.into()),
+                deleted: value.deleted,
+            }
+        }
+    }
+
+    impl From<CloudPluginScope> for golem_api_grpc::proto::golem::component::CloudPluginScope {
+        fn from(scope: CloudPluginScope) -> Self {
+            match scope {
+            CloudPluginScope::Global(_) => golem_api_grpc::proto::golem::component::CloudPluginScope {
+                scope: Some(golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Global(
+                    golem_api_grpc::proto::golem::common::Empty {},
+                )),
+            },
+            CloudPluginScope::Component(scope) => golem_api_grpc::proto::golem::component::CloudPluginScope {
+                scope: Some(golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Component(
+                    golem_api_grpc::proto::golem::component::ComponentPluginScope {
+                        component_id: Some(scope.component_id.into()),
+                    },
+                )),
+            },
+            CloudPluginScope::Project(scope) => golem_api_grpc::proto::golem::component::CloudPluginScope {
+                scope: Some(golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Project(
+                    golem_api_grpc::proto::golem::component::ProjectPluginScope {
+                        project_id: Some(scope.project_id.into()),
+                    },
+                )),
+            },
+        }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::CloudPluginScope> for CloudPluginScope {
+        type Error = String;
+
+        fn try_from(
+            proto: golem_api_grpc::proto::golem::component::CloudPluginScope,
+        ) -> Result<Self, Self::Error> {
+            match proto.scope {
+                Some(
+                    golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Global(_),
+                ) => Ok(Self::global()),
+                Some(
+                    golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Component(
+                        scope,
+                    ),
+                ) => Ok(Self::component(
+                    scope
+                        .component_id
+                        .ok_or("Missing component_id")?
+                        .try_into()?,
+                )),
+                Some(
+                    golem_api_grpc::proto::golem::component::cloud_plugin_scope::Scope::Project(
+                        scope,
+                    ),
+                ) => Ok(Self::project(
+                    scope.project_id.ok_or("Missing project_id")?.try_into()?,
+                )),
+                None => Err("Missing scope".to_string()),
+            }
+        }
     }
 }

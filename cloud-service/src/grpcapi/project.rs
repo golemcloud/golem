@@ -1,13 +1,25 @@
-use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
 use crate::model;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::project;
-use cloud_api_grpc::proto::golem::cloud::project::v1::cloud_project_service_server::CloudProjectService;
-use cloud_api_grpc::proto::golem::cloud::project::v1::{
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::project::v1::cloud_project_service_server::CloudProjectService;
+use golem_api_grpc::proto::golem::project::v1::{
     create_project_response, delete_project_response, get_default_project_response,
     get_project_response, get_projects_response, project_error, CreateProjectRequest,
     CreateProjectResponse, CreateProjectSuccessResponse, DeleteProjectRequest,
@@ -15,13 +27,14 @@ use cloud_api_grpc::proto::golem::cloud::project::v1::{
     GetProjectResponse, GetProjectsRequest, GetProjectsResponse, GetProjectsSuccessResponse,
     ProjectError,
 };
-use cloud_api_grpc::proto::golem::cloud::project::Project;
-use cloud_common::grpc::proto_project_id_string;
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::project::Project;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::{AccountId, ProjectId};
 use golem_common::recorded_grpc_api_request;
 use golem_common::SafeDisplay;
+use golem_service_base::grpc::proto_project_id_string;
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;

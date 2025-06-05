@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api::{ComponentError, Result};
+use crate::api::{ApiTags, ComponentError, Result};
+use crate::service::plugin::CloudPluginService;
+use golem_common::model::auth::CloudAuthCtx;
 use golem_common::model::error::ErrorBody;
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+use golem_common::model::plugin::PluginDefinition;
+use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
 use golem_common::model::Empty;
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::api::dto;
-use golem_component_service_base::service::plugin::PluginService;
-use golem_service_base::api_tags::ApiTags;
+use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::OpenApi;
@@ -27,77 +29,82 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct PluginApi {
-    pub plugin_service:
-        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
+    plugin_service: Arc<CloudPluginService>,
 }
 
-#[OpenApi(prefix_path = "/v1", tag = ApiTags::Plugin)]
+#[OpenApi(prefix_path = "/v1/plugins", tag = ApiTags::Plugin)]
 impl PluginApi {
+    pub fn new(plugin_service: Arc<CloudPluginService>) -> Self {
+        Self { plugin_service }
+    }
+
     /// Lists all the registered plugins (including all versions of each).
-    #[oai(path = "/plugins/", method = "get", operation_id = "list_plugins")]
+    #[oai(path = "/", method = "get", operation_id = "list_plugins")]
     pub async fn list_plugins(
         &self,
-        scope: Query<Option<DefaultPluginScope>>,
-    ) -> Result<Json<Vec<dto::PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>>> {
+        scope: Query<Option<CloudPluginScope>>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>>> {
         let record = recorded_http_api_request!("list_plugins",);
+        let auth = CloudAuthCtx::new(token.secret());
 
         let response = if let Some(scope) = scope.0 {
             self.plugin_service
-                .list_plugins_for_scope(&DefaultPluginOwner, &scope, ())
+                .list_plugins_for_scope(&auth, &scope)
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())
-                .map(|response| Json(response.into_iter().map(|p| p.into()).collect()))
+                .map(|response| Json(response.into_iter().collect()))
         } else {
             self.plugin_service
-                .list_plugins(&DefaultPluginOwner)
+                .list_plugins(&auth)
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())
-                .map(|response| Json(response.into_iter().map(|p| p.into()).collect()))
+                .map(|response| Json(response.into_iter().collect()))
         };
 
         record.result(response)
     }
 
     /// Lists all the registered versions of a specific plugin identified by its name
-    #[oai(
-        path = "/plugins/:name",
-        method = "get",
-        operation_id = "list_plugin_versions"
-    )]
+    #[oai(path = "/:name", method = "get", operation_id = "list_plugin_versions")]
     pub async fn list_plugin_versions(
         &self,
         name: Path<String>,
-    ) -> Result<Json<Vec<dto::PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>>> {
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>>> {
         let record = recorded_http_api_request!("list_plugin_versions", plugin_name = name.0);
+        let auth = CloudAuthCtx::new(token.secret());
 
         let response = self
             .plugin_service
-            .list_plugin_versions(&DefaultPluginOwner, &name)
+            .list_plugin_versions(&auth, &name)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
-            .map(|response| Json(response.into_iter().map(|p| p.into()).collect()));
+            .map(|response| Json(response.into_iter().collect()));
 
         record.result(response)
     }
 
     /// Registers a new plugin
-    #[oai(path = "/plugins/", method = "post", operation_id = "create_plugin")]
+    #[oai(path = "/", method = "post", operation_id = "create_plugin")]
     pub async fn create_plugin(
         &self,
-        plugin: Json<dto::PluginDefinitionCreation<DefaultPluginScope>>,
+        plugin: Json<dto::PluginDefinitionCreation<CloudPluginScope>>,
+        token: GolemSecurityScheme,
     ) -> Result<Json<Empty>> {
         let record = recorded_http_api_request!(
             "create_plugin",
             plugin_name = plugin.name,
             plugin_version = plugin.version
         );
+        let auth = CloudAuthCtx::new(token.secret());
 
         let response = self
             .plugin_service
-            .create_plugin(&DefaultPluginOwner, plugin.0.into())
+            .create_plugin(&auth, plugin.0.into())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -114,17 +121,19 @@ impl PluginApi {
     )]
     pub async fn create_library_plugin(
         &self,
-        plugin: dto::LibraryPluginDefinitionCreation<DefaultPluginScope>,
+        plugin: dto::LibraryPluginDefinitionCreation<CloudPluginScope>,
+        token: GolemSecurityScheme,
     ) -> Result<Json<Empty>> {
         let record = recorded_http_api_request!(
             "create_library_plugin",
             plugin_name = plugin.name,
             plugin_version = plugin.version
         );
+        let auth = CloudAuthCtx::new(token.secret());
 
         let response = self
             .plugin_service
-            .create_plugin(&DefaultPluginOwner, plugin.into())
+            .create_plugin(&auth, plugin.into())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -141,17 +150,19 @@ impl PluginApi {
     )]
     pub async fn create_app_plugin(
         &self,
-        plugin: dto::AppPluginDefinitionCreation<DefaultPluginScope>,
+        plugin: dto::AppPluginDefinitionCreation<CloudPluginScope>,
+        token: GolemSecurityScheme,
     ) -> Result<Json<Empty>> {
         let record = recorded_http_api_request!(
             "create_app_plugin",
             plugin_name = plugin.name,
             plugin_version = plugin.version
         );
+        let auth = CloudAuthCtx::new(token.secret());
 
         let response = self
             .plugin_service
-            .create_plugin(&DefaultPluginOwner, plugin.into())
+            .create_plugin(&auth, plugin.into())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -161,30 +172,28 @@ impl PluginApi {
     }
 
     /// Gets a registered plugin by its name and version
-    #[oai(
-        path = "/plugins/:name/:version",
-        method = "get",
-        operation_id = "get_plugin"
-    )]
+    #[oai(path = "/:name/:version", method = "get", operation_id = "get_plugin")]
     pub async fn get_plugin(
         &self,
         name: Path<String>,
         version: Path<String>,
-    ) -> Result<Json<dto::PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>> {
+        token: GolemSecurityScheme,
+    ) -> Result<Json<PluginDefinition<CloudPluginOwner, CloudPluginScope>>> {
         let record = recorded_http_api_request!(
             "get_plugin",
             plugin_name = name.0,
             plugin_version = version.0
         );
+        let auth = CloudAuthCtx::new(token.secret());
 
         let response = self
             .plugin_service
-            .get(&DefaultPluginOwner, &name, &version)
+            .get(&auth, &name, &version)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
             .and_then(|response| match response {
-                Some(response) => Ok(Json(response.into())),
+                Some(response) => Ok(Json(response)),
                 None => Err(ComponentError::NotFound(Json(ErrorBody {
                     error: "Plugin not found".to_string(),
                 }))),
@@ -195,7 +204,7 @@ impl PluginApi {
 
     /// Deletes a registered plugin by its name and version
     #[oai(
-        path = "/plugins/:name/:version",
+        path = "/:name/:version",
         method = "delete",
         operation_id = "delete_plugin"
     )]
@@ -203,16 +212,18 @@ impl PluginApi {
         &self,
         name: Path<String>,
         version: Path<String>,
+        token: GolemSecurityScheme,
     ) -> Result<Json<Empty>> {
         let record = recorded_http_api_request!(
             "delete_plugin",
             plugin_name = name.0,
             plugin_version = version.0
         );
+        let auth = CloudAuthCtx::new(token.secret());
 
         let response = self
             .plugin_service
-            .delete(&DefaultPluginOwner, &name, &version)
+            .delete(&auth, &name, &version)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())

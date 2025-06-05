@@ -89,7 +89,7 @@ interface oplog {
 
     record exported-function-completed-parameters {
         timestamp: datetime,
-        response: wit-value,
+        response: option<wit-value>,
         consumed-fuel: s64
     }
 

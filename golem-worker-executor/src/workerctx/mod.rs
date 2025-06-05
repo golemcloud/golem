@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod cloud;
-pub mod oss;
 
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
@@ -55,12 +54,11 @@ use golem_common::model::{
     PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{Value, ValueAndType};
 use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
-use wasmtime_wasi::WasiView;
+use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
@@ -177,7 +175,7 @@ pub trait WorkerCtx:
     /// in the cluster
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy>;
 
-    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types> + Send + Sync>;
+    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types>>;
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService>;
 
@@ -313,7 +311,7 @@ pub trait InvocationHooks {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: TypeAnnotatedValue,
+        output: Option<ValueAndType>,
     ) -> Result<(), GolemError>;
 }
 

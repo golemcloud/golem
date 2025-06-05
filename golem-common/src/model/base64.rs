@@ -138,15 +138,17 @@ impl Encode for Base64 {
     }
 }
 
-impl Decode for Base64 {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<Context> Decode<Context> for Base64 {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let vec: Vec<u8> = Vec::decode(decoder)?;
         Ok(Base64(vec))
     }
 }
 
-impl<'de> BorrowDecode<'de> for Base64 {
-    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<'de, Context> BorrowDecode<'de, Context> for Base64 {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
         let vec: Vec<u8> = Vec::borrow_decode(decoder)?;
         Ok(Base64(vec))
     }

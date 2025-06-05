@@ -174,7 +174,10 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
         .await
         .unwrap();
 
+    let project_id = deps.cloud_service().get_default_project().await.unwrap();
+
     let request = ApiDeploymentRequest {
+        project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
             id: api_definition_id.value,
             version: "1".to_string(),

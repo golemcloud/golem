@@ -1,7 +1,21 @@
-use cloud_common::config::RemoteCloudServiceConfig;
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
+use golem_service_base::clients::RemoteCloudServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_worker_executor::services::golem_config::{
     ActiveWorkersConfig, CompiledComponentServiceConfig, ComponentCacheConfig,
@@ -9,7 +23,7 @@ use golem_worker_executor::services::golem_config::{
     KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, PluginServiceConfig,
     ProjectServiceConfig, RdbmsConfig, ResourceLimitsConfig, SchedulerConfig,
     ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SuspendConfig,
-    WorkerExecutorMode, WorkerServiceGrpcConfig,
+    WorkerServiceGrpcConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -70,7 +84,6 @@ impl DebugConfig {
             component_service: ComponentServiceConfig::Grpc(self.component_service),
             component_cache: self.component_cache,
             project_service: Default::default(),
-            mode: WorkerExecutorMode::Cloud,
             grpc_address: self.grpc_address,
             port: self.port,
             http_address: self.http_address,

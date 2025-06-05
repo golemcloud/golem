@@ -29,11 +29,11 @@ pub trait GatewayWorkerRequestExecutor<Namespace> {
 // The result of a worker execution from worker-bridge,
 // which is a combination of function metadata and the type-annotated-value representing the actual result
 pub struct WorkerResponse {
-    pub result: TypeAnnotatedValue,
+    pub result: Option<TypeAnnotatedValue>,
 }
 
 impl WorkerResponse {
-    pub fn new(result: TypeAnnotatedValue) -> Self {
+    pub fn new(result: Option<TypeAnnotatedValue>) -> Self {
         WorkerResponse { result }
     }
 }

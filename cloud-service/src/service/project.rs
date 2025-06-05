@@ -1,3 +1,18 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::auth::{AuthService, AuthServiceError, ViewableProjects};
 use crate::auth::AccountAuthorisation;
 use crate::model::{
     AccountAction, Project, ProjectData, ProjectPluginInstallationTarget, ProjectType,
@@ -5,24 +20,22 @@ use crate::model::{
 use crate::repo::project::{ProjectRecord, ProjectRepo};
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
 use async_trait::async_trait;
-use cloud_common::clients::plugin::{PluginError, PluginServiceClient};
-use cloud_common::model::ProjectAction;
-use cloud_common::model::TokenSecret;
-use cloud_common::repo::CloudPluginOwnerRow;
+use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::TokenSecret;
 use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationAction, PluginInstallationCreation,
     PluginInstallationUpdate, PluginInstallationUpdateWithId, PluginUninstallation,
 };
 use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{PluginId, ProjectId};
+use golem_common::repo::CloudPluginOwnerRow;
 use golem_common::SafeDisplay;
+use golem_service_base::clients::plugin::{PluginError, PluginServiceClient};
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
 use std::fmt::Display;
 use std::sync::Arc;
 use tracing::info;
-
-use super::auth::{AuthService, AuthServiceError, ViewableProjects};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {

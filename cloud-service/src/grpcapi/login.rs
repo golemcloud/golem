@@ -1,6 +1,16 @@
-use std::fmt::{Debug, Formatter};
-use std::str::FromStr;
-use std::sync::Arc;
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
@@ -8,18 +18,21 @@ use crate::model;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::login;
 use crate::service::oauth2::{OAuth2Error, OAuth2Service};
-use cloud_api_grpc::proto::golem::cloud::login::v1::cloud_login_service_server::CloudLoginService;
-use cloud_api_grpc::proto::golem::cloud::login::v1::{
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::login::v1::cloud_login_service_server::CloudLoginService;
+use golem_api_grpc::proto::golem::login::v1::{
     complete_o_auth2_response, current_token_response, login_error, o_auth2_response,
     start_o_auth2_response, CompleteOAuth2Request, CompleteOAuth2Response, CurrentTokenRequest,
     CurrentTokenResponse, LoginError, OAuth2Request, OAuth2Response, StartOAuth2Response,
 };
-use cloud_api_grpc::proto::golem::cloud::login::OAuth2Data;
-use cloud_api_grpc::proto::golem::cloud::token::{Token, UnsafeToken};
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::login::OAuth2Data;
+use golem_api_grpc::proto::golem::token::{Token, UnsafeToken};
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::recorded_grpc_api_request;
 use golem_common::SafeDisplay;
+use std::fmt::{Debug, Formatter};
+use std::str::FromStr;
+use std::sync::Arc;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;

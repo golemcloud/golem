@@ -12,77 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::anyhow;
+use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_env_filter;
-use golem_service_base::migration::MigrationsDir;
-use golem_worker_service::config::make_config_loader;
-use golem_worker_service::WorkerService;
-use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use golem_worker_service_base::metrics;
-use opentelemetry::global;
-use prometheus::Registry;
-use tokio::task::JoinSet;
+use golem_service_base::db;
+use golem_service_base::migration::{Migrations, MigrationsDir};
+use golem_worker_service::app::{app, dump_openapi_yaml};
+use golem_worker_service::config::load_or_dump_config;
+use std::path::Path;
+use tracing::{error, info};
 
-fn main() -> Result<(), anyhow::Error> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?
-            .block_on(dump_openapi_yaml())
-    } else if let Some(config) = make_config_loader().load_or_dump_config() {
-        init_tracing_with_default_env_filter(&config.tracing);
+        println!("{}", dump_openapi_yaml().await.map_err(|err| anyhow!(err))?);
+        Ok(())
+    } else if let Some(config) = load_or_dump_config() {
+        init_tracing_with_default_env_filter(&config.base_config.tracing);
 
-        let prometheus = metrics::register_all();
+        if config.is_local_env() {
+            info!("Golem Worker Service starting up (local mode)...");
+        } else {
+            info!("Golem Worker Service starting up...");
+        }
 
-        let exporter = opentelemetry_prometheus::exporter()
-            .with_registry(prometheus.clone())
-            .build()?;
+        let migrations = MigrationsDir::new(Path::new("./db/migration").to_path_buf());
+        match config.base_config.db.clone() {
+            DbConfig::Postgres(c) => {
+                db::postgres::migrate(&c, migrations.postgres_migrations())
+                    .await
+                    .map_err(|e| {
+                        error!("DB - init error: {}", &e);
+                        std::io::Error::other(format!("Init error (pg): {e:?}"))
+                    })?;
+            }
+            DbConfig::Sqlite(c) => {
+                db::sqlite::migrate(&c, migrations.sqlite_migrations())
+                    .await
+                    .map_err(|e| {
+                        error!("DB - init error: {}", e);
+                        std::io::Error::other(format!("Init error (sqlite): {e:?}"))
+                    })?;
+            }
+        };
 
-        global::set_meter_provider(
-            opentelemetry_sdk::metrics::MeterProviderBuilder::default()
-                .with_reader(exporter)
-                .build(),
-        );
-
-        Ok(tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?
-            .block_on(async_main(config, prometheus))?)
+        Ok(app(&config).await?)
     } else {
         Ok(())
     }
-}
-
-async fn async_main(
-    config: WorkerServiceBaseConfig,
-    prometheus: Registry,
-) -> Result<(), anyhow::Error> {
-    let server = WorkerService::new(
-        config,
-        prometheus,
-        MigrationsDir::new("./db/migration".into()),
-    )
-    .await?;
-
-    let mut join_set = JoinSet::new();
-
-    server.run(&mut join_set).await?;
-
-    while let Some(res) = join_set.join_next().await {
-        res??;
-    }
-
-    Ok(())
-}
-
-async fn dump_openapi_yaml() -> Result<(), anyhow::Error> {
-    let config = WorkerServiceBaseConfig::default();
-    let service = WorkerService::new(
-        config,
-        Registry::default(),
-        MigrationsDir::new("../../golem-worker-service/db/migration".into()),
-    )
-    .await?;
-    let yaml = service.http_service().spec_yaml();
-    println!("{yaml}");
-    Ok(())
 }

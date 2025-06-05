@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use tracing::debug;
-use wasmtime_wasi::{WasiImpl, WasiView};
+use wasmtime_wasi::p2::{WasiImpl, WasiView};
 
 use crate::preview2::wasi::logging::logging::{Host, Level};
 

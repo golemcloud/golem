@@ -45,8 +45,8 @@ impl Encode for SemVer {
     }
 }
 
-impl Decode for SemVer {
-    fn decode<D: bincode::de::Decoder>(
+impl<Context> Decode<Context> for SemVer {
+    fn decode<D: bincode::de::Decoder<Context = Context>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
         let major = u64::decode(decoder)?;
@@ -70,15 +70,15 @@ impl Decode for SemVer {
     }
 }
 
-impl<'de> BorrowDecode<'de> for SemVer {
-    fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
+impl<'de, Context> BorrowDecode<'de, Context> for SemVer {
+    fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
         let major = u64::borrow_decode(decoder)?;
         let minor = u64::borrow_decode(decoder)?;
         let patch = u64::borrow_decode(decoder)?;
-        let pre_str = <Cow<'de, str> as BorrowDecode>::borrow_decode(decoder)?;
-        let build_str = <Cow<'de, str> as BorrowDecode>::borrow_decode(decoder)?;
+        let pre_str = <Cow<'de, str> as BorrowDecode<Context>>::borrow_decode(decoder)?;
+        let build_str = <Cow<'de, str> as BorrowDecode<Context>>::borrow_decode(decoder)?;
         let pre = Prerelease::new(&pre_str)
             .map_err(|_| bincode::error::DecodeError::OtherString("Invalid prerelease".into()))?;
         let build = BuildMetadata::new(&build_str).map_err(|_| {

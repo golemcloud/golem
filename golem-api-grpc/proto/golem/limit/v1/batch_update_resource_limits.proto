@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package golem.limit.v1;
+
+message BatchUpdateResourceLimits {
+  map<string, int64> updates = 1;
+}

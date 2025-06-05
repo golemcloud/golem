@@ -1,9 +1,5 @@
 use test_r::test;
 
-use cloud_common::model::Role;
-use cloud_common::model::{
-    PlanId, ProjectActions, ProjectAuthorisedActions, ProjectGrantId, ProjectPolicyId, TokenId,
-};
 use cloud_service::auth::AccountAuthorisation;
 use cloud_service::config::{make_config_loader, CloudServiceConfig};
 use cloud_service::model::{
@@ -17,8 +13,10 @@ use cloud_service::service::project_grant::ProjectGrantService;
 use cloud_service::service::project_policy::ProjectPolicyService;
 use cloud_service::service::Services;
 use golem_common::config::DbConfig;
+use golem_common::model::auth::{ProjectActions, ProjectAuthorisedActions, Role};
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
+use golem_common::model::{PlanId, ProjectGrantId, ProjectPolicyId, TokenId};
 use golem_service_base::db;
 use golem_service_base::migration::{Migrations, MigrationsDir};
 use std::collections::HashSet;

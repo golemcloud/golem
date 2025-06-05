@@ -12,16 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::rib_expr::rib_expr;
+use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
+use crate::rib_source_span::GetSourcePosition;
 use combine::{
     between,
     parser::char::{char, spaces},
     sep_by, ParseError, Parser,
 };
-
-use super::rib_expr::rib_expr;
-use crate::expr::Expr;
-use crate::parser::errors::RibParseError;
-use crate::rib_source_span::GetSourcePosition;
 
 pub fn tuple<Input>() -> impl Parser<Input, Output = Expr>
 where

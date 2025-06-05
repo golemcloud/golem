@@ -30,8 +30,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, RetryConfig, WorkerId};
 use golem_service_base::model::RevertWorkerTarget;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::{Value, WitValue};
+use golem_wasm_rpc::{Value, ValueAndType, WitValue};
 use http::Uri;
 use std::collections::HashMap;
 use std::error::Error;
@@ -54,7 +53,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
-    ) -> Result<TypeAnnotatedValue, WorkerProxyError>;
+    ) -> Result<Option<ValueAndType>, WorkerProxyError>;
 
     async fn invoke(
         &self,
@@ -222,7 +221,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
-    ) -> Result<TypeAnnotatedValue, WorkerProxyError> {
+    ) -> Result<Option<ValueAndType>, WorkerProxyError> {
         debug!(
             "Invoking remote worker function {function_name} with parameters {function_params:?}"
         );
@@ -262,17 +261,23 @@ impl WorkerProxy for RemoteWorkerProxy {
 
         match response.result {
             Some(invoke_and_await_typed_response::Result::Success(result)) => {
-                let result =
-                    result
-                        .result
-                        .ok_or(WorkerProxyError::InternalError(GolemError::unknown(
-                            "Missing result value in the worker API response".to_string(),
-                        )))?;
                 let result = result
-                    .type_annotated_value
-                    .ok_or(WorkerProxyError::InternalError(GolemError::unknown(
-                        "Missing type_annotated_value in the worker API response".to_string(),
-                    )))?;
+                    .result
+                    .map(|tav| {
+                        tav.type_annotated_value
+                            .ok_or(WorkerProxyError::InternalError(GolemError::unknown(
+                                "Missing type_annotated_value in the worker API response"
+                                    .to_string(),
+                            )))
+                            .and_then(|tav| {
+                                ValueAndType::try_from(tav).map_err(|e| {
+                                    WorkerProxyError::InternalError(GolemError::unknown(format!(
+                                        "Failed to parse invocation result value: {e}"
+                                    )))
+                                })
+                            })
+                    })
+                    .transpose()?;
                 Ok(result)
             }
             Some(invoke_and_await_typed_response::Result::Error(error)) => Err(error.into()),

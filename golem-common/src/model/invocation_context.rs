@@ -684,8 +684,8 @@ impl Encode for InvocationContextSpan {
     }
 }
 
-impl Decode for InvocationContextSpan {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<Context> Decode<Context> for InvocationContextSpan {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let tag = u8::decode(decoder)?;
         match tag {
             0 => {
@@ -718,8 +718,10 @@ impl Decode for InvocationContextSpan {
     }
 }
 
-impl<'de> BorrowDecode<'de> for InvocationContextSpan {
-    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<'de, Context> BorrowDecode<'de, Context> for InvocationContextSpan {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
         let tag = u8::borrow_decode(decoder)?;
         match tag {
             0 => {
@@ -888,8 +890,8 @@ impl Encode for InvocationContextStack {
     }
 }
 
-impl Decode for InvocationContextStack {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<Context> Decode<Context> for InvocationContextStack {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let trace_id = TraceId::decode(decoder)?;
         let spans = Vec::<Arc<InvocationContextSpan>>::decode(decoder)?;
         let trace_states = Vec::<String>::decode(decoder)?;
@@ -901,8 +903,10 @@ impl Decode for InvocationContextStack {
     }
 }
 
-impl<'de> BorrowDecode<'de> for InvocationContextStack {
-    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<'de, Context> BorrowDecode<'de, Context> for InvocationContextStack {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
         let trace_id = TraceId::borrow_decode(decoder)?;
         let spans = Vec::borrow_decode(decoder)?;
         let trace_state = Vec::borrow_decode(decoder)?;

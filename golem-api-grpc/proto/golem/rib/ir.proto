@@ -3,9 +3,7 @@ syntax = "proto3";
 package golem.rib;
 
 import "wasm/ast/type.proto";
-
 import "wasm/rpc/type_annotated_value.proto";
-
 import "golem/rib/function_name.proto";
 
 message RibIR {

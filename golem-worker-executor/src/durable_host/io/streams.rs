@@ -25,7 +25,7 @@ use crate::error::GolemError;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
 use golem_common::model::WorkerEvent;
-use wasmtime_wasi::bindings::io::streams::{
+use wasmtime_wasi::p2::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
 use wasmtime_wasi_http::body::{FailingStream, HostIncomingBodyStream};
@@ -288,7 +288,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn convert_stream_error(
         &mut self,
         err: StreamError,
-    ) -> anyhow::Result<wasmtime_wasi::bindings::io::streams::StreamError> {
+    ) -> anyhow::Result<wasmtime_wasi::p2::bindings::io::streams::StreamError> {
         Host::convert_stream_error(&mut self.as_wasi_view().0, err)
     }
 }

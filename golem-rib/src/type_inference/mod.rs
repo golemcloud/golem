@@ -2574,7 +2574,7 @@ mod tests {
                         name: "my_parameter".to_string(),
                         typ: u64(),
                     }],
-                    results: vec![],
+                    result: None,
                 }),
                 AnalysedExport::Function(AnalysedFunction {
                     name: "baz".to_string(),
@@ -2582,7 +2582,7 @@ mod tests {
                         name: "my_parameter".to_string(),
                         typ: AnalysedType::U32(TypeU32),
                     }],
-                    results: vec![],
+                    result: None,
                 }),
             ];
             FunctionTypeRegistry::from_export_metadata(&metadata)
@@ -2648,10 +2648,7 @@ mod tests {
             vec![AnalysedExport::Function(AnalysedFunction {
                 name: function_name.to_string(),
                 parameters: analysed_function_parameters,
-                results: vec![AnalysedFunctionResult {
-                    name: None,
-                    typ: output,
-                }],
+                result: Some(AnalysedFunctionResult { typ: output }),
             })]
         }
 

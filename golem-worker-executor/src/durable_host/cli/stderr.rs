@@ -16,7 +16,7 @@ use wasmtime::component::Resource;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use wasmtime_wasi::bindings::cli::stderr::{Host, OutputStream};
+use wasmtime_wasi::p2::bindings::cli::stderr::{Host, OutputStream};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn get_stderr(&mut self) -> anyhow::Result<Resource<OutputStream>> {

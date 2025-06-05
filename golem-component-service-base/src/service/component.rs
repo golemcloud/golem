@@ -553,12 +553,12 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                     parameter_conflict = true;
                 }
 
-                let new_return_types = match new_registry_value.clone() {
-                    RegistryValue::Function { return_types, .. } => return_types,
-                    _ => vec![],
+                let new_return_type = match new_registry_value.clone() {
+                    RegistryValue::Function { return_type, .. } => return_type,
+                    _ => None,
                 };
 
-                if existing_function_call.return_types() != &new_return_types {
+                if existing_function_call.return_type() != &new_return_type {
                     return_conflict = true;
                 }
 
@@ -573,8 +573,8 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
 
                 let return_conflict = if return_conflict {
                     Some(ReturnTypeConflict {
-                        existing: existing_function_call.return_types().clone(),
-                        new: new_return_types,
+                        existing: existing_function_call.return_type().clone(),
+                        new: new_return_type,
                     })
                 } else {
                     None
@@ -802,7 +802,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
 
         let constraints = self
             .component_repo
-            .get_constraint(&owner.to_string(), &component_id.0)
+            .get_constraint(&owner.to_string(), component_id.0)
             .await?;
 
         let new_type_registry = FunctionTypeRegistry::from_export_metadata(&metadata.exports);
@@ -837,11 +837,12 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             .update(
                 &owner_record,
                 &owner.to_string(),
-                &component_id.0,
-                data.clone(),
+                component_id.0,
+                data.len() as i32,
                 record_metadata_serde::serialize(&metadata)
                     .map_err(|err| ComponentError::conversion_error("metadata", err))?
                     .to_vec(),
+                metadata.root_package_version.as_deref(),
                 component_type.map(|ct| ct as i32),
                 files,
                 Json(env),
@@ -867,14 +868,10 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             self.upload_protected_component(&component, transformed_data)
         )?;
 
-        self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version)
-            .await;
-
         self.component_repo
             .activate(
                 &owner.to_string(),
-                &component_id.0,
+                component_id.0,
                 component.versioned_component_id.version as i64,
                 &object_store_key,
                 &object_store_key,
@@ -883,6 +880,10 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                     .to_vec(),
             )
             .await?;
+
+        self.component_compilation
+            .enqueue_compilation(component_id, component.versioned_component_id.version)
+            .await;
 
         Ok(component)
     }
@@ -1084,7 +1085,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         self.component_repo
             .activate(
                 namespace,
-                &new_component.versioned_component_id.component_id.0,
+                new_component.versioned_component_id.component_id.0,
                 new_component.versioned_component_id.version as i64,
                 &new_component
                     .object_store_key
@@ -1326,10 +1327,17 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         };
 
         if let Some(component) = component {
-            info!(owner = %owner, component_id = %component.versioned_component_id, "Download component as stream");
+            let protected_object_store_key = component.protected_object_store_key();
+
+            info!(
+                owner = %owner,
+                component_id = %component.versioned_component_id,
+                protected_object_store_key = %protected_object_store_key,
+                "Download component as stream",
+            );
 
             self.object_store
-                .get_stream(&component.protected_object_store_key())
+                .get_stream(&protected_object_store_key)
                 .await
                 .map_err(|e| {
                     ComponentError::component_store_error("Error downloading component", e)
@@ -1458,7 +1466,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             .component_repo
             .get_by_version(
                 &owner.to_string(),
-                &component_id.component_id.0,
+                component_id.component_id.0,
                 component_id.version,
             )
             .await?;
@@ -1482,7 +1490,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         info!(owner = %owner, "Get latest component");
         let result = self
             .component_repo
-            .get_latest_version(&owner.to_string(), &component_id.0)
+            .get_latest_version(&owner.to_string(), component_id.0)
             .await?;
 
         match result {
@@ -1504,7 +1512,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         info!(owner = %owner, component_id = %component_id ,"Get component");
         let records = self
             .component_repo
-            .get(&owner.to_string(), &component_id.0)
+            .get(&owner.to_string(), component_id.0)
             .await?;
 
         let values: Vec<Component<Owner>> = records
@@ -1518,7 +1526,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
     async fn get_owner(&self, component_id: &ComponentId) -> Result<Option<Owner>, ComponentError> {
         info!(component_id = %component_id, "Get component owner");
-        let result = self.component_repo.get_namespace(&component_id.0).await?;
+        let result = self.component_repo.get_namespace(component_id.0).await?;
         if let Some(result) = result {
             let value = result
                 .parse()
@@ -1538,7 +1546,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
         let records = self
             .component_repo
-            .get(&owner.to_string(), &component_id.0)
+            .get(&owner.to_string(), component_id.0)
             .await?;
         let components = records
             .iter()
@@ -1562,7 +1570,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
                 })?;
             }
             self.component_repo
-                .delete(&owner.to_string(), &component_id.0)
+                .delete(&owner.to_string(), component_id.0)
                 .await?;
             Ok(())
         } else {
@@ -1586,7 +1594,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             .component_repo
             .get_constraint(
                 &component_constraint.owner.to_string(),
-                &component_constraint.component_id.0,
+                component_constraint.component_id.0,
             )
             .await?
             .ok_or(ComponentError::ComponentConstraintCreateError(format!(
@@ -1612,12 +1620,12 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         info!(owner = %owner, component_id = %component_id, "Delete constraint");
 
         self.component_repo
-            .delete_constraints(&owner.to_string(), &component_id.0, constraints_to_remove)
+            .delete_constraints(&owner.to_string(), component_id.0, constraints_to_remove)
             .await?;
 
         let result = self
             .component_repo
-            .get_constraint(&owner.to_string(), &component_id.0)
+            .get_constraint(&owner.to_string(), component_id.0)
             .await?
             .ok_or(ComponentError::ComponentConstraintCreateError(format!(
                 "Failed to get constraints for {}",
@@ -1642,7 +1650,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
         let result = self
             .component_repo
-            .get_constraint(&owner.to_string(), &component_id.0)
+            .get_constraint(&owner.to_string(), component_id.0)
             .await?;
         Ok(result)
     }
@@ -1657,7 +1665,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         let plugin_owner_record = owner_record.into();
         let records = self
             .component_repo
-            .get_installed_plugins(&plugin_owner_record, &component_id.0, component_version)
+            .get_installed_plugins(&plugin_owner_record, component_id.0, component_version)
             .await?;
 
         records
@@ -1736,7 +1744,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
         let latest = self
             .component_repo
-            .get_latest_version(&owner.to_string(), &component_id.0)
+            .get_latest_version(&owner.to_string(), component_id.0)
             .await?;
 
         if let Some(latest) = latest {
@@ -1812,7 +1820,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
                 .component_repo
                 .apply_plugin_installation_changes(
                     &plugin_owner_record,
-                    &component_id.0,
+                    component_id.0,
                     &repo_actions,
                 )
                 .await?;
@@ -2234,8 +2242,8 @@ pub struct ParameterTypeConflict {
 
 #[derive(Debug)]
 pub struct ReturnTypeConflict {
-    pub existing: Vec<AnalysedType>,
-    pub new: Vec<AnalysedType>,
+    pub existing: Option<AnalysedType>,
+    pub new: Option<AnalysedType>,
 }
 
 impl Display for ConflictingFunction {
@@ -2267,12 +2275,12 @@ impl Display for ConflictingFunction {
                 writeln!(
                     f,
                     "    Existing: {}",
-                    internal::convert_to_pretty_types(&conflict.existing)
+                    internal::convert_to_pretty_type(&conflict.existing)
                 )?;
                 writeln!(
                     f,
                     "    New:      {}",
-                    internal::convert_to_pretty_types(&conflict.new)
+                    internal::convert_to_pretty_type(&conflict.new)
                 )?;
             }
             None => {
@@ -2435,6 +2443,15 @@ mod internal {
             .collect::<Vec<_>>();
 
         type_names.join(", ")
+    }
+
+    pub(crate) fn convert_to_pretty_type(analysed_type: &Option<AnalysedType>) -> String {
+        analysed_type
+            .as_ref()
+            .map(|x| {
+                rib::TypeName::try_from(x.clone()).map_or("unknown".to_string(), |x| x.to_string())
+            })
+            .unwrap_or("unit".to_string())
     }
 }
 

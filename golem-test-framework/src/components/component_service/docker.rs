@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::cloud_service::CloudService;
 use crate::components::component_service::{
     new_component_client, new_plugin_client, ComponentService, ComponentServiceClient,
     PluginServiceClient,
@@ -41,6 +42,7 @@ pub struct DockerComponentService {
     component_client: ComponentServiceClient,
     plugin_client: PluginServiceClient,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl DockerComponentService {
@@ -55,6 +57,7 @@ impl DockerComponentService {
         verbosity: Level,
         client_protocol: GolemClientProtocol,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Starting golem-component-service container");
 
@@ -65,6 +68,7 @@ impl DockerComponentService {
             rdb,
             verbosity,
             true,
+            &cloud_service,
         )
         .await;
 
@@ -97,6 +101,7 @@ impl DockerComponentService {
                 "localhost",
                 public_grpc_port,
                 public_http_port,
+                &cloud_service,
             )
             .await,
             plugin_client: new_plugin_client(
@@ -104,9 +109,11 @@ impl DockerComponentService {
                 "localhost",
                 public_grpc_port,
                 public_http_port,
+                &cloud_service,
             )
             .await,
             plugin_wasm_files_service,
+            cloud_service,
         }
     }
 }
@@ -123,6 +130,10 @@ impl ComponentServiceInternal for DockerComponentService {
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
+    }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        self.cloud_service.clone()
     }
 }
 

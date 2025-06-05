@@ -17,9 +17,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use wasmtime_wasi::p2::{Stderr, StdinStream, Stdout, StdoutStream};
 use wasmtime_wasi::{
-    DynInputStream, DynOutputStream, InputStream, OutputStream, Pollable, Stderr, StdinStream,
-    Stdout, StdoutStream, StreamError, StreamResult,
+    DynInputStream, DynOutputStream, InputStream, OutputStream, Pollable, StreamError, StreamResult,
 };
 
 pub mod error;

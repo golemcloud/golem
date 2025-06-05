@@ -6,15 +6,6 @@ import "golem/common/empty.proto";
 import "golem/apidefinition/v1/api_definition_error.proto";
 import "golem/apidefinition/api_definition.proto";
 
-service ApiDefinitionService {
-  rpc CreateApiDefinition (CreateApiDefinitionRequest) returns (CreateApiDefinitionResponse) {}
-  rpc UpdateApiDefinition (UpdateApiDefinitionRequest) returns (UpdateApiDefinitionResponse) {}
-  rpc GetApiDefinition (GetApiDefinitionRequest) returns (GetApiDefinitionResponse) {}
-  rpc GetApiDefinitionVersions (GetApiDefinitionVersionsRequest) returns (GetApiDefinitionVersionsResponse) {}
-  rpc GetAllApiDefinitions (GetAllApiDefinitionsRequest) returns (GetAllApiDefinitionsResponse) {}
-  rpc DeleteApiDefinition (DeleteApiDefinitionRequest) returns (DeleteApiDefinitionResponse) {}
-}
-
 message ApiDefinitionRequest {
   ApiDefinitionId id = 1;
   string version = 2;
@@ -95,4 +86,3 @@ message GetAllApiDefinitionsResponse {
     ApiDefinitionError error = 2;
   }
 }
-

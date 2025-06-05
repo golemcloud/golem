@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::service::account::AccountError;
 use crate::service::account_grant::AccountGrantServiceError;
 use crate::service::auth::AuthServiceError;
@@ -6,10 +20,10 @@ use crate::service::project_grant::ProjectGrantError;
 use crate::service::project_policy::ProjectPolicyError;
 use crate::service::token::TokenServiceError;
 use crate::service::Services;
-use cloud_common::clients::plugin::PluginError;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
+use golem_service_base::clients::plugin::PluginError;
 use poem::endpoint::PrometheusExporter;
 use poem::Route;
 use poem_openapi::payload::Json;

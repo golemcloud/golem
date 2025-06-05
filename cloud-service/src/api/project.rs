@@ -1,17 +1,31 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::api::{ApiTags, LimitedApiError, LimitedApiResult};
 use crate::model::*;
 use crate::service::api_mapper::RemoteCloudApiMapper;
 use crate::service::auth::AuthService;
 use crate::service::project::ProjectService;
-use cloud_common::auth::GolemSecurityScheme;
-use cloud_common::model::ProjectPermisison;
 use futures_util::{stream, StreamExt, TryStreamExt};
+use golem_common::model::auth::ProjectPermisison;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
 use golem_common::model::{Empty, PluginInstallationId, ProjectId};
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::api::dto;
 use golem_component_service_base::model::BatchPluginInstallationUpdates;
+use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;

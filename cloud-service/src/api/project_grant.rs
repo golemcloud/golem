@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::api::{ApiTags, LimitedApiError, LimitedApiResult};
 use crate::auth::AccountAuthorisation;
 use crate::model::*;
@@ -5,11 +19,12 @@ use crate::service::account::AccountService;
 use crate::service::auth::AuthService;
 use crate::service::project_grant::ProjectGrantService;
 use crate::service::project_policy::ProjectPolicyService;
-use cloud_common::auth::GolemSecurityScheme;
-use cloud_common::model::{ProjectActions, ProjectGrantId, ProjectPolicyId};
+use golem_common::model::auth::ProjectActions;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::ProjectId;
+use golem_common::model::{ProjectGrantId, ProjectPolicyId};
 use golem_common::recorded_http_api_request;
+use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
