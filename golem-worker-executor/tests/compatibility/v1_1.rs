@@ -12,26 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{HashMap, HashSet};
-use test_r::test;
-
 use crate::compatibility::v1::backward_compatible;
 use goldenfile::Mint;
-use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerResourceId,
-};
-use golem_common::model::RetryConfig;
-use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, PluginInstallationId, Timestamp,
-    TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerResourceDescription,
-    WorkerStatus, WorkerStatusRecord, WorkerStatusRecordExtensions,
-};
+use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogPayload};
+use golem_common::model::{AccountId, ComponentId, PluginInstallationId, Timestamp, WorkerId};
 use golem_wasm_ast::analysis::analysed_type::bool;
 use golem_wasm_rpc::{Value, ValueAndType};
 use golem_worker_executor::durable_host::serialized::SerializableError;
 use golem_worker_executor::durable_host::wasm_rpc::serialized::SerializableInvokeResult;
 use golem_worker_executor::error::GolemError;
 use golem_worker_executor::services::rpc::RpcError;
+use std::collections::HashSet;
+use test_r::test;
 use uuid::Uuid;
 
 #[test]
@@ -169,56 +161,4 @@ pub fn serializable_invoke_result() {
         &mut mint,
         sir4,
     );
-}
-
-#[test]
-pub fn worker_status_record_v11() {
-    let wsr2 = WorkerStatusRecord {
-        status: WorkerStatus::Running,
-        skipped_regions: Default::default(),
-        overridden_retry_config: Some(RetryConfig::default()),
-        pending_invocations: vec![TimestampedWorkerInvocation {
-            timestamp: Timestamp::from(1724701938466),
-            invocation: WorkerInvocation::ManualUpdate {
-                target_version: 100,
-            },
-        }],
-        pending_updates: Default::default(),
-        failed_updates: vec![],
-        successful_updates: vec![],
-        invocation_results: HashMap::from_iter(vec![(
-            IdempotencyKey {
-                value: "id1".to_string(),
-            },
-            OplogIndex::from_u64(111),
-        )]),
-        current_idempotency_key: None,
-        component_version: 2,
-        component_size: 100_000_000,
-        total_linear_memory_size: 500_000_000,
-        owned_resources: HashMap::from_iter(vec![(
-            WorkerResourceId(1),
-            WorkerResourceDescription {
-                created_at: Timestamp::from(1724701938466),
-                indexed_resource_key: Some(IndexedResourceKey {
-                    resource_name: "r1".to_string(),
-                    resource_params: vec!["a".to_string(), "b".to_string()],
-                }),
-            },
-        )]),
-        oplog_idx: OplogIndex::from_u64(10000),
-        extensions: WorkerStatusRecordExtensions::Extension1 {
-            active_plugins: HashSet::from_iter(vec![
-                PluginInstallationId(
-                    Uuid::parse_str("E7AA7893-B8F8-4DC7-B3AC-3A9E3472EA18").unwrap(),
-                ),
-                PluginInstallationId(
-                    Uuid::parse_str("339ED9E3-9D93-440C-BC07-377F56642ABB").unwrap(),
-                ),
-            ]),
-        },
-    };
-
-    let mut mint = Mint::new("tests/goldenfiles");
-    backward_compatible("worker_status_record_indexed_v11", &mut mint, wsr2);
 }

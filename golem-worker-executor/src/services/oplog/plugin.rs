@@ -707,8 +707,7 @@ impl<T: GolemTypes> ForwardingOplogState<T> {
             }
         };
 
-        let active_plugins = metadata.last_known_status.active_plugins();
-        if !active_plugins.is_empty() {
+        if !metadata.last_known_status.active_plugins.is_empty() {
             let entries: Vec<_> = self.buffer.drain(..).collect();
             let initial_oplog_index =
                 OplogIndex::from_u64(Into::<u64>::into(self.last_oplog_idx) - entries.len() as u64);
@@ -762,7 +761,7 @@ impl<T: GolemTypes> ForwardingOplogState<T> {
             public_entries.push(public_entry);
         }
 
-        for installation_id in metadata.last_known_status.active_plugins() {
+        for installation_id in metadata.last_known_status.active_plugins.iter() {
             self.oplog_plugins
                 .send(
                     metadata.clone(),

@@ -371,6 +371,17 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<V>, String> {
+        match self.get_attempt_deserialize(namespace, key).await? {
+            Some(inner) => Ok(Some(inner?)),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn get_attempt_deserialize<V: Decode<()>>(
+        &self,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+    ) -> Result<Option<Result<V, String>>, String> {
         let maybe_bytes = self
             .storage
             .get(
@@ -382,7 +393,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             )
             .await?;
         if let Some(bytes) = maybe_bytes {
-            let value: V = deserialize(&bytes)?;
+            let value: Result<V, String> = deserialize(&bytes);
             Ok(Some(value))
         } else {
             Ok(None)

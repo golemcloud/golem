@@ -48,6 +48,7 @@ use async_trait::async_trait;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
+use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
@@ -98,6 +99,7 @@ pub trait WorkerCtx:
     /// Arguments:
     /// - `owned_worker_id`: The worker ID (consists of the component id and worker name as well as the worker's owner account)
     /// - `component_metadata`: Metadata associated with the worker's component
+    /// - `initial_component_metadata`: Metadata associated with the worker's component at the start of replay. Might be same or earlier than component_metadata
     /// - `promise_service`: The service for managing promises
     /// - `worker_service`: The service for managing workers
     /// - `key_value_service`: The service for storing key-value pairs
@@ -117,7 +119,6 @@ pub trait WorkerCtx:
     #[allow(clippy::too_many_arguments)]
     async fn create(
         owned_worker_id: OwnedWorkerId,
-        component_metadata: ComponentMetadata<Self::Types>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -333,7 +334,7 @@ pub trait UpdateManagement {
     /// Called when an update attempt succeeded
     async fn on_worker_update_succeeded(
         &self,
-        target_version: ComponentVersion,
+        update: &UpdateDescription,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     );
@@ -400,7 +401,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// If the result is true, the instance
     async fn prepare_instance(
         worker_id: &WorkerId,
-        instance: &wasmtime::component::Instance,
+        instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<RetryDecision, GolemError>;
 
