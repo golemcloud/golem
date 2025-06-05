@@ -735,13 +735,20 @@ dependencies = ["build-release-override-linux-arm64"]
 description = "Runs all the services locally"
 dependencies = ["build"]
 
-condition = { fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager." }
-condition_script = ["nginx -v", "lnav --version", "redis-server --version"]
+condition = { env_set = [ "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"], fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager. GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET env vars must be set." }
+
+condition_script = [
+    "nginx -v",
+    "lnav --version",
+    "redis-server --version",
+    ""
+]
 
 script = '''
 mkdir -pv data logs
 
-redis-server --port 6380 --save "" --appendonly no &> logs/redis.log &
+# start redis
+redis-server --port 6380 --appendonly yes --dir data/redis &> logs/redis.log &
 redis_pid=$!
 
 export RUST_BACKTRACE=1
@@ -752,35 +759,99 @@ export GOLEM__TRACING__FILE__ENABLED="${GOLEM__TRACING__FILE__ENABLED:=true}"
 export GOLEM__TRACING__FILE__JSON="${GOLEM__TRACING__FILE__JSON:=false}"
 export GOLEM__TRACING__STDOUT__ENABLED="${GOLEM__TRACING__STDOUT__ENABLED:=false}"
 
-pushd golem-shard-manager || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn GOLEM_SHARD_MANAGER_PORT=9002 ../target/debug/golem-shard-manager &
-shard_manager_pid=$!
+# start cloud service
+pushd cloud-service || exit
+
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn \
+    GOLEM__HTTP_PORT=8080 \
+    GOLEM__GRPC_PORT=9090 \
+    GOLEM__OAUTH2__GITHUB_CLIENT_ID="${GITHUB_CLIENT_ID}" \
+    GOLEM__OAUTH2__GITHUB_CLIENT_SECRET="${GITHUB_CLIENT_SECRET}" \
+    GOLEM__OAUTH2__GITHUB_REDIRECT_URI="http://localhost:9881/v1/login/oauth2/web/callback/github" \
+    GOLEM__DB__CONFIG__DATABASE="../data/golem_cloud_service.db" \
+    GOLEM__CORS_ORIGIN_REGEX="http://localhost:3000" \
+    GOLEM__ACCOUNTS__ROOT__TOKEN="5c832d93-ff85-4a8f-9803-513950fdfdb1" \
+    ../target/debug/cloud-service &
+
+cloud_service_pid=$!
 popd || exit
 
+# start component-compilation-service
 pushd golem-component-compilation-service || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-compilation-service &
+
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn \
+    GOLEM__HTTP_PORT=8081 \
+    GOLEM__GRPC_PORT=9091 \
+    GOLEM__COMPONENT_SERVICE__CONFIG__PORT=9092 \
+    ../target/debug/golem-component-compilation-service &
+
 component_compilation_service_pid=$!
 popd || exit
 
+# start component-service
 pushd golem-component-service || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-service &
+
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn \
+    GOLEM__HTTP_PORT=8082 \
+    GOLEM__GRPC_PORT=9092 \
+    GOLEM__CLOUD_SERVICE__PORT=9090 \
+    GOLEM__COMPILATION__CONFIG__PORT=9091 \
+    GOLEM__DB__CONFIG__DATABASE="../data/golem_component.db" \
+    GOLEM__CORS_ORIGIN_REGEX="http://localhost:3000" \
+    ../target/debug/golem-component-service &
+
 component_service_pid=$!
 popd || exit
 
-pushd golem-worker-service || exit
-RUST_LOG=debug,h2=warn,hyper=warn,tower=warn ../target/debug/golem-worker-service &
-worker_service_pid=$!
+# start shard-manager
+pushd golem-shard-manager || exit
+
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn \
+    GOLEM__HTTP_PORT=8083 \
+    GOLEM__GRPC_PORT=9093 \
+    ../target/debug/golem-shard-manager &
+
+shard_manager_pid=$!
 popd || exit
 
+# start worker-executor
 pushd golem-worker-executor || exit
-RUST_LOG=info ../target/debug/worker-executor &
+
+RUST_LOG=info \
+    GOLEM__HTTP_PORT=8084 \
+    GOLEM__PORT=9094 \
+    GOLEM__PLUGIN_SERVICE__CONFIG__PORT=9092 \
+    GOLEM__PUBLIC_WORKER_API__PORT=9095 \
+    GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT=9093 \
+    GOLEM__COMPONENT_SERVICE__PORT=9092 \
+    GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN="5c832d93-ff85-4a8f-9803-513950fdfdb1" \
+    GOLEM__RESOURCE_LIMITS__CONFIG__PORT=9090 \
+    GOLEM__RESOURCE_LIMITS__CONFIG__ACCESS_TOKEN="5c832d93-ff85-4a8f-9803-513950fdfdb1" \
+    ../target/debug/golem-worker-executor &
+
 worker_executor_pid=$!
 popd || exit
 
-nginx -c $CARGO_MAKE_WORKING_DIRECTORY/golem-router/golem-services.local.conf &> logs/nginx.log &
+# start worker-service
+pushd golem-worker-service || exit
+RUST_LOG=debug,h2=warn,hyper=warn,tower=warn
+    GOLEM__PORT=8085 \
+    GOLEM__CUSTOM_REQUEST_PORT=8086 \
+    GOLEM__WORKER_GRPC_PORT=9095 \
+    GOLEM__COMPONENT_SERVICE__PORT=9092 \
+    GOLEM__ROUTING_TABLE__PORT=9093 \
+    GOLEM__CORS_ORIGIN_REGEX="http://localhost:3000" \
+    GOLEM__CLOUD_SERVICE__PORT=9090 \
+    ../target/debug/golem-worker-service &
+
+worker_service_pid=$!
+popd || exit
+
+nginx -c $CARGO_MAKE_WORKING_DIRECTORY/golem-router/golem-services.local.conf -p $CARGO_MAKE_WORKING_DIRECTORY/data &> logs/nginx.log &
 router_pid=$!
 
 echo "Started services"
+echo " - cloud service:                 $cloud_service_pid"
 echo " - worker executor:               $worker_executor_pid"
 echo " - worker service:                $worker_service_pid"
 echo " - component service:             $component_service_pid"
@@ -790,10 +861,11 @@ echo " - router:                        $router_pid"
 echo " - redis:                         $redis_pid"
 echo ""
 echo "Kill all manually:"
-echo "kill -9 $worker_executor_pid $worker_service_pid $component_service_pid $component_compilation_service_pid $shard_manager_pid $router_pid $redis_pid"
+echo "kill -9 $cloud_service_pid $worker_executor_pid $worker_service_pid $component_service_pid $component_compilation_service_pid $shard_manager_pid $router_pid $redis_pid"
 
 lnav logs
 
+kill $cloud_service_pid || true
 kill $worker_executor_pid || true
 kill $worker_service_pid || true
 kill $component_service_pid || true
