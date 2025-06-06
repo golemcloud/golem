@@ -109,8 +109,49 @@ impl Display for CallType {
 mod protobuf {
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::instance_type::FullyQualifiedResourceConstructor;
-    use crate::{DynamicParsedFunctionName, Expr, ParsedFunctionName};
+    use crate::{ComponentInfo, DynamicParsedFunctionName, Expr, ParsedFunctionName};
     use golem_api_grpc::proto::golem::rib::WorkerInstance;
+
+    impl TryFrom<golem_api_grpc::proto::golem::rib::ComponentInfo> for ComponentInfo {
+        type Error = String;
+
+        fn try_from(value: golem_api_grpc::proto::golem::rib::ComponentInfo) -> Result<Self, Self::Error> {
+            let component_name = value.component_name;
+            let component_id = value.value.ok_or("Missing component version")?;
+
+            let root_package_name = value
+                .root_package_name;
+
+            let root_package_version = value
+                .root_package_version;
+
+            Ok(ComponentInfo {
+                component_name,
+                component_id: component_id.into(),
+                root_package_name,
+                root_package_version,
+            })
+        }
+    }
+
+    impl From<ComponentInfo> for golem_api_grpc::proto::golem::rib::ComponentInfo {
+        fn from(value: ComponentInfo) -> Self {
+            golem_api_grpc::proto::golem::rib::ComponentInfo {
+                component_name: value.component_name,
+                value: Some(value.component_id.into()),
+                root_package_name: value.root_package_name,
+                root_package_version: value.root_package_version,
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor> for FullyQualifiedResourceConstructor {
+        type Error = String;
+
+        fn try_from(value: golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor) -> Result<Self, Self::Error> {
+            Err("Conversion from proto to FullyQualifiedResourceConstructor is not implemented".to_string())
+        }
+    }
 
     impl TryFrom<golem_api_grpc::proto::golem::rib::InstanceCreationType> for InstanceCreationType {
         type Error = String;
@@ -127,7 +168,10 @@ mod protobuf {
                         .transpose()?
                         .map(Box::new);
 
-                    Ok(InstanceCreationType::Worker { worker_name })
+                    Ok(InstanceCreationType::Worker {
+                        component_info: None,
+                        worker_name
+                    })
                 }
                 golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(
                     resource_instance,
@@ -143,7 +187,13 @@ mod protobuf {
                     let resource_name =
                         FullyQualifiedResourceConstructor::try_from(resource_constructor_proto)?;
 
+                    let component_info = resource_instance
+                        .component
+                        .map(ComponentInfo::try_from)
+                        .transpose()?;
+
                     Ok(InstanceCreationType::Resource {
+                        component_info,
                         worker_name,
                         resource_name,
                     })
@@ -155,16 +205,18 @@ mod protobuf {
     impl From<InstanceCreationType> for golem_api_grpc::proto::golem::rib::InstanceCreationType {
         fn from(value: InstanceCreationType) -> Self {
             match value {
-                InstanceCreationType::Worker { worker_name } => {
+                InstanceCreationType::Worker { component_info, worker_name } => {
                     golem_api_grpc::proto::golem::rib::InstanceCreationType {
                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Worker(Box::new(WorkerInstance {
+                            component: component_info.map(|c| golem_api_grpc::proto::golem::rib::ComponentInfo::from(c)),
                             worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
                         }))),
                     }
                 }
-                InstanceCreationType::Resource { worker_name, resource_name } => {
+                InstanceCreationType::Resource { component_info, worker_name, resource_name } => {
                     golem_api_grpc::proto::golem::rib::InstanceCreationType {
                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(golem_api_grpc::proto::golem::rib::ResourceInstanceWithWorkerName {
+                            component: component_info.map(|c| golem_api_grpc::proto::golem::rib::ComponentInfo::from(c)),
                             worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
                             resource_name: Some(golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor::from(resource_name)),
                         }))),
@@ -237,24 +289,26 @@ mod protobuf {
                 },
                 CallType::InstanceCreation(instance_creation) => {
                     match instance_creation {
-                        InstanceCreationType::Worker { worker_name } => {
+                        InstanceCreationType::Worker { worker_name , component_info} => {
                             golem_api_grpc::proto::golem::rib::CallType {
                                 worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
                                 name:  Some(golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
                                     Box::new(golem_api_grpc::proto::golem::rib::InstanceCreationType {
                                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Worker(Box::new(WorkerInstance {
+                                            component: component_info.map(|c| golem_api_grpc::proto::golem::rib::ComponentInfo::from(c)),
                                             worker_name: worker_name.map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
                                         }))),
                                     })
                                 )),
                             }
                         }
-                        InstanceCreationType::Resource { worker_name, resource_name } => {
+                        InstanceCreationType::Resource { worker_name, resource_name, component_info } => {
                             golem_api_grpc::proto::golem::rib::CallType {
                                 worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
                                 name:  Some(golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
                                     Box::new(golem_api_grpc::proto::golem::rib::InstanceCreationType {
                                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(golem_api_grpc::proto::golem::rib::ResourceInstanceWithWorkerName {
+                                            component: component_info.map(|c| golem_api_grpc::proto::golem::rib::ComponentInfo::from(c)),
                                             worker_name: worker_name.map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
                                             resource_name: Some(golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor::from(resource_name)),
                                         }))),

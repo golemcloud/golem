@@ -93,7 +93,7 @@ mod internal {
             },
 
             CallType::Function { function_name, .. } => {
-                let function_name0 = RegistryKey::from_dynamic_parsed_function_name(function_name);
+                let function_name0 = FunctionName::from_dynamic_parsed_function_name(function_name);
 
                 match function_name0 {
                     FunctionName::ResourceMethod(fqn_resource_method) => {

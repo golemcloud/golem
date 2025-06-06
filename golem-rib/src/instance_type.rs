@@ -30,7 +30,7 @@ use golem_api_grpc::proto::golem::rib::{
     ResourceMethodDictionary as ProtoResourceMethodDictionary,
 };
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeVariant};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::ops::Deref;
@@ -150,20 +150,29 @@ impl InstanceType {
         let package_name = fully_qualified_resource_constructor.package_name.clone();
         let resource_constructor_name = fully_qualified_resource_constructor.resource_name.clone();
 
-        let mut resource_method_dict = vec![];
-        for (f, function_type) in self.function_dict().name_and_types.iter() {
-            if let FunctionName::ResourceMethod(resource_method) = f {
-                if resource_method.resource_name == resource_constructor_name
-                    && resource_method.interface_name == interface_name
-                    && resource_method.package_name == package_name
-                {
-                    resource_method_dict.push((resource_method.clone(), function_type.clone()));
+        let mut tree = BTreeMap::new();
+        for (component_info, function_type) in self.component_dependency().dependencies.iter() {
+            let mut resource_method_dict = vec![];
+
+            for (name, typ) in function_type.name_and_types.iter() {
+                if let FunctionName::ResourceMethod(resource_method) = name {
+                    if resource_method.resource_name == resource_constructor_name
+                        && resource_method.interface_name == interface_name
+                        && resource_method.package_name == package_name
+                    {
+                        resource_method_dict.push((resource_method.clone(), typ.clone()));
+                    }
                 }
             }
+
+            tree.insert(
+                component_info.clone(),
+                resource_method_dict,
+            );
         }
 
         let resource_method_dict = ResourceMethodDictionary {
-            map: resource_method_dict,
+            map: tree,
         };
 
         InstanceType::Resource {
@@ -209,108 +218,126 @@ impl InstanceType {
         &self,
         method_name: &str,
         type_parameter: Option<TypeParameter>,
-    ) -> Result<Function, String> {
+    ) -> Result<(ComponentInfo, Function), String> {
         match type_parameter {
             Some(tp) => match tp {
                 TypeParameter::Interface(iface) => {
-                    let interfaces = self
-                        .function_dict()
-                        .name_and_types
-                        .into_iter()
-                        .filter(|(f, _)| f.interface_name() == Some(iface.clone()))
-                        .collect::<Vec<_>>();
+                    let component_dependency =
+                        self.component_dependency().filter_by_interface(&iface)?;
 
-                    if interfaces.is_empty() {
-                        return Err(format!("Interface '{}' not found", iface));
-                    }
+                    if component_dependency.size() == 1 {
+                        let (info, function_dictionary) =
+                            component_dependency.dependencies.first_key_value().unwrap();
 
-                    let functions = interfaces
-                        .into_iter()
-                        .filter(|(f, _)| f.name() == method_name)
-                        .collect::<Vec<_>>();
+                        let functions = function_dictionary
+                            .name_and_types
+                            .iter()
+                            .filter(|(f, _)| f.name() == method_name)
+                            .collect::<Vec<_>>();
 
-                    if functions.is_empty() {
-                        return Err(format!(
-                            "Function '{}' not found in interface '{}'",
-                            method_name, iface
-                        ));
-                    }
+                        if functions.is_empty() {
+                            return Err(format!(
+                                "Function '{}' not found in interface '{}'",
+                                method_name, iface
+                            ));
+                        }
 
-                    // There is only 1 interface, and there cannot exist any more conflicts
-                    // with an interface
-                    if functions.len() == 1 {
-                        let (fqfn, ftype) = &functions[0];
-                        Ok(Function {
-                            function_name: fqfn.clone(),
-                            function_type: ftype.clone(),
-                        })
+                        if functions.len() == 1 {
+                            let (fqfn, ftype) = &functions[0];
+                            Ok((info.clone(), Function {
+                                function_name: fqfn.clone(),
+                                function_type: ftype.clone(),
+                            }))
+                        } else {
+                            search_function_in_instance(self, method_name)
+                        }
                     } else {
-                        search_function_in_instance(self, method_name)
+                        Err(format!(
+                            "Interface '{}' found in multiple components",
+                            iface
+                        ))
                     }
                 }
 
                 TypeParameter::PackageName(pkg) => {
-                    let packages = self
-                        .function_dict()
-                        .name_and_types
-                        .into_iter()
-                        .filter(|(f, _)| f.package_name() == Some(pkg.clone()))
-                        .collect::<Vec<_>>();
+                    let component_dependency =
+                        self.component_dependency().filter_by_package_name(&pkg)?;
 
-                    if packages.is_empty() {
-                        return Err(format!("package '{}' not found", pkg));
-                    }
+                    if component_dependency.size() == 1 {
+                        let (info, function_dictionary) =
+                            component_dependency.dependencies.first_key_value().unwrap();
 
-                    let functions = packages
-                        .into_iter()
-                        .filter(|(f, _)| f.name() == method_name)
-                        .collect::<Vec<_>>();
+                        let packages = function_dictionary
+                            .name_and_types
+                            .iter()
+                            .filter(|(f, _)| f.package_name() == Some(pkg.clone()))
+                            .collect::<Vec<_>>();
 
-                    if functions.is_empty() {
-                        return Err(format!(
-                            "function '{}' not found in package '{}'",
-                            method_name, pkg
-                        ));
-                    }
+                        if packages.is_empty() {
+                            return Err(format!("package '{}' not found", pkg));
+                        }
 
-                    if functions.len() == 1 {
-                        let (fqfn, ftype) = &functions[0];
-                        Ok(Function {
-                            function_name: fqfn.clone(),
-                            function_type: ftype.clone(),
-                        })
+                        let functions = packages
+                            .into_iter()
+                            .filter(|(f, _)| f.name() == method_name)
+                            .collect::<Vec<_>>();
+
+                        if functions.len() == 1 {
+                            let (fqfn, ftype) = &functions[0];
+                            Ok((info.clone(), Function {
+                                function_name: fqfn.clone(),
+                                function_type: ftype.clone(),
+                            }))
+                        } else {
+                            search_function_in_instance(self, method_name)
+                        }
                     } else {
-                        search_function_in_instance(self, method_name)
+                        Err(format!(
+                            "package '{}' found in multiple components. Please specify the root package name instead",
+                            pkg
+                        ))
                     }
                 }
 
                 TypeParameter::FullyQualifiedInterface(fq_iface) => {
-                    let functions = self
-                        .function_dict()
-                        .name_and_types
-                        .into_iter()
-                        .filter(|(f, _)| {
-                            f.package_name() == Some(fq_iface.package_name.clone())
-                                && f.interface_name() == Some(fq_iface.interface_name.clone())
-                                && f.name() == method_name
-                        })
-                        .collect::<Vec<_>>();
+                    let component_dependency =
+                        self.component_dependency().filter_by_fully_qualified_interface(&fq_iface)?;
 
-                    if functions.is_empty() {
-                        return Err(format!(
-                            "function '{}' not found in interface '{}'",
-                            method_name, fq_iface
-                        ));
-                    }
+                    if component_dependency.size() == 1 {
+                        let (info, function_dictionary) =
+                            component_dependency.dependencies.first_key_value().unwrap();
 
-                    if functions.len() == 1 {
-                        let (fqfn, ftype) = &functions[0];
-                        Ok(Function {
-                            function_name: fqfn.clone(),
-                            function_type: ftype.clone(),
-                        })
+                        let functions = function_dictionary
+                            .name_and_types
+                            .iter()
+                            .filter(|(f, _)| {
+                                f.package_name() == Some(fq_iface.package_name.clone())
+                                    && f.interface_name() == Some(fq_iface.interface_name.clone())
+                                    && f.name() == method_name
+                            })
+                            .collect::<Vec<_>>();
+
+                        if functions.is_empty() {
+                            return Err(format!(
+                                "function '{}' not found in interface '{}'",
+                                method_name, fq_iface
+                            ));
+                        }
+
+                        if functions.len() == 1 {
+                            let (fqfn, ftype) = &functions[0];
+                            Ok((info.clone(), Function {
+                                function_name: fqfn.clone(),
+                                function_type: ftype.clone(),
+                            }))
+                        } else {
+                            search_function_in_instance(self, method_name)
+                        }
                     } else {
-                        search_function_in_instance(self, method_name)
+                        Err(format!(
+                            "interface '{}' found in multiple components. Please specify the root package name instead",
+                            fq_iface
+                        ))
                     }
                 }
             },
@@ -472,17 +499,27 @@ impl FunctionDictionary {
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct ResourceMethodDictionary {
-    pub map: Vec<(FullyQualifiedResourceMethod, FunctionType)>,
+    pub map: BTreeMap<ComponentInfo, Vec<(FullyQualifiedResourceMethod, FunctionType)>>,
 }
 
-impl From<&ResourceMethodDictionary> for FunctionDictionary {
+impl From<&ResourceMethodDictionary> for ComponentDependency {
     fn from(value: &ResourceMethodDictionary) -> Self {
-        FunctionDictionary {
-            name_and_types: value
-                .map
-                .iter()
-                .map(|(k, v)| (FunctionName::ResourceMethod(k.clone()), v.clone()))
-                .collect(),
+
+        let mut dict = BTreeMap::new();
+
+        for (info, function_dictionary) in value.map {
+            let function_dictionary =  FunctionDictionary {
+                name_and_types: function_dictionary
+                    .iter()
+                    .map(|(k, v)| (FunctionName::ResourceMethod(k.clone()), v.clone()))
+                    .collect(),
+            };
+
+            dict.insert(info, function_dictionary);
+        }
+
+        ComponentDependency {
+            dependencies: dict,
         }
     }
 }
@@ -761,7 +798,7 @@ impl FunctionName {
                     method_name: "drop".to_string(),
                 })
             }
-        };
+        }
     }
 
     pub fn from_call_type(call_type: &CallType) -> Option<FunctionName> {
@@ -910,7 +947,7 @@ pub struct FunctionType {
 
 impl FunctionType {
     pub fn as_type_variant(&self) -> Option<TypeVariant> {
-        let analysed_type = AnalysedType::try_from(&self.return_type.clone()?).ok();
+        let analysed_type = AnalysedType::try_from(&self.return_type.clone()?).ok()?;
 
         match analysed_type {
             AnalysedType::Variant(type_variant) => Some(type_variant),
@@ -938,40 +975,102 @@ impl FunctionType {
 fn search_function_in_instance(
     instance: &InstanceType,
     function_name: &str,
-) -> Result<Function, String> {
-    let functions: Vec<(FunctionName, FunctionType)> = instance
-        .function_dict()
-        .name_and_types
-        .into_iter()
-        .filter(|(f, _)| f.name() == *function_name)
-        .collect();
+    component_info: Option<&ComponentInfo>,
+) -> Result<(ComponentInfo, Function), String> {
 
-    if functions.is_empty() {
-        return Err(format!("function '{}' not found", function_name));
-    }
+    match component_info {
+        Some(info) => {
+           let function_dictionary = instance.component_dependency().dependencies.get(info).ok_or(
+                format!("Component info '{}' not found in instance", info)
+            )?;
 
-    let mut package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>> =
-        HashMap::new();
+            let functions = function_dictionary
+                .name_and_types
+                .iter()
+                .filter(|(f, _)| f.name() == function_name)
+                .collect::<Vec<_>>();
 
-    for (fqfn, _) in &functions {
-        package_map
-            .entry(fqfn.package_name())
-            .or_default()
-            .insert(fqfn.interface_name());
-    }
+            if functions.is_empty() {
+                return Err(format!(
+                    "function '{}' not found in component '{}'",
+                    function_name, info
+                ));
+            }
 
-    match package_map.len() {
-        1 => {
-            let interfaces = package_map.values().flatten().cloned().collect();
-            search_function_in_single_package(interfaces, functions, function_name)
+            let mut package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>> =
+                HashMap::new();
+
+            match package_map.len() {
+                1 => {
+                    let interfaces = package_map.values().flatten().cloned().collect();
+                    let function = search_function_in_single_package(interfaces, functions, function_name)?;
+
+                    Ok((info.clone(), function))
+
+                }
+                _ => {
+                    let function = search_function_in_multiple_packages(function_name, package_map)?;
+                    Ok((info.clone(), function))
+                },
+            }
         }
-        _ => search_function_in_multiple_packages(function_name, package_map),
+        None => {
+            let mut component_info_functions = vec![];
+
+            for (info, function_dictionary) in instance
+                .component_dependency()
+                .dependencies
+                .iter()
+            {
+                let functions = function_dictionary
+                    .name_and_types
+                    .iter()
+                    .filter(|(f, _)| f.name() == function_name)
+                    .collect::<Vec<_>>();
+
+                if functions.is_empty() {
+                    continue;
+                }
+
+                let mut package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>> =
+                    HashMap::new();
+
+                match package_map.len() {
+                    1 => {
+                        let interfaces = package_map.values().flatten().cloned().collect();
+                        let function = search_function_in_single_package(interfaces, functions, function_name)?;
+
+                        component_info_functions.push((info.clone(), function));
+
+                    }
+                    _ => {
+                        let function = search_function_in_multiple_packages(function_name, package_map)?;
+                        component_info_functions.push((info.clone(), function));
+                    },
+                }
+            }
+
+            if component_info_functions.len() == 1 {
+                let (info, function) = &component_info_functions[0];
+                Ok((info.clone(), function.clone()))
+            } else if component_info_functions.is_empty() {
+                Err(format!("function '{}' not found", function_name))
+            } else {
+                Err(format!(
+                    "function '{}' found in multiple components. Please specify the type parameter",
+                    function_name
+                ))
+            }
+        }
     }
+
+
+
 }
 
 fn search_function_in_single_package(
     interfaces: HashSet<Option<InterfaceName>>,
-    functions: Vec<(FunctionName, FunctionType)>,
+    functions: Vec<&(FunctionName, FunctionType)>,
     function_name: &str,
 ) -> Result<Function, String> {
     if interfaces.len() == 1 {
@@ -1055,58 +1154,58 @@ impl TryFrom<ProtoFunctionType> for FunctionType {
     }
 }
 
-impl TryFrom<ProtoResourceMethodDictionary> for ResourceMethodDictionary {
-    type Error = String;
+// impl TryFrom<ProtoResourceMethodDictionary> for ResourceMethodDictionary {
+//     type Error = String;
+//
+//     fn try_from(proto: ProtoResourceMethodDictionary) -> Result<Self, Self::Error> {
+//         let mut map = Vec::new();
+//         for resource_method_entry in proto.map {
+//             let resource_method = resource_method_entry
+//                 .key
+//                 .ok_or("resource method not found")?;
+//             let function_type = resource_method_entry
+//                 .value
+//                 .ok_or("function type not found")?;
+//             let resource_method = FullyQualifiedResourceMethod::try_from(resource_method)?;
+//             let function_type = FunctionType::try_from(function_type)?;
+//             map.push((resource_method, function_type));
+//         }
+//         Ok(ResourceMethodDictionary { map })
+//     }
+// }
 
-    fn try_from(proto: ProtoResourceMethodDictionary) -> Result<Self, Self::Error> {
-        let mut map = Vec::new();
-        for resource_method_entry in proto.map {
-            let resource_method = resource_method_entry
-                .key
-                .ok_or("resource method not found")?;
-            let function_type = resource_method_entry
-                .value
-                .ok_or("function type not found")?;
-            let resource_method = FullyQualifiedResourceMethod::try_from(resource_method)?;
-            let function_type = FunctionType::try_from(function_type)?;
-            map.push((resource_method, function_type));
-        }
-        Ok(ResourceMethodDictionary { map })
-    }
-}
+// impl TryFrom<ProtoFunctionDictionary> for FunctionDictionary {
+//     type Error = String;
+//
+//     fn try_from(value: ProtoFunctionDictionary) -> Result<Self, Self::Error> {
+//         let mut map = Vec::new();
+//
+//         for function_entry in value.map {
+//             let function_name = function_entry.key.ok_or("Function name not found")?;
+//             let function_type = function_entry.value.ok_or("Function type not found")?;
+//
+//             let function_name = FunctionName::try_from(function_name)?;
+//             let function_type = FunctionType::try_from(function_type)?;
+//             map.push((function_name, function_type));
+//         }
+//
+//         Ok(FunctionDictionary {
+//             name_and_types: map,
+//         })
+//     }
+// }
 
-impl TryFrom<ProtoFunctionDictionary> for FunctionDictionary {
-    type Error = String;
-
-    fn try_from(value: ProtoFunctionDictionary) -> Result<Self, Self::Error> {
-        let mut map = Vec::new();
-
-        for function_entry in value.map {
-            let function_name = function_entry.key.ok_or("Function name not found")?;
-            let function_type = function_entry.value.ok_or("Function type not found")?;
-
-            let function_name = FunctionName::try_from(function_name)?;
-            let function_type = FunctionType::try_from(function_type)?;
-            map.push((function_name, function_type));
-        }
-
-        Ok(FunctionDictionary {
-            name_and_types: map,
-        })
-    }
-}
-
-impl TryFrom<ProtoPackageName> for PackageName {
-    type Error = String;
-
-    fn try_from(proto: ProtoPackageName) -> Result<Self, Self::Error> {
-        Ok(PackageName {
-            namespace: proto.namespace,
-            package_name: proto.package_name,
-            version: proto.version,
-        })
-    }
-}
+// impl TryFrom<ProtoPackageName> for PackageName {
+//     type Error = String;
+//
+//     fn try_from(proto: ProtoPackageName) -> Result<Self, Self::Error> {
+//         Ok(PackageName {
+//             namespace: proto.namespace,
+//             package_name: proto.package_name,
+//             version: proto.version,
+//         })
+//     }
+// }
 
 impl TryFrom<ProtoInterfaceName> for InterfaceName {
     type Error = String;
@@ -1119,172 +1218,172 @@ impl TryFrom<ProtoInterfaceName> for InterfaceName {
     }
 }
 
-impl TryFrom<ProtoFullyQualifiedFunctionName> for FullyQualifiedFunctionName {
-    type Error = String;
+// impl TryFrom<ProtoFullyQualifiedFunctionName> for FullyQualifiedFunctionName {
+//     type Error = String;
+//
+//     fn try_from(proto: ProtoFullyQualifiedFunctionName) -> Result<Self, Self::Error> {
+//         Ok(FullyQualifiedFunctionName {
+//             package_name: proto.package_name.map(TryFrom::try_from).transpose()?,
+//             interface_name: proto.interface_name.map(TryFrom::try_from).transpose()?,
+//             function_name: proto.function_name,
+//         })
+//     }
+// }
 
-    fn try_from(proto: ProtoFullyQualifiedFunctionName) -> Result<Self, Self::Error> {
-        Ok(FullyQualifiedFunctionName {
-            package_name: proto.package_name.map(TryFrom::try_from).transpose()?,
-            interface_name: proto.interface_name.map(TryFrom::try_from).transpose()?,
-            function_name: proto.function_name,
-        })
-    }
-}
+// impl TryFrom<ProtoFullyQualifiedResourceMethod> for FullyQualifiedResourceMethod {
+//     type Error = String;
+//
+//     fn try_from(proto: ProtoFullyQualifiedResourceMethod) -> Result<Self, Self::Error> {
+//         Ok(FullyQualifiedResourceMethod {
+//             resource_name: proto.resource_name,
+//             method_name: proto.method_name,
+//             package_name: proto.package_name.map(TryFrom::try_from).transpose()?,
+//             interface_name: proto.interface_name.map(TryFrom::try_from).transpose()?,
+//         })
+//     }
+// }
 
-impl TryFrom<ProtoFullyQualifiedResourceMethod> for FullyQualifiedResourceMethod {
-    type Error = String;
+// impl TryFrom<ProtoFullyQualifiedResourceConstructor> for FullyQualifiedResourceConstructor {
+//     type Error = String;
+//
+//     fn try_from(proto: ProtoFullyQualifiedResourceConstructor) -> Result<Self, Self::Error> {
+//         Ok(FullyQualifiedResourceConstructor {
+//             package_name: proto.package_name.map(TryFrom::try_from).transpose()?,
+//             interface_name: proto.interface_name.map(TryFrom::try_from).transpose()?,
+//             resource_name: proto.resource_name,
+//         })
+//     }
+// }
 
-    fn try_from(proto: ProtoFullyQualifiedResourceMethod) -> Result<Self, Self::Error> {
-        Ok(FullyQualifiedResourceMethod {
-            resource_name: proto.resource_name,
-            method_name: proto.method_name,
-            package_name: proto.package_name.map(TryFrom::try_from).transpose()?,
-            interface_name: proto.interface_name.map(TryFrom::try_from).transpose()?,
-        })
-    }
-}
+// impl TryFrom<ProtoFunctionName> for FunctionName {
+//     type Error = String;
+//
+//     fn try_from(proto: ProtoFunctionName) -> Result<Self, Self::Error> {
+//         let proto_function_name = proto.function_name.ok_or("Function name not found")?;
+//         match proto_function_name {
+//             function_name_type::FunctionName::Function(fqfn) => {
+//                 Ok(FunctionName::Function(TryFrom::try_from(fqfn)?))
+//             }
+//             function_name_type::FunctionName::ResourceConstructor(fqfn) => {
+//                 Ok(FunctionName::ResourceConstructor(TryFrom::try_from(fqfn)?))
+//             }
+//             function_name_type::FunctionName::ResourceMethod(fqfn) => {
+//                 Ok(FunctionName::ResourceMethod(TryFrom::try_from(fqfn)?))
+//             }
+//         }
+//     }
+// }
 
-impl TryFrom<ProtoFullyQualifiedResourceConstructor> for FullyQualifiedResourceConstructor {
-    type Error = String;
-
-    fn try_from(proto: ProtoFullyQualifiedResourceConstructor) -> Result<Self, Self::Error> {
-        Ok(FullyQualifiedResourceConstructor {
-            package_name: proto.package_name.map(TryFrom::try_from).transpose()?,
-            interface_name: proto.interface_name.map(TryFrom::try_from).transpose()?,
-            resource_name: proto.resource_name,
-        })
-    }
-}
-
-impl TryFrom<ProtoFunctionName> for FunctionName {
-    type Error = String;
-
-    fn try_from(proto: ProtoFunctionName) -> Result<Self, Self::Error> {
-        let proto_function_name = proto.function_name.ok_or("Function name not found")?;
-        match proto_function_name {
-            function_name_type::FunctionName::Function(fqfn) => {
-                Ok(FunctionName::Function(TryFrom::try_from(fqfn)?))
-            }
-            function_name_type::FunctionName::ResourceConstructor(fqfn) => {
-                Ok(FunctionName::ResourceConstructor(TryFrom::try_from(fqfn)?))
-            }
-            function_name_type::FunctionName::ResourceMethod(fqfn) => {
-                Ok(FunctionName::ResourceMethod(TryFrom::try_from(fqfn)?))
-            }
-        }
-    }
-}
-
-impl TryFrom<ProtoInstanceType> for InstanceType {
-    type Error = String;
-
-    fn try_from(value: ProtoInstanceType) -> Result<Self, Self::Error> {
-        let instance = value.instance.ok_or("Instance not found")?;
-
-        match instance {
-            Instance::Global(global_instance) => {
-                let functions_global = global_instance
-                    .functions_global
-                    .ok_or("Functions global not found")?;
-
-                Ok(InstanceType::Global {
-                    worker_name: global_instance
-                        .worker_name
-                        .map(Expr::try_from)
-                        .transpose()?
-                        .map(Box::new),
-                    component_dependency: TryFrom::try_from(functions_global)?,
-                })
-            }
-            Instance::Package(package_instance) => {
-                let package_name = package_instance
-                    .package_name
-                    .ok_or("Package name not found")?;
-                let functions_in_package = package_instance
-                    .functions_in_package
-                    .ok_or("Functions in package not found")?;
-
-                Ok(InstanceType::Package {
-                    worker_name: package_instance
-                        .worker_name
-                        .map(Expr::try_from)
-                        .transpose()?
-                        .map(Box::new),
-                    package_name: TryFrom::try_from(package_name)?,
-                    component_dependency: TryFrom::try_from(functions_in_package)?,
-                })
-            }
-            Instance::Interface(interface_instance) => {
-                let interface_name = interface_instance
-                    .interface_name
-                    .ok_or("Interface name not found")?;
-                let functions_in_interface = interface_instance
-                    .functions_in_interface
-                    .ok_or("Functions in interface not found")?;
-
-                Ok(InstanceType::Interface {
-                    worker_name: interface_instance
-                        .worker_name
-                        .map(Expr::try_from)
-                        .transpose()?
-                        .map(Box::new),
-                    interface_name: TryFrom::try_from(interface_name)?,
-                    component_dependency: TryFrom::try_from(functions_in_interface)?,
-                })
-            }
-            Instance::PackageInterface(package_interface_instance) => {
-                let functions_in_package_interface = package_interface_instance
-                    .functions_in_package_interface
-                    .ok_or("Functions in package interface not found")?;
-
-                let interface_name = package_interface_instance
-                    .interface_name
-                    .ok_or("Interface name not found")?;
-                let package_name = package_interface_instance
-                    .package_name
-                    .ok_or("Package name not found")?;
-
-                Ok(InstanceType::PackageInterface {
-                    worker_name: package_interface_instance
-                        .worker_name
-                        .map(Expr::try_from)
-                        .transpose()?
-                        .map(Box::new),
-                    package_name: TryFrom::try_from(package_name)?,
-                    interface_name: TryFrom::try_from(interface_name)?,
-                    component_dependency: TryFrom::try_from(functions_in_package_interface)?,
-                })
-            }
-            Instance::Resource(resource_instance) => {
-                let resource_method_dict = resource_instance
-                    .resource_method_dict
-                    .ok_or("Resource method dictionary not found")?;
-                Ok(InstanceType::Resource {
-                    worker_name: resource_instance
-                        .worker_name
-                        .map(Expr::try_from)
-                        .transpose()?
-                        .map(Box::new),
-                    package_name: resource_instance
-                        .package_name
-                        .map(TryFrom::try_from)
-                        .transpose()?,
-                    interface_name: resource_instance
-                        .interface_name
-                        .map(TryFrom::try_from)
-                        .transpose()?,
-                    resource_constructor: resource_instance.resource_constructor,
-                    resource_args: resource_instance
-                        .resource_args
-                        .into_iter()
-                        .map(TryFrom::try_from)
-                        .collect::<Result<Vec<Expr>, String>>()?,
-                    component_dependency: TryFrom::try_from(resource_method_dict)?,
-                })
-            }
-        }
-    }
-}
+// impl TryFrom<ProtoInstanceType> for InstanceType {
+//     type Error = String;
+//
+//     fn try_from(value: ProtoInstanceType) -> Result<Self, Self::Error> {
+//         let instance = value.instance.ok_or("Instance not found")?;
+//
+//         match instance {
+//             Instance::Global(global_instance) => {
+//                 let functions_global = global_instance
+//                     .functions_global
+//                     .ok_or("Functions global not found")?;
+//
+//                 Ok(InstanceType::Global {
+//                     worker_name: global_instance
+//                         .worker_name
+//                         .map(Expr::try_from)
+//                         .transpose()?
+//                         .map(Box::new),
+//                     component_dependency: TryFrom::try_from(functions_global)?,
+//                 })
+//             }
+//             Instance::Package(package_instance) => {
+//                 let package_name = package_instance
+//                     .package_name
+//                     .ok_or("Package name not found")?;
+//                 let functions_in_package = package_instance
+//                     .functions_in_package
+//                     .ok_or("Functions in package not found")?;
+//
+//                 Ok(InstanceType::Package {
+//                     worker_name: package_instance
+//                         .worker_name
+//                         .map(Expr::try_from)
+//                         .transpose()?
+//                         .map(Box::new),
+//                     package_name: TryFrom::try_from(package_name)?,
+//                     component_dependency: TryFrom::try_from(functions_in_package)?,
+//                 })
+//             }
+//             Instance::Interface(interface_instance) => {
+//                 let interface_name = interface_instance
+//                     .interface_name
+//                     .ok_or("Interface name not found")?;
+//                 let functions_in_interface = interface_instance
+//                     .functions_in_interface
+//                     .ok_or("Functions in interface not found")?;
+//
+//                 Ok(InstanceType::Interface {
+//                     worker_name: interface_instance
+//                         .worker_name
+//                         .map(Expr::try_from)
+//                         .transpose()?
+//                         .map(Box::new),
+//                     interface_name: TryFrom::try_from(interface_name)?,
+//                     component_dependency: TryFrom::try_from(functions_in_interface)?,
+//                 })
+//             }
+//             Instance::PackageInterface(package_interface_instance) => {
+//                 let functions_in_package_interface = package_interface_instance
+//                     .functions_in_package_interface
+//                     .ok_or("Functions in package interface not found")?;
+//
+//                 let interface_name = package_interface_instance
+//                     .interface_name
+//                     .ok_or("Interface name not found")?;
+//                 let package_name = package_interface_instance
+//                     .package_name
+//                     .ok_or("Package name not found")?;
+//
+//                 Ok(InstanceType::PackageInterface {
+//                     worker_name: package_interface_instance
+//                         .worker_name
+//                         .map(Expr::try_from)
+//                         .transpose()?
+//                         .map(Box::new),
+//                     package_name: TryFrom::try_from(package_name)?,
+//                     interface_name: TryFrom::try_from(interface_name)?,
+//                     component_dependency: TryFrom::try_from(functions_in_package_interface)?,
+//                 })
+//             }
+//             Instance::Resource(resource_instance) => {
+//                 let resource_method_dict = resource_instance
+//                     .resource_method_dict
+//                     .ok_or("Resource method dictionary not found")?;
+//                 Ok(InstanceType::Resource {
+//                     worker_name: resource_instance
+//                         .worker_name
+//                         .map(Expr::try_from)
+//                         .transpose()?
+//                         .map(Box::new),
+//                     package_name: resource_instance
+//                         .package_name
+//                         .map(TryFrom::try_from)
+//                         .transpose()?,
+//                     interface_name: resource_instance
+//                         .interface_name
+//                         .map(TryFrom::try_from)
+//                         .transpose()?,
+//                     resource_constructor: resource_instance.resource_constructor,
+//                     resource_args: resource_instance
+//                         .resource_args
+//                         .into_iter()
+//                         .map(TryFrom::try_from)
+//                         .collect::<Result<Vec<Expr>, String>>()?,
+//                     component_dependency: TryFrom::try_from(resource_method_dict)?,
+//                 })
+//             }
+//         }
+//     }
+// }
 
 impl From<PackageName> for ProtoPackageName {
     fn from(value: PackageName) -> Self {

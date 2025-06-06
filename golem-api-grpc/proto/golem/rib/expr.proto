@@ -4,6 +4,7 @@ package golem.rib;
 
 import "golem/rib/function_name.proto";
 import "golem/rib/type_name.proto";
+import "golem/common/uuid.proto";
 
 message Expr {
   oneof expr {
@@ -267,6 +268,13 @@ message CallType {
    optional golem.rib.Expr worker_name = 5;
 }
 
+message ComponentInfo {
+  string component_name = 1;
+  golem.common.UUID value = 2;
+  optional string root_package_name = 3;
+  optional string root_package_version = 4;
+}
+
 message InstanceCreationType {
     oneof kind {
         WorkerInstance worker = 1;
@@ -276,11 +284,14 @@ message InstanceCreationType {
 
 message WorkerInstance {
     optional golem.rib.Expr worker_name = 1;
+    optional ComponentInfo component = 2;
 }
 
 message ResourceInstanceWithWorkerName {
     optional golem.rib.Expr worker_name = 1;
     golem.rib.FullyQualifiedResourceConstructor resource_name = 2;
+    optional ComponentInfo component = 3;
+
 }
 
 message FullyQualifiedResourceConstructor {

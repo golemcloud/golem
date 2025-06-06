@@ -583,7 +583,7 @@ mod internal {
                     // we need to push a place holder in the stack that does nothing
                     CallType::InstanceCreation(instance_creation_type) => {
                         match instance_creation_type {
-                            InstanceCreationType::Worker { worker_name } => {
+                            InstanceCreationType::Worker { worker_name, .. } => {
                                 for expr in args.iter().rev() {
                                     stack.push(ExprState::from_expr(expr));
                                 }
