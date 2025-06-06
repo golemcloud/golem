@@ -17,12 +17,12 @@ use crate::type_parameter::InterfaceName;
 use crate::{
     CallType, ComponentDependency, ComponentInfo, DynamicParsedFunctionName,
     DynamicParsedFunctionReference, Expr, FunctionTypeRegistry, InferredType, ParsedFunctionSite,
-    RegistryKey, RegistryValue,
+    RegistryKey, RegistryValue, TypeInternal,
 };
 use golem_api_grpc::proto::golem::rib::{
     FullyQualifiedResourceConstructor as ProtoFullyQualifiedResourceConstructor,
-    FunctionType as ProtoFunctionType,
-    InterfaceName as ProtoInterfaceName, PackageName as ProtoPackageName,
+    FunctionType as ProtoFunctionType, InterfaceName as ProtoInterfaceName,
+    PackageName as ProtoPackageName,
 };
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeVariant};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -160,15 +160,10 @@ impl InstanceType {
                 }
             }
 
-            tree.insert(
-                component_info.clone(),
-                resource_method_dict,
-            );
+            tree.insert(component_info.clone(), resource_method_dict);
         }
 
-        let resource_method_dict = ResourceMethodDictionary {
-            map: tree,
-        };
+        let resource_method_dict = ResourceMethodDictionary { map: tree };
 
         InstanceType::Resource {
             worker_name,
@@ -239,10 +234,13 @@ impl InstanceType {
 
                         if functions.len() == 1 {
                             let (fqfn, ftype) = &functions[0];
-                            Ok((info.clone(), Function {
-                                function_name: fqfn.clone(),
-                                function_type: ftype.clone(),
-                            }))
+                            Ok((
+                                info.clone(),
+                                Function {
+                                    function_name: fqfn.clone(),
+                                    function_type: ftype.clone(),
+                                },
+                            ))
                         } else {
                             search_function_in_instance(self, method_name, Some(info))
                         }
@@ -279,10 +277,13 @@ impl InstanceType {
 
                         if functions.len() == 1 {
                             let (fqfn, ftype) = &functions[0];
-                            Ok((info.clone(), Function {
-                                function_name: fqfn.clone(),
-                                function_type: ftype.clone(),
-                            }))
+                            Ok((
+                                info.clone(),
+                                Function {
+                                    function_name: fqfn.clone(),
+                                    function_type: ftype.clone(),
+                                },
+                            ))
                         } else {
                             search_function_in_instance(self, method_name, Some(info))
                         }
@@ -295,8 +296,9 @@ impl InstanceType {
                 }
 
                 TypeParameter::FullyQualifiedInterface(fq_iface) => {
-                    let component_dependency =
-                        self.component_dependency().filter_by_fully_qualified_interface(&fq_iface)?;
+                    let component_dependency = self
+                        .component_dependency()
+                        .filter_by_fully_qualified_interface(&fq_iface)?;
 
                     if component_dependency.size() == 1 {
                         let (info, function_dictionary) =
@@ -321,10 +323,13 @@ impl InstanceType {
 
                         if functions.len() == 1 {
                             let (fqfn, ftype) = &functions[0];
-                            Ok((info.clone(), Function {
-                                function_name: fqfn.clone(),
-                                function_type: ftype.clone(),
-                            }))
+                            Ok((
+                                info.clone(),
+                                Function {
+                                    function_name: fqfn.clone(),
+                                    function_type: ftype.clone(),
+                                },
+                            ))
                         } else {
                             search_function_in_instance(self, method_name, Some(info))
                         }
@@ -342,29 +347,37 @@ impl InstanceType {
 
     // A flattened list of all resource methods
     pub fn resource_method_dictionary(&self) -> FunctionDictionary {
-        let name_and_types = self.component_dependency()
+        let name_and_types = self
+            .component_dependency()
             .dependencies
-            .values().flat_map(
-                |function_dictionary| {
-                    function_dictionary
-                        .name_and_types
-                        .iter()
-                        .filter(|(f, _)| matches!(f, FunctionName::ResourceMethod(_)))
-                        .map(|(f, t)| (f.clone(), t.clone()))
-                        .collect::<Vec<_>>()
-                }
-            ).collect();
+            .values()
+            .flat_map(|function_dictionary| {
+                function_dictionary
+                    .name_and_types
+                    .iter()
+                    .filter(|(f, _)| matches!(f, FunctionName::ResourceMethod(_)))
+                    .map(|(f, t)| (f.clone(), t.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
 
         FunctionDictionary { name_and_types }
     }
 
     pub fn function_dict_without_resource_methods(&self) -> FunctionDictionary {
         let name_and_types = self
-            .function_dict()
-            .name_and_types
-            .into_iter()
-            .filter(|(f, _)| !matches!(f, FunctionName::ResourceMethod(_)))
-            .collect::<Vec<_>>();
+            .component_dependency()
+            .dependencies
+            .values()
+            .flat_map(|function_dictionary| {
+                function_dictionary
+                    .name_and_types
+                    .iter()
+                    .filter(|(f, _)| !matches!(f, FunctionName::ResourceMethod(_)))
+                    .map(|(f, t)| (f.clone(), t.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
 
         FunctionDictionary { name_and_types }
     }
@@ -506,11 +519,10 @@ pub struct ResourceMethodDictionary {
 
 impl From<&ResourceMethodDictionary> for ComponentDependency {
     fn from(value: &ResourceMethodDictionary) -> Self {
-
         let mut dict = BTreeMap::new();
 
         for (info, function_dictionary) in value.map {
-            let function_dictionary =  FunctionDictionary {
+            let function_dictionary = FunctionDictionary {
                 name_and_types: function_dictionary
                     .iter()
                     .map(|(k, v)| (FunctionName::ResourceMethod(k.clone()), v.clone()))
@@ -520,9 +532,7 @@ impl From<&ResourceMethodDictionary> for ComponentDependency {
             dict.insert(info, function_dictionary);
         }
 
-        ComponentDependency {
-            dependencies: dict,
-        }
+        ComponentDependency { dependencies: dict }
     }
 }
 
@@ -584,11 +594,22 @@ impl FunctionDictionary {
                 } => match key {
                     RegistryKey::FunctionName(name) => {
                         let function_name = FunctionName::Variant(name.to_string());
+                        let cases = variant_type
+                            .cases
+                            .iter()
+                            .map(|x| {
+                                (
+                                    x.name.clone(),
+                                    x.typ.as_ref().map(|x| InferredType::from(x)),
+                                )
+                            })
+                            .collect::<Vec<_>>();
+
                         map.push((
                             function_name,
                             FunctionType {
                                 parameter_types: parameter_types.iter().map(|x| x.into()).collect(),
-                                return_type: Some(InferredType::from(variant_type)),
+                                return_type: Some(InferredType::variant(cases)),
                             },
                         ));
                     }
@@ -979,12 +1000,13 @@ fn search_function_in_instance(
     function_name: &str,
     component_info: Option<&ComponentInfo>,
 ) -> Result<(ComponentInfo, Function), String> {
-
     match component_info {
         Some(info) => {
-           let function_dictionary = instance.component_dependency().dependencies.get(info).ok_or(
-                format!("Component info '{}' not found in instance", info)
-            )?;
+            let function_dictionary = instance
+                .component_dependency()
+                .dependencies
+                .get(info)
+                .ok_or(format!("Component info '{}' not found in instance", info))?;
 
             let functions = function_dictionary
                 .name_and_types
@@ -1005,25 +1027,22 @@ fn search_function_in_instance(
             match package_map.len() {
                 1 => {
                     let interfaces = package_map.values().flatten().cloned().collect();
-                    let function = search_function_in_single_package(interfaces, functions, function_name)?;
+                    let function =
+                        search_function_in_single_package(interfaces, functions, function_name)?;
 
                     Ok((info.clone(), function))
-
                 }
                 _ => {
-                    let function = search_function_in_multiple_packages(function_name, package_map)?;
+                    let function =
+                        search_function_in_multiple_packages(function_name, package_map)?;
                     Ok((info.clone(), function))
-                },
+                }
             }
         }
         None => {
             let mut component_info_functions = vec![];
 
-            for (info, function_dictionary) in instance
-                .component_dependency()
-                .dependencies
-                .iter()
-            {
+            for (info, function_dictionary) in instance.component_dependency().dependencies.iter() {
                 let functions = function_dictionary
                     .name_and_types
                     .iter()
@@ -1040,15 +1059,19 @@ fn search_function_in_instance(
                 match package_map.len() {
                     1 => {
                         let interfaces = package_map.values().flatten().cloned().collect();
-                        let function = search_function_in_single_package(interfaces, functions, function_name)?;
+                        let function = search_function_in_single_package(
+                            interfaces,
+                            functions,
+                            function_name,
+                        )?;
 
                         component_info_functions.push((info.clone(), function));
-
                     }
                     _ => {
-                        let function = search_function_in_multiple_packages(function_name, package_map)?;
+                        let function =
+                            search_function_in_multiple_packages(function_name, package_map)?;
                         component_info_functions.push((info.clone(), function));
-                    },
+                    }
                 }
             }
 
@@ -1065,9 +1088,6 @@ fn search_function_in_instance(
             }
         }
     }
-
-
-
 }
 
 fn search_function_in_single_package(

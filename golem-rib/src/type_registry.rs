@@ -14,10 +14,8 @@
 
 use crate::call_type::CallType;
 use crate::{
-    DynamicParsedFunctionName, Expr,
-    FullyQualifiedInterfaceName,
-    FunctionDictionary, FunctionName, FunctionType, InstanceCreationType,
-    InterfaceName, PackageName, TypeParameter,
+    DynamicParsedFunctionName, Expr, FullyQualifiedInterfaceName, FunctionDictionary, FunctionName,
+    FunctionType, InstanceCreationType, InterfaceName, PackageName, TypeParameter,
 };
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum};
@@ -318,7 +316,6 @@ pub struct ComponentInfo {
     pub root_package_version: Option<String>,
 }
 
-
 impl Display for ComponentInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -326,16 +323,11 @@ impl Display for ComponentInfo {
             "Component: {}, ID: {}, Root Package: {}@{}",
             self.component_name,
             self.component_id,
-            self.root_package_name
-                .as_deref()
-                .unwrap_or("unknown"),
-            self.root_package_version
-                .as_deref()
-                .unwrap_or("unknown")
+            self.root_package_name.as_deref().unwrap_or("unknown"),
+            self.root_package_version.as_deref().unwrap_or("unknown")
         )
     }
 }
-
 
 // A type-registry is a mapping from a function/variant/enum to the `arguments` and `return types` of that function/variant/enum.
 // The structure is raw and closer to the original component metadata.

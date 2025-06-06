@@ -115,15 +115,15 @@ mod protobuf {
     impl TryFrom<golem_api_grpc::proto::golem::rib::ComponentInfo> for ComponentInfo {
         type Error = String;
 
-        fn try_from(value: golem_api_grpc::proto::golem::rib::ComponentInfo) -> Result<Self, Self::Error> {
+        fn try_from(
+            value: golem_api_grpc::proto::golem::rib::ComponentInfo,
+        ) -> Result<Self, Self::Error> {
             let component_name = value.component_name;
             let component_id = value.value.ok_or("Missing component version")?;
 
-            let root_package_name = value
-                .root_package_name;
+            let root_package_name = value.root_package_name;
 
-            let root_package_version = value
-                .root_package_version;
+            let root_package_version = value.root_package_version;
 
             Ok(ComponentInfo {
                 component_name,
@@ -145,11 +145,18 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor> for FullyQualifiedResourceConstructor {
+    impl TryFrom<golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor>
+        for FullyQualifiedResourceConstructor
+    {
         type Error = String;
 
-        fn try_from(value: golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor) -> Result<Self, Self::Error> {
-            Err("Conversion from proto to FullyQualifiedResourceConstructor is not implemented".to_string())
+        fn try_from(
+            value: golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor,
+        ) -> Result<Self, Self::Error> {
+            Err(
+                "Conversion from proto to FullyQualifiedResourceConstructor is not implemented"
+                    .to_string(),
+            )
         }
     }
 
@@ -170,7 +177,7 @@ mod protobuf {
 
                     Ok(InstanceCreationType::Worker {
                         component_info: None,
-                        worker_name
+                        worker_name,
                     })
                 }
                 golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(
