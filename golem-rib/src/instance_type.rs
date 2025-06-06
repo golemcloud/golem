@@ -25,12 +25,11 @@ use golem_api_grpc::proto::golem::rib::{
     InterfaceName as ProtoInterfaceName, PackageName as ProtoPackageName,
     ResourceMethodDictionary as ProtoResourceMethodDictionary,
 };
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeVariant};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::ops::Deref;
-
 // InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
 // This will be more or less a propagation of the original component metadata (structured as FunctionTypeRegistry),
 // but with better structure and mandates the fact that it belongs to a specific component
@@ -423,6 +422,40 @@ pub struct FunctionDictionary {
 }
 
 impl FunctionDictionary {
+    pub fn get_type_enum(&self, identifier_name: &str) -> Option<TypeEnum> {
+        self.name_and_types
+            .iter()
+            .find_map(|(f, ftype)| {
+                match f {
+                    FunctionName::Enum(name) => {
+                        if name == identifier_name {
+                            ftype.as_type_enum()
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None
+                }
+            })
+    }
+    pub fn get_type_variant(&self, identifier_name: &str) -> Option<TypeVariant> {
+        self.name_and_types
+            .iter()
+            .find_map(|(f, ftype)| {
+                match f {
+                    FunctionName::Variant(name) => {
+                        if name == identifier_name {
+                            ftype.as_type_variant()
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None
+                }
+            })
+
+    }
+
     pub fn function_names(&self) -> Vec<String> {
         self.name_and_types
             .iter()
@@ -742,6 +775,23 @@ pub struct FunctionType {
 }
 
 impl FunctionType {
+
+    pub fn as_type_variant(&self) -> Option<TypeVariant> {
+        let analysed_type = AnalysedType::try_from(&self.return_type.clone().unwrap()).unwrap();
+        match analysed_type {
+            AnalysedType::Variant(type_variant) => Some(type_variant,),
+            _ => None
+        }
+    }
+
+    pub fn as_type_enum(&self) -> Option<TypeEnum> {
+        let analysed_type = AnalysedType::try_from(&self.return_type.clone().unwrap()).unwrap();
+        match analysed_type {
+            AnalysedType::Enum(type_enum) => Some(type_enum),
+            _ => None
+        }
+    }
+
     pub fn parameter_types(&self) -> Vec<InferredType> {
         self.parameter_types.clone()
     }

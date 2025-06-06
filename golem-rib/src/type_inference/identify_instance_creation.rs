@@ -110,10 +110,10 @@ mod internal {
                 let instance_creation_type =
                     get_instance_creation_details(call_type, type_parameter.clone(), args, component_dependency)?;
 
-                if let Some(instance_creation_details) = instance_creation_type {
-                    let worker_name = instance_creation_details.worker_name().cloned();
+                if let Some(instance_creation_type) = instance_creation_type {
+                    let worker_name = instance_creation_type.worker_name().cloned();
 
-                    *call_type = CallType::InstanceCreation(instance_creation_details);
+                    *call_type = CallType::InstanceCreation(instance_creation_type);
 
                     let new_instance_type = InstanceType::from(
                         component_dependency,

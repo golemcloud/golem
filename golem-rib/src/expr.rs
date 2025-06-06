@@ -1071,19 +1071,19 @@ impl Expr {
 
     pub fn infer_types(
         &mut self,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependency,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibTypeError> {
-        self.infer_types_initial_phase(function_type_registry, type_spec)?;
+        self.infer_types_initial_phase(component_dependency, type_spec)?;
         self.bind_instance_types();
         // Identifying the first fix point with method calls to infer all
         // worker function invocations as this forms the foundation for the rest of the
         // compilation. This is compiler doing its best to infer all the calls such
         // as worker invokes or instance calls etc.
         type_inference::type_inference_fix_point(Self::resolve_method_calls, self)?;
-        self.infer_function_call_types(function_type_registry)?;
+        self.infer_function_call_types(component_dependency)?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)?;
-        self.check_types(function_type_registry)?;
+        self.check_types(component_dependency)?;
         self.unify_types()?;
         Ok(())
     }
@@ -1674,8 +1674,8 @@ impl Expr {
         }
     }
 
-    pub fn infer_enums(&mut self, function_type_registry: &FunctionTypeRegistry) {
-        type_inference::infer_enums(self, function_type_registry);
+    pub fn infer_enums(&mut self, component_dependency: &ComponentDependency) {
+        type_inference::infer_enums(self, component_dependency);
     }
 
     pub fn infer_variants(&mut self, component_dependency: &ComponentDependency) {

@@ -106,13 +106,16 @@ mod internal {
                     ..
                 } => {
                     if !variable_id.is_local() {
-                        let key = crate::instance_type::FunctionName::Variant(variable_id.name().clone());
-                        if let Some(RegistryValue::Value(AnalysedType::Variant(type_variant))) =
-                            component_dependency.function_dictionary()
+                        let result =
+                            component_dependency.function_dictionary().iter()
+                                .find_map(|x| x.get_type_variant(variable_id.name().as_str()));
+
+                        // Conflicts of having the same variant names across multiple components is not handled
+                        if let Some(type_variant) = result
                         {
                             no_arg_variants.push(variable_id.name());
                             *inferred_type =
-                                inferred_type.merge(InferredType::from_type_variant(type_variant));
+                                inferred_type.merge(InferredType::from_type_variant(&type_variant));
                         }
                     }
                 }
@@ -123,11 +126,15 @@ mod internal {
                     inferred_type,
                     ..
                 } => {
-                    let key = RegistryKey::FunctionName(function_name.to_string());
-                    if let Some(RegistryValue::Variant { variant_type, .. }) =
-                        component_dependency.types.get(&key)
+
+                    // Conflicts of having the same variant names across multiple components is not handled
+                    let result =
+                        component_dependency.function_dictionary().iter()
+                            .find_map(|x| x.get_type_variant(function_name.to_string().as_str()));
+
+                    if let Some(RegistryValue::Variant { variant_type, .. }) = result
                     {
-                        let variant_inferred_type = InferredType::from_type_variant(variant_type);
+                        let variant_inferred_type = InferredType::from_type_variant(&variant_type);
                         *inferred_type = inferred_type.merge(variant_inferred_type);
 
                         variant_with_args.push(function_name.to_string());
