@@ -28,7 +28,6 @@ use crate::repo::project::{DbProjectRepo, ProjectRepo};
 use crate::repo::project_grant::{DbProjectGrantRepo, ProjectGrantRepo};
 use crate::repo::project_policy::{DbProjectPolicyRepo, ProjectPolicyRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
-use golem_common::model::plugin::CloudPluginOwner;
 use golem_service_base::db::Pool;
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRepoQueries,
@@ -93,11 +92,8 @@ impl Repositories {
         DbProjectRepo<DB>: ProjectRepo,
         DbTokenRepo<DB>: TokenRepo,
         DbOAuth2FlowState<DB>: OAuth2WebFlowStateRepo,
-        DbPluginInstallationRepoQueries<DB::Db>: PluginInstallationRepoQueries<
-            DB::Db,
-            CloudPluginOwner,
-            ProjectPluginInstallationTarget,
-        >,
+        DbPluginInstallationRepoQueries<DB::Db>:
+            PluginInstallationRepoQueries<DB::Db, ProjectPluginInstallationTarget>,
     {
         let plan_repo: Arc<dyn PlanRepo + Sync + Send> = Arc::new(DbPlanRepo::new(db_pool.clone()));
 

@@ -17,7 +17,7 @@ use crate::model::params::*;
 use crate::services::debug_service::{DebugService, DebugServiceError};
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use axum_jrpc::{Id, JsonRpcRequest, JsonRpcResponse};
-use golem_common::model::auth::CloudAuthCtx;
+use golem_common::model::auth::AuthCtx;
 use golem_common::model::OwnedWorkerId;
 use serde_json::Value;
 use std::fmt::Display;
@@ -48,7 +48,7 @@ pub async fn jrpc_handler(
         "connect" => {
             let params: ConnectParams = parse_params(&jrpc_id, json_rpc_request.params)?;
 
-            let auth_ctx = CloudAuthCtx::new(params.token);
+            let auth_ctx = AuthCtx::new(params.token);
 
             let result = debug_service
                 .connect(&auth_ctx, params.worker_id, active_session)

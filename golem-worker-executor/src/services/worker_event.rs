@@ -27,7 +27,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::Stream;
 
 /// Per-worker event stream
-pub trait WorkerEventService {
+pub trait WorkerEventService: Send + Sync {
     /// Emit an arbitrary worker event.
     ///
     /// There are helpers like `emit_stdout` for specific types.

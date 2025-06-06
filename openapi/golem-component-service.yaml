@@ -1113,7 +1113,7 @@ paths:
       parameters:
       - name: scope
         schema:
-          $ref: '#/components/schemas/CloudPluginScope'
+          $ref: '#/components/schemas/PluginScope'
         in: query
         required: false
         deprecated: false
@@ -1126,7 +1126,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/PluginDefinition_CloudPluginOwner_CloudPluginScope'
+                  $ref: '#/components/schemas/PluginDefinition'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -1175,7 +1175,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/PluginDefinitionCreation_CloudPluginScope'
+              $ref: '#/components/schemas/PluginDefinitionCreation'
         required: true
       responses:
         '200':
@@ -1245,7 +1245,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/PluginDefinition_CloudPluginOwner_CloudPluginScope'
+                  $ref: '#/components/schemas/PluginDefinition'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -1317,7 +1317,7 @@ paths:
                 homepage:
                   type: string
                 scope:
-                  $ref: '#/components/schemas/CloudPluginScope'
+                  $ref: '#/components/schemas/PluginScope'
                 wasm:
                   type: string
                   format: binary
@@ -1400,7 +1400,7 @@ paths:
                 homepage:
                   type: string
                 scope:
-                  $ref: '#/components/schemas/CloudPluginScope'
+                  $ref: '#/components/schemas/PluginScope'
                 wasm:
                   type: string
                   format: binary
@@ -1478,7 +1478,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/PluginDefinition_CloudPluginOwner_CloudPluginScope'
+                $ref: '#/components/schemas/PluginDefinition'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -2005,62 +2005,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationAction'
-    CloudPluginOwner:
-      type: object
-      title: CloudPluginOwner
-      required:
-      - accountId
-      properties:
-        accountId:
-          type: string
-    CloudPluginScope:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/CloudPluginScope_Empty'
-      - $ref: '#/components/schemas/CloudPluginScope_ComponentPluginScope'
-      - $ref: '#/components/schemas/CloudPluginScope_ProjectPluginScope'
-      discriminator:
-        propertyName: type
-        mapping:
-          Global: '#/components/schemas/CloudPluginScope_Empty'
-          Component: '#/components/schemas/CloudPluginScope_ComponentPluginScope'
-          Project: '#/components/schemas/CloudPluginScope_ProjectPluginScope'
-    CloudPluginScope_ComponentPluginScope:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Component
-            example: Component
-      - $ref: '#/components/schemas/ComponentPluginScope'
-    CloudPluginScope_Empty:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Global
-            example: Global
-      - $ref: '#/components/schemas/Empty'
-    CloudPluginScope_ProjectPluginScope:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Project
-            example: Project
-      - $ref: '#/components/schemas/ProjectPluginScope'
     Component:
       type: object
       title: Component
@@ -2381,38 +2325,9 @@ components:
         componentVersion:
           type: integer
           format: uint64
-    PluginDefinitionCreation_CloudPluginScope:
+    PluginDefinition:
       type: object
-      title: PluginDefinitionCreation_CloudPluginScope
-      required:
-      - name
-      - version
-      - description
-      - icon
-      - homepage
-      - specs
-      - scope
-      properties:
-        name:
-          type: string
-        version:
-          type: string
-        description:
-          type: string
-        icon:
-          type: array
-          items:
-            type: integer
-            format: uint8
-        homepage:
-          type: string
-        specs:
-          $ref: '#/components/schemas/PluginTypeSpecificCreation'
-        scope:
-          $ref: '#/components/schemas/CloudPluginScope'
-    PluginDefinition_CloudPluginOwner_CloudPluginScope:
-      type: object
-      title: PluginDefinition_CloudPluginOwner_CloudPluginScope
+      title: PluginDefinition
       required:
       - id
       - name
@@ -2444,11 +2359,40 @@ components:
         specs:
           $ref: '#/components/schemas/PluginTypeSpecificDefinition'
         scope:
-          $ref: '#/components/schemas/CloudPluginScope'
+          $ref: '#/components/schemas/PluginScope'
         owner:
-          $ref: '#/components/schemas/CloudPluginOwner'
+          $ref: '#/components/schemas/PluginOwner'
         deleted:
           type: boolean
+    PluginDefinitionCreation:
+      type: object
+      title: PluginDefinitionCreation
+      required:
+      - name
+      - version
+      - description
+      - icon
+      - homepage
+      - specs
+      - scope
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        icon:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        homepage:
+          type: string
+        specs:
+          $ref: '#/components/schemas/PluginTypeSpecificCreation'
+        scope:
+          $ref: '#/components/schemas/PluginScope'
     PluginInstallation:
       type: object
       title: PluginInstallation
@@ -2578,6 +2522,62 @@ components:
           type: object
           additionalProperties:
             type: string
+    PluginOwner:
+      type: object
+      title: PluginOwner
+      required:
+      - accountId
+      properties:
+        accountId:
+          type: string
+    PluginScope:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginScope_Empty'
+      - $ref: '#/components/schemas/PluginScope_ComponentPluginScope'
+      - $ref: '#/components/schemas/PluginScope_ProjectPluginScope'
+      discriminator:
+        propertyName: type
+        mapping:
+          Global: '#/components/schemas/PluginScope_Empty'
+          Component: '#/components/schemas/PluginScope_ComponentPluginScope'
+          Project: '#/components/schemas/PluginScope_ProjectPluginScope'
+    PluginScope_ComponentPluginScope:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Component
+            example: Component
+      - $ref: '#/components/schemas/ComponentPluginScope'
+    PluginScope_Empty:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Global
+            example: Global
+      - $ref: '#/components/schemas/Empty'
+    PluginScope_ProjectPluginScope:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Project
+            example: Project
+      - $ref: '#/components/schemas/ProjectPluginScope'
     PluginTypeSpecificCreation:
       type: object
       oneOf:

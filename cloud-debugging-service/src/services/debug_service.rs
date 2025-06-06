@@ -20,7 +20,7 @@ use crate::model::params::*;
 use async_trait::async_trait;
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use gethostname::gethostname;
-use golem_common::model::auth::CloudAuthCtx;
+use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId, WorkerMetadata};
@@ -31,7 +31,6 @@ use golem_worker_executor::services::{
     HasWorkerForkService, HasWorkerService,
 };
 use golem_worker_executor::worker::Worker;
-use golem_worker_executor::GolemTypes;
 use serde_json::Value;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -42,7 +41,7 @@ use tracing::{error, info};
 pub trait DebugService {
     async fn connect(
         &self,
-        authentication_context: &CloudAuthCtx,
+        authentication_context: &AuthCtx,
         source_worker_id: WorkerId,
         active_session: Arc<ActiveSession>,
     ) -> Result<ConnectResult, DebugServiceError>;
@@ -164,14 +163,14 @@ impl DebugServiceError {
     }
 }
 
-pub struct DebugServiceDefault<T: GolemTypes> {
+pub struct DebugServiceDefault {
     worker_auth_service: Arc<dyn AuthService + Sync + Send>,
     debug_session: Arc<dyn DebugSessions + Sync + Send>,
-    all: All<DebugContext<T>>,
+    all: All<DebugContext>,
 }
 
-impl<T: GolemTypes> DebugServiceDefault<T> {
-    pub fn new(all: All<DebugContext<T>>) -> Self {
+impl DebugServiceDefault {
+    pub fn new(all: All<DebugContext>) -> Self {
         let extra_deps = all.extra_deps();
         let debug_session = extra_deps.debug_session();
         let worker_auth_service = extra_deps.auth_service();
@@ -480,7 +479,7 @@ impl<T: GolemTypes> DebugServiceDefault<T> {
 
     pub async fn target_index_at_invocation_boundary(
         worker_id: &WorkerId,
-        worker: &Arc<Worker<DebugContext<T>>>,
+        worker: &Arc<Worker<DebugContext>>,
         target_oplog_index: OplogIndex,
     ) -> Result<OplogIndex, DebugServiceError> {
         // New target index to be calculated here
@@ -530,10 +529,10 @@ impl<T: GolemTypes> DebugServiceDefault<T> {
 }
 
 #[async_trait]
-impl<T: GolemTypes> DebugService for DebugServiceDefault<T> {
+impl DebugService for DebugServiceDefault {
     async fn connect(
         &self,
-        auth_ctx: &CloudAuthCtx,
+        auth_ctx: &AuthCtx,
         worker_id: WorkerId,
         active_session: Arc<ActiveSession>,
     ) -> Result<ConnectResult, DebugServiceError> {
@@ -726,30 +725,27 @@ impl<T: GolemTypes> DebugService for DebugServiceDefault<T> {
 
 #[cfg(test)]
 mod tests {
-    use axum::body::Bytes;
-    use golem_worker_executor::cloud::CloudGolemTypes;
-    use std::fmt::{Debug, Formatter};
-    use std::time::Duration;
-    use test_r::test;
-
     use super::*;
+    use axum::body::Bytes;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::oplog::{OplogEntry, OplogPayload};
     use golem_common::model::Timestamp;
     use golem_worker_executor::services::oplog::CommitLevel;
+    use std::fmt::{Debug, Formatter};
+    use std::time::Duration;
+    use test_r::test;
 
     #[test]
     async fn test_get_target_oplog_index_at_invocation_boundary_1() {
         let target_oplog_index = OplogIndex::from_u64(1);
         let original_last_oplog_index = OplogIndex::from_u64(10);
 
-        let result =
-            DebugServiceDefault::<CloudGolemTypes>::get_target_oplog_index_at_invocation_boundary(
-                Arc::new(TestOplog::new(5)),
-                target_oplog_index,
-                original_last_oplog_index,
-            )
-            .await;
+        let result = DebugServiceDefault::get_target_oplog_index_at_invocation_boundary(
+            Arc::new(TestOplog::new(5)),
+            target_oplog_index,
+            original_last_oplog_index,
+        )
+        .await;
 
         assert_eq!(result, Ok(OplogIndex::from_u64(5)));
     }
@@ -759,13 +755,12 @@ mod tests {
         let target_oplog_index = OplogIndex::from_u64(1);
         let original_last_oplog_index = OplogIndex::from_u64(10);
 
-        let result =
-            DebugServiceDefault::<CloudGolemTypes>::get_target_oplog_index_at_invocation_boundary(
-                Arc::new(TestOplog::new(11)),
-                target_oplog_index,
-                original_last_oplog_index,
-            )
-            .await;
+        let result = DebugServiceDefault::get_target_oplog_index_at_invocation_boundary(
+            Arc::new(TestOplog::new(11)),
+            target_oplog_index,
+            original_last_oplog_index,
+        )
+        .await;
 
         assert!(result.is_err());
     }

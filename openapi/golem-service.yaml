@@ -3395,7 +3395,7 @@ paths:
         name: scope
         deprecated: false
         schema:
-          $ref: '#/components/schemas/CloudPluginScope'
+          $ref: '#/components/schemas/PluginScope'
         explode: true
         style: form
       responses:
@@ -3406,7 +3406,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/PluginDefinition_CloudPluginOwner_CloudPluginScope'
+                  $ref: '#/components/schemas/PluginDefinition'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -3455,7 +3455,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/PluginDefinitionCreation_CloudPluginScope'
+              $ref: '#/components/schemas/PluginDefinitionCreation'
         required: true
       responses:
         '200':
@@ -3526,7 +3526,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/PluginDefinition_CloudPluginOwner_CloudPluginScope'
+                  $ref: '#/components/schemas/PluginDefinition'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -3590,7 +3590,7 @@ paths:
                 homepage:
                   type: string
                 scope:
-                  $ref: '#/components/schemas/CloudPluginScope'
+                  $ref: '#/components/schemas/PluginScope'
                 wasm:
                   type: string
                   format: binary
@@ -3673,7 +3673,7 @@ paths:
                 homepage:
                   type: string
                 scope:
-                  $ref: '#/components/schemas/CloudPluginScope'
+                  $ref: '#/components/schemas/PluginScope'
                 wasm:
                   type: string
                   format: binary
@@ -3761,7 +3761,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/PluginDefinition_CloudPluginOwner_CloudPluginScope'
+                $ref: '#/components/schemas/PluginDefinition'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -7964,62 +7964,6 @@ components:
           type: string
       required:
       - blobStorageKey
-    CloudPluginOwner:
-      title: CloudPluginOwner
-      type: object
-      properties:
-        accountId:
-          type: string
-      required:
-      - accountId
-    CloudPluginScope:
-      discriminator:
-        propertyName: type
-        mapping:
-          Global: '#/components/schemas/CloudPluginScope_Empty'
-          Component: '#/components/schemas/CloudPluginScope_ComponentPluginScope'
-          Project: '#/components/schemas/CloudPluginScope_ProjectPluginScope'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/CloudPluginScope_Empty'
-      - $ref: '#/components/schemas/CloudPluginScope_ComponentPluginScope'
-      - $ref: '#/components/schemas/CloudPluginScope_ProjectPluginScope'
-    CloudPluginScope_ComponentPluginScope:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Component
-            type: string
-            enum:
-            - Component
-        required:
-        - type
-      - $ref: '#/components/schemas/ComponentPluginScope'
-    CloudPluginScope_Empty:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Global
-            type: string
-            enum:
-            - Global
-        required:
-        - type
-      - $ref: '#/components/schemas/Empty'
-    CloudPluginScope_ProjectPluginScope:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Project
-            type: string
-            enum:
-            - Project
-        required:
-        - type
-      - $ref: '#/components/schemas/ProjectPluginScope'
     Component:
       title: Component
       type: object
@@ -8316,37 +8260,8 @@ components:
       required:
       - componentId
       - componentVersion
-    PluginDefinitionCreation_CloudPluginScope:
-      title: PluginDefinitionCreation_CloudPluginScope
-      type: object
-      properties:
-        name:
-          type: string
-        version:
-          type: string
-        description:
-          type: string
-        icon:
-          type: array
-          items:
-            type: integer
-            format: uint8
-        homepage:
-          type: string
-        specs:
-          $ref: '#/components/schemas/PluginTypeSpecificCreation'
-        scope:
-          $ref: '#/components/schemas/CloudPluginScope'
-      required:
-      - name
-      - version
-      - description
-      - icon
-      - homepage
-      - specs
-      - scope
-    PluginDefinition_CloudPluginOwner_CloudPluginScope:
-      title: PluginDefinition_CloudPluginOwner_CloudPluginScope
+    PluginDefinition:
+      title: PluginDefinition
       type: object
       properties:
         id:
@@ -8368,9 +8283,9 @@ components:
         specs:
           $ref: '#/components/schemas/PluginTypeSpecificDefinition'
         scope:
-          $ref: '#/components/schemas/CloudPluginScope'
+          $ref: '#/components/schemas/PluginScope'
         owner:
-          $ref: '#/components/schemas/CloudPluginOwner'
+          $ref: '#/components/schemas/PluginOwner'
         deleted:
           type: boolean
       required:
@@ -8384,6 +8299,91 @@ components:
       - scope
       - owner
       - deleted
+    PluginDefinitionCreation:
+      title: PluginDefinitionCreation
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        icon:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        homepage:
+          type: string
+        specs:
+          $ref: '#/components/schemas/PluginTypeSpecificCreation'
+        scope:
+          $ref: '#/components/schemas/PluginScope'
+      required:
+      - name
+      - version
+      - description
+      - icon
+      - homepage
+      - specs
+      - scope
+    PluginOwner:
+      title: PluginOwner
+      type: object
+      properties:
+        accountId:
+          type: string
+      required:
+      - accountId
+    PluginScope:
+      discriminator:
+        propertyName: type
+        mapping:
+          Global: '#/components/schemas/PluginScope_Empty'
+          Component: '#/components/schemas/PluginScope_ComponentPluginScope'
+          Project: '#/components/schemas/PluginScope_ProjectPluginScope'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginScope_Empty'
+      - $ref: '#/components/schemas/PluginScope_ComponentPluginScope'
+      - $ref: '#/components/schemas/PluginScope_ProjectPluginScope'
+    PluginScope_ComponentPluginScope:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Component
+            type: string
+            enum:
+            - Component
+        required:
+        - type
+      - $ref: '#/components/schemas/ComponentPluginScope'
+    PluginScope_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Global
+            type: string
+            enum:
+            - Global
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    PluginScope_ProjectPluginScope:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Project
+            type: string
+            enum:
+            - Project
+        required:
+        - type
+      - $ref: '#/components/schemas/ProjectPluginScope'
     PluginTypeSpecificCreation:
       discriminator:
         propertyName: type

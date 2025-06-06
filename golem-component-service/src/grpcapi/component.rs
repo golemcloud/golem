@@ -43,7 +43,6 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_api_grpc::proto::golem::component::{Component, PluginInstallation};
 use golem_common::grpc::{proto_component_id_string, proto_plugin_installation_id_string};
-use golem_common::model::component::CloudComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
@@ -1042,7 +1041,7 @@ impl ComponentService for ComponentGrpcApi {
 }
 
 fn component_to_grpc(
-    value: golem_component_service_base::model::Component<CloudComponentOwner>,
+    value: golem_component_service_base::model::Component,
 ) -> golem_api_grpc::proto::golem::component::Component {
     let component_type: golem_api_grpc::proto::golem::component::ComponentType =
         value.component_type.into();

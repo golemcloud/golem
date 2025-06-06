@@ -32,8 +32,8 @@ use std::fmt::Debug;
 use tempfile::NamedTempFile;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Component<Owner: ComponentOwner> {
-    pub owner: Owner,
+pub struct Component {
+    pub owner: ComponentOwner,
     pub versioned_component_id: VersionedComponentId,
     pub component_name: ComponentName,
     pub component_size: u64,
@@ -47,7 +47,7 @@ pub struct Component<Owner: ComponentOwner> {
     pub env: HashMap<String, String>,
 }
 
-impl<Owner: ComponentOwner> Component<Owner> {
+impl Component {
     pub fn new(
         component_id: ComponentId,
         component_name: ComponentName,
@@ -56,9 +56,9 @@ impl<Owner: ComponentOwner> Component<Owner> {
         files: Vec<InitialComponentFile>,
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: Owner,
+        owner: ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentProcessingError> {
+    ) -> Result<Component, ComponentProcessingError> {
         let mut metadata = ComponentMetadata::analyse_component(data)?;
         metadata.dynamic_linking = dynamic_linking;
 
@@ -106,8 +106,8 @@ impl<Owner: ComponentOwner> Component<Owner> {
     }
 }
 
-impl<Owner: ComponentOwner> From<Component<Owner>> for golem_service_base::model::Component {
-    fn from(value: Component<Owner>) -> Self {
+impl From<Component> for golem_service_base::model::Component {
+    fn from(value: Component) -> Self {
         Self {
             versioned_component_id: value.versioned_component_id,
             component_name: value.component_name,
@@ -123,13 +123,13 @@ impl<Owner: ComponentOwner> From<Component<Owner>> for golem_service_base::model
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ComponentConstraints<Owner: ComponentOwner> {
-    pub owner: Owner,
+pub struct ComponentConstraints {
+    pub owner: ComponentOwner,
     pub component_id: ComponentId,
     pub constraints: FunctionConstraints,
 }
 
-impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
+impl ComponentConstraints {
     pub fn function_signatures(&self) -> Vec<FunctionSignature> {
         let constraints = &self.constraints;
 
@@ -141,12 +141,12 @@ impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
     }
 }
 
-impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
+impl ComponentConstraints {
     pub fn init(
-        owner: &Owner,
+        owner: &ComponentOwner,
         component_id: &ComponentId,
         worker_functions_in_rib: WorkerFunctionsInRib,
-    ) -> ComponentConstraints<Owner> {
+    ) -> ComponentConstraints {
         ComponentConstraints {
             owner: owner.clone(),
             component_id: component_id.clone(),

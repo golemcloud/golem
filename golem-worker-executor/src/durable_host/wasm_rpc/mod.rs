@@ -145,7 +145,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
-                function_params: try_get_typed_parameters::<Ctx>(
+                function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
                     &remote_worker_id.account_id,
                     &remote_worker_id.worker_id.component_id,
@@ -275,7 +275,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
-                function_params: try_get_typed_parameters::<Ctx>(
+                function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
                     &remote_worker_id.account_id,
                     &remote_worker_id.worker_id.component_id,
@@ -375,7 +375,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             remote_worker_id: remote_worker_id.worker_id(),
             idempotency_key: idempotency_key.clone(),
             function_name: function_name.clone(),
-            function_params: try_get_typed_parameters::<Ctx>(
+            function_params: try_get_typed_parameters(
                 self.state.component_service.clone(),
                 &remote_worker_id.account_id,
                 &remote_worker_id.worker_id.component_id,
@@ -499,7 +499,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
-                function_params: try_get_typed_parameters::<Ctx>(
+                function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
                     &remote_worker_id.account_id,
                     &remote_worker_id.worker_id.component_id,
@@ -804,7 +804,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         remote_worker_id: remote_worker_id.worker_id(),
                         idempotency_key: idempotency_key.clone(),
                         function_name: function_name.clone(),
-                        function_params: try_get_typed_parameters::<Ctx>(
+                        function_params: try_get_typed_parameters(
                             component_service,
                             &remote_worker_id.account_id,
                             &remote_worker_id.worker_id.component_id,
@@ -1093,8 +1093,8 @@ async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
 /// empty vector.
 ///
 /// This should only be used for generating "debug information" for the stored oplog entries.
-async fn try_get_typed_parameters<Ctx: WorkerCtx>(
-    components: Arc<dyn ComponentService<Ctx::Types>>,
+async fn try_get_typed_parameters(
+    components: Arc<dyn ComponentService>,
     account_id: &AccountId,
     component_id: &ComponentId,
     function_name: &str,
