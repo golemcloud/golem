@@ -10,7 +10,7 @@ message WorkerFunctionsInRib {
 }
 
 message WorkerFunctionType {
-    RegistryKey function_key = 1;
+    string function_key = 1;
     repeated wasm.ast.Type parameter_types = 2;
     optional wasm.ast.Type return_type = 3;
 }

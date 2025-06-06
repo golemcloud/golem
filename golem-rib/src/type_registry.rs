@@ -137,15 +137,15 @@ impl ComponentDependencies {
     ) -> Result<ComponentDependencies, String> {
         let mut tree = BTreeMap::new();
 
-        for (component_info, function_dict) in self.dependencies {
-            let name_and_types = function_dict
+        for (component_info, function_dict) in self.dependencies.iter() {
+            let name_and_types: Vec<&(FunctionName, FunctionType)> = function_dict
                 .name_and_types
-                .into_iter()
+                .iter()
                 .filter(|(f, _)| f.interface_name().as_ref() == Some(interface_name))
                 .collect::<Vec<_>>();
 
             if !name_and_types.is_empty() {
-                tree.insert(component_info, FunctionDictionary { name_and_types });
+                tree.insert(component_info.clone(), FunctionDictionary { name_and_types: name_and_types.into_iter().cloned().collect() });
             }
         }
 

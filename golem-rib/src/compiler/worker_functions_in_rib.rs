@@ -44,7 +44,7 @@ impl WorkerFunctionsInRib {
             )?;
 
             let function_call_in_rib = WorkerFunctionType {
-                function_key: key.clone(),
+                function_key: key.name(),
                 parameter_types: function_type.parameter_types
                     .iter()
                     .map(|param| AnalysedType::try_from(param).unwrap())
@@ -66,7 +66,7 @@ impl WorkerFunctionsInRib {
 // The type of a function call with worker (ephmeral or durable) in Rib script
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerFunctionType {
-    pub function_key: FunctionName,
+    pub function_key: String, // TODO; to be changed to FunctionName once all the rib test cases pass
     pub parameter_types: Vec<AnalysedType>,
     pub return_type: Option<AnalysedType>,
 }
@@ -121,8 +121,7 @@ mod protobuf {
                 .map(AnalysedType::try_from)
                 .collect::<Result<_, _>>()?;
 
-            let registry_key_proto = value.function_key.ok_or("Function key missing")?;
-            let function_key = RegistryKey::try_from(registry_key_proto)?;
+            let function_key = value.function_key;
 
             Ok(Self {
                 function_key,
@@ -134,10 +133,10 @@ mod protobuf {
 
     impl From<WorkerFunctionType> for WorkerFunctionTypeProto {
         fn from(value: WorkerFunctionType) -> Self {
-            let registry_key = (&value.function_key).into();
+            let function_key = value.function_key;
 
             WorkerFunctionTypeProto {
-                function_key: Some(registry_key),
+                function_key,
                 parameter_types: value
                     .parameter_types
                     .iter()
