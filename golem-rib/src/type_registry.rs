@@ -60,9 +60,6 @@ impl ComponentDependencies {
     ) -> Result<FunctionType, String> {
         // If function name is unique across all components, we are not in need of a component_info per se
         // and we can return the exact component dependency
-
-        dbg!(&self.dependencies);
-
         match component_info {
             None => {
                 let mut function_types_in_component = vec![];
@@ -79,10 +76,7 @@ impl ComponentDependencies {
                 }
 
                 if function_types_in_component.is_empty() {
-                    Err(format!(
-                        "function `{}` not found in any component",
-                        function_name
-                    ))
+                    Err("unknown function".to_string())
                 } else {
                     if function_types_in_component.len() > 1 {
                         Err(format!(
