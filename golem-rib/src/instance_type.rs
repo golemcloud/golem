@@ -1062,6 +1062,13 @@ fn search_function_in_instance(
                 let mut package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>> =
                     HashMap::new();
 
+                for (fqfn, _) in &functions {
+                    package_map
+                        .entry(fqfn.package_name())
+                        .or_default()
+                        .insert(fqfn.interface_name());
+                }
+
                 match package_map.len() {
                     1 => {
                         let interfaces = package_map.values().flatten().cloned().collect();
