@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::rib_type_error::RibTypeError;
-use crate::{Expr, FunctionTypeRegistry};
+use crate::{ComponentDependency, Expr, FunctionTypeRegistry};
 
 // Handling the following and making sure the types are inferred fully at this stage.
 // The expr `Call` will still be expr `Call` itself but CallType will be worker instance creation
@@ -24,7 +24,7 @@ use crate::{Expr, FunctionTypeRegistry};
 // instance[foo]("worker-name")
 pub fn identify_instance_creation(
     expr: &mut Expr,
-    function_type_registry: &FunctionTypeRegistry,
+    function_type_registry: &ComponentDependency,
 ) -> Result<(), RibTypeError> {
     internal::search_for_invalid_instance_declarations(expr)?;
     internal::identify_instance_creation_with_worker(expr, function_type_registry)
@@ -108,14 +108,13 @@ mod internal {
 
 
                 let instance_creation_type =
-                    get_instance_creation_details(call_type, type_parameter, args, component_dependency);
+                    get_instance_creation_details(call_type, type_parameter.clone(), args, component_dependency)?;
 
                 if let Some(instance_creation_details) = instance_creation_type {
                     let worker_name = instance_creation_details.worker_name().cloned();
 
                     *call_type = CallType::InstanceCreation(instance_creation_details);
 
-                    let type_parameter =
                     let new_instance_type = InstanceType::from(
                         component_dependency,
                         worker_name.as_ref(),
@@ -153,31 +152,42 @@ mod internal {
         type_parameter: Option<TypeParameter>,
         args: &[Expr],
         component_dependency: &ComponentDependency,
-    ) -> Option<InstanceCreationType> {
+    ) -> Result<Option<InstanceCreationType>, RibTypeError> {
         match call_type {
-            CallType::Function { component_info, function_name, .. } => {
+            CallType::Function {  function_name, .. } => {
                 let function_name = function_name.to_parsed_function_name().function;
                 match function_name {
                     ParsedFunctionReference::Function { function } if function == "instance" => {
                         let optional_worker_name_expression = args.first();
 
+                        let instance_creation = component_dependency.get_worker_instance_type(
+                            type_parameter,
+                            optional_worker_name_expression.cloned(),
+                        ).map_err(|err| {
+                            RibTypeError::from(CustomError::new(
+                                &Expr::Call {
+                                    call_type: call_type.clone(),
+                                    generic_type_parameter: None,
+                                    args: args.to_vec(),
+                                    inferred_type: InferredType::unknown(),
+                                    source_span: Default::default(),
+                                    type_annotation: None,
+                                },
+                                format!("failed to create instance: {}", err),
+                            ))
+                        })?;
 
-                        ComponentDependency::get_worker_instance_type()
-
-                        Some(InstanceCreationType::Worker {
-                            worker_name: optional_worker_name_expression
-                                .map(|x| Box::new(x.clone())),
-                        })
+                        Ok(Some(instance_creation))
                     }
 
-                    _ => None,
+                    _ => Ok(None),
                 }
             }
             CallType::InstanceCreation(instance_creation_type) => {
-                Some(instance_creation_type.clone())
+                Ok(Some(instance_creation_type.clone()))
             }
-            CallType::VariantConstructor(_) => None,
-            CallType::EnumConstructor(_) => None,
+            CallType::VariantConstructor(_) => Ok(None),
+            CallType::EnumConstructor(_) => Ok(None),
         }
     }
 }

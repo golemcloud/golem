@@ -19,7 +19,6 @@ use std::fmt::Display;
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum CallType {
     Function {
-        component_info: Option<ComponentInfo>,
         worker: Option<Box<Expr>>,
         function_name: DynamicParsedFunctionName,
     },

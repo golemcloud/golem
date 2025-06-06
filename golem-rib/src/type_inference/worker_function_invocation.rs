@@ -137,7 +137,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                             match instance_type.deref() {
                                 InstanceType::Resource {
                                     resource_args,
-                                    resource_method_dict,
+                                    component_dependency: resource_method_dict,
                                     resource_constructor,
                                     ..
                                 } => {

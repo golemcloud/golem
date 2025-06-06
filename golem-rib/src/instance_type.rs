@@ -14,7 +14,7 @@
 
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
-use crate::{ComponentInfo, DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
+use crate::{ComponentDependency, ComponentInfo, DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
 use golem_api_grpc::proto::golem::rib::instance_type::Instance;
 use golem_api_grpc::proto::golem::rib::{
     function_name_type, FullyQualifiedFunctionName as ProtoFullyQualifiedFunctionName,
@@ -39,52 +39,35 @@ use std::ops::Deref;
 // allowing lazy loading of resource and invoke the functions in them!
 // The distinction is only to disallow compiler to see only the functions that are part of a location (package/interface/package-interface/resoruce or all)
 
-pub struct InstanceType {
-    pub component_info: InferredComponent,
-    pub details: InstanceTypeDetails
-}
-
-impl InstanceType {
-    pub fn from(
-        type_parameter: Option<TypeParameter>,
-
-    )
-
-}
-
-pub enum InferredComponent {
-    Available(ComponentInfo),
-    Unavailable
-}
-
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
-pub enum InstanceTypeDetails {
-    // Holds functions across every package and interface in the component
+pub enum InstanceType {
+    // Holds functions across every package and interface in every components
     Global {
         worker_name: Option<Box<Expr>>,
-        functions_global: FunctionDictionary,
+        component_dependency: ComponentDependency,
     },
 
-    // Holds functions across every interface in the package
+    // A component can refer to a Package x, which can exist in other components
     Package {
         worker_name: Option<Box<Expr>>,
         package_name: PackageName,
-        functions_in_package: FunctionDictionary,
+        component_dependency: ComponentDependency,
     },
 
-    // Holds all functions across (may be across packages) for a specific interface
+    // Holds all functions across (may be across packages or components) for a specific interface
     Interface {
         worker_name: Option<Box<Expr>>,
         interface_name: InterfaceName,
-        functions_in_interface: FunctionDictionary,
+        component_dependency: ComponentDependency,
     },
 
     // Most granular level, holds functions for a specific package and interface
+    // That said, this package and interface may exist in multiple components
     PackageInterface {
         worker_name: Option<Box<Expr>>,
         package_name: PackageName,
         interface_name: InterfaceName,
-        functions_in_package_interface: FunctionDictionary,
+        component_dependency: ComponentDependency,
     },
 
     // Holds the resource creation and the functions in the resource
@@ -95,34 +78,34 @@ pub enum InstanceTypeDetails {
         interface_name: Option<InterfaceName>,
         resource_constructor: String,
         resource_args: Vec<Expr>,
-        resource_method_dict: ResourceMethodDictionary,
+        component_dependency: ResourceMethodDictionary,
     },
 }
 
-impl InstanceTypeDetails {
+impl InstanceType {
     pub fn set_worker_name(&mut self, worker_name: Expr) {
         match self {
-            InstanceTypeDetails::Global {
+            InstanceType::Global {
                 worker_name: wn, ..
             } => {
                 *wn = Some(Box::new(worker_name));
             }
-            InstanceTypeDetails::Package {
+            InstanceType::Package {
                 worker_name: wn, ..
             } => {
                 *wn = Some(Box::new(worker_name));
             }
-            InstanceTypeDetails::Interface {
+            InstanceType::Interface {
                 worker_name: wn, ..
             } => {
                 *wn = Some(Box::new(worker_name));
             }
-            InstanceTypeDetails::PackageInterface {
+            InstanceType::PackageInterface {
                 worker_name: wn, ..
             } => {
                 *wn = Some(Box::new(worker_name));
             }
-            InstanceTypeDetails::Resource {
+            InstanceType::Resource {
                 worker_name: wn, ..
             } => {
                 *wn = Some(Box::new(worker_name));
@@ -132,23 +115,23 @@ impl InstanceTypeDetails {
 
     pub fn worker_mut(&mut self) -> Option<&mut Box<Expr>> {
         match self {
-            InstanceTypeDetails::Global { worker_name, .. } => worker_name.as_mut(),
-            InstanceTypeDetails::Package { worker_name, .. } => worker_name.as_mut(),
-            InstanceTypeDetails::Interface { worker_name, .. } => worker_name.as_mut(),
-            InstanceTypeDetails::PackageInterface { worker_name, .. } => worker_name.as_mut(),
-            InstanceTypeDetails::Resource { worker_name, .. } => worker_name.as_mut(),
+            InstanceType::Global { worker_name, .. } => worker_name.as_mut(),
+            InstanceType::Package { worker_name, .. } => worker_name.as_mut(),
+            InstanceType::Interface { worker_name, .. } => worker_name.as_mut(),
+            InstanceType::PackageInterface { worker_name, .. } => worker_name.as_mut(),
+            InstanceType::Resource { worker_name, .. } => worker_name.as_mut(),
         }
     }
 
     pub fn worker(&self) -> Option<&Expr> {
         match self {
-            InstanceTypeDetails::Global { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
-            InstanceTypeDetails::Package { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
-            InstanceTypeDetails::Interface { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
-            InstanceTypeDetails::PackageInterface { worker_name, .. } => {
+            InstanceType::Global { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
+            InstanceType::Package { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
+            InstanceType::Interface { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
+            InstanceType::PackageInterface { worker_name, .. } => {
                 worker_name.as_ref().map(|v| v.deref())
             }
-            InstanceTypeDetails::Resource { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
+            InstanceType::Resource { worker_name, .. } => worker_name.as_ref().map(|v| v.deref()),
         }
     }
 
@@ -180,43 +163,43 @@ impl InstanceTypeDetails {
             map: resource_method_dict,
         };
 
-        InstanceTypeDetails::Resource {
+        InstanceType::Resource {
             worker_name,
             package_name,
             interface_name,
             resource_constructor: resource_constructor_name,
             resource_args,
-            resource_method_dict,
+            component_dependency: resource_method_dict,
         }
     }
 
     pub fn interface_name(&self) -> Option<InterfaceName> {
         match self {
-            InstanceTypeDetails::Global { .. } => None,
-            InstanceTypeDetails::Package { .. } => None,
-            InstanceTypeDetails::Interface { interface_name, .. } => Some(interface_name.clone()),
-            InstanceTypeDetails::PackageInterface { interface_name, .. } => Some(interface_name.clone()),
-            InstanceTypeDetails::Resource { interface_name, .. } => interface_name.clone(),
+            InstanceType::Global { .. } => None,
+            InstanceType::Package { .. } => None,
+            InstanceType::Interface { interface_name, .. } => Some(interface_name.clone()),
+            InstanceType::PackageInterface { interface_name, .. } => Some(interface_name.clone()),
+            InstanceType::Resource { interface_name, .. } => interface_name.clone(),
         }
     }
 
     pub fn package_name(&self) -> Option<PackageName> {
         match self {
-            InstanceTypeDetails::Global { .. } => None,
-            InstanceTypeDetails::Package { package_name, .. } => Some(package_name.clone()),
-            InstanceTypeDetails::Interface { .. } => None,
-            InstanceTypeDetails::PackageInterface { package_name, .. } => Some(package_name.clone()),
-            InstanceTypeDetails::Resource { package_name, .. } => package_name.clone(),
+            InstanceType::Global { .. } => None,
+            InstanceType::Package { package_name, .. } => Some(package_name.clone()),
+            InstanceType::Interface { .. } => None,
+            InstanceType::PackageInterface { package_name, .. } => Some(package_name.clone()),
+            InstanceType::Resource { package_name, .. } => package_name.clone(),
         }
     }
 
     pub fn worker_name(&self) -> Option<Box<Expr>> {
         match self {
-            InstanceTypeDetails::Global { worker_name, .. } => worker_name.clone(),
-            InstanceTypeDetails::Package { worker_name, .. } => worker_name.clone(),
-            InstanceTypeDetails::Interface { worker_name, .. } => worker_name.clone(),
-            InstanceTypeDetails::PackageInterface { worker_name, .. } => worker_name.clone(),
-            InstanceTypeDetails::Resource { worker_name, .. } => worker_name.clone(),
+            InstanceType::Global { worker_name, .. } => worker_name.clone(),
+            InstanceType::Package { worker_name, .. } => worker_name.clone(),
+            InstanceType::Interface { worker_name, .. } => worker_name.clone(),
+            InstanceType::PackageInterface { worker_name, .. } => worker_name.clone(),
+            InstanceType::Resource { worker_name, .. } => worker_name.clone(),
         }
     }
     pub fn get_function(
@@ -354,103 +337,72 @@ impl InstanceTypeDetails {
         FunctionDictionary { name_and_types }
     }
 
-    pub fn function_dict(&self) -> FunctionDictionary {
+    pub fn component_dependency(&self) -> &ComponentDependency {
         match self {
             InstanceType::Global {
-                functions_global: function_dict,
+                component_dependency,
                 ..
-            } => function_dict.clone(),
+            } => component_dependency,
             InstanceType::Package {
-                functions_in_package: function_dict,
+                component_dependency,
                 ..
-            } => function_dict.clone(),
+            } => component_dependency,
             InstanceType::Interface {
-                functions_in_interface: function_dict,
+                component_dependency,
                 ..
-            } => function_dict.clone(),
+            } => component_dependency,
             InstanceType::PackageInterface {
-                functions_in_package_interface: function_dict,
+                component_dependency,
                 ..
-            } => function_dict.clone(),
+            } => component_dependency,
             InstanceType::Resource {
-                resource_method_dict,
+                component_dependency,
                 ..
-            } => resource_method_dict.into(),
+            } =>  panic!("resource method dictionary") //resource_method_dict.into(),
         }
     }
 
     pub fn from(
-        registry: &FunctionTypeRegistry,
+        dependency: &ComponentDependency,
         worker_name: Option<&Expr>,
         type_parameter: Option<TypeParameter>,
     ) -> Result<InstanceType, String> {
-        let function_dict = FunctionDictionary::from_function_type_registry(registry)?;
 
         match type_parameter {
             None => Ok(InstanceType::Global {
                 worker_name: worker_name.cloned().map(Box::new),
-                functions_global: function_dict,
+                component_dependency: dependency.clone(),
             }),
             Some(type_parameter) => match type_parameter {
                 TypeParameter::Interface(interface_name) => {
-                    let name_and_types = function_dict
-                        .name_and_types
-                        .into_iter()
-                        .filter(|(f, _)| f.interface_name() == Some(interface_name.clone()))
-                        .collect::<Vec<_>>();
-
-                    if name_and_types.is_empty() {
-                        return Err(format!("interface `{}` not found", interface_name));
-                    }
-
-                    let function_dict = FunctionDictionary { name_and_types };
+                    let new_dependency =
+                        dependency.filter_by_interface(&interface_name)?;
 
                     Ok(InstanceType::Interface {
                         worker_name: worker_name.cloned().map(Box::new),
                         interface_name,
-                        functions_in_interface: function_dict,
+                        component_dependency: new_dependency,
                     })
                 }
                 TypeParameter::PackageName(package_name) => {
-                    let name_and_types = function_dict
-                        .name_and_types
-                        .into_iter()
-                        .filter(|(f, _)| f.package_name() == Some(package_name.clone()))
-                        .collect::<Vec<_>>();
-
-                    if name_and_types.is_empty() {
-                        return Err(format!("package `{}` not found", package_name));
-                    }
-
-                    let function_dict = FunctionDictionary { name_and_types };
+                    let new_dependency =
+                        dependency.filter_by_package_name(&package_name)?;
 
                     Ok(InstanceType::Package {
                         worker_name: worker_name.cloned().map(Box::new),
                         package_name,
-                        functions_in_package: function_dict,
+                        component_dependency: new_dependency,
                     })
                 }
-                TypeParameter::FullyQualifiedInterface(fq_interface) => {
-                    let name_and_types = function_dict
-                        .name_and_types
-                        .into_iter()
-                        .filter(|(f, _)| {
-                            f.package_name() == Some(fq_interface.package_name.clone())
-                                && f.interface_name() == Some(fq_interface.interface_name.clone())
-                        })
-                        .collect::<Vec<_>>();
-
-                    if name_and_types.is_empty() {
-                        return Err(format!("`{}` not found", fq_interface));
-                    }
-
-                    let function_dict = FunctionDictionary { name_and_types };
+                TypeParameter::FullyQualifiedInterface(fqi) => {
+                    let component_dependency =
+                        dependency.filter_by_fully_qualified_interface(&fqi)?;
 
                     Ok(InstanceType::PackageInterface {
                         worker_name: worker_name.cloned().map(Box::new),
-                        package_name: fq_interface.package_name,
-                        interface_name: fq_interface.interface_name,
-                        functions_in_package_interface: function_dict,
+                        package_name: fqi.package_name,
+                        interface_name: fqi.interface_name,
+                        component_dependency,
                     })
                 }
             },
@@ -548,7 +500,45 @@ impl FunctionDictionary {
                     }
                 },
 
-                _ => continue,
+                RegistryValue::Variant {
+                    parameter_types,
+                    variant_type,
+                } => {
+                    match key {
+                        RegistryKey::FunctionName(name) => {
+                            let function_name = FunctionName::Variant(name.to_string());
+                            map.push((
+                                function_name,
+                                FunctionType {
+                                    parameter_types: parameter_types.iter().map(|x| x.into()).collect(),
+                                    return_type: Some(InferredType::from(variant_type)),
+                                },
+                            ));
+                        }
+                        RegistryKey::FunctionNameWithInterface { .. } => {}
+                    }
+                }
+
+                RegistryValue::Value(value) => {
+                    match value {
+                        AnalysedType::Enum(type_enum) => {
+                            match key {
+                                RegistryKey::FunctionName(name) => {
+                                    let function_name = FunctionName::Enum(name.to_string());
+                                    map.push((
+                                        function_name,
+                                        FunctionType {
+                                            parameter_types: vec![],
+                                            return_type: Some(InferredType::enum_(type_enum.cases.clone())),
+                                        },
+                                    ));
+                                }
+                                RegistryKey::FunctionNameWithInterface { .. } => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             };
         }
 
@@ -592,7 +582,7 @@ fn resolve_function_name(
 }
 
 fn get_resource_name(function_name: &str) -> Option<String> {
-    if function_name.starts_with("[constructor]") {
+    if function_name.trim().starts_with("[constructor]") {
         Some(
             function_name
                 .trim_start_matches("[constructor]")
@@ -626,6 +616,8 @@ fn get_resource_method_name(function_name: &str) -> Result<Option<(String, Strin
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum FunctionName {
+    Variant(String),
+    Enum(String),
     Function(FullyQualifiedFunctionName),
     ResourceConstructor(FullyQualifiedResourceConstructor),
     ResourceMethod(FullyQualifiedResourceMethod),
@@ -1017,7 +1009,7 @@ impl TryFrom<ProtoInstanceType> for InstanceType {
                         .map(Expr::try_from)
                         .transpose()?
                         .map(Box::new),
-                    functions_global: TryFrom::try_from(functions_global)?,
+                    component_dependency: TryFrom::try_from(functions_global)?,
                 })
             }
             Instance::Package(package_instance) => {
@@ -1035,7 +1027,7 @@ impl TryFrom<ProtoInstanceType> for InstanceType {
                         .transpose()?
                         .map(Box::new),
                     package_name: TryFrom::try_from(package_name)?,
-                    functions_in_package: TryFrom::try_from(functions_in_package)?,
+                    component_dependency: TryFrom::try_from(functions_in_package)?,
                 })
             }
             Instance::Interface(interface_instance) => {
@@ -1053,7 +1045,7 @@ impl TryFrom<ProtoInstanceType> for InstanceType {
                         .transpose()?
                         .map(Box::new),
                     interface_name: TryFrom::try_from(interface_name)?,
-                    functions_in_interface: TryFrom::try_from(functions_in_interface)?,
+                    component_dependency: TryFrom::try_from(functions_in_interface)?,
                 })
             }
             Instance::PackageInterface(package_interface_instance) => {
@@ -1076,7 +1068,7 @@ impl TryFrom<ProtoInstanceType> for InstanceType {
                         .map(Box::new),
                     package_name: TryFrom::try_from(package_name)?,
                     interface_name: TryFrom::try_from(interface_name)?,
-                    functions_in_package_interface: TryFrom::try_from(
+                    component_dependency: TryFrom::try_from(
                         functions_in_package_interface,
                     )?,
                 })
@@ -1105,7 +1097,7 @@ impl TryFrom<ProtoInstanceType> for InstanceType {
                         .into_iter()
                         .map(TryFrom::try_from)
                         .collect::<Result<Vec<Expr>, String>>()?,
-                    resource_method_dict: TryFrom::try_from(resource_method_dict)?,
+                    component_dependency: TryFrom::try_from(resource_method_dict)?,
                 })
             }
         }

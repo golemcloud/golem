@@ -13,18 +13,130 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::{DynamicParsedFunctionName, Expr, InstanceCreationType, InstanceType, TypeParameter};
+use crate::{DynamicParsedFunctionName, Expr, FullyQualifiedInterfaceName, FunctionDictionary, InstanceCreationType, InstanceType, InterfaceName, PackageName, TypeParameter};
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{format, Display, Formatter};
 use uuid::Uuid;
 
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct ComponentDependency {
-    pub dependencies: HashMap<ComponentInfo, FunctionTypeRegistry>,
+    pub dependencies: BTreeMap<ComponentInfo, FunctionDictionary>,
 }
 
 impl ComponentDependency {
+    pub fn function_dictionary(&self) -> Vec<&FunctionDictionary> {
+        self.dependencies
+            .values()
+            .collect::<Vec<_>>()
+    }
+
+    pub fn filter_by_interface(&self, interface_name: &InterfaceName) -> Result<ComponentDependency, String> {
+        let mut tree = BTreeMap::new();
+
+        for (component_info, function_dict) in self.dependencies {
+            let name_and_types = function_dict
+                .name_and_types
+                .into_iter()
+                .filter(|(f, _)| f.interface_name().as_ref() == Some(interface_name))
+                .collect::<Vec<_>>();
+
+            if !name_and_types.is_empty() {
+                tree.insert(
+                    component_info,
+                    FunctionDictionary { name_and_types },
+                );
+            }
+        }
+
+        if tree.is_empty() {
+            return Err(format!("interface `{}` not found", interface_name));
+        }
+
+        Ok(ComponentDependency {
+            dependencies: tree,
+        })
+    }
+
+    pub fn filter_by_package_name(
+        &self,
+        package_name: &PackageName,
+    ) -> Result<ComponentDependency, String> {
+
+        // If the package name corresponds to the root package name we pick that up
+        let mut tree = BTreeMap::new();
+
+        for (component_info, function_dict) in self.dependencies.iter() {
+            if let Some(root_package_name) = &component_info.root_package_name {
+                if root_package_name == &package_name.to_string() {
+                    tree.insert(component_info.clone(), function_dict.clone());
+                }
+            } else {
+                // If this package doesn't correspond to a root, but happens to be part of the component then
+
+                let name_and_types = function_dict
+                    .name_and_types
+                    .iter()
+                    .filter(|(f, _)| f.package_name() == Some(package_name.clone()))
+                    .collect::<Vec<_>>();
+
+                if !name_and_types.is_empty() {
+                    tree.insert(
+                        component_info.clone(),
+                        FunctionDictionary { name_and_types: name_and_types.cloned() },
+                    );
+                }
+            }
+        }
+
+        if tree.is_empty() {
+            return Err(format!("package `{}` not found", package_name));
+        }
+
+        Ok(ComponentDependency {
+            dependencies: tree,
+        })
+    }
+
+    pub fn filter_by_fully_qualified_interface(&self, fqi: &FullyQualifiedInterfaceName) -> Result<Self, String> {
+        let mut tree = BTreeMap::new();
+
+        for (component_info, function_dict) in self.dependencies.iter() {
+            if let Some(root_package_name) = &component_info.root_package_name {
+                if root_package_name == &fqi.package_name.to_string() {
+                    tree.insert(component_info.clone(), function_dict.clone());
+                }
+            } else {
+                // If this package doesn't correspond to a root, but happens to be part of the component then
+
+                let name_and_types = function_dict
+                    .name_and_types
+                    .iter()
+                    .filter(|(f, _)| {
+                        f.package_name() == Some(fqi.package_name.clone())
+                            && f.interface_name() == Some(fqi.interface_name.clone())
+                    })
+                    .collect::<Vec<_>>();
+
+
+                if !name_and_types.is_empty() {
+                    tree.insert(
+                        component_info.clone(),
+                        FunctionDictionary { name_and_types: name_and_types.cloned() },
+                    );
+                }
+            }
+        }
+
+        if tree.is_empty() {
+            return Err(format!("fully qualified interface `{}` not found", fqi));
+        }
+
+        Ok(ComponentDependency {
+            dependencies: tree,
+        })
+    }
 
     // type-parameter can be None.
     // If present, it may represent the root package name of the component
@@ -80,17 +192,20 @@ impl ComponentDependency {
             }
         }
     }
-    pub fn from_raw(dependencies: Vec<(ComponentInfo, &Vec<AnalysedExport>)>) -> Self {
-        let mut dep_map = HashMap::new();
 
-        for (component_info, exports) in dependencies {
+
+    pub fn from_raw(component_and_exports: Vec<(ComponentInfo, &Vec<AnalysedExport>)>) -> Result<Self, String> {
+        let mut dependencies = BTreeMap::new();
+
+        for (component_info, exports) in component_and_exports {
             let function_type_registry = FunctionTypeRegistry::from_export_metadata(exports);
-            dep_map.insert(component_info, function_type_registry);
+            let function_dictionary = FunctionDictionary::from_function_type_registry(&function_type_registry)?;
+            dependencies.insert(component_info, function_dictionary);
         }
 
-        ComponentDependency {
-            dependencies: dep_map,
-        }
+        Ok(ComponentDependency {
+            dependencies,
+        })
     }
 }
 

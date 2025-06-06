@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, FunctionTypeRegistry};
+use crate::{ComponentDependency, Expr, FunctionTypeRegistry};
 
-pub fn infer_variants(expr: &mut Expr, function_type_registry: &FunctionTypeRegistry) {
-    let variants = internal::get_variants_info(expr, function_type_registry);
+pub fn infer_variants(expr: &mut Expr, component_dependency: &ComponentDependency) {
+    let variants = internal::get_variants_info(expr, component_dependency);
 
     internal::convert_identifiers_to_no_arg_variant_calls(expr, &variants);
 
@@ -25,7 +25,7 @@ pub fn infer_variants(expr: &mut Expr, function_type_registry: &FunctionTypeRegi
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::{Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
+    use crate::{ComponentDependency, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
     use golem_wasm_ast::analysis::AnalysedType;
     use std::collections::VecDeque;
 
@@ -91,7 +91,7 @@ mod internal {
 
     pub(crate) fn get_variants_info(
         expr: &mut Expr,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependency,
     ) -> VariantInfo {
         let mut no_arg_variants = vec![];
         let mut variant_with_args = vec![];
@@ -106,9 +106,9 @@ mod internal {
                     ..
                 } => {
                     if !variable_id.is_local() {
-                        let key = RegistryKey::FunctionName(variable_id.name().clone());
+                        let key = crate::instance_type::FunctionName::Variant(variable_id.name().clone());
                         if let Some(RegistryValue::Value(AnalysedType::Variant(type_variant))) =
-                            function_type_registry.types.get(&key)
+                            component_dependency.function_dictionary()
                         {
                             no_arg_variants.push(variable_id.name());
                             *inferred_type =
@@ -125,7 +125,7 @@ mod internal {
                 } => {
                     let key = RegistryKey::FunctionName(function_name.to_string());
                     if let Some(RegistryValue::Variant { variant_type, .. }) =
-                        function_type_registry.types.get(&key)
+                        component_dependency.types.get(&key)
                     {
                         let variant_inferred_type = InferredType::from_type_variant(variant_type);
                         *inferred_type = inferred_type.merge(variant_inferred_type);
