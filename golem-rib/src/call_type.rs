@@ -119,7 +119,7 @@ mod protobuf {
             value: golem_api_grpc::proto::golem::rib::ComponentInfo,
         ) -> Result<Self, Self::Error> {
             let component_name = value.component_name;
-            let component_id = value.value.ok_or("Missing component version")?;
+            let component_id = value.value.ok_or("Missing component id")?;
 
             let root_package_name = value.root_package_name;
 

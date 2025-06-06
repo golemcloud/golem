@@ -747,6 +747,7 @@ mod tests {
         let mut expr = Expr::from_text(expr).unwrap();
 
         let result = expr.infer_types(&component_dependencies, &vec![]);
+        
         assert!(result.is_ok());
     }
 

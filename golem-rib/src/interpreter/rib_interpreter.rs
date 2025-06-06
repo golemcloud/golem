@@ -1987,14 +1987,16 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
+        let metadata =  get_metadata_with_enum_and_variant();
+
         let compiler = RibCompiler::new(RibCompilerConfig::new(
-            get_metadata_with_enum_and_variant(),
+            metadata,
             vec![],
         ));
 
-        let compiled = compiler.compile(expr).unwrap();
+        let compiled = compiler.compile(expr);
 
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
+        let result = interpreter.run(compiled.unwrap().byte_code).await.unwrap();
         let expected_enum_type = r#enum(&["x", "y", "z"]);
         let expected_variant_type = get_analysed_type_variant();
 
