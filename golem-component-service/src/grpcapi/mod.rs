@@ -20,7 +20,7 @@ use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentServiceServer;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_server::PluginServiceServer;
 use golem_api_grpc::proto::golem::component::v1::{component_error, ComponentError};
-use golem_common::model::auth::CloudAuthCtx;
+use golem_common::model::auth::AuthCtx;
 use golem_common::model::{ComponentId, ProjectId};
 use golem_service_base::clients::get_authorisation_token;
 use std::net::SocketAddr;
@@ -76,9 +76,9 @@ fn internal_error(error: &str) -> ComponentError {
     }
 }
 
-fn auth(metadata: MetadataMap) -> Result<CloudAuthCtx, ComponentError> {
+fn auth(metadata: MetadataMap) -> Result<AuthCtx, ComponentError> {
     match get_authorisation_token(metadata) {
-        Some(t) => Ok(CloudAuthCtx::new(t)),
+        Some(t) => Ok(AuthCtx::new(t)),
         None => Err(ComponentError {
             error: Some(component_error::Error::Unauthorized(ErrorBody {
                 error: "Missing token".into(),

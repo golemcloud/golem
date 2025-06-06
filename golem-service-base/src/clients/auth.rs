@@ -26,7 +26,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::{AccountId, ProjectId, RetryConfig};
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
@@ -37,14 +37,14 @@ use tonic::Status;
 
 #[async_trait]
 pub trait BaseAuthService: Send + Sync {
-    async fn get_account(&self, ctx: &CloudAuthCtx) -> Result<AccountId, AuthServiceError>;
+    async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError>;
 
     async fn authorize_project_action(
         &self,
         project_id: &ProjectId,
         permission: ProjectAction,
-        ctx: &CloudAuthCtx,
-    ) -> Result<CloudNamespace, AuthServiceError>;
+        ctx: &AuthCtx,
+    ) -> Result<Namespace, AuthServiceError>;
 }
 
 #[derive(Clone)]
@@ -77,7 +77,7 @@ impl CloudAuthService {
 
 #[async_trait]
 impl BaseAuthService for CloudAuthService {
-    async fn get_account(&self, ctx: &CloudAuthCtx) -> Result<AccountId, AuthServiceError> {
+    async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError> {
         let result: Result<AccountId, AuthClientError> = with_retries(
             "auth",
             "get-account",
@@ -114,9 +114,9 @@ impl BaseAuthService for CloudAuthService {
         &self,
         project_id: &ProjectId,
         action: ProjectAction,
-        ctx: &CloudAuthCtx,
-    ) -> Result<CloudNamespace, AuthServiceError> {
-        let result: Result<CloudNamespace, AuthClientError> = with_retries(
+        ctx: &AuthCtx,
+    ) -> Result<Namespace, AuthServiceError> {
+        let result: Result<Namespace, AuthClientError> = with_retries(
             "auth",
             "authorize-project-action",
             Some(format!("{action:}")),
@@ -149,7 +149,7 @@ impl BaseAuthService for CloudAuthService {
                             let account_id = AccountId {
                                 value: payload.project_owner_account_id.unwrap().name,
                             };
-                            Ok(CloudNamespace {
+                            Ok(Namespace {
                                 account_id,
                                 project_id: project_id.clone(),
                             })

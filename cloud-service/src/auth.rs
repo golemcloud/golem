@@ -14,7 +14,7 @@
 
 use crate::model::Token;
 use golem_common::model::auth::Role;
-use golem_common::model::plugin::CloudPluginOwner;
+use golem_common::model::plugin::PluginOwner;
 use golem_common::model::AccountId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -52,8 +52,8 @@ impl AccountAuthorisation {
         self.token.account_id == *account_id || self.roles.contains(role)
     }
 
-    pub fn as_plugin_owner(&self) -> CloudPluginOwner {
-        CloudPluginOwner {
+    pub fn as_plugin_owner(&self) -> PluginOwner {
+        PluginOwner {
             account_id: self.token.account_id.clone(),
         }
     }

@@ -14,7 +14,7 @@
 
 use crate::api::common::ApiEndpointError;
 use crate::service::api_security::SecuritySchemeService;
-use golem_common::model::auth::CloudAuthCtx;
+use golem_common::model::auth::AuthCtx;
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::api_tags::ApiTags;
@@ -67,7 +67,7 @@ impl SecuritySchemeApi {
             .get(
                 &SecuritySchemeIdentifier::new(security_scheme_identifier.0),
                 &project_id,
-                &CloudAuthCtx::new(token),
+                &AuthCtx::new(token),
             )
             .instrument(record.span.clone())
             .await?;
@@ -109,7 +109,7 @@ impl SecuritySchemeApi {
 
         let security_scheme_with_metadata = self
             .security_scheme_service
-            .create(&security_scheme, &project_id, &CloudAuthCtx::new(token))
+            .create(&security_scheme, &project_id, &AuthCtx::new(token))
             .await?;
 
         Ok(Json(SecuritySchemeData::from(

@@ -18,7 +18,7 @@ use crate::service::api_domain::RegisterDomainRouteError;
 use crate::service::api_security::SecuritySchemeServiceError;
 use golem_api_grpc::proto::golem::project::v1::project_error::Error;
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::auth::CloudNamespace;
+use golem_common::model::auth::Namespace;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::error::ErrorsBody;
 use golem_common::{safe, SafeDisplay};
@@ -123,8 +123,8 @@ impl ApiEndpointError {
     }
 }
 
-impl From<ApiDeploymentError<CloudNamespace>> for ApiEndpointError {
-    fn from(value: ApiDeploymentError<CloudNamespace>) -> Self {
+impl From<ApiDeploymentError<Namespace>> for ApiEndpointError {
+    fn from(value: ApiDeploymentError<Namespace>) -> Self {
         match value {
             ApiDeploymentError::ApiDefinitionNotFound(_, _, _) => {
                 ApiEndpointError::not_found(value)

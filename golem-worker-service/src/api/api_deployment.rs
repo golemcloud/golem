@@ -18,7 +18,7 @@ use crate::model::ApiDeploymentRequest;
 use crate::service::api_domain::RegisterDomainRoute;
 use crate::service::auth::AuthService;
 use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe, SafeDisplay};
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -36,7 +36,7 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct ApiDeploymentApi {
-    deployment_service: Arc<dyn ApiDeploymentService<CloudAuthCtx, CloudNamespace> + Sync + Send>,
+    deployment_service: Arc<dyn ApiDeploymentService<AuthCtx, Namespace> + Sync + Send>,
     auth_service: Arc<dyn AuthService + Sync + Send>,
     domain_route: Arc<dyn RegisterDomainRoute + Sync + Send>,
 }
@@ -44,9 +44,7 @@ pub struct ApiDeploymentApi {
 #[OpenApi(prefix_path = "/v1/api/deployments", tag = ApiTags::ApiDeployment)]
 impl ApiDeploymentApi {
     pub fn new(
-        deployment_service: Arc<
-            dyn ApiDeploymentService<CloudAuthCtx, CloudNamespace> + Sync + Send,
-        >,
+        deployment_service: Arc<dyn ApiDeploymentService<AuthCtx, Namespace> + Sync + Send>,
         auth_service: Arc<dyn AuthService + Sync + Send>,
         domain_route: Arc<dyn RegisterDomainRoute + Sync + Send>,
     ) -> Self {
@@ -85,7 +83,7 @@ impl ApiDeploymentApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         let token = token.secret();
-        let auth_ctx = CloudAuthCtx::new(token);
+        let auth_ctx = AuthCtx::new(token);
 
         let namespace = self
             .auth_service
@@ -170,7 +168,7 @@ impl ApiDeploymentApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<ApiDeployment>>, ApiEndpointError> {
         let token = token.secret();
-        let auth_ctx = CloudAuthCtx::new(token);
+        let auth_ctx = AuthCtx::new(token);
 
         let namespace = self
             .auth_service
@@ -213,7 +211,7 @@ impl ApiDeploymentApi {
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         let token = token.secret();
         let site = ApiSiteString(site);
-        let auth_ctx = CloudAuthCtx::new(token);
+        let auth_ctx = AuthCtx::new(token);
 
         let namespace = self
             .auth_service
@@ -243,7 +241,7 @@ impl ApiDeploymentApi {
     ) -> Result<Json<String>, ApiEndpointError> {
         let record = recorded_http_api_request!("delete_deployment", site = site.0);
 
-        let auth_ctx = CloudAuthCtx::new(token.secret());
+        let auth_ctx = AuthCtx::new(token.secret());
 
         let namespace = self
             .auth_service
@@ -260,8 +258,8 @@ impl ApiDeploymentApi {
 
     async fn delete_internal(
         &self,
-        namespace: &CloudNamespace,
-        auth_ctx: &CloudAuthCtx,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
         site: String,
     ) -> Result<Json<String>, ApiEndpointError> {
         let site = ApiSiteString(site);
@@ -311,7 +309,7 @@ impl ApiDeploymentApi {
             version = version.0.clone()
         );
 
-        let auth_ctx = CloudAuthCtx::new(token.secret());
+        let auth_ctx = AuthCtx::new(token.secret());
 
         // TODO: should not use ProjectAction::ViewApiDefinition, rather a deployment action,
         //       for now kept in sync with delete
@@ -330,8 +328,8 @@ impl ApiDeploymentApi {
 
     async fn undeploy_api_internal(
         &self,
-        namespace: &CloudNamespace,
-        auth_ctx: &CloudAuthCtx,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
         site: String,
         id: String,
         version: String,

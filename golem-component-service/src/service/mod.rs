@@ -18,8 +18,6 @@ use crate::service::component::CloudComponentService;
 use crate::service::plugin::CloudPluginService;
 use golem_api_grpc::proto::golem::project::v1::project_error;
 use golem_common::config::DbConfig;
-use golem_common::model::component::CloudComponentOwner;
-use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
 use golem_common::SafeDisplay;
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_component_service_base::repo::component::{
@@ -96,13 +94,11 @@ impl Services {
                     .await
                     .map_err(|e| e.to_string())?;
 
-                let component_repo: Arc<dyn ComponentRepo<CloudComponentOwner> + Send + Sync> =
-                    Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
-                        db_pool.clone(),
-                    )));
-                let plugin_repo: Arc<
-                    dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync,
-                > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db_pool.clone())));
+                let component_repo: Arc<dyn ComponentRepo> = Arc::new(LoggedComponentRepo::new(
+                    DbComponentRepo::new(db_pool.clone()),
+                ));
+                let plugin_repo: Arc<dyn PluginRepo> =
+                    Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db_pool.clone())));
                 (component_repo, plugin_repo)
             }
             DbConfig::Sqlite(config) => {
@@ -110,13 +106,11 @@ impl Services {
                     .await
                     .map_err(|e| e.to_string())?;
 
-                let component_repo: Arc<dyn ComponentRepo<CloudComponentOwner> + Send + Sync> =
-                    Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
-                        db_pool.clone(),
-                    )));
-                let plugin_repo: Arc<
-                    dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync,
-                > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db_pool.clone())));
+                let component_repo: Arc<dyn ComponentRepo> = Arc::new(LoggedComponentRepo::new(
+                    DbComponentRepo::new(db_pool.clone()),
+                ));
+                let plugin_repo: Arc<dyn PluginRepo> =
+                    Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db_pool.clone())));
                 (component_repo, plugin_repo)
             }
         };
@@ -155,9 +149,7 @@ impl Services {
 
         let base_component_service = Arc::new(LazyComponentService::new());
 
-        let base_plugin_service: Arc<
-            dyn PluginService<CloudPluginOwner, CloudPluginScope> + Send + Sync,
-        > = Arc::new(PluginServiceDefault::new(
+        let base_plugin_service: Arc<dyn PluginService> = Arc::new(PluginServiceDefault::new(
             plugin_repo.clone(),
             plugin_wasm_files_service.clone(),
             base_component_service.clone(),

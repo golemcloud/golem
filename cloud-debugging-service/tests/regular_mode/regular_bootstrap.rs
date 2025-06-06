@@ -2,7 +2,6 @@ use crate::regular_mode::worker_ctx::TestWorkerCtx;
 use crate::{get_component_cache_config, get_component_service_config};
 use async_trait::async_trait;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_worker_executor::cloud::CloudGolemTypes;
 use golem_worker_executor::durable_host::DurableWorkerCtx;
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
@@ -52,10 +51,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
-    ) -> (
-        Arc<dyn Plugins<CloudGolemTypes>>,
-        Arc<dyn PluginsObservations>,
-    ) {
+    ) -> (Arc<dyn Plugins>, Arc<dyn PluginsObservations>) {
         let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(
             &golem_config.plugin_service,
         );
@@ -65,9 +61,9 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
     fn create_component_service(
         &self,
         golem_config: &GolemConfig,
-        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
-    ) -> Arc<dyn ComponentService<CloudGolemTypes>> {
+    ) -> Arc<dyn ComponentService> {
         golem_worker_executor::services::cloud::component::configured(
             &get_component_service_config(),
             &golem_config.project_service,
@@ -84,7 +80,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<TestWorkerCtx>>,
         runtime: Handle,
-        component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
+        component_service: Arc<dyn ComponentService>,
         shard_manager_service: Arc<dyn ShardManagerService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -101,7 +97,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<CloudGolemTypes>>,
+        plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(&ResourceLimitsConfig::Disabled(

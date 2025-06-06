@@ -278,7 +278,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
-    component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
+    component_service: Arc<dyn component::ComponentService>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
     worker_fork: Arc<dyn worker_fork::WorkerForkService>,
     worker_service: Arc<dyn worker::WorkerService>,
@@ -296,7 +296,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
-    plugins: Arc<dyn Plugins<Ctx::Types>>,
+    plugins: Arc<dyn Plugins>,
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     resource_limits: Arc<dyn ResourceLimits>,
     extra_deps: Ctx::ExtraDeps,
@@ -347,8 +347,8 @@ impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasComponentService<Ctx::Types> for DirectWorkerInvocationRpc<Ctx> {
-    fn component_service(&self) -> Arc<dyn component::ComponentService<Ctx::Types>> {
+impl<Ctx: WorkerCtx> HasComponentService for DirectWorkerInvocationRpc<Ctx> {
+    fn component_service(&self) -> Arc<dyn component::ComponentService> {
         self.component_service.clone()
     }
 }
@@ -471,8 +471,8 @@ impl<Ctx: WorkerCtx> HasFileLoader for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasPlugins<Ctx::Types> for DirectWorkerInvocationRpc<Ctx> {
-    fn plugins(&self) -> Arc<dyn Plugins<Ctx::Types>> {
+impl<Ctx: WorkerCtx> HasPlugins for DirectWorkerInvocationRpc<Ctx> {
+    fn plugins(&self) -> Arc<dyn Plugins> {
         self.plugins.clone()
     }
 }
@@ -504,7 +504,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
-        component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
+        component_service: Arc<dyn component::ComponentService>,
         worker_fork: Arc<dyn worker_fork::WorkerForkService>,
         worker_service: Arc<dyn worker::WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -523,7 +523,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<Ctx::Types>>,
+        plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         extra_deps: Ctx::ExtraDeps,

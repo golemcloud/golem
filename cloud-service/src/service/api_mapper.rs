@@ -14,7 +14,6 @@
 
 use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::component::CloudComponentOwner;
 use golem_common::model::plugin::PluginInstallation;
 use golem_component_service_base::api::dto;
 use golem_component_service_base::model::Component;
@@ -31,10 +30,6 @@ impl RemoteCloudApiMapper {
             plugin_service_client,
         }
     }
-
-    // Note: cannot implement ApiMapper<CloudComponentOwner> because we need more than the owner
-    // to chain the user's token into the plugin query. But this is not a problem at the moment,
-    // because the ApiMapper trait is not used in any of the base implementations anyway.
 
     pub async fn convert_plugin_installation(
         &self,
@@ -55,7 +50,7 @@ impl RemoteCloudApiMapper {
     pub async fn convert_component(
         &self,
         token: &TokenSecret,
-        component: Component<CloudComponentOwner>,
+        component: Component,
     ) -> Result<dto::Component, PluginError> {
         let installed_plugins = stream::iter(component.installed_plugins)
             .then(async |p| self.convert_plugin_installation(token, p).await)

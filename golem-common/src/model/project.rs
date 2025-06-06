@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::auth::CloudNamespace;
+use super::auth::Namespace;
 use super::{AccountId, ProjectId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -23,9 +23,9 @@ pub struct ProjectView {
     pub description: String,
 }
 
-impl From<ProjectView> for CloudNamespace {
+impl From<ProjectView> for Namespace {
     fn from(value: ProjectView) -> Self {
-        CloudNamespace::new(value.id, value.owner_account_id)
+        Namespace::new(value.id, value.owner_account_id)
     }
 }
 

@@ -18,7 +18,7 @@ use crate::api::{ApiTags, ComponentError, Result};
 use crate::model::{ComponentQuery, ComponentSearch};
 use crate::service::component::CloudComponentService;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use golem_common::model::auth::CloudAuthCtx;
+use golem_common::model::auth::AuthCtx;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
@@ -93,7 +93,7 @@ impl ComponentApi {
         component_id: Path<ComponentId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<dto::Component>>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "get_component_metadata_all_versions",
             component_id = component_id.0.to_string()
@@ -108,7 +108,7 @@ impl ComponentApi {
     async fn get_component_metadata_all_versions_internal(
         &self,
         component_id: &ComponentId,
-        auth: CloudAuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<Vec<dto::Component>>> {
         let components = self.component_service.get(component_id, &auth).await?;
 
@@ -135,7 +135,7 @@ impl ComponentApi {
         component_type: Query<Option<ComponentType>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<dto::Component>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "upload_component",
             component_id = component_id.0.to_string()
@@ -152,7 +152,7 @@ impl ComponentApi {
         component_id: ComponentId,
         wasm: Body,
         component_type: Option<ComponentType>,
-        auth: CloudAuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<dto::Component>> {
         let data = wasm.into_vec().await?;
         let response = self
@@ -183,7 +183,7 @@ impl ComponentApi {
         payload: UpdatePayload,
         token: GolemSecurityScheme,
     ) -> Result<Json<dto::Component>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "update_component",
             component_id = component_id.0.to_string()
@@ -199,7 +199,7 @@ impl ComponentApi {
         &self,
         component_id: ComponentId,
         payload: UpdatePayload,
-        auth: CloudAuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<dto::Component>> {
         let data = payload.component.into_vec().await?;
         let files_file = payload.files.map(|f| f.into_file());
@@ -245,7 +245,7 @@ impl ComponentApi {
         payload: UploadPayload,
         token: GolemSecurityScheme,
     ) -> Result<Json<dto::Component>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "create_component",
             component_name = payload.query.0.component_name.to_string(),
@@ -261,7 +261,7 @@ impl ComponentApi {
     async fn create_component_internal(
         &self,
         payload: UploadPayload,
-        auth: CloudAuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<dto::Component>> {
         let data = payload.component.into_vec().await?;
         let component_name = payload.query.0.component_name;
@@ -315,7 +315,7 @@ impl ComponentApi {
         version: Query<Option<u64>>,
         token: GolemSecurityScheme,
     ) -> Result<Binary<Body>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "download_component",
             component_id = component_id.0.to_string(),
@@ -349,7 +349,7 @@ impl ComponentApi {
         #[oai(name = "version")] version: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<dto::Component>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "get_component_metadata",
             component_id = component_id.0.to_string(),
@@ -368,7 +368,7 @@ impl ComponentApi {
         &self,
         component_id: ComponentId,
         version: String,
-        auth: CloudAuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<dto::Component>> {
         let version_int = Self::parse_version_path_segment(&version)?;
 
@@ -406,7 +406,7 @@ impl ComponentApi {
         component_id: Path<ComponentId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<dto::Component>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "get_latest_component_metadata",
             component_id = component_id.0.to_string()
@@ -423,7 +423,7 @@ impl ComponentApi {
     async fn get_latest_component_metadata_internal(
         &self,
         component_id: ComponentId,
-        auth: CloudAuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<dto::Component>> {
         let response = self
             .component_service
@@ -455,7 +455,7 @@ impl ComponentApi {
         component_name: Query<Option<ComponentName>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<dto::Component>>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "get_components",
             component_name = component_name.0.as_ref().map(|v| v.0.clone()),
@@ -474,7 +474,7 @@ impl ComponentApi {
         &self,
         project_id: Option<ProjectId>,
         component_name: Option<ComponentName>,
-        auth: CloudAuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<Vec<dto::Component>>> {
         let components = self
             .component_service
@@ -495,7 +495,7 @@ impl ComponentApi {
         components_search: Json<ComponentSearch>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<dto::Component>>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "search_components",
             search_components = components_search
@@ -517,7 +517,7 @@ impl ComponentApi {
     async fn search_components_internal(
         &self,
         search_query: ComponentSearch,
-        auth: CloudAuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<Vec<dto::Component>>> {
         let component_by_name_and_versions = search_query
             .components
@@ -554,7 +554,7 @@ impl ComponentApi {
         version: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<dto::PluginInstallation>>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "get_installed_plugins",
             component_id = component_id.0.to_string(),
@@ -573,7 +573,7 @@ impl ComponentApi {
         &self,
         component_id: ComponentId,
         version: String,
-        auth: CloudAuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<Vec<dto::PluginInstallation>>> {
         let version_int = Self::parse_version_path_segment(&version)?;
 
@@ -602,7 +602,7 @@ impl ComponentApi {
         plugin: Json<PluginInstallationCreation>,
         token: GolemSecurityScheme,
     ) -> Result<Json<dto::PluginInstallation>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
         let record = recorded_http_api_request!(
             "install_plugin",
@@ -623,7 +623,7 @@ impl ComponentApi {
         &self,
         component_id: ComponentId,
         plugin: PluginInstallationCreation,
-        auth: CloudAuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<dto::PluginInstallation>> {
         let (owner, installation) = self
             .component_service
@@ -650,7 +650,7 @@ impl ComponentApi {
         update: Json<PluginInstallationUpdate>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Empty>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
         let record = recorded_http_api_request!(
             "update_installed_plugin",
@@ -686,7 +686,7 @@ impl ComponentApi {
         installation_id: Path<PluginInstallationId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Empty>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
         let record = recorded_http_api_request!(
             "uninstall_plugin",
@@ -717,7 +717,7 @@ impl ComponentApi {
         updates: Json<BatchPluginInstallationUpdates>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Empty>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
         let record = recorded_http_api_request!(
             "batch_update_installed_plugins",
@@ -735,7 +735,7 @@ impl ComponentApi {
         &self,
         component_id: ComponentId,
         updates: BatchPluginInstallationUpdates,
-        auth: CloudAuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<Empty>> {
         self.component_service
             .batch_update_plugin_installations_for_component(&auth, &component_id, &updates.actions)
@@ -756,7 +756,7 @@ impl ComponentApi {
         file_path: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Binary<Body>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
         let record = recorded_http_api_request!(
             "download_component_file",
@@ -777,7 +777,7 @@ impl ComponentApi {
         component_id: ComponentId,
         version: String,
         file_path: String,
-        auth: CloudAuthCtx,
+        auth: AuthCtx,
     ) -> Result<Binary<Body>> {
         let version_int = Self::parse_version_path_segment(&version)?;
 

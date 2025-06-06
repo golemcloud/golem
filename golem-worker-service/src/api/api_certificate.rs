@@ -15,7 +15,7 @@
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::model::{Certificate, CertificateId, CertificateRequest};
 use crate::service::api_certificate::CertificateService;
-use golem_common::model::auth::CloudAuthCtx;
+use golem_common::model::auth::AuthCtx;
 use golem_common::model::ProjectId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -58,7 +58,7 @@ impl ApiCertificateApi {
         );
         let response = self
             .certificate_service
-            .create(&payload.0, &CloudAuthCtx::new(token))
+            .create(&payload.0, &AuthCtx::new(token))
             .instrument(record.span.clone())
             .await
             .map(Json)
@@ -89,7 +89,7 @@ impl ApiCertificateApi {
             .get(
                 project_id_query.0.clone(),
                 certificate_id_query.0,
-                &CloudAuthCtx::new(token),
+                &AuthCtx::new(token),
             )
             .instrument(record.span.clone())
             .await
@@ -120,7 +120,7 @@ impl ApiCertificateApi {
             .delete(
                 &project_id_query.0,
                 &certificate_id_query.0,
-                &CloudAuthCtx::new(token),
+                &AuthCtx::new(token),
             )
             .instrument(record.span.clone())
             .await

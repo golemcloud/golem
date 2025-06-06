@@ -15,7 +15,7 @@
 use crate::model::{AccountApiDomain, ApiDomain, DomainRequest};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
-use golem_common::model::auth::CloudNamespace;
+use golem_common::model::auth::Namespace;
 use golem_common::model::AccountId;
 use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
@@ -36,7 +36,7 @@ impl ApiDomainRecord {
         created_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
         Self {
-            namespace: CloudNamespace {
+            namespace: Namespace {
                 account_id,
                 project_id: domain.project_id,
             }
@@ -52,7 +52,7 @@ impl TryFrom<ApiDomainRecord> for AccountApiDomain {
     type Error = String;
 
     fn try_from(value: ApiDomainRecord) -> Result<Self, Self::Error> {
-        let namespace: CloudNamespace = value.namespace.try_into()?;
+        let namespace: Namespace = value.namespace.try_into()?;
 
         let name_servers = if value.name_servers.is_empty() {
             vec![]

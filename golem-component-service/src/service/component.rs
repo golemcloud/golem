@@ -16,13 +16,13 @@ use crate::service::CloudComponentError;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
-use golem_common::model::auth::CloudAuthCtx;
+use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
-use golem_common::model::component::CloudComponentOwner;
+use golem_common::model::component::ComponentOwner;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
-use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope, ComponentOwnershipQuery};
+use golem_common::model::plugin::{ComponentOwnershipQuery, PluginOwner};
 use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationAction, PluginInstallationCreation,
     PluginInstallationUpdate,
@@ -45,20 +45,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct CloudComponentService {
-    base_component_service: Arc<dyn ComponentService<CloudComponentOwner> + Sync + Send>,
+    base_component_service: Arc<dyn ComponentService>,
     auth_service: Arc<dyn BaseAuthService + Sync + Send>,
     limit_service: Arc<dyn LimitService + Sync + Send>,
     project_service: Arc<dyn ProjectService + Sync + Send>,
-    plugin_service: Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope> + Sync + Send>,
+    plugin_service: Arc<dyn PluginService>,
 }
 
 impl CloudComponentService {
     pub fn new(
-        base_component_service: Arc<dyn ComponentService<CloudComponentOwner> + Sync + Send>,
+        base_component_service: Arc<dyn ComponentService>,
         auth_service: Arc<dyn BaseAuthService + Sync + Send>,
         limit_service: Arc<dyn LimitService + Sync + Send>,
         project_service: Arc<dyn ProjectService + Sync + Send>,
-        plugin_service: Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope> + Sync + Send>,
+        plugin_service: Arc<dyn PluginService>,
     ) -> Self {
         CloudComponentService {
             base_component_service,
@@ -72,15 +72,15 @@ impl CloudComponentService {
     async fn get_owner(
         &self,
         project_id: Option<ProjectId>,
-        auth: &CloudAuthCtx,
-    ) -> Result<CloudComponentOwner, CloudComponentError> {
+        auth: &AuthCtx,
+    ) -> Result<ComponentOwner, CloudComponentError> {
         if let Some(project_id) = project_id.clone() {
             Ok(self
                 .is_authorized_by_project(auth, &project_id, &ProjectAction::ViewComponent)
                 .await?)
         } else {
             let project = self.project_service.get_default(&auth.token_secret).await?;
-            Ok(CloudComponentOwner {
+            Ok(ComponentOwner {
                 account_id: project.owner_account_id,
                 project_id: project.id,
             })
@@ -95,9 +95,9 @@ impl CloudComponentService {
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         env: HashMap<String, String>,
-    ) -> Result<Component<CloudComponentOwner>, CloudComponentError> {
+    ) -> Result<Component, CloudComponentError> {
         let component_id = ComponentId::new_v4();
 
         let owner = self.get_owner(project_id, auth).await?;
@@ -143,9 +143,9 @@ impl CloudComponentService {
         data: Vec<u8>,
         files: Vec<InitialComponentFile>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         env: HashMap<String, String>,
-    ) -> Result<Component<CloudComponentOwner>, CloudComponentError> {
+    ) -> Result<Component, CloudComponentError> {
         let component_id = ComponentId::new_v4();
 
         let owner = self.get_owner(project_id, auth).await?;
@@ -190,9 +190,9 @@ impl CloudComponentService {
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         env: HashMap<String, String>,
-    ) -> Result<Component<CloudComponentOwner>, CloudComponentError> {
+    ) -> Result<Component, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
@@ -226,9 +226,9 @@ impl CloudComponentService {
         component_type: Option<ComponentType>,
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         env: HashMap<String, String>,
-    ) -> Result<Component<CloudComponentOwner>, CloudComponentError> {
+    ) -> Result<Component, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
@@ -259,7 +259,7 @@ impl CloudComponentService {
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<Vec<u8>, CloudComponentError> {
         let namespace = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
@@ -277,7 +277,7 @@ impl CloudComponentService {
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
@@ -294,8 +294,8 @@ impl CloudComponentService {
         &self,
         project_id: Option<ProjectId>,
         component_name: Option<ComponentName>,
-        auth: &CloudAuthCtx,
-    ) -> Result<Vec<Component<CloudComponentOwner>>, CloudComponentError> {
+        auth: &AuthCtx,
+    ) -> Result<Vec<Component>, CloudComponentError> {
         let owner = self.get_owner(project_id, auth).await?;
 
         let result = self
@@ -310,8 +310,8 @@ impl CloudComponentService {
         &self,
         project_id: Option<ProjectId>,
         component_names: Vec<ComponentByNameAndVersion>,
-        auth: &CloudAuthCtx,
-    ) -> Result<Vec<Component<CloudComponentOwner>>, CloudComponentError> {
+        auth: &AuthCtx,
+    ) -> Result<Vec<Component>, CloudComponentError> {
         let owner = self.get_owner(project_id, auth).await?;
 
         let result = self
@@ -325,8 +325,8 @@ impl CloudComponentService {
     pub async fn get_by_project(
         &self,
         project_id: &ProjectId,
-        auth: &CloudAuthCtx,
-    ) -> Result<Vec<Component<CloudComponentOwner>>, CloudComponentError> {
+        auth: &AuthCtx,
+    ) -> Result<Vec<Component>, CloudComponentError> {
         let owner = self
             .is_authorized_by_project(auth, project_id, &ProjectAction::ViewComponent)
             .await?;
@@ -341,8 +341,8 @@ impl CloudComponentService {
     pub async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
-        auth: &CloudAuthCtx,
-    ) -> Result<Option<Component<CloudComponentOwner>>, CloudComponentError> {
+        auth: &AuthCtx,
+    ) -> Result<Option<Component>, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(
                 auth,
@@ -362,8 +362,8 @@ impl CloudComponentService {
     pub async fn get_latest_version(
         &self,
         component_id: &ComponentId,
-        auth: &CloudAuthCtx,
-    ) -> Result<Option<Component<CloudComponentOwner>>, CloudComponentError> {
+        auth: &AuthCtx,
+    ) -> Result<Option<Component>, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
             .await?;
@@ -377,8 +377,8 @@ impl CloudComponentService {
     pub async fn get(
         &self,
         component_id: &ComponentId,
-        auth: &CloudAuthCtx,
-    ) -> Result<Vec<Component<CloudComponentOwner>>, CloudComponentError> {
+        auth: &AuthCtx,
+    ) -> Result<Vec<Component>, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
             .await?;
@@ -394,8 +394,8 @@ impl CloudComponentService {
         &self,
         component_id: ComponentId,
         constraints: FunctionConstraints,
-        auth: &CloudAuthCtx,
-    ) -> Result<ComponentConstraints<CloudComponentOwner>, CloudComponentError> {
+        auth: &AuthCtx,
+    ) -> Result<ComponentConstraints, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, &component_id, &ProjectAction::UpdateComponent)
             .await?;
@@ -418,8 +418,8 @@ impl CloudComponentService {
         &self,
         component_id: ComponentId,
         constraints: FunctionConstraints,
-        auth: &CloudAuthCtx,
-    ) -> Result<ComponentConstraints<CloudComponentOwner>, CloudComponentError> {
+        auth: &AuthCtx,
+    ) -> Result<ComponentConstraints, CloudComponentError> {
         let owner = self
             .is_authorized_by_component(auth, &component_id, &ProjectAction::UpdateComponent)
             .await?;
@@ -444,10 +444,10 @@ impl CloudComponentService {
 
     pub async fn get_plugin_installations_for_component(
         &self,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         component_id: &ComponentId,
         component_version: ComponentVersion,
-    ) -> Result<(CloudPluginOwner, Vec<PluginInstallation>), PluginError> {
+    ) -> Result<(PluginOwner, Vec<PluginInstallation>), PluginError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
@@ -461,14 +461,14 @@ impl CloudComponentService {
 
     pub async fn create_plugin_installation_for_component(
         &self,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         component_id: &ComponentId,
         installation: PluginInstallationCreation,
-    ) -> Result<(CloudPluginOwner, PluginInstallation), PluginError> {
+    ) -> Result<(PluginOwner, PluginInstallation), PluginError> {
         let owner = self
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
-        let plugin_owner: CloudPluginOwner = owner.clone().into();
+        let plugin_owner: PluginOwner = owner.clone().into();
 
         let plugin_definition = self
             .plugin_service
@@ -503,7 +503,7 @@ impl CloudComponentService {
 
     pub async fn update_plugin_installation_for_component(
         &self,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
         update: PluginInstallationUpdate,
@@ -518,7 +518,7 @@ impl CloudComponentService {
 
     pub async fn delete_plugin_installation_for_component(
         &self,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
     ) -> Result<(), PluginError> {
@@ -532,7 +532,7 @@ impl CloudComponentService {
 
     pub async fn batch_update_plugin_installations_for_component(
         &self,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         component_id: &ComponentId,
         actions: &[PluginInstallationAction],
     ) -> Result<Vec<Option<PluginInstallation>>, PluginError> {
@@ -546,7 +546,7 @@ impl CloudComponentService {
 
     pub async fn get_file_contents(
         &self,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         component_id: &ComponentId,
         version: ComponentVersion,
         path: &str,
@@ -563,10 +563,10 @@ impl CloudComponentService {
 
     async fn is_authorized_by_component(
         &self,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         component_id: &ComponentId,
         action: &ProjectAction,
-    ) -> Result<CloudComponentOwner, CloudComponentError> {
+    ) -> Result<ComponentOwner, CloudComponentError> {
         let owner = self.base_component_service.get_owner(component_id).await?;
 
         match owner {
@@ -583,16 +583,16 @@ impl CloudComponentService {
 
     async fn is_authorized_by_project(
         &self,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         project_id: &ProjectId,
         action: &ProjectAction,
-    ) -> Result<CloudComponentOwner, CloudComponentError> {
+    ) -> Result<ComponentOwner, CloudComponentError> {
         let namespace = self
             .auth_service
             .authorize_project_action(project_id, action.clone(), auth)
             .await?;
 
-        Ok(CloudComponentOwner {
+        Ok(ComponentOwner {
             account_id: namespace.account_id,
             project_id: namespace.project_id,
         })
@@ -604,7 +604,7 @@ impl ComponentOwnershipQuery for CloudComponentService {
     async fn get_project(
         &self,
         component_id: &ComponentId,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<Option<ProjectId>, String> {
         let component = self
             .get_latest_version(component_id, auth)

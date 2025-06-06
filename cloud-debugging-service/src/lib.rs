@@ -25,7 +25,6 @@ use axum::routing::any;
 use axum::Router;
 use golem_service_base::clients::auth::CloudAuthService;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_worker_executor::cloud::CloudGolemTypes;
 use golem_worker_executor::durable_host::DurableWorkerCtx;
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
@@ -52,7 +51,7 @@ use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{rdbms, resource_limits, All, HasConfig};
 use golem_worker_executor::wasi_host::create_linker;
-use golem_worker_executor::{Bootstrap, GolemTypes};
+use golem_worker_executor::Bootstrap;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
@@ -84,22 +83,20 @@ pub struct ServerBootstrap {
 }
 
 #[async_trait]
-impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
+impl Bootstrap<DebugContext> for ServerBootstrap {
     fn create_active_workers(
         &self,
         golem_config: &GolemConfig,
-    ) -> Arc<ActiveWorkers<DebugContext<CloudGolemTypes>>> {
-        Arc::new(ActiveWorkers::<DebugContext<CloudGolemTypes>>::new(
-            &golem_config.memory,
-        ))
+    ) -> Arc<ActiveWorkers<DebugContext>> {
+        Arc::new(ActiveWorkers::<DebugContext>::new(&golem_config.memory))
     }
 
     fn create_component_service(
         &self,
         golem_config: &GolemConfig,
-        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        blob_storage: Arc<dyn BlobStorage>,
         plugins: Arc<dyn PluginsObservations>,
-    ) -> Arc<dyn ComponentService<CloudGolemTypes>> {
+    ) -> Arc<dyn ComponentService> {
         golem_worker_executor::services::cloud::component::configured(
             &golem_config.component_service,
             &golem_config.project_service,
@@ -112,8 +109,8 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
 
     async fn run_grpc_server(
         &self,
-        service_dependencies: All<DebugContext<CloudGolemTypes>>,
-        _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext<CloudGolemTypes>>>,
+        service_dependencies: All<DebugContext>,
+        _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext>>,
         join_set: &mut JoinSet<Result<(), Error>>,
     ) -> anyhow::Result<u16> {
         run_debug_server(service_dependencies, join_set).await
@@ -122,10 +119,7 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
-    ) -> (
-        Arc<dyn Plugins<CloudGolemTypes>>,
-        Arc<dyn PluginsObservations>,
-    ) {
+    ) -> (Arc<dyn Plugins>, Arc<dyn PluginsObservations>) {
         let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(
             &golem_config.plugin_service,
         );
@@ -134,11 +128,11 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
 
     async fn create_services(
         &self,
-        active_workers: Arc<ActiveWorkers<DebugContext<CloudGolemTypes>>>,
+        active_workers: Arc<ActiveWorkers<DebugContext>>,
         engine: Arc<Engine>,
-        linker: Arc<Linker<DebugContext<CloudGolemTypes>>>,
+        linker: Arc<Linker<DebugContext>>,
         runtime: Handle,
-        component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
+        component_service: Arc<dyn ComponentService>,
         shard_manager_service: Arc<dyn ShardManagerService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -149,15 +143,15 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn rdbms::RdbmsService>,
-        worker_activator: Arc<dyn WorkerActivator<DebugContext<CloudGolemTypes>>>,
+        worker_activator: Arc<dyn WorkerActivator<DebugContext>>,
         oplog_service: Arc<dyn OplogService>,
         scheduler_service: Arc<dyn SchedulerService>,
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<CloudGolemTypes>>,
+        plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
-    ) -> anyhow::Result<All<DebugContext<CloudGolemTypes>>> {
+    ) -> anyhow::Result<All<DebugContext>> {
         let remote_cloud_service_config = self.debug_config.cloud_service.clone();
 
         let auth_service: Arc<dyn AuthService> = Arc::new(AuthServiceDefault::new(
@@ -274,23 +268,16 @@ impl Bootstrap<DebugContext<CloudGolemTypes>> for ServerBootstrap {
         ))
     }
 
-    fn create_wasmtime_linker(
-        &self,
-        engine: &Engine,
-    ) -> anyhow::Result<Linker<DebugContext<CloudGolemTypes>>> {
+    fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<DebugContext>> {
         create_debug_wasmtime_linker(engine)
     }
 }
 
-fn get_durable_ctx<T: GolemTypes>(
-    ctx: &mut DebugContext<T>,
-) -> &mut DurableWorkerCtx<DebugContext<T>> {
+fn get_durable_ctx(ctx: &mut DebugContext) -> &mut DurableWorkerCtx<DebugContext> {
     &mut ctx.durable_ctx
 }
 
-pub fn create_debug_wasmtime_linker<T: GolemTypes>(
-    engine: &Engine,
-) -> anyhow::Result<Linker<DebugContext<T>>> {
+pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<DebugContext>> {
     let mut linker = create_linker(engine, get_durable_ctx)?;
     golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
@@ -300,8 +287,8 @@ pub fn create_debug_wasmtime_linker<T: GolemTypes>(
     Ok(linker)
 }
 
-pub async fn run_debug_server<T: GolemTypes>(
-    service_dependencies: All<DebugContext<T>>,
+pub async fn run_debug_server(
+    service_dependencies: All<DebugContext>,
     join_set: &mut JoinSet<Result<(), Error>>,
 ) -> anyhow::Result<u16> {
     let debug_service = Arc::new(DebugServiceDefault::new(service_dependencies.clone()));

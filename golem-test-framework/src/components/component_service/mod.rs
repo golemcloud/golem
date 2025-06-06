@@ -766,17 +766,15 @@ pub trait ComponentService: ComponentServiceInternal {
                             );
 
                         client
-                            .create_plugin(
-                                &golem_client::model::PluginDefinitionCreationCloudPluginScope {
-                                    name: definition.name,
-                                    version: definition.version,
-                                    description: definition.description,
-                                    icon: definition.icon,
-                                    homepage: definition.homepage,
-                                    scope: definition.scope,
-                                    specs,
-                                },
-                            )
+                            .create_plugin(&golem_client::model::PluginDefinitionCreation {
+                                name: definition.name,
+                                version: definition.version,
+                                description: definition.description,
+                                icon: definition.icon,
+                                homepage: definition.homepage,
+                                scope: definition.scope,
+                                specs,
+                            })
                             .await
                     }
                     PluginTypeSpecificDefinition::OplogProcessor(def) => {
@@ -788,17 +786,15 @@ pub trait ComponentService: ComponentServiceInternal {
                         );
 
                         client
-                            .create_plugin(
-                                &golem_client::model::PluginDefinitionCreationCloudPluginScope {
-                                    name: definition.name,
-                                    version: definition.version,
-                                    description: definition.description,
-                                    icon: definition.icon,
-                                    homepage: definition.homepage,
-                                    scope: definition.scope,
-                                    specs,
-                                },
-                            )
+                            .create_plugin(&golem_client::model::PluginDefinitionCreation {
+                                name: definition.name,
+                                version: definition.version,
+                                description: definition.description,
+                                icon: definition.icon,
+                                homepage: definition.homepage,
+                                scope: definition.scope,
+                                specs,
+                            })
                             .await
                     }
                     golem_common::model::plugin::PluginTypeSpecificDefinition::Library(def) => {

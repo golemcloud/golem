@@ -4,7 +4,7 @@ use test_r::test;
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
-use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::auth::{ProjectAction, TokenSecret};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_service_base::clients::auth::{AuthServiceError, BaseAuthService};
@@ -73,7 +73,7 @@ impl TestAuthService {
 
 #[async_trait]
 impl BaseAuthService for TestAuthService {
-    async fn get_account(&self, ctx: &CloudAuthCtx) -> Result<AccountId, AuthServiceError> {
+    async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError> {
         Ok(AccountId::from(ctx.token_secret.value.to_string().as_str()))
     }
 
@@ -81,9 +81,9 @@ impl BaseAuthService for TestAuthService {
         &self,
         project_id: &ProjectId,
         _permission: ProjectAction,
-        ctx: &CloudAuthCtx,
-    ) -> Result<CloudNamespace, AuthServiceError> {
-        Ok(CloudNamespace::new(
+        ctx: &AuthCtx,
+    ) -> Result<Namespace, AuthServiceError> {
+        Ok(Namespace::new(
             project_id.clone(),
             AccountId::from(ctx.token_secret.value.to_string().as_str()),
         ))
@@ -96,9 +96,9 @@ impl AuthService for TestAuthService {
         &self,
         component_id: &ComponentId,
         _permission: ProjectAction,
-        ctx: &CloudAuthCtx,
-    ) -> Result<CloudNamespace, AuthServiceError> {
-        Ok(CloudNamespace::new(
+        ctx: &AuthCtx,
+    ) -> Result<Namespace, AuthServiceError> {
+        Ok(Namespace::new(
             ProjectId(component_id.0),
             AccountId::from(ctx.token_secret.value.to_string().as_str()),
         ))
@@ -199,7 +199,7 @@ pub async fn test_with_postgres_db() {
 }
 
 async fn test_certificate_service(certificate_service: Arc<dyn CertificateService + Sync + Send>) {
-    let auth_ctx = CloudAuthCtx::new(TokenSecret::new(Uuid::new_v4()));
+    let auth_ctx = AuthCtx::new(TokenSecret::new(Uuid::new_v4()));
 
     let project_id = "15d70aa5-2e23-4ee3-b65c-4e1d702836a3"
         .parse::<ProjectId>()
@@ -316,7 +316,7 @@ fn contains_certificates(result: Vec<Certificate>, expected: Vec<Certificate>) -
 }
 
 async fn test_domain_service(domain_service: Arc<dyn ApiDomainService + Sync + Send>) {
-    let auth_ctx = CloudAuthCtx::new(TokenSecret::new(Uuid::new_v4()));
+    let auth_ctx = AuthCtx::new(TokenSecret::new(Uuid::new_v4()));
 
     let project_id = "15d70aa5-2e23-4ee3-b65c-4e1d702836a3"
         .parse::<ProjectId>()

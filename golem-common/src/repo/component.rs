@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::plugin::CloudPluginOwnerRow;
-use crate::model::component::CloudComponentOwner;
+use super::plugin::PluginOwnerRow;
+use crate::model::component::ComponentOwner;
 use crate::model::{AccountId, ProjectId};
 use crate::repo::RowMeta;
 use sqlx::query_builder::Separated;
@@ -22,31 +22,31 @@ use std::fmt::Display;
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
-pub struct CloudComponentOwnerRow {
+pub struct ComponentOwnerRow {
     pub account_id: String,
     pub project_id: Uuid,
 }
 
-impl Display for CloudComponentOwnerRow {
+impl Display for ComponentOwnerRow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.account_id, self.project_id)
     }
 }
 
-impl From<CloudComponentOwner> for CloudComponentOwnerRow {
-    fn from(owner: CloudComponentOwner) -> Self {
-        CloudComponentOwnerRow {
+impl From<ComponentOwner> for ComponentOwnerRow {
+    fn from(owner: ComponentOwner) -> Self {
+        Self {
             account_id: owner.account_id.value,
             project_id: owner.project_id.0,
         }
     }
 }
 
-impl TryFrom<CloudComponentOwnerRow> for CloudComponentOwner {
+impl TryFrom<ComponentOwnerRow> for ComponentOwner {
     type Error = String;
 
-    fn try_from(value: CloudComponentOwnerRow) -> Result<Self, Self::Error> {
-        Ok(CloudComponentOwner {
+    fn try_from(value: ComponentOwnerRow) -> Result<Self, Self::Error> {
+        Ok(Self {
             account_id: AccountId {
                 value: value.account_id,
             },
@@ -55,7 +55,7 @@ impl TryFrom<CloudComponentOwnerRow> for CloudComponentOwner {
     }
 }
 
-impl<DB: Database> RowMeta<DB> for CloudComponentOwnerRow
+impl<DB: Database> RowMeta<DB> for ComponentOwnerRow
 where
     String: for<'q> Encode<'q, DB> + Type<DB>,
 {
@@ -78,9 +78,9 @@ where
     }
 }
 
-impl From<CloudComponentOwnerRow> for CloudPluginOwnerRow {
-    fn from(value: CloudComponentOwnerRow) -> Self {
-        CloudPluginOwnerRow {
+impl From<ComponentOwnerRow> for PluginOwnerRow {
+    fn from(value: ComponentOwnerRow) -> Self {
+        PluginOwnerRow {
             account_id: value.account_id,
         }
     }

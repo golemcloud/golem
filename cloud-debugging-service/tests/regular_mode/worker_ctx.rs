@@ -15,7 +15,6 @@ use golem_wasm_rpc::golem_rpc_0_2_x::types::{
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, WitValue};
 use golem_wasm_rpc::{Value, ValueAndType};
-use golem_worker_executor::cloud::CloudGolemTypes;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
@@ -64,20 +63,18 @@ pub struct TestWorkerCtx {
 
 #[async_trait]
 impl WorkerCtx for TestWorkerCtx {
-    type Types = CloudGolemTypes;
-
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
-        component_metadata: ComponentMetadata<CloudGolemTypes>,
+        component_metadata: ComponentMetadata,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
-        event_service: Arc<dyn WorkerEventService + Send + Sync>,
+        event_service: Arc<dyn WorkerEventService>,
         _active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
@@ -85,13 +82,13 @@ impl WorkerCtx for TestWorkerCtx {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
-        component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
+        component_service: Arc<dyn ComponentService>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<CloudGolemTypes>>,
+        plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
     ) -> Result<Self, GolemError> {
@@ -147,7 +144,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_worker_id()
     }
 
-    fn component_metadata(&self) -> &ComponentMetadata<CloudGolemTypes> {
+    fn component_metadata(&self) -> &ComponentMetadata {
         self.durable_ctx.component_metadata()
     }
 
@@ -163,7 +160,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.worker_proxy()
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService<CloudGolemTypes>> {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
         self.durable_ctx.component_service()
     }
 
@@ -339,7 +336,7 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
         engine: &Engine,
         linker: &mut Linker<TestWorkerCtx>,
         component: &Component,
-        component_metadata: &ComponentMetadata<CloudGolemTypes>,
+        component_metadata: &ComponentMetadata,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
