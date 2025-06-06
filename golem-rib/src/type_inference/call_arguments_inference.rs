@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{Expr, ExprVisitor, FunctionCallError};
+use crate::{ComponentDependency, Expr, ExprVisitor, FunctionCallError};
 
 // Resolving function arguments and return types based on function type registry
 // If the function call is a mere instance creation, then the return type i
 pub fn infer_function_call_types(
     expr: &mut Expr,
-    function_type_registry: &FunctionTypeRegistry,
+    component_dependency: &ComponentDependency,
 ) -> Result<(), FunctionCallError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
     while let Some(expr) = visitor.pop_back() {
@@ -35,7 +35,7 @@ pub fn infer_function_call_types(
             internal::resolve_call_argument_types(
                 &expr_copied,
                 call_type,
-                function_type_registry,
+                component_dependency,
                 args,
                 inferred_type,
             )?;
@@ -49,10 +49,7 @@ mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::inferred_type::TypeOrigin;
     use crate::type_inference::GetTypeHint;
-    use crate::{
-        ActualType, DynamicParsedFunctionName, ExpectedType, Expr, FunctionCallError,
-        FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeMismatchError,
-    };
+    use crate::{ActualType, DynamicParsedFunctionName, ExpectedType, Expr, FullyQualifiedResourceConstructor, FunctionCallError, FunctionName, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeMismatchError};
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
 
@@ -76,28 +73,9 @@ mod internal {
                 }
 
                 InstanceCreationType::Resource { resource_name, .. } => {
-                    let resource_constructor_with_prefix =
-                        format!["[constructor]{}", resource_name.resource_name];
-                    let interface =
-                        match (&resource_name.package_name, &resource_name.interface_name) {
-                            (Some(package_name), Some(interface_name)) => {
-                                Some(format!("{}/{}", package_name, interface_name))
-                            }
-                            (None, Some(interface_name)) => Some(interface_name.to_string()),
-                            _ => None,
-                        };
-
-                    let registry_key = match interface {
-                        None => RegistryKey::FunctionName(resource_constructor_with_prefix),
-                        Some(interface) => RegistryKey::FunctionNameWithInterface {
-                            interface_name: interface.to_string(),
-                            function_name: resource_constructor_with_prefix,
-                        },
-                    };
-
                     infer_resource_constructor_arguments(
                         original_expr,
-                        &registry_key,
+                        &resource_name,
                         Some(args),
                         function_type_registry,
                     )?;
@@ -228,7 +206,7 @@ mod internal {
 
     fn infer_resource_constructor_arguments(
         original_expr: &Expr,
-        resource_constructor_registry_key: &RegistryKey,
+        resource_constructor: &FullyQualifiedResourceConstructor,
         raw_resource_parameters: Option<&mut [Expr]>,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), FunctionCallError> {
@@ -238,14 +216,17 @@ mod internal {
             constructor_params = resource_params
         }
 
+        let function_name =
+            FunctionName::ResourceConstructor(resource_constructor.clone());
+
         // Infer the types of constructor parameter expressions
         infer_args_and_result_type(
             original_expr,
             &FunctionDetails::ResourceConstructorName {
-                resource_constructor_name: resource_constructor_registry_key.get_function_name(),
+                resource_constructor_name: resource_constructor.resource_name.clone(),
             },
             function_type_registry,
-            resource_constructor_registry_key,
+            &function_name,
             constructor_params,
             None,
         )
@@ -255,7 +236,7 @@ mod internal {
         original_expr: &Expr,
         function_name: &FunctionDetails,
         function_type_registry: &FunctionTypeRegistry,
-        key: &RegistryKey,
+        key: &FunctionName,
         args: &mut [Expr],
         function_result_inferred_type: Option<&mut InferredType>,
     ) -> Result<(), FunctionCallError> {

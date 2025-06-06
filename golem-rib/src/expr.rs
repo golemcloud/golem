@@ -1176,9 +1176,9 @@ impl Expr {
 
     pub fn infer_function_call_types(
         &mut self,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependency,
     ) -> Result<(), RibTypeError> {
-        type_inference::infer_function_call_types(self, function_type_registry)?;
+        type_inference::infer_function_call_types(self, component_dependency)?;
         Ok(())
     }
 
