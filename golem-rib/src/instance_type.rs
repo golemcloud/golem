@@ -19,15 +19,10 @@ use crate::{
     DynamicParsedFunctionReference, Expr, FunctionTypeRegistry, InferredType, ParsedFunctionSite,
     RegistryKey, RegistryValue,
 };
-use golem_api_grpc::proto::golem::rib::instance_type::Instance;
 use golem_api_grpc::proto::golem::rib::{
-    function_name_type, FullyQualifiedFunctionName as ProtoFullyQualifiedFunctionName,
     FullyQualifiedResourceConstructor as ProtoFullyQualifiedResourceConstructor,
-    FullyQualifiedResourceMethod as ProtoFullyQualifiedResourceMethod,
-    FunctionDictionary as ProtoFunctionDictionary, FunctionNameType as ProtoFunctionName,
-    FunctionType as ProtoFunctionType, InstanceType as ProtoInstanceType,
+    FunctionType as ProtoFunctionType,
     InterfaceName as ProtoInterfaceName, PackageName as ProtoPackageName,
-    ResourceMethodDictionary as ProtoResourceMethodDictionary,
 };
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeVariant};
 use std::collections::{BTreeMap, HashMap, HashSet};
