@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ComponentDependencies, FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue, RibCompilationError};
+use crate::{ComponentDependencies, FunctionName, FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue, RibCompilationError};
 use golem_wasm_ast::analysis::AnalysedType;
 
 // An easier data type that focus just on the side effecting function calls in Rib script.
@@ -30,30 +30,29 @@ pub struct WorkerFunctionsInRib {
 impl WorkerFunctionsInRib {
     pub fn from_inferred_expr(
         inferred_expr: &InferredExpr,
-        original_type_registry: &ComponentDependencies,
+        component_dependency: &ComponentDependencies,
     ) -> Result<Option<WorkerFunctionsInRib>, RibCompilationError> {
-        let worker_invoke_registry_keys = inferred_expr.worker_invoke_registry_keys();
-        let type_registry_subset =
-            original_type_registry.get_from_keys(worker_invoke_registry_keys);
+        let worker_invoke_registry_keys =
+            inferred_expr.worker_invoke_registry_keys();
+
         let mut function_calls = vec![];
 
-        for (key, value) in type_registry_subset.types {
-            if let RegistryValue::Function {
-                parameter_types,
+        for key in worker_invoke_registry_keys {
+
+            let function_type = component_dependency.get_function_type(&None, &key).map_err(
+                |e| RibCompilationError::RibStaticAnalysisError(e.to_string()),
+            )?;
+
+            let function_call_in_rib = WorkerFunctionType {
+                function_key: key.clone(),
+                parameter_types: function_type.parameter_types
+                    .iter()
+                    .map(|param| AnalysedType::try_from(param).unwrap())
+                    .collect(),
                 return_type,
-            } = value
-            {
-                let function_call_in_rib = WorkerFunctionType {
-                    function_key: key,
-                    parameter_types,
-                    return_type,
-                };
-                function_calls.push(function_call_in_rib)
-            } else {
-                return Err(RibCompilationError::RibStaticAnalysisError(
-                    "unable to inspect the worker function calls in rib. functional calls should have parameter types and return types".to_string(),
-                ));
-            }
+            };
+
+            function_calls.push(function_call_in_rib)
         }
 
         if function_calls.is_empty() {
@@ -67,7 +66,7 @@ impl WorkerFunctionsInRib {
 // The type of a function call with worker (ephmeral or durable) in Rib script
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerFunctionType {
-    pub function_key: RegistryKey,
+    pub function_key: FunctionName,
     pub parameter_types: Vec<AnalysedType>,
     pub return_type: Option<AnalysedType>,
 }

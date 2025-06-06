@@ -859,6 +859,7 @@ mod compiler_error_tests {
     }
 
     mod test_utils {
+        use uuid::Uuid;
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, handle, list, record, s32, str, tuple, u32, u64, variant,
         };
@@ -866,6 +867,7 @@ mod compiler_error_tests {
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, NameTypePair,
         };
+        use crate::{ComponentDependency, ComponentInfo};
 
         pub(crate) fn strip_spaces(input: &str) -> String {
             let lines = input.lines();
@@ -890,7 +892,7 @@ mod compiler_error_tests {
             result.strip_prefix("\n").unwrap_or(&result).to_string()
         }
 
-        pub(crate) fn get_metadata() -> Vec<AnalysedExport> {
+        pub(crate) fn get_metadata() -> Vec<ComponentDependency> {
             let function_export = AnalysedExport::Function(AnalysedFunction {
                 name: "foo".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
@@ -1061,7 +1063,15 @@ mod compiler_error_tests {
                 ],
             });
 
-            vec![function_export, resource_export]
+            let component_dependency = ComponentDependency {
+                component_info: ComponentInfo {
+                    component_name: "some_name".to_string(),
+                    component_id: Uuid::new_v4(),
+                    root_package_name: None,
+                    root_package_version: None,
+                },
+                exports: vec![function_export, resource_export],
+            };
         }
     }
 }
