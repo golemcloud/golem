@@ -151,7 +151,7 @@ fn override_type(expr: &mut Expr, type_spec: &GlobalVariableTypeSpec) {
 mod tests {
     use super::*;
     use crate::rib_source_span::SourceSpan;
-    use crate::{FunctionTypeRegistry, Id, TypeName};
+    use crate::{ComponentDependencies, FunctionTypeRegistry, Id, TypeName};
     use test_r::test;
 
     #[test]
@@ -221,7 +221,7 @@ mod tests {
             inferred_type: InferredType::string(),
         };
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec])
+        expr.infer_types(&ComponentDependencies::default(), &vec![type_spec])
             .unwrap();
 
         let expected = Expr::expr_block(vec![

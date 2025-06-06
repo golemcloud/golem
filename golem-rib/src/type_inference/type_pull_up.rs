@@ -466,7 +466,7 @@ mod type_pull_up_tests {
     use crate::function_name::DynamicParsedFunctionName;
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
-    use crate::{ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
+    use crate::{ArmPattern, ComponentDependencies, Expr, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
 
     #[test]
     pub fn test_pull_up_identifier() {
@@ -772,7 +772,7 @@ mod type_pull_up_tests {
         "#;
 
         let mut expr = Expr::from_text(rib).unwrap();
-        let function_registry = FunctionTypeRegistry::empty();
+        let function_registry = ComponentDependencies::default();
         expr.infer_types_initial_phase(&function_registry, &vec![])
             .unwrap();
         expr.infer_all_identifiers();

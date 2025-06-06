@@ -66,16 +66,12 @@ mod tests {
     use crate::type_checker::Path;
     use crate::type_inference::global_variable_type_binding::GlobalVariableTypeSpec;
     use crate::type_inference::tests::test_utils::{
-        call, concat, cond, equal_to, expr_block, get_analysed_exports, get_analysed_type_enum,
+        call, concat, cond, equal_to, expr_block, get_component_dependency, get_analysed_type_enum,
         get_analysed_type_variant, greater_than, greater_than_or_equal_to, identifier, less_than,
         less_than_or_equal_to, let_binding, number, option, pattern_match, plus, record, result,
         select_dynamic, select_field, sequence, tuple,
     };
-    use crate::{
-        ArmPattern, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr,
-        FunctionTypeRegistry, InferredExpr, InferredType, MatchArm, Number, ParsedFunctionSite,
-        TypeName, VariableId,
-    };
+    use crate::{ArmPattern, ComponentDependencies, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionTypeRegistry, InferredExpr, InferredType, MatchArm, Number, ParsedFunctionSite, TypeName, VariableId};
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
 
@@ -92,12 +88,12 @@ mod tests {
         let type_spec =
             GlobalVariableTypeSpec::new("foo", Path::from_elems(vec![]), InferredType::string());
 
-        let with_type_spec = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec]);
+        let with_type_spec = expr.infer_types(&ComponentDependencies::default(), &vec![type_spec]);
 
         assert!(with_type_spec.is_ok());
 
         let mut new_expr = Expr::from_text(rib_expr).unwrap();
-        let without_type_spec = new_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let without_type_spec = new_expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(without_type_spec.is_err())
     }
@@ -118,7 +114,7 @@ mod tests {
         );
 
         assert!(expr
-            .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec])
+            .infer_types(&ComponentDependencies::default(), &vec![type_spec])
             .is_ok());
     }
 
@@ -146,7 +142,7 @@ mod tests {
         ];
 
         assert!(expr
-            .infer_types(&FunctionTypeRegistry::empty(), &type_spec)
+            .infer_types(&ComponentDependencies::default(), &type_spec)
             .is_ok());
     }
 
@@ -166,7 +162,7 @@ mod tests {
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
         assert!(expr
-            .infer_types(&FunctionTypeRegistry::empty(), &vec![])
+            .infer_types(&ComponentDependencies::default(), &vec![])
             .is_ok());
     }
 
@@ -182,11 +178,11 @@ mod tests {
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
 
         assert!(expr
-            .infer_types(&FunctionTypeRegistry::empty(), &vec![])
+            .infer_types(&ComponentDependencies::default(), &vec![])
             .is_ok());
     }
 
@@ -202,11 +198,11 @@ mod tests {
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
 
         assert!(expr
-            .infer_types(&FunctionTypeRegistry::empty(), &vec![])
+            .infer_types(&ComponentDependencies::default(), &vec![])
             .is_ok());
     }
 
@@ -214,13 +210,13 @@ mod tests {
     fn test_inference_inline_type_annotation_0() {
         let mut old = Expr::from_text(r#"1u32"#).unwrap();
 
-        let result = old.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = old.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_ok());
 
         // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
         let mut new = Expr::from_text(r#"1: u32"#).unwrap();
-        let result = new.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = new.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_ok());
     }
@@ -229,13 +225,13 @@ mod tests {
     fn test_inference_inline_type_annotation_1() {
         let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz[0] + 1u32"#).unwrap();
 
-        let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = invalid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_ok());
 
         // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
         let mut valid_rib_expr = Expr::from_text(r#"foo.bar.baz[0]: u32 + 1u32"#).unwrap();
-        let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_ok());
     }
@@ -253,14 +249,14 @@ mod tests {
         let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz + 1u32"#).unwrap();
 
         let result =
-            invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+            invalid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![type_spec.clone()]);
 
         assert!(result.is_err());
 
         // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
         let mut valid_rib_expr = Expr::from_text(r#"foo.bar.baz: u32 + 1u32"#).unwrap();
         let result =
-            valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+            valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![type_spec.clone()]);
 
         assert!(result.is_ok());
     }
@@ -275,14 +271,14 @@ mod tests {
         let mut invalid_rib_expr = Expr::from_text(r#"foo + 1u32"#).unwrap();
 
         let result =
-            invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+            invalid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![type_spec.clone()]);
 
         assert!(result.is_err());
 
         // We inline the type of foo identifier with u32 (over-riding what's given in the type spec)
         let mut valid_rib_expr = Expr::from_text(r#"foo: u32 + 1u32"#).unwrap();
         let result =
-            valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+            valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![type_spec.clone()]);
 
         assert!(result.is_ok());
     }
@@ -292,7 +288,7 @@ mod tests {
         // Even if 1 is not specified with a specific number type, it should be inferred as u64
         let mut rib_expr = Expr::from_text(r#"some(1): option<u64>"#).unwrap();
 
-        let result = rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_ok());
     }
@@ -302,7 +298,7 @@ mod tests {
         // Even if 1 is not specified with a specific number type, it should be inferred as u64
         let mut rib_expr = Expr::from_text(r#"some(1): option<option<u64>>"#).unwrap();
 
-        let result = rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_err());
     }
@@ -310,7 +306,7 @@ mod tests {
     #[test]
     fn test_inference_inline_type_annotation_7() {
         let mut valid_rib_expr = Expr::from_text(r#"ok(1): result<u64, string>"#).unwrap();
-        let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_ok());
     }
@@ -318,7 +314,7 @@ mod tests {
     #[test]
     fn test_inference_inline_type_annotation_8() {
         let mut valid_rib_expr = Expr::from_text(r#"ok(1): result<u64>"#).unwrap();
-        let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_ok());
     }
@@ -326,7 +322,7 @@ mod tests {
     #[test]
     fn test_inference_inline_type_annotation_9() {
         let mut valid_rib_expr = Expr::from_text(r#"err(1): result<_, u64>"#).unwrap();
-        let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_ok());
     }
@@ -334,7 +330,7 @@ mod tests {
     #[test]
     fn test_inference_inline_type_annotation_10() {
         let mut valid_rib_expr = Expr::from_text(r#"err(1): result"#).unwrap();
-        let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_ok());
     }
@@ -342,7 +338,7 @@ mod tests {
     #[test]
     fn test_inference_inline_type_annotation_11() {
         let mut valid_rib_expr = Expr::from_text(r#"[1, 2]: list<u64>"#).unwrap();
-        let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_ok());
     }
@@ -351,7 +347,7 @@ mod tests {
     fn test_inference_standalone_literals_1() {
         let mut expr = Expr::from_text(r#"err(1)"#).unwrap();
 
-        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_ok());
     }
@@ -360,7 +356,7 @@ mod tests {
     fn test_inference_standalone_literals_2() {
         let mut expr = Expr::from_text(r#"ok(1)"#).unwrap();
 
-        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_ok());
     }
@@ -369,7 +365,7 @@ mod tests {
     fn test_inference_standalone_literals_3() {
         let mut expr = Expr::from_text(r#"[1, 2]"#).unwrap();
 
-        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(result.is_ok());
     }
@@ -377,7 +373,7 @@ mod tests {
     #[test]
     fn test_inference_standalone_literals_4() {
         let mut expr = Expr::from_text("{foo: {status: 200, b: \"hello\"}}").unwrap();
-        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let result = expr.infer_types(&ComponentDependencies::default(), &vec![]);
         assert!(result.is_ok());
     }
 
@@ -388,7 +384,7 @@ mod tests {
           foo(x)
         "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
@@ -436,7 +432,7 @@ mod tests {
           baz(y)
         "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
@@ -514,7 +510,7 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -547,7 +543,7 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -574,7 +570,7 @@ mod tests {
           x == y
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -640,7 +636,7 @@ mod tests {
 
         let output_enum_type = get_analysed_type_enum(vec!["success", "failure", "in-progress"]);
 
-        let component_metadata = get_analysed_exports(
+        let component_dependencies = get_component_dependency(
             "process",
             vec![
                 input_enum_type.clone(),
@@ -680,12 +676,10 @@ mod tests {
 
             "#;
 
-        let function_type_registry =
-            FunctionTypeRegistry::from_export_metadata(&component_metadata);
 
         let mut expr = Expr::from_text(expr).unwrap();
 
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        expr.infer_types(&component_dependencies, &vec![]).unwrap();
 
         let expected = test_utils::expected_expr_for_enum_test();
 
@@ -706,7 +700,7 @@ mod tests {
             ("failure", None),
         ]);
 
-        let component_metadata = get_analysed_exports(
+        let component_dependencies = get_component_dependency(
             "process",
             vec![
                 input_variant_type.clone(),
@@ -746,12 +740,10 @@ mod tests {
 
             "#;
 
-        let function_type_registry =
-            FunctionTypeRegistry::from_export_metadata(&component_metadata);
 
         let mut expr = Expr::from_text(expr).unwrap();
 
-        let result = expr.infer_types(&function_type_registry, &vec![]);
+        let result = expr.infer_types(&component_dependencies, &vec![]);
         assert!(result.is_ok());
     }
 
@@ -763,7 +755,7 @@ mod tests {
           "${x}${y}"
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -793,7 +785,7 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -818,7 +810,7 @@ mod tests {
           if x > y then res1 else res2
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -874,7 +866,7 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -904,7 +896,7 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -947,7 +939,7 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -1004,7 +996,7 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -1073,7 +1065,7 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -1126,7 +1118,7 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -1175,7 +1167,7 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
 
         let expected = expr_block(
@@ -1253,7 +1245,7 @@ mod tests {
                   2 => baz(y)
                 }"#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -1355,7 +1347,7 @@ mod tests {
               }
             "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
@@ -1376,7 +1368,7 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
 
         let expected = expr_block(
@@ -1475,7 +1467,7 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
 
         let expected = expr_block(
@@ -1555,7 +1547,7 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
 
         let expected = expr_block(
@@ -1641,7 +1633,7 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
 
         let expected = expr_block(
@@ -1797,7 +1789,7 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -1839,7 +1831,7 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -1894,7 +1886,7 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -1945,7 +1937,7 @@ mod tests {
           y
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -2042,7 +2034,7 @@ mod tests {
         let return_type = golem_wasm_ast::analysis::analysed_type::option(worker_response.typ);
 
         let component_metadata =
-            get_analysed_exports("foo", vec![request_type.clone()], return_type);
+            get_component_dependency("foo", vec![request_type.clone()], return_type);
 
         let expr_str = r#"
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
@@ -2052,10 +2044,8 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        let function_type_registry =
-            FunctionTypeRegistry::from_export_metadata(&component_metadata);
 
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        expr.infer_types(&component_metadata, &vec![]).unwrap();
 
         let expected = test_utils::expected_expr_for_select_index();
 
@@ -2075,7 +2065,7 @@ mod tests {
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let inferred_expr =
-            InferredExpr::from_expr(expr, &FunctionTypeRegistry::empty(), &vec![]).unwrap();
+            InferredExpr::from_expr(expr, &ComponentDependencies::default(), &vec![]).unwrap();
 
         let expected = expr_block(
             vec![
@@ -2151,7 +2141,7 @@ mod tests {
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let inferred_expr =
-            InferredExpr::from_expr(expr, &FunctionTypeRegistry::empty(), &vec![]).unwrap();
+            InferredExpr::from_expr(expr, &ComponentDependencies::default(), &vec![]).unwrap();
 
         let expected = expr_block(
             vec![
@@ -2196,7 +2186,7 @@ mod tests {
           { a : p, b: q }
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let function_type_registry = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();
 
@@ -2296,11 +2286,9 @@ mod tests {
         use crate::generic_type_parameter::GenericTypeParameter;
         use crate::parser::type_name::TypeName;
         use crate::rib_source_span::SourceSpan;
-        use crate::{
-            ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
-            Number, ParsedFunctionSite, VariableId,
-        };
+        use crate::{ArmPattern, ComponentDependencies, ComponentDependency, ComponentInfo, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier, Number, ParsedFunctionSite, VariableId};
         use bigdecimal::BigDecimal;
+        use uuid::Uuid;
         use golem_wasm_ast::analysis::analysed_type::u64;
         use golem_wasm_ast::analysis::TypeVariant;
         use golem_wasm_ast::analysis::{
@@ -2566,7 +2554,7 @@ mod tests {
             }
         }
 
-        pub(crate) fn get_function_type_registry() -> FunctionTypeRegistry {
+        pub(crate) fn get_component_dependencies() -> ComponentDependencies {
             let metadata = vec![
                 AnalysedExport::Function(AnalysedFunction {
                     name: "foo".to_string(),
@@ -2585,7 +2573,17 @@ mod tests {
                     result: None,
                 }),
             ];
-            FunctionTypeRegistry::from_export_metadata(&metadata)
+
+            let component_info = ComponentInfo {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            ComponentDependencies::from_raw(vec![(component_info, &metadata)])
+                .unwrap()
+
         }
 
         pub(crate) fn get_analysed_type_enum(cases: Vec<&str>) -> AnalysedType {
@@ -2631,11 +2629,11 @@ mod tests {
             )
         }
 
-        pub(crate) fn get_analysed_exports(
+        pub(crate) fn get_component_dependency(
             function_name: &str,
             input_types: Vec<AnalysedType>,
             output: AnalysedType,
-        ) -> Vec<AnalysedExport> {
+        ) -> ComponentDependencies {
             let analysed_function_parameters = input_types
                 .into_iter()
                 .enumerate()
@@ -2645,11 +2643,23 @@ mod tests {
                 })
                 .collect();
 
-            vec![AnalysedExport::Function(AnalysedFunction {
-                name: function_name.to_string(),
-                parameters: analysed_function_parameters,
-                result: Some(AnalysedFunctionResult { typ: output }),
-            })]
+            let component_info = ComponentInfo {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            ComponentDependencies::from_raw(
+                vec![(
+                    component_info,
+                    &vec![AnalysedExport::Function(AnalysedFunction {
+                        name: function_name.to_string(),
+                        parameters: analysed_function_parameters,
+                        result: Some(AnalysedFunctionResult { typ: output }),
+                    })],
+                )],
+            ).unwrap()
         }
 
         pub(crate) fn expected_expr_for_enum_test() -> Expr {

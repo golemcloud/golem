@@ -768,10 +768,11 @@ fn expected_analysed_type() -> AnalysedType {
 }
 
 mod component_metadata {
+    use uuid::Uuid;
     use crate::function_metadata;
-    use golem_wasm_ast::analysis::AnalysedExport;
+    use rib::{ComponentDependency, ComponentInfo};
 
-    pub(crate) fn component_metadata() -> Vec<AnalysedExport> {
+    pub(crate) fn component_metadata() -> Vec<ComponentDependency> {
         let mut exports = vec![];
         exports.extend(function_metadata::function_unit_response());
         exports.extend(function_metadata::function_no_arg());
@@ -827,7 +828,17 @@ mod component_metadata {
         exports.extend(function_metadata::function_record_response());
         exports.extend(function_metadata::function_all_inputs());
 
-        exports
+        let component_info = ComponentInfo {
+            component_name: "foo".to_string(),
+            component_id: Uuid::new_v4(),
+            root_package_name: None,
+            root_package_version: None,
+        };
+
+        vec![ComponentDependency {
+            component_info,
+            exports,
+        }]
     }
 }
 

@@ -1079,6 +1079,8 @@ mod compiler_error_tests {
                 },
                 exports: vec![function_export, resource_export],
             };
+
+            vec![component_dependency]
         }
     }
 }

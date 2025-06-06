@@ -14,8 +14,8 @@
 
 use crate::{ComponentDependencies, Expr, FunctionTypeRegistry};
 
-pub fn infer_enums(expr: &mut Expr, function_type_registry: &ComponentDependencies) {
-    let eum_info = internal::get_enum_info(expr, function_type_registry);
+pub fn infer_enums(expr: &mut Expr, component_dependencies: &ComponentDependencies) {
+    let eum_info = internal::get_enum_info(expr, component_dependencies);
 
     internal::convert_identifiers_to_enum_function_calls(expr, &eum_info);
 }

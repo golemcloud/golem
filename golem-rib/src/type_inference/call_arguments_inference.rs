@@ -460,16 +460,16 @@ mod internal {
 mod function_parameters_inference_tests {
     use bigdecimal::BigDecimal;
     use test_r::test;
-
+    use uuid::Uuid;
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::rib_source_span::SourceSpan;
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{Expr, InferredType, ParsedFunctionSite};
+    use crate::{ComponentDependencies, ComponentDependency, ComponentInfo, Expr, InferredType, ParsedFunctionSite};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
 
-    fn get_function_type_registry() -> FunctionTypeRegistry {
+    fn get_component_dependencies() -> ComponentDependencies {
         let metadata = vec![
             AnalysedExport::Function(AnalysedFunction {
                 name: "foo".to_string(),
@@ -488,7 +488,16 @@ mod function_parameters_inference_tests {
                 result: None,
             }),
         ];
-        FunctionTypeRegistry::from_export_metadata(&metadata)
+
+        let component_info = ComponentInfo {
+            component_name: "foo".to_string(),
+            component_id: Uuid::new_v4(),
+            root_package_name: None,
+            root_package_version: None,
+        };
+
+       ComponentDependencies::from_raw(vec![(component_info, metadata.as_ref())])
+            .expect("Failed to create component dependencies")
     }
 
     #[test]
@@ -498,7 +507,7 @@ mod function_parameters_inference_tests {
           foo(x)
         "#;
 
-        let function_type_registry = get_function_type_registry();
+        let function_type_registry = get_component_dependencies();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_function_call_types(&function_type_registry)

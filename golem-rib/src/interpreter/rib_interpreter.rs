@@ -1447,10 +1447,7 @@ mod tests {
         get_analysed_type_variant, get_metadata_with_enum_and_variant, get_value_and_type,
         strip_spaces,
     };
-    use crate::{
-        Expr, FunctionTypeRegistry, GlobalVariableTypeSpec, InferredType, InstructionId, Path,
-        RibCompiler, RibCompilerConfig, VariableId,
-    };
+    use crate::{ComponentDependencies, ComponentDependency, Expr, FunctionTypeRegistry, GlobalVariableTypeSpec, InferredType, InstructionId, Path, RibCompiler, RibCompilerConfig, VariableId};
     use golem_wasm_ast::analysis::analysed_type::{
         bool, case, f32, field, list, option, r#enum, record, result, s32, s8, str, tuple, u32,
         u64, u8, variant,
@@ -2350,7 +2347,7 @@ mod tests {
         "#;
 
         let mut expr = Expr::from_text(expr).unwrap();
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
         let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
@@ -2372,7 +2369,7 @@ mod tests {
         "#;
 
         let mut expr = Expr::from_text(expr).unwrap();
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
         let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
@@ -2395,7 +2392,7 @@ mod tests {
         "#;
 
         let mut expr = Expr::from_text(expr).unwrap();
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
 
         let compiler = RibCompiler::default();
@@ -4645,10 +4642,7 @@ mod tests {
 
     mod test_utils {
         use crate::interpreter::rib_interpreter::Interpreter;
-        use crate::{
-            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue, InstructionId,
-            RibFunctionInvoke, RibFunctionInvokeResult, RibInput,
-        };
+        use crate::{ComponentDependency, ComponentInfo, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue, InstructionId, RibFunctionInvoke, RibFunctionInvokeResult, RibInput};
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, handle, list, option, r#enum, record, result, s32, str, tuple, u32,
@@ -4660,6 +4654,7 @@ mod tests {
         };
         use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
+        use uuid::Uuid;
 
         pub(crate) fn strip_spaces(input: &str) -> String {
             let lines = input.lines();
@@ -4737,7 +4732,7 @@ mod tests {
             function_name: &str,
             input_types: Vec<AnalysedType>,
             output: Option<AnalysedType>,
-        ) -> Vec<AnalysedExport> {
+        ) -> Vec<ComponentDependency> {
             let analysed_function_parameters = input_types
                 .into_iter()
                 .enumerate()
@@ -4749,25 +4744,36 @@ mod tests {
 
             let result = output.map(|typ| AnalysedFunctionResult { typ });
 
-            vec![AnalysedExport::Function(AnalysedFunction {
-                name: function_name.to_string(),
-                parameters: analysed_function_parameters,
-                result,
-            })]
+            let component_info = ComponentInfo {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency {
+                component_info,
+                exports: vec![AnalysedExport::Function(AnalysedFunction {
+                    name: function_name.to_string(),
+                    parameters: analysed_function_parameters,
+                    result,
+                })],
+            }]
+
         }
 
-        pub(crate) fn get_metadata_with_resource_with_params() -> Vec<AnalysedExport> {
+        pub(crate) fn get_metadata_with_resource_with_params() -> Vec<ComponentDependency> {
             get_metadata_with_resource(vec![AnalysedFunctionParameter {
                 name: "user-id".to_string(),
                 typ: str(),
             }])
         }
 
-        pub(crate) fn get_metadata_with_resource_without_params() -> Vec<AnalysedExport> {
+        pub(crate) fn get_metadata_with_resource_without_params() -> Vec<ComponentDependency> {
             get_metadata_with_resource(vec![])
         }
 
-        pub(crate) fn get_metadata() -> Vec<AnalysedExport> {
+        pub(crate) fn get_metadata() -> Vec<ComponentDependency>{
             // Exist in only amazon:shopping-cart/api1
             let analysed_function_in_api1 = AnalysedFunction {
                 name: "foo".to_string(),
@@ -4846,12 +4852,22 @@ mod tests {
                 ],
             });
 
-            vec![analysed_export1, analysed_export2, analysed_export3]
+            let component_info = ComponentInfo {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency {
+                component_info,
+                exports:  vec![analysed_export1, analysed_export2, analysed_export3]
+            }]
         }
 
         fn get_metadata_with_resource(
             resource_constructor_params: Vec<AnalysedFunctionParameter>,
-        ) -> Vec<AnalysedExport> {
+        ) -> Vec<ComponentDependency> {
             let instance = AnalysedExport::Instance(AnalysedInstance {
                 name: "golem:it/api".to_string(),
                 functions: vec![
@@ -4966,7 +4982,17 @@ mod tests {
                 ],
             });
 
-            vec![instance]
+            let component_info = ComponentInfo {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency {
+                component_info,
+                exports: vec![instance],
+            }]
         }
 
         pub(crate) fn get_value_and_type(
@@ -5094,8 +5120,8 @@ mod tests {
             }
         }
 
-        pub(crate) fn get_metadata_with_enum_and_variant() -> Vec<AnalysedExport> {
-            vec![
+        pub(crate) fn get_metadata_with_enum_and_variant() -> Vec<ComponentDependency> {
+            let exports = vec![
                 AnalysedExport::Function(AnalysedFunction {
                     name: "add-u32".to_string(),
                     parameters: vec![
@@ -5156,7 +5182,19 @@ mod tests {
                         typ: get_analysed_type_variant(),
                     }),
                 }),
-            ]
+            ];
+
+            let component_info = ComponentInfo {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency {
+                component_info,
+                exports
+            }]
         }
 
         struct TestInvoke3;
