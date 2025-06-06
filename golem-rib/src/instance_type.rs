@@ -244,7 +244,7 @@ impl InstanceType {
                                 function_type: ftype.clone(),
                             }))
                         } else {
-                            search_function_in_instance(self, method_name)
+                            search_function_in_instance(self, method_name, Some(info))
                         }
                     } else {
                         Err(format!(
@@ -284,7 +284,7 @@ impl InstanceType {
                                 function_type: ftype.clone(),
                             }))
                         } else {
-                            search_function_in_instance(self, method_name)
+                            search_function_in_instance(self, method_name, Some(info))
                         }
                     } else {
                         Err(format!(
@@ -326,7 +326,7 @@ impl InstanceType {
                                 function_type: ftype.clone(),
                             }))
                         } else {
-                            search_function_in_instance(self, method_name)
+                            search_function_in_instance(self, method_name, Some(info))
                         }
                     } else {
                         Err(format!(
@@ -336,17 +336,24 @@ impl InstanceType {
                     }
                 }
             },
-            None => search_function_in_instance(self, method_name),
+            None => search_function_in_instance(self, method_name, None),
         }
     }
 
+    // A flattened list of all resource methods
     pub fn resource_method_dictionary(&self) -> FunctionDictionary {
-        let name_and_types = self
-            .function_dict()
-            .name_and_types
-            .into_iter()
-            .filter(|(f, _)| matches!(f, FunctionName::ResourceMethod(_)))
-            .collect::<Vec<_>>();
+        let name_and_types = self.component_dependency()
+            .dependencies
+            .values().flat_map(
+                |function_dictionary| {
+                    function_dictionary
+                        .name_and_types
+                        .iter()
+                        .filter(|(f, _)| matches!(f, FunctionName::ResourceMethod(_)))
+                        .map(|(f, t)| (f.clone(), t.clone()))
+                        .collect::<Vec<_>>()
+                }
+            ).collect();
 
         FunctionDictionary { name_and_types }
     }
@@ -951,7 +958,7 @@ impl FunctionType {
     }
 
     pub fn as_type_enum(&self) -> Option<TypeEnum> {
-        let analysed_type = AnalysedType::try_from(&self.return_type.clone()?).ok();
+        let analysed_type = AnalysedType::try_from(&self.return_type.clone()?).ok()?;
         match analysed_type {
             AnalysedType::Enum(type_enum) => Some(type_enum),
             _ => None,

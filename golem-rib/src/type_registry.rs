@@ -319,6 +319,24 @@ pub struct ComponentInfo {
 }
 
 
+impl Display for ComponentInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Component: {}, ID: {}, Root Package: {}@{}",
+            self.component_name,
+            self.component_id,
+            self.root_package_name
+                .as_deref()
+                .unwrap_or("unknown"),
+            self.root_package_version
+                .as_deref()
+                .unwrap_or("unknown")
+        )
+    }
+}
+
+
 // A type-registry is a mapping from a function/variant/enum to the `arguments` and `return types` of that function/variant/enum.
 // The structure is raw and closer to the original component metadata.
 // FunctionTypeRegistry act as a set of all dependencies in Rib.
