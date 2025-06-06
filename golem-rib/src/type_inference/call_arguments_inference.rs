@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{ComponentDependency, Expr, ExprVisitor, FunctionCallError};
+use crate::{ComponentDependencies, Expr, ExprVisitor, FunctionCallError};
 
 // Resolving function arguments and return types based on function type registry
 // If the function call is a mere instance creation, then the return type
@@ -22,7 +22,7 @@ use crate::{ComponentDependency, Expr, ExprVisitor, FunctionCallError};
 // and asking the user to specify the type parameter that may help with drilling down the component explicitly.
 pub fn infer_function_call_types(
     expr: &mut Expr,
-    component_dependency: &ComponentDependency,
+    component_dependency: &ComponentDependencies,
 ) -> Result<(), FunctionCallError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
     while let Some(expr) = visitor.pop_back() {
@@ -53,7 +53,7 @@ mod internal {
     use crate::inferred_type::TypeOrigin;
     use crate::type_inference::GetTypeHint;
     use crate::{
-        ActualType, ComponentDependency, DynamicParsedFunctionName, ExpectedType, Expr,
+        ActualType, ComponentDependencies, DynamicParsedFunctionName, ExpectedType, Expr,
         FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod, FunctionCallError,
         FunctionName, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
         TypeMismatchError,
@@ -64,7 +64,7 @@ mod internal {
     pub(crate) fn resolve_call_argument_types(
         original_expr: &Expr,
         call_type: &mut CallType,
-        component_dependency: &ComponentDependency,
+        component_dependency: &ComponentDependencies,
         args: &mut [Expr],
         function_result_inferred_type: &mut InferredType,
     ) -> Result<(), FunctionCallError> {
@@ -158,7 +158,7 @@ mod internal {
         original_expr: &Expr,
         fqn_resource_method: &FullyQualifiedResourceMethod,
         dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
-        function_type_registry: &ComponentDependency,
+        function_type_registry: &ComponentDependencies,
         function_result_inferred_type: &mut InferredType,
         resource_method_args: &mut [Expr],
     ) -> Result<(), FunctionCallError> {
@@ -186,7 +186,7 @@ mod internal {
         original_expr: &Expr,
         fqn_resource_method: &FullyQualifiedResourceMethod,
         dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
-        function_type_registry: &ComponentDependency,
+        function_type_registry: &ComponentDependencies,
         resource_method_args: &mut [Expr],
         function_result_inferred_type: &mut InferredType,
     ) -> Result<(), FunctionCallError> {
@@ -215,7 +215,7 @@ mod internal {
         original_expr: &Expr,
         resource_constructor: &FullyQualifiedResourceConstructor,
         raw_resource_parameters: Option<&mut [Expr]>,
-        function_type_registry: &ComponentDependency,
+        function_type_registry: &ComponentDependencies,
     ) -> Result<(), FunctionCallError> {
         let mut constructor_params: &mut [Expr] = &mut [];
 
@@ -241,7 +241,7 @@ mod internal {
     fn infer_args_and_result_type(
         original_expr: &Expr,
         function_name: &FunctionDetails,
-        component_dependency: &ComponentDependency,
+        component_dependency: &ComponentDependencies,
         key: &FunctionName,
         args: &mut [Expr],
         function_result_inferred_type: Option<&mut InferredType>,

@@ -21,7 +21,7 @@ use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
-    from_string, text, type_checker, type_inference, ComponentDependency,
+    from_string, text, type_checker, type_inference, ComponentDependencies,
     DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType,
     ParsedFunctionName, VariableId,
 };
@@ -1075,7 +1075,7 @@ impl Expr {
 
     pub fn infer_types(
         &mut self,
-        component_dependency: &ComponentDependency,
+        component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibTypeError> {
         self.infer_types_initial_phase(component_dependency, type_spec)?;
@@ -1094,7 +1094,7 @@ impl Expr {
 
     pub fn infer_types_initial_phase(
         &mut self,
-        component_dependency: &ComponentDependency,
+        component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibTypeError> {
         self.set_origin();
@@ -1173,14 +1173,14 @@ impl Expr {
 
     pub fn identify_instance_creation(
         &mut self,
-        component_dependency: &ComponentDependency,
+        component_dependency: &ComponentDependencies,
     ) -> Result<(), RibTypeError> {
         type_inference::identify_instance_creation(self, component_dependency)
     }
 
     pub fn infer_function_call_types(
         &mut self,
-        component_dependency: &ComponentDependency,
+        component_dependency: &ComponentDependencies,
     ) -> Result<(), RibTypeError> {
         type_inference::infer_function_call_types(self, component_dependency)?;
         Ok(())
@@ -1208,7 +1208,7 @@ impl Expr {
 
     pub fn check_types(
         &mut self,
-        component_dependency: &ComponentDependency,
+        component_dependency: &ComponentDependencies,
     ) -> Result<(), RibTypeError> {
         type_checker::type_check(self, component_dependency)
     }
@@ -1678,11 +1678,11 @@ impl Expr {
         }
     }
 
-    pub fn infer_enums(&mut self, component_dependency: &ComponentDependency) {
+    pub fn infer_enums(&mut self, component_dependency: &ComponentDependencies) {
         type_inference::infer_enums(self, component_dependency);
     }
 
-    pub fn infer_variants(&mut self, component_dependency: &ComponentDependency) {
+    pub fn infer_variants(&mut self, component_dependency: &ComponentDependencies) {
         type_inference::infer_variants(self, component_dependency);
     }
 

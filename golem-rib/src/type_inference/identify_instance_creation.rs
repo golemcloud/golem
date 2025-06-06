@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::rib_type_error::RibTypeError;
-use crate::{ComponentDependency, Expr, FunctionTypeRegistry};
+use crate::{ComponentDependencies, Expr, FunctionTypeRegistry};
 
 // Handling the following and making sure the types are inferred fully at this stage.
 // The expr `Call` will still be expr `Call` itself but CallType will be worker instance creation
@@ -24,7 +24,7 @@ use crate::{ComponentDependency, Expr, FunctionTypeRegistry};
 // instance[foo]("worker-name")
 pub fn identify_instance_creation(
     expr: &mut Expr,
-    function_type_registry: &ComponentDependency,
+    function_type_registry: &ComponentDependencies,
 ) -> Result<(), RibTypeError> {
     internal::search_for_invalid_instance_declarations(expr)?;
     internal::identify_instance_creation_with_worker(expr, function_type_registry)
@@ -37,7 +37,7 @@ mod internal {
     use crate::type_parameter::TypeParameter;
     use crate::type_registry::FunctionTypeRegistry;
     use crate::{
-        ComponentDependency, CustomError, Expr, ExprVisitor, FunctionCallError, InferredType,
+        ComponentDependencies, CustomError, Expr, ExprVisitor, FunctionCallError, InferredType,
         ParsedFunctionReference, TypeInternal, TypeOrigin,
     };
 
@@ -86,7 +86,7 @@ mod internal {
     // this has to go in first to disambiguate global variables with instance creations
     pub(crate) fn identify_instance_creation_with_worker(
         expr: &mut Expr,
-        component_dependency: &ComponentDependency,
+        component_dependency: &ComponentDependencies,
     ) -> Result<(), RibTypeError> {
         let mut visitor = ExprVisitor::bottom_up(expr);
 
@@ -157,7 +157,7 @@ mod internal {
         call_type: &CallType,
         type_parameter: Option<TypeParameter>,
         args: &[Expr],
-        component_dependency: &ComponentDependency,
+        component_dependency: &ComponentDependencies,
     ) -> Result<Option<InstanceCreationType>, RibTypeError> {
         match call_type {
             CallType::Function { function_name, .. } => {

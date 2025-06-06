@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ArmPattern, ComponentDependency, Expr, ExprVisitor, FunctionTypeRegistry};
+use crate::{ArmPattern, ComponentDependencies, Expr, ExprVisitor, FunctionTypeRegistry};
 
 // When checking exhaustive pattern match, there is no need to ensure
 // if the pattern aligns with conditions because those checks are done
@@ -20,7 +20,7 @@ use crate::{ArmPattern, ComponentDependency, Expr, ExprVisitor, FunctionTypeRegi
 // is whether the arms in the pattern match is exhaustive.
 pub fn check_exhaustive_pattern_match(
     expr: &mut Expr,
-    component_dependency: &ComponentDependency,
+    component_dependency: &ComponentDependencies,
 ) -> Result<(), ExhaustivePatternMatchError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
@@ -52,7 +52,7 @@ pub enum ExhaustivePatternMatchError {
 
 mod internal {
     use crate::type_checker::exhaustive_pattern_match::ExhaustivePatternMatchError;
-    use crate::{ArmPattern, ComponentDependency, Expr, FunctionTypeRegistry};
+    use crate::{ArmPattern, ComponentDependencies, Expr, FunctionTypeRegistry};
     use golem_wasm_ast::analysis::TypeVariant;
     use std::collections::HashMap;
 
@@ -61,7 +61,7 @@ mod internal {
     pub(crate) fn check_exhaustive_pattern_match(
         predicate: &Expr,
         arms: &[ArmPattern],
-        component_dependency: &ComponentDependency,
+        component_dependency: &ComponentDependencies,
     ) -> Result<(), ExhaustivePatternMatchError> {
         let mut exhaustive_check_result =
             check_exhaustive(predicate, arms, ConstructorDetail::option());

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ComponentDependency, Expr, FunctionTypeRegistry};
+use crate::{ComponentDependencies, Expr, FunctionTypeRegistry};
 
-pub fn infer_variants(expr: &mut Expr, component_dependency: &ComponentDependency) {
+pub fn infer_variants(expr: &mut Expr, component_dependency: &ComponentDependencies) {
     let variants = internal::get_variants_info(expr, component_dependency);
 
     internal::convert_identifiers_to_no_arg_variant_calls(expr, &variants);
@@ -26,7 +26,7 @@ pub fn infer_variants(expr: &mut Expr, component_dependency: &ComponentDependenc
 mod internal {
     use crate::call_type::CallType;
     use crate::{
-        ComponentDependency, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
+        ComponentDependencies, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::collections::VecDeque;
@@ -93,7 +93,7 @@ mod internal {
 
     pub(crate) fn get_variants_info(
         expr: &mut Expr,
-        component_dependency: &ComponentDependency,
+        component_dependency: &ComponentDependencies,
     ) -> VariantInfo {
         let mut no_arg_variants = vec![];
         let mut variant_with_args = vec![];
@@ -134,7 +134,7 @@ mod internal {
                         .iter()
                         .find_map(|x| x.get_variant_info(function_name.to_string().as_str()));
 
-                    if let Some(RegistryValue::Variant { variant_type, .. }) = result {
+                    if let Some(variant_type) = result {
                         let variant_inferred_type = InferredType::from_type_variant(&variant_type);
                         *inferred_type = inferred_type.merge(variant_inferred_type);
 

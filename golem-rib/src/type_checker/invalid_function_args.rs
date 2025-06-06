@@ -14,7 +14,7 @@
 
 use crate::call_type::CallType;
 use crate::type_checker::missing_fields::find_missing_fields_in_record;
-use crate::{type_checker, ComponentDependency, FunctionName};
+use crate::{type_checker, ComponentDependencies, FunctionName};
 use crate::{Expr, ExprVisitor, FunctionCallError, FunctionTypeRegistry, RegistryKey};
 use golem_wasm_ast::analysis::AnalysedType;
 
@@ -25,7 +25,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 #[allow(clippy::result_large_err)]
 pub fn check_invalid_function_args(
     expr: &mut Expr,
-    component_dependency: &ComponentDependency,
+    component_dependency: &ComponentDependencies,
 ) -> Result<(), FunctionCallError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
@@ -48,7 +48,7 @@ pub fn check_invalid_function_args(
 fn get_missing_record_keys(
     call_type: &CallType,
     args: &[Expr],
-    component_dependency: &ComponentDependency,
+    component_dependency: &ComponentDependencies,
     function_call_expr: &Expr,
 ) -> Result<(), FunctionCallError> {
     let function_name =

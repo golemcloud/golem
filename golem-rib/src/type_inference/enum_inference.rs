@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ComponentDependency, Expr, FunctionTypeRegistry};
+use crate::{ComponentDependencies, Expr, FunctionTypeRegistry};
 
-pub fn infer_enums(expr: &mut Expr, function_type_registry: &ComponentDependency) {
+pub fn infer_enums(expr: &mut Expr, function_type_registry: &ComponentDependencies) {
     let eum_info = internal::get_enum_info(expr, function_type_registry);
 
     internal::convert_identifiers_to_enum_function_calls(expr, &eum_info);
@@ -23,7 +23,7 @@ pub fn infer_enums(expr: &mut Expr, function_type_registry: &ComponentDependency
 mod internal {
     use crate::call_type::CallType;
     use crate::{
-        ComponentDependency, Expr, ExprVisitor, FunctionTypeRegistry, RegistryKey, RegistryValue,
+        ComponentDependencies, Expr, ExprVisitor, FunctionTypeRegistry, RegistryKey, RegistryValue,
     };
     use golem_wasm_ast::analysis::AnalysedType;
 
@@ -59,7 +59,7 @@ mod internal {
 
     pub(crate) fn get_enum_info(
         expr: &mut Expr,
-        component_dependency: &ComponentDependency,
+        component_dependency: &ComponentDependencies,
     ) -> EnumInfo {
         let mut enum_cases = vec![];
         let mut visitor = ExprVisitor::bottom_up(expr);
@@ -79,7 +79,7 @@ mod internal {
                         .iter()
                         .find_map(|x| x.get_enum_info(variable_id.name().as_str()));
 
-                    if let Some(RegistryValue::Value(AnalysedType::Enum(typed_enum))) = result {
+                    if let Some(typed_enum) = result {
                         enum_cases.push(variable_id.name());
                         *inferred_type =
                             inferred_type.merge((&AnalysedType::Enum(typed_enum.clone())).into());

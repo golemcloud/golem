@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue, RibCompilationError};
+use crate::{ComponentDependencies, FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue, RibCompilationError};
 use golem_wasm_ast::analysis::AnalysedType;
 
 // An easier data type that focus just on the side effecting function calls in Rib script.
@@ -30,7 +30,7 @@ pub struct WorkerFunctionsInRib {
 impl WorkerFunctionsInRib {
     pub fn from_inferred_expr(
         inferred_expr: &InferredExpr,
-        original_type_registry: &FunctionTypeRegistry,
+        original_type_registry: &ComponentDependencies,
     ) -> Result<Option<WorkerFunctionsInRib>, RibCompilationError> {
         let worker_invoke_registry_keys = inferred_expr.worker_invoke_registry_keys();
         let type_registry_subset =

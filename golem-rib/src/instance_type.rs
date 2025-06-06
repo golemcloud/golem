@@ -15,7 +15,7 @@
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
 use crate::{
-    CallType, ComponentDependency, ComponentInfo, DynamicParsedFunctionName,
+    CallType, ComponentDependencies, ComponentInfo, DynamicParsedFunctionName,
     DynamicParsedFunctionReference, Expr, FunctionTypeRegistry, InferredType, ParsedFunctionSite,
     RegistryKey, RegistryValue, TypeInternal,
 };
@@ -27,7 +27,7 @@ use golem_api_grpc::proto::golem::rib::{
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeVariant};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
-use std::fmt::{Debug, Display};
+use std::fmt::{write, Debug, Display, Formatter};
 use std::ops::Deref;
 // InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
 // This will be more or less a propagation of the original component metadata (structured as FunctionTypeRegistry),
@@ -42,21 +42,21 @@ pub enum InstanceType {
     // Holds functions across every package and interface in every components
     Global {
         worker_name: Option<Box<Expr>>,
-        component_dependency: ComponentDependency,
+        component_dependency: ComponentDependencies,
     },
 
     // A component can refer to a Package x, which can exist in other components
     Package {
         worker_name: Option<Box<Expr>>,
         package_name: PackageName,
-        component_dependency: ComponentDependency,
+        component_dependency: ComponentDependencies,
     },
 
     // Holds all functions across (may be across packages or components) for a specific interface
     Interface {
         worker_name: Option<Box<Expr>>,
         interface_name: InterfaceName,
-        component_dependency: ComponentDependency,
+        component_dependency: ComponentDependencies,
     },
 
     // Most granular level, holds functions for a specific package and interface
@@ -65,7 +65,7 @@ pub enum InstanceType {
         worker_name: Option<Box<Expr>>,
         package_name: PackageName,
         interface_name: InterfaceName,
-        component_dependency: ComponentDependency,
+        component_dependency: ComponentDependencies,
     },
 
     // Holds the resource creation and the functions in the resource
@@ -382,7 +382,7 @@ impl InstanceType {
         FunctionDictionary { name_and_types }
     }
 
-    pub fn component_dependency(&self) -> &ComponentDependency {
+    pub fn component_dependency(&self) -> &ComponentDependencies {
         match self {
             InstanceType::Global {
                 component_dependency,
@@ -408,7 +408,7 @@ impl InstanceType {
     }
 
     pub fn from(
-        dependency: &ComponentDependency,
+        dependency: &ComponentDependencies,
         worker_name: Option<&Expr>,
         type_parameter: Option<TypeParameter>,
     ) -> Result<InstanceType, String> {
@@ -517,7 +517,7 @@ pub struct ResourceMethodDictionary {
     pub map: BTreeMap<ComponentInfo, Vec<(FullyQualifiedResourceMethod, FunctionType)>>,
 }
 
-impl From<&ResourceMethodDictionary> for ComponentDependency {
+impl From<&ResourceMethodDictionary> for ComponentDependencies {
     fn from(value: &ResourceMethodDictionary) -> Self {
         let mut dict = BTreeMap::new();
 
@@ -532,7 +532,7 @@ impl From<&ResourceMethodDictionary> for ComponentDependency {
             dict.insert(info, function_dictionary);
         }
 
-        ComponentDependency { dependencies: dict }
+        ComponentDependencies { dependencies: dict }
     }
 }
 
@@ -716,6 +716,12 @@ pub enum FunctionName {
     ResourceMethod(FullyQualifiedResourceMethod),
 }
 
+impl Display for FunctionName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
 impl FunctionName {
     pub fn from_dynamic_parsed_function_name(
         function_name: &DynamicParsedFunctionName,
@@ -744,7 +750,7 @@ impl FunctionName {
                 }),
                 Some(InterfaceName {
                     name: interface.clone(),
-                    version: version.as_ref().map(|v| v.to_string()),
+                    version: version.as_ref().map(|v| v.0.to_string()),
                 }),
             ),
         };

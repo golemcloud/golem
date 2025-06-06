@@ -23,12 +23,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{format, Display, Formatter};
 use uuid::Uuid;
 
-#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
-pub struct ComponentDependency {
+#[derive(Debug, Default, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
+pub struct ComponentDependencies {
     pub dependencies: BTreeMap<ComponentInfo, FunctionDictionary>,
 }
 
-impl ComponentDependency {
+impl ComponentDependencies {
     pub fn size(&self) -> usize {
         self.dependencies.len()
     }
@@ -134,7 +134,7 @@ impl ComponentDependency {
     pub fn filter_by_interface(
         &self,
         interface_name: &InterfaceName,
-    ) -> Result<ComponentDependency, String> {
+    ) -> Result<ComponentDependencies, String> {
         let mut tree = BTreeMap::new();
 
         for (component_info, function_dict) in self.dependencies {
@@ -153,13 +153,13 @@ impl ComponentDependency {
             return Err(format!("interface `{}` not found", interface_name));
         }
 
-        Ok(ComponentDependency { dependencies: tree })
+        Ok(ComponentDependencies { dependencies: tree })
     }
 
     pub fn filter_by_package_name(
         &self,
         package_name: &PackageName,
-    ) -> Result<ComponentDependency, String> {
+    ) -> Result<ComponentDependencies, String> {
         // If the package name corresponds to the root package name we pick that up
         let mut tree = BTreeMap::new();
 
@@ -192,7 +192,7 @@ impl ComponentDependency {
             return Err(format!("package `{}` not found", package_name));
         }
 
-        Ok(ComponentDependency { dependencies: tree })
+        Ok(ComponentDependencies { dependencies: tree })
     }
 
     pub fn filter_by_fully_qualified_interface(
@@ -233,7 +233,7 @@ impl ComponentDependency {
             return Err(format!("fully qualified interface `{}` not found", fqi));
         }
 
-        Ok(ComponentDependency { dependencies: tree })
+        Ok(ComponentDependencies { dependencies: tree })
     }
 
     // type-parameter can be None.
@@ -304,7 +304,7 @@ impl ComponentDependency {
             dependencies.insert(component_info, function_dictionary);
         }
 
-        Ok(ComponentDependency { dependencies })
+        Ok(ComponentDependencies { dependencies })
     }
 }
 
