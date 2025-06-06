@@ -459,6 +459,8 @@ pub struct Function {
 }
 
 // Global Function Dictionary across Components,
+// In a FunctionDictionary, unlike registry, the function names becomes more biased
+// to Rib
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd, Default)]
 pub struct FunctionDictionary {
     pub name_and_types: Vec<(FunctionName, FunctionType)>,
@@ -495,7 +497,8 @@ impl FunctionDictionary {
         self.name_and_types.iter().find_map(|(f, ftype)| match f {
             FunctionName::Variant(name) => {
                 if name == identifier_name {
-                    ftype.as_type_variant()
+                    let result = ftype.as_type_variant();
+                    result
                 } else {
                     None
                 }
@@ -620,6 +623,7 @@ impl FunctionDictionary {
                     AnalysedType::Enum(type_enum) => match key {
                         RegistryKey::FunctionName(name) => {
                             let function_name = FunctionName::Enum(name.to_string());
+
                             map.push((
                                 function_name,
                                 FunctionType {
@@ -630,6 +634,34 @@ impl FunctionDictionary {
                         }
                         RegistryKey::FunctionNameWithInterface { .. } => {}
                     },
+                    AnalysedType::Variant(variant_type) => match key {
+                        RegistryKey::FunctionName(name) => {
+                            let function_name = FunctionName::Variant(name.to_string());
+
+                            let cases = variant_type
+                                .cases
+                                .iter()
+                                .map(|x| {
+                                    (
+                                        x.name.clone(),
+                                        x.typ.as_ref().map(|x| InferredType::from(x)),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+
+                            map.push((
+                                function_name,
+                                FunctionType {
+                                    parameter_types: vec![],
+                                    return_type: Some(InferredType::variant(
+                                       cases
+                                    )),
+                                },
+                            ));
+                        }
+                        RegistryKey::FunctionNameWithInterface { .. } => {}
+                    },
+
                     _ => {}
                 },
             };
