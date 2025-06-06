@@ -61,20 +61,21 @@ impl ComponentDependencies {
         // If function name is unique across all components, we are not in need of a component_info per se
         // and we can return the exact component dependency
 
+        dbg!(&self.dependencies);
+
         match component_info {
             None => {
                 let mut function_types_in_component = vec![];
 
                 for (component_info, function_dict) in &self.dependencies {
-                    function_dict
+                    let types = function_dict
                         .name_and_types
                         .iter()
-                        .for_each(|(f_name, function_type)| {
-                            if f_name == f_name {
-                                function_types_in_component
-                                    .push((component_info, function_type.clone()));
-                            }
-                        });
+                        .filter_map(|(f_name, function_type)| {
+                            if (f_name == function_name) { Some(function_type) } else { None }
+                        }).collect::<Vec<_>>();
+
+                    function_types_in_component.push((component_info.clone(), types));
                 }
 
                 if function_types_in_component.is_empty() {
@@ -89,7 +90,7 @@ impl ComponentDependencies {
                             function_name
                         ))
                     } else {
-                        Ok(function_types_in_component[0].1.clone())
+                        Ok(function_types_in_component[0].1[0].clone())
                     }
                 }
             }
