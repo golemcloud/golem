@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use cloud_debugging_service::auth::AuthService;
 use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_service_base::clients::auth::{AuthServiceError, BaseAuthService};
 
@@ -10,7 +10,7 @@ pub struct TestAuthService;
 
 #[async_trait]
 impl BaseAuthService for TestAuthService {
-    async fn get_account(&self, ctx: &CloudAuthCtx) -> Result<AccountId, AuthServiceError> {
+    async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError> {
         Ok(AccountId::from(ctx.token_secret.value.to_string().as_str()))
     }
 
@@ -18,9 +18,9 @@ impl BaseAuthService for TestAuthService {
         &self,
         project_id: &ProjectId,
         _permission: ProjectAction,
-        ctx: &CloudAuthCtx,
-    ) -> Result<CloudNamespace, AuthServiceError> {
-        Ok(CloudNamespace::new(
+        ctx: &AuthCtx,
+    ) -> Result<Namespace, AuthServiceError> {
+        Ok(Namespace::new(
             project_id.clone(),
             AccountId::from(ctx.token_secret.value.to_string().as_str()),
         ))
@@ -32,9 +32,9 @@ impl AuthService for TestAuthService {
         &self,
         component_id: &ComponentId,
         _permission: ProjectAction,
-        ctx: &CloudAuthCtx,
-    ) -> Result<CloudNamespace, AuthServiceError> {
-        Ok(CloudNamespace::new(
+        ctx: &AuthCtx,
+    ) -> Result<Namespace, AuthServiceError> {
+        Ok(Namespace::new(
             ProjectId(component_id.0),
             AccountId::from(ctx.token_secret.value.to_string().as_str()),
         ))

@@ -14,7 +14,7 @@
 
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
-use golem_common::model::auth::CloudNamespace;
+use golem_common::model::auth::Namespace;
 use golem_common::model::{TargetWorkerId, WorkerId};
 use golem_worker_service_base::gateway_execution::{
     GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
@@ -34,10 +34,10 @@ impl CloudGatewayWorkerRequestExecutor {
 }
 
 #[async_trait]
-impl GatewayWorkerRequestExecutor<CloudNamespace> for CloudGatewayWorkerRequestExecutor {
+impl GatewayWorkerRequestExecutor<Namespace> for CloudGatewayWorkerRequestExecutor {
     async fn execute(
         &self,
-        resolved_worker_request: GatewayResolvedWorkerRequest<CloudNamespace>,
+        resolved_worker_request: GatewayResolvedWorkerRequest<Namespace>,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
         let worker_name_opt_validated = resolved_worker_request
             .worker_name

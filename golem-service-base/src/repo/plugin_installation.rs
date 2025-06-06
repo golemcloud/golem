@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use conditional_trait_gen::trait_gen;
-use golem_common::model::plugin::PluginOwner;
 use golem_common::model::plugin::{PluginInstallation, PluginInstallationTarget};
 use golem_common::model::{PluginId, PluginInstallationId};
-use golem_common::repo::RowMeta;
+use golem_common::repo::{PluginOwnerRow, RowMeta};
 use sqlx::{Database, QueryBuilder};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -25,7 +24,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
-pub struct PluginInstallationRecord<Owner: PluginOwner, Target: PluginInstallationTarget> {
+pub struct PluginInstallationRecord<Target: PluginInstallationTarget> {
     pub installation_id: Uuid,
     pub plugin_id: Uuid,
     pub priority: i32,
@@ -33,13 +32,13 @@ pub struct PluginInstallationRecord<Owner: PluginOwner, Target: PluginInstallati
     #[sqlx(flatten)]
     pub target: Target::Row,
     #[sqlx(flatten)]
-    pub owner: Owner::Row,
+    pub owner: PluginOwnerRow,
 }
 
-impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRecord<Owner, Target> {
+impl<Target: PluginInstallationTarget> PluginInstallationRecord<Target> {
     pub fn try_from(
         installation: PluginInstallation,
-        owner: Owner::Row,
+        owner: PluginOwnerRow,
         target: Target::Row,
     ) -> Result<Self, String> {
         Ok(PluginInstallationRecord {
@@ -54,12 +53,12 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRec
     }
 }
 
-impl<Owner: PluginOwner, Target: PluginInstallationTarget>
-    TryFrom<PluginInstallationRecord<Owner, Target>> for PluginInstallation
+impl<Target: PluginInstallationTarget> TryFrom<PluginInstallationRecord<Target>>
+    for PluginInstallation
 {
     type Error = String;
 
-    fn try_from(value: PluginInstallationRecord<Owner, Target>) -> Result<Self, Self::Error> {
+    fn try_from(value: PluginInstallationRecord<Target>) -> Result<Self, Self::Error> {
         let parameters: HashMap<String, String> = serde_json::from_str(
             std::str::from_utf8(&value.parameters).map_err(|e| e.to_string())?,
         )
@@ -80,22 +79,18 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
 /// for the actual repo, as for components (or any other plugin installation target that requires
 /// immutable installations) the actual implementation needs to be in transactional context of
 /// the target repo.
-pub trait PluginInstallationRepoQueries<
-    DB: Database,
-    Owner: PluginOwner,
-    Target: PluginInstallationTarget,
->
-{
-    fn get_all<'a>(&self, owner: &'a Owner::Row, target: &'a Target::Row) -> QueryBuilder<'a, DB>;
-
-    fn create<'a>(
+pub trait PluginInstallationRepoQueries<DB: Database, Target: PluginInstallationTarget> {
+    fn get_all<'a>(
         &self,
-        record: &'a PluginInstallationRecord<Owner, Target>,
+        owner: &'a PluginOwnerRow,
+        target: &'a Target::Row,
     ) -> QueryBuilder<'a, DB>;
+
+    fn create<'a>(&self, record: &'a PluginInstallationRecord<Target>) -> QueryBuilder<'a, DB>;
 
     fn update<'a>(
         &self,
-        owner: &'a Owner::Row,
+        owner: &'a PluginOwnerRow,
         target: &'a Target::Row,
         id: &'a Uuid,
         new_priority: i32,
@@ -104,7 +99,7 @@ pub trait PluginInstallationRepoQueries<
 
     fn delete<'a>(
         &self,
-        owner: &'a Owner::Row,
+        owner: &'a PluginOwnerRow,
         target: &'a Target::Row,
         id: &'a Uuid,
     ) -> QueryBuilder<'a, DB>;
@@ -127,13 +122,12 @@ impl<DB: Database> DbPluginInstallationRepoQueries<DB> {
 }
 
 #[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
-impl<Owner: PluginOwner, Target: PluginInstallationTarget>
-    PluginInstallationRepoQueries<sqlx::Postgres, Owner, Target>
+impl<Target: PluginInstallationTarget> PluginInstallationRepoQueries<sqlx::Postgres, Target>
     for DbPluginInstallationRepoQueries<sqlx::Postgres>
 {
     fn get_all<'a>(
         &self,
-        owner: &'a Owner::Row,
+        owner: &'a PluginOwnerRow,
         target: &'a Target::Row,
     ) -> QueryBuilder<'a, sqlx::Postgres> {
         let mut query = QueryBuilder::new("SELECT ");
@@ -146,7 +140,7 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
         column_list.push("parameters");
 
         Target::Row::add_column_list(&mut column_list);
-        Owner::Row::add_column_list(&mut column_list);
+        PluginOwnerRow::add_column_list(&mut column_list);
 
         query.push(" FROM ");
         query.push(Target::table_name());
@@ -167,7 +161,7 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
 
     fn create<'a>(
         &self,
-        record: &'a PluginInstallationRecord<Owner, Target>,
+        record: &'a PluginInstallationRecord<Target>,
     ) -> QueryBuilder<'a, sqlx::Postgres> {
         let mut query = QueryBuilder::new("INSERT INTO ");
         query.push(Target::table_name());
@@ -181,7 +175,7 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
         column_list.push("parameters");
 
         Target::Row::add_column_list(&mut column_list);
-        Owner::Row::add_column_list(&mut column_list);
+        PluginOwnerRow::add_column_list(&mut column_list);
 
         query.push(") VALUES (");
 
@@ -207,7 +201,7 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
 
     fn update<'a>(
         &self,
-        owner: &'a Owner::Row,
+        owner: &'a PluginOwnerRow,
         target: &'a Target::Row,
         id: &'a Uuid,
         new_priority: i32,
@@ -239,7 +233,7 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
 
     fn delete<'a>(
         &self,
-        owner: &'a Owner::Row,
+        owner: &'a PluginOwnerRow,
         target: &'a Target::Row,
         id: &'a Uuid,
     ) -> QueryBuilder<'a, sqlx::Postgres> {

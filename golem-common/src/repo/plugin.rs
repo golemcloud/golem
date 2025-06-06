@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::plugin::ComponentPluginScope;
-use crate::model::plugin::{CloudPluginOwner, CloudPluginScope, ProjectPluginScope};
+use crate::model::plugin::{PluginOwner, PluginScope, ProjectPluginScope};
 use crate::model::{AccountId, ComponentId, Empty, ProjectId};
 use crate::repo::RowMeta;
 use sqlx::query_builder::Separated;
@@ -22,29 +22,29 @@ use std::fmt::Display;
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
-pub struct CloudPluginOwnerRow {
+pub struct PluginOwnerRow {
     pub account_id: String,
 }
 
-impl Display for CloudPluginOwnerRow {
+impl Display for PluginOwnerRow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.account_id)
     }
 }
 
-impl From<CloudPluginOwner> for CloudPluginOwnerRow {
-    fn from(owner: CloudPluginOwner) -> Self {
-        CloudPluginOwnerRow {
+impl From<PluginOwner> for PluginOwnerRow {
+    fn from(owner: PluginOwner) -> Self {
+        Self {
             account_id: owner.account_id.value,
         }
     }
 }
 
-impl TryFrom<CloudPluginOwnerRow> for CloudPluginOwner {
+impl TryFrom<PluginOwnerRow> for PluginOwner {
     type Error = String;
 
-    fn try_from(value: CloudPluginOwnerRow) -> Result<Self, Self::Error> {
-        Ok(CloudPluginOwner {
+    fn try_from(value: PluginOwnerRow) -> Result<Self, Self::Error> {
+        Ok(Self {
             account_id: AccountId {
                 value: value.account_id,
             },
@@ -52,7 +52,7 @@ impl TryFrom<CloudPluginOwnerRow> for CloudPluginOwner {
     }
 }
 
-impl<DB: Database> RowMeta<DB> for CloudPluginOwnerRow
+impl<DB: Database> RowMeta<DB> for PluginOwnerRow
 where
     String: for<'q> Encode<'q, DB> + Type<DB>,
 {
@@ -75,23 +75,23 @@ where
 }
 
 #[derive(sqlx::FromRow, Debug, Clone)]
-pub struct CloudPluginScopeRow {
+pub struct PluginScopeRow {
     scope_component_id: Option<Uuid>,
     scope_project_id: Option<Uuid>,
 }
 
-impl From<CloudPluginScope> for CloudPluginScopeRow {
-    fn from(value: CloudPluginScope) -> Self {
+impl From<PluginScope> for PluginScopeRow {
+    fn from(value: PluginScope) -> Self {
         match value {
-            CloudPluginScope::Global(_) => Self {
+            PluginScope::Global(_) => Self {
                 scope_component_id: None,
                 scope_project_id: None,
             },
-            CloudPluginScope::Component(component) => Self {
+            PluginScope::Component(component) => Self {
                 scope_component_id: Some(component.component_id.0),
                 scope_project_id: None,
             },
-            CloudPluginScope::Project(project) => Self {
+            PluginScope::Project(project) => Self {
                 scope_component_id: None,
                 scope_project_id: Some(project.project_id.0),
             },
@@ -99,24 +99,24 @@ impl From<CloudPluginScope> for CloudPluginScopeRow {
     }
 }
 
-impl TryFrom<CloudPluginScopeRow> for CloudPluginScope {
+impl TryFrom<PluginScopeRow> for PluginScope {
     type Error = String;
 
-    fn try_from(value: CloudPluginScopeRow) -> Result<Self, Self::Error> {
+    fn try_from(value: PluginScopeRow) -> Result<Self, Self::Error> {
         match (value.scope_component_id, value.scope_project_id) {
-            (Some(component_id), None) => Ok(CloudPluginScope::Component(ComponentPluginScope {
+            (Some(component_id), None) => Ok(PluginScope::Component(ComponentPluginScope {
                 component_id: ComponentId(component_id),
             })),
-            (None, Some(project_id)) => Ok(CloudPluginScope::Project(ProjectPluginScope {
+            (None, Some(project_id)) => Ok(PluginScope::Project(ProjectPluginScope {
                 project_id: ProjectId(project_id),
             })),
-            (None, None) => Ok(CloudPluginScope::Global(Empty {})),
+            (None, None) => Ok(PluginScope::Global(Empty {})),
             _ => Err("Invalid scope (has both component and project id set)".to_string()),
         }
     }
 }
 
-impl<DB: Database> RowMeta<DB> for CloudPluginScopeRow
+impl<DB: Database> RowMeta<DB> for PluginScopeRow
 where
     Uuid: for<'q> Encode<'q, DB> + Type<DB>,
     Option<Uuid>: for<'q> Encode<'q, DB> + Type<DB>,

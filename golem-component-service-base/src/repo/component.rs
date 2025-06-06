@@ -21,12 +21,14 @@ use futures::future::try_join_all;
 use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::plugin::{ComponentPluginInstallationTarget, PluginOwner};
+use golem_common::model::plugin::ComponentPluginInstallationTarget;
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
     InitialComponentFileKey,
 };
+use golem_common::repo::ComponentOwnerRow;
 use golem_common::repo::ComponentPluginInstallationRow;
+use golem_common::repo::PluginOwnerRow;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::model::ComponentName;
 use golem_service_base::repo::plugin_installation::{
@@ -37,15 +39,15 @@ use sqlx::types::Json;
 use sqlx::{Postgres, QueryBuilder, Row, Sqlite};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
-use std::marker::PhantomData;
 use std::result::Result;
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, info_span, Span};
 use tracing_futures::Instrument;
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
-pub struct ComponentRecord<Owner: ComponentOwner> {
+pub struct ComponentRecord {
     pub namespace: String,
     pub component_id: Uuid,
     pub name: String,
@@ -62,20 +64,19 @@ pub struct ComponentRecord<Owner: ComponentOwner> {
     pub files: Vec<FileRecord>,
     // one-to-many relationship. Retrieved separately
     #[sqlx(skip)]
-    pub installed_plugins:
-        Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
+    pub installed_plugins: Vec<PluginInstallationRecord<ComponentPluginInstallationTarget>>,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
     pub env: Json<HashMap<String, String>>,
 }
 
-impl<Owner: ComponentOwner> ComponentRecord<Owner> {
-    pub fn try_from_model(value: Component<Owner>, available: bool) -> Result<Self, String> {
+impl ComponentRecord {
+    pub fn try_from_model(value: Component, available: bool) -> Result<Self, String> {
         let metadata = record_metadata_serde::serialize(&value.metadata)?;
 
         let component_owner = value.owner.clone();
-        let component_owner_row: Owner::Row = component_owner.into();
-        let plugin_owner_row: <Owner::PluginOwner as PluginOwner>::Row = component_owner_row.into();
+        let component_owner_row: ComponentOwnerRow = component_owner.into();
+        let plugin_owner_row: PluginOwnerRow = component_owner_row.into();
 
         let object_store_key = value
             .object_store_key
@@ -129,16 +130,16 @@ impl<Owner: ComponentOwner> ComponentRecord<Owner> {
     }
 }
 
-impl<Owner: ComponentOwner> TryFrom<ComponentRecord<Owner>> for Component<Owner> {
+impl TryFrom<ComponentRecord> for Component {
     type Error = String;
 
-    fn try_from(value: ComponentRecord<Owner>) -> Result<Self, Self::Error> {
+    fn try_from(value: ComponentRecord) -> Result<Self, Self::Error> {
         let metadata: ComponentMetadata = record_metadata_serde::deserialize(&value.metadata)?;
         let versioned_component_id: VersionedComponentId = VersionedComponentId {
             component_id: ComponentId(value.component_id),
             version: value.version as u64,
         };
-        let owner: Owner = value.namespace.parse()?;
+        let owner: ComponentOwner = value.namespace.parse()?;
         let files = value
             .files
             .into_iter()
@@ -173,10 +174,10 @@ pub struct ComponentConstraintsRecord {
     pub constraints: Vec<u8>,
 }
 
-impl<Owner: ComponentOwner> TryFrom<ComponentConstraints<Owner>> for ComponentConstraintsRecord {
+impl TryFrom<ComponentConstraints> for ComponentConstraintsRecord {
     type Error = String;
 
-    fn try_from(value: ComponentConstraints<Owner>) -> Result<Self, Self::Error> {
+    fn try_from(value: ComponentConstraints) -> Result<Self, Self::Error> {
         let metadata = constraint_serde::serialize(&value.constraints)?;
         Ok(Self {
             namespace: value.owner.to_string(),
@@ -186,7 +187,7 @@ impl<Owner: ComponentOwner> TryFrom<ComponentConstraints<Owner>> for ComponentCo
     }
 }
 
-impl<Owner: ComponentOwner> TryFrom<ComponentConstraintsRecord> for ComponentConstraints<Owner> {
+impl TryFrom<ComponentConstraintsRecord> for ComponentConstraints {
     type Error = String;
 
     fn try_from(value: ComponentConstraintsRecord) -> Result<Self, Self::Error> {
@@ -225,10 +226,7 @@ impl FileRecord {
         }
     }
 
-    pub fn from_component_and_file<Owner: ComponentOwner>(
-        component: &Component<Owner>,
-        file: &InitialComponentFile,
-    ) -> Self {
+    pub fn from_component_and_file(component: &Component, file: &InitialComponentFile) -> Self {
         Self::from_component_id_and_version_and_file(
             component.versioned_component_id.component_id.0,
             component.versioned_component_id.version as i64,
@@ -250,8 +248,8 @@ impl TryFrom<FileRecord> for InitialComponentFile {
 }
 
 #[async_trait]
-pub trait ComponentRepo<Owner: ComponentOwner>: Debug + Send + Sync {
-    async fn create(&self, component: &ComponentRecord<Owner>) -> Result<(), RepoError>;
+pub trait ComponentRepo: Debug + Send + Sync {
+    async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError>;
 
     /// Creates a new component version (ignores component.version) and copies the plugin
     /// installations from the previous latest version.
@@ -259,7 +257,7 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug + Send + Sync {
     /// Returns the updated component.
     async fn update(
         &self,
-        owner: &Owner::Row,
+        owner: &ComponentOwnerRow,
         namespace: &str,
         component_id: Uuid,
         size: i32,
@@ -268,7 +266,7 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug + Send + Sync {
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
         env: Json<HashMap<String, String>>,
-    ) -> Result<ComponentRecord<Owner>, RepoError>;
+    ) -> Result<ComponentRecord, RepoError>;
 
     /// Activates a component version previously created with `update`.
     ///
@@ -288,34 +286,34 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug + Send + Sync {
         &self,
         namespace: &str,
         component_id: Uuid,
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError>;
+    ) -> Result<Vec<ComponentRecord>, RepoError>;
 
-    async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord<Owner>>, RepoError>;
+    async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError>;
 
     async fn get_latest_version(
         &self,
         namespace: &str,
         component_id: Uuid,
-    ) -> Result<Option<ComponentRecord<Owner>>, RepoError>;
+    ) -> Result<Option<ComponentRecord>, RepoError>;
 
     async fn get_by_version(
         &self,
         namespace: &str,
         component_id: Uuid,
         version: u64,
-    ) -> Result<Option<ComponentRecord<Owner>>, RepoError>;
+    ) -> Result<Option<ComponentRecord>, RepoError>;
 
     async fn get_by_name(
         &self,
         namespace: &str,
         name: &str,
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError>;
+    ) -> Result<Vec<ComponentRecord>, RepoError>;
 
     async fn get_by_names(
         &self,
         namespace: &str,
         names: &[ComponentByNameAndVersion],
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError>;
+    ) -> Result<Vec<ComponentRecord>, RepoError>;
 
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError>;
 
@@ -343,25 +341,22 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug + Send + Sync {
 
     async fn get_installed_plugins(
         &self,
-        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
+        owner: &PluginOwnerRow,
         component_id: Uuid,
         version: u64,
-    ) -> Result<
-        Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
-        RepoError,
-    >;
+    ) -> Result<Vec<PluginInstallationRecord<ComponentPluginInstallationTarget>>, RepoError>;
 
     async fn apply_plugin_installation_changes(
         &self,
-        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
+        owner: &PluginOwnerRow,
         component_id: Uuid,
-        actions: &[PluginInstallationRepoAction<Owner>],
+        actions: &[PluginInstallationRepoAction],
     ) -> Result<u64, RepoError>;
 }
 
-pub enum PluginInstallationRepoAction<Owner: ComponentOwner> {
+pub enum PluginInstallationRepoAction {
     Install {
-        record: PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>,
+        record: PluginInstallationRecord<ComponentPluginInstallationTarget>,
     },
     Update {
         plugin_installation_id: Uuid,
@@ -373,23 +368,19 @@ pub enum PluginInstallationRepoAction<Owner: ComponentOwner> {
     },
 }
 
-pub struct LoggedComponentRepo<Owner: ComponentOwner, Repo: ComponentRepo<Owner>> {
+pub struct LoggedComponentRepo<Repo: ComponentRepo> {
     repo: Repo,
-    _owner: PhantomData<Owner>,
 }
 
-impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner>> Debug for LoggedComponentRepo<Owner, Repo> {
+impl<Repo: ComponentRepo> Debug for LoggedComponentRepo<Repo> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.repo.fmt(f)
     }
 }
 
-impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner>> LoggedComponentRepo<Owner, Repo> {
+impl<Repo: ComponentRepo> LoggedComponentRepo<Repo> {
     pub fn new(repo: Repo) -> Self {
-        Self {
-            repo,
-            _owner: PhantomData,
-        }
+        Self { repo }
     }
 
     fn span(component_id: Uuid) -> Span {
@@ -399,10 +390,8 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner>> LoggedComponentRepo<Owne
 }
 
 #[async_trait]
-impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentRepo<Owner>
-    for LoggedComponentRepo<Owner, Repo>
-{
-    async fn create(&self, component: &ComponentRecord<Owner>) -> Result<(), RepoError> {
+impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
+    async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
         self.repo
             .create(component)
             .instrument(Self::span(component.component_id))
@@ -411,7 +400,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
 
     async fn update(
         &self,
-        owner: &Owner::Row,
+        owner: &ComponentOwnerRow,
         namespace: &str,
         component_id: Uuid,
         size: i32,
@@ -420,7 +409,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
         env: Json<HashMap<String, String>>,
-    ) -> Result<ComponentRecord<Owner>, RepoError> {
+    ) -> Result<ComponentRecord, RepoError> {
         self.repo
             .update(
                 owner,
@@ -463,14 +452,14 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         &self,
         namespace: &str,
         component_id: Uuid,
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
         self.repo
             .get(namespace, component_id)
             .instrument(Self::span(component_id))
             .await
     }
 
-    async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+    async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError> {
         self.repo.get_all(namespace).await
     }
 
@@ -478,7 +467,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         &self,
         namespace: &str,
         component_id: Uuid,
-    ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
+    ) -> Result<Option<ComponentRecord>, RepoError> {
         self.repo
             .get_latest_version(namespace, component_id)
             .instrument(Self::span(component_id))
@@ -490,7 +479,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         namespace: &str,
         component_id: Uuid,
         version: u64,
-    ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
+    ) -> Result<Option<ComponentRecord>, RepoError> {
         self.repo
             .get_by_version(namespace, component_id, version)
             .instrument(Self::span(component_id))
@@ -501,7 +490,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         &self,
         namespace: &str,
         name: &str,
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
         self.repo.get_by_name(namespace, name).await
     }
 
@@ -509,7 +498,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         &self,
         namespace: &str,
         names: &[ComponentByNameAndVersion],
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
         self.repo
             .get_by_names(namespace, names)
             .instrument(info_span!("get_by_names", namespace = %namespace))
@@ -566,13 +555,10 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
 
     async fn get_installed_plugins(
         &self,
-        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
+        owner: &PluginOwnerRow,
         component_id: Uuid,
         version: u64,
-    ) -> Result<
-        Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
-        RepoError,
-    > {
+    ) -> Result<Vec<PluginInstallationRecord<ComponentPluginInstallationTarget>>, RepoError> {
         self.repo
             .get_installed_plugins(owner, component_id, version)
             .instrument(Self::span(component_id))
@@ -581,9 +567,9 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
 
     async fn apply_plugin_installation_changes(
         &self,
-        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
+        owner: &PluginOwnerRow,
         component_id: Uuid,
-        actions: &[PluginInstallationRepoAction<Owner>],
+        actions: &[PluginInstallationRepoAction],
     ) -> Result<u64, RepoError> {
         self.repo
             .apply_plugin_installation_changes(owner, component_id, actions)
@@ -592,25 +578,17 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
     }
 }
 
-pub struct DbComponentRepo<DB: Pool, Owner: ComponentOwner> {
+pub struct DbComponentRepo<DB: Pool> {
     db_pool: DB,
     plugin_installation_queries: Arc<
-        dyn PluginInstallationRepoQueries<
-                DB::Db,
-                Owner::PluginOwner,
-                ComponentPluginInstallationTarget,
-            > + Send
-            + Sync,
+        dyn PluginInstallationRepoQueries<DB::Db, ComponentPluginInstallationTarget> + Send + Sync,
     >,
 }
 
-impl<DB: Pool + Sync, Owner: ComponentOwner> DbComponentRepo<DB, Owner>
+impl<DB: Pool + Sync> DbComponentRepo<DB>
 where
-    DbPluginInstallationRepoQueries<DB::Db>: PluginInstallationRepoQueries<
-        DB::Db,
-        Owner::PluginOwner,
-        ComponentPluginInstallationTarget,
-    >,
+    DbPluginInstallationRepoQueries<DB::Db>:
+        PluginInstallationRepoQueries<DB::Db, ComponentPluginInstallationTarget>,
 {
     pub fn new(db_pool: DB) -> Self {
         let plugin_installation_queries =
@@ -622,7 +600,7 @@ where
     }
 }
 
-impl<Owner: ComponentOwner, DB: Pool> Debug for DbComponentRepo<DB, Owner> {
+impl<DB: Pool> Debug for DbComponentRepo<DB> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DbComponentRepo")
             .field("db_pool", &self.db_pool)
@@ -632,7 +610,7 @@ impl<Owner: ComponentOwner, DB: Pool> Debug for DbComponentRepo<DB, Owner> {
 
 #[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
 )]
-impl<Owner: ComponentOwner> DbComponentRepo<golem_service_base::db::postgres::PostgresPool, Owner> {
+impl DbComponentRepo<golem_service_base::db::postgres::PostgresPool> {
     async fn get_files(
         &self,
         component_id: Uuid,
@@ -661,8 +639,8 @@ impl<Owner: ComponentOwner> DbComponentRepo<golem_service_base::db::postgres::Po
 
     async fn add_files(
         &self,
-        components: impl IntoIterator<Item = ComponentRecord<Owner>>,
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        components: impl IntoIterator<Item = ComponentRecord>,
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
         let result = components
             .into_iter()
             .map(|component| async move {
@@ -678,27 +656,21 @@ impl<Owner: ComponentOwner> DbComponentRepo<golem_service_base::db::postgres::Po
 
     async fn get_installed_plugins_for_component(
         &self,
-        component: &ComponentRecord<Owner>,
-    ) -> Result<
-        Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
-        RepoError,
-    > {
+        component: &ComponentRecord,
+    ) -> Result<Vec<PluginInstallationRecord<ComponentPluginInstallationTarget>>, RepoError> {
         let target = ComponentPluginInstallationRow {
             component_id: component.component_id,
             component_version: component.version,
         };
 
-        let owner = Owner::from_str(&component.namespace).map_err(RepoError::Internal)?;
-        let owner_row: Owner::Row = owner.into();
-        let plugin_owner_row: <Owner::PluginOwner as PluginOwner>::Row = owner_row.into();
+        let owner = ComponentOwner::from_str(&component.namespace).map_err(RepoError::Internal)?;
+        let owner_row: ComponentOwnerRow = owner.into();
+        let plugin_owner_row: PluginOwnerRow = owner_row.into();
         let mut query = self
             .plugin_installation_queries
             .get_all(&plugin_owner_row, &target);
-        let query = query
-            .build_query_as::<PluginInstallationRecord<
-                Owner::PluginOwner,
-                ComponentPluginInstallationTarget,
-            >>();
+        let query =
+            query.build_query_as::<PluginInstallationRecord<ComponentPluginInstallationTarget>>();
         self.db_pool
             .with_ro("component", "get_installed_plugins_for_component")
             .fetch_all(query)
@@ -707,8 +679,8 @@ impl<Owner: ComponentOwner> DbComponentRepo<golem_service_base::db::postgres::Po
 
     async fn add_installed_plugins(
         &self,
-        components: impl IntoIterator<Item = ComponentRecord<Owner>>,
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+        components: impl IntoIterator<Item = ComponentRecord>,
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
         let result = components
             .into_iter()
             .map(|component| async move {
@@ -728,10 +700,8 @@ impl<Owner: ComponentOwner> DbComponentRepo<golem_service_base::db::postgres::Po
 #[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
 )]
 #[async_trait]
-impl<Owner: ComponentOwner> ComponentRepo<Owner>
-    for DbComponentRepo<golem_service_base::db::postgres::PostgresPool, Owner>
-{
-    async fn create(&self, component: &ComponentRecord<Owner>) -> Result<(), RepoError> {
+impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::PostgresPool> {
+    async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.with_rw("component", "create").begin().await?;
 
         let query = sqlx::query("SELECT namespace, name FROM components WHERE component_id = $1")
@@ -827,7 +797,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
     async fn update(
         &self,
-        owner: &Owner::Row,
+        owner: &ComponentOwnerRow,
         namespace: &str,
         component_id: Uuid,
         size: i32,
@@ -836,7 +806,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         component_type: Option<i32>,
         files: Option<Vec<FileRecord>>,
         env: Json<HashMap<String, String>>,
-    ) -> Result<ComponentRecord<Owner>, RepoError> {
+    ) -> Result<ComponentRecord, RepoError> {
         let mut transaction = self.db_pool.with_rw("component", "update").begin().await?;
 
         let query = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
@@ -891,11 +861,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
                 let mut query = self
                     .plugin_installation_queries
                     .get_all(&plugin_owner, &old_target);
-                let query =
-                    query.build_query_as::<PluginInstallationRecord<
-                        Owner::PluginOwner,
-                        ComponentPluginInstallationTarget,
-                    >>();
+                let query = query
+                    .build_query_as::<PluginInstallationRecord<ComponentPluginInstallationTarget>>(
+                    );
 
                 let existing_installations = transaction.fetch_all(query).await?;
 
@@ -1025,8 +993,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         &self,
         namespace: &str,
         component_id: Uuid,
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
+        let query = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1067,8 +1035,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         &self,
         namespace: &str,
         component_id: Uuid,
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
+        let query = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1105,11 +1073,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
     }
 
     #[when(golem_service_base::db::postgres::PostgresPool -> get_all)]
-    async fn get_all_postgres(
-        &self,
-        namespace: &str,
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
+    async fn get_all_postgres(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError> {
+        let query = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1145,11 +1110,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
     }
 
     #[when(golem_service_base::db::sqlite::SqlitePool -> get_all)]
-    async fn get_all_sqlite(
-        &self,
-        namespace: &str,
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
+    async fn get_all_sqlite(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError> {
+        let query = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1189,8 +1151,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         &self,
         namespace: &str,
         component_id: Uuid,
-    ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
-        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
+    ) -> Result<Option<ComponentRecord>, RepoError> {
+        let query = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1234,8 +1196,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         &self,
         namespace: &str,
         component_id: Uuid,
-    ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
-        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
+    ) -> Result<Option<ComponentRecord>, RepoError> {
+        let query = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1280,8 +1242,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         namespace: &str,
         component_id: Uuid,
         version: u64,
-    ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
-        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
+    ) -> Result<Option<ComponentRecord>, RepoError> {
+        let query = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1325,8 +1287,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         namespace: &str,
         component_id: Uuid,
         version: u64,
-    ) -> Result<Option<ComponentRecord<Owner>>, RepoError> {
-        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
+    ) -> Result<Option<ComponentRecord>, RepoError> {
+        let query = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1369,8 +1331,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         &self,
         namespace: &str,
         name: &str,
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
+        let query = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1411,7 +1373,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         &self,
         namespace: &str,
         components: &[ComponentByNameAndVersion],
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
             r#"
         WITH input_components(name, version, is_latest) AS (
@@ -1500,7 +1462,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         "#,
         );
 
-        let query = query_builder.build_query_as::<ComponentRecord<Owner>>();
+        let query = query_builder.build_query_as::<ComponentRecord>();
 
         let components = self
             .db_pool
@@ -1520,7 +1482,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         &self,
         namespace: &str,
         components: &[ComponentByNameAndVersion],
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
         let mut query_builder: QueryBuilder<Sqlite> = QueryBuilder::new(
             r#"
         WITH input_components(name, version, is_latest) AS (
@@ -1605,7 +1567,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         );
 
         let query = query_builder
-            .build_query_as::<ComponentRecord<Owner>>()
+            .build_query_as::<ComponentRecord>()
             .bind(namespace)
             .bind(namespace);
 
@@ -1627,8 +1589,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
         &self,
         namespace: &str,
         name: &str,
-    ) -> Result<Vec<ComponentRecord<Owner>>, RepoError> {
-        let query = sqlx::query_as::<_, ComponentRecord<Owner>>(
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
+        let query = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -1921,20 +1883,17 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
     async fn get_installed_plugins(
         &self,
-        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
+        owner: &PluginOwnerRow,
         component_id: Uuid,
         version: u64,
-    ) -> Result<
-        Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
-        RepoError,
-    > {
+    ) -> Result<Vec<PluginInstallationRecord<ComponentPluginInstallationTarget>>, RepoError> {
         let target = ComponentPluginInstallationRow {
             component_id,
             component_version: version as i64,
         };
         let mut query = self.plugin_installation_queries.get_all(owner, &target);
-        let query = query
-            .build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>();
+        let query =
+            query.build_query_as::<PluginInstallationRecord<ComponentPluginInstallationTarget>>();
 
         self.db_pool
             .with_ro("component", "get_installed_plugins")
@@ -1944,9 +1903,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
 
     async fn apply_plugin_installation_changes(
         &self,
-        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
+        owner: &PluginOwnerRow,
         component_id: Uuid,
-        actions: &[PluginInstallationRepoAction<Owner>],
+        actions: &[PluginInstallationRepoAction],
     ) -> Result<u64, RepoError> {
         let mut transaction = self
             .db_pool
@@ -1978,7 +1937,8 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner>
             component_version: new_version - 1,
         };
         let mut query = self.plugin_installation_queries.get_all(owner, &old_target);
-        let query = query.build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>();
+        let query =
+            query.build_query_as::<PluginInstallationRecord<ComponentPluginInstallationTarget>>();
 
         let existing_installations = transaction.fetch_all(query).await?;
 

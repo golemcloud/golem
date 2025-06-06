@@ -42,23 +42,23 @@ pub enum PluginTypeSpecificCreation {
     App(AppPluginCreation),
 }
 
-pub struct PluginDefinitionCreation<Scope: PluginScope> {
+pub struct PluginDefinitionCreation {
     pub name: String,
     pub version: String,
     pub description: String,
     pub icon: Vec<u8>,
     pub homepage: String,
     pub specs: PluginTypeSpecificCreation,
-    pub scope: Scope,
+    pub scope: PluginScope,
 }
 
-impl<Scope: PluginScope> PluginDefinitionCreation<Scope> {
-    pub fn into_definition<Owner: PluginOwner>(
+impl PluginDefinitionCreation {
+    pub fn into_definition(
         self,
         id: PluginId,
-        owner: Owner,
+        owner: PluginOwner,
         specs: PluginTypeSpecificDefinition,
-    ) -> PluginDefinition<Owner, Scope> {
+    ) -> PluginDefinition {
         PluginDefinition {
             id,
             name: self.name,

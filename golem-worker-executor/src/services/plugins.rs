@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::error::GolemError;
-use crate::GolemTypes;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::plugin::{PluginDefinition, PluginInstallation};
@@ -41,7 +40,7 @@ pub trait PluginsObservations: Send + Sync {
 }
 
 #[async_trait]
-pub trait Plugins<T: GolemTypes>: PluginsObservations {
+pub trait Plugins: PluginsObservations {
     /// Gets a plugin installation and the plugin definition it refers to for a given plugin
     /// installation id belonging to a specific component version
     async fn get(
@@ -50,13 +49,7 @@ pub trait Plugins<T: GolemTypes>: PluginsObservations {
         component_id: &ComponentId,
         component_version: ComponentVersion,
         installation_id: &PluginInstallationId,
-    ) -> Result<
-        (
-            PluginInstallation,
-            PluginDefinition<T::PluginOwner, T::PluginScope>,
-        ),
-        GolemError,
-    > {
+    ) -> Result<(PluginInstallation, PluginDefinition), GolemError> {
         let plugin_installation = self
             .get_plugin_installation(account_id, component_id, component_version, installation_id)
             .await?;
@@ -85,11 +78,11 @@ pub trait Plugins<T: GolemTypes>: PluginsObservations {
         component_id: &ComponentId,
         component_version: ComponentVersion,
         plugin_installation: &PluginInstallation,
-    ) -> Result<PluginDefinition<T::PluginOwner, T::PluginScope>, GolemError>;
+    ) -> Result<PluginDefinition, GolemError>;
 }
 
 #[allow(clippy::type_complexity)]
-pub struct CachedPlugins<T: GolemTypes, Inner: Plugins<T>> {
+pub struct CachedPlugins<Inner: Plugins> {
     inner: Inner,
     cached_plugin_installations: Cache<
         (
@@ -102,15 +95,10 @@ pub struct CachedPlugins<T: GolemTypes, Inner: Plugins<T>> {
         PluginInstallation,
         GolemError,
     >,
-    cached_plugin_definitions: Cache<
-        (AccountId, PluginId),
-        (),
-        PluginDefinition<T::PluginOwner, T::PluginScope>,
-        GolemError,
-    >,
+    cached_plugin_definitions: Cache<(AccountId, PluginId), (), PluginDefinition, GolemError>,
 }
 
-impl<T: GolemTypes, Inner: Plugins<T> + Clone> Clone for CachedPlugins<T, Inner> {
+impl<Inner: Plugins + Clone> Clone for CachedPlugins<Inner> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -120,7 +108,7 @@ impl<T: GolemTypes, Inner: Plugins<T> + Clone> Clone for CachedPlugins<T, Inner>
     }
 }
 
-impl<T: GolemTypes, Inner: Plugins<T>> CachedPlugins<T, Inner> {
+impl<Inner: Plugins> CachedPlugins<Inner> {
     pub fn new(inner: Inner, plugin_cache_capacity: usize) -> Self {
         Self {
             inner,
@@ -141,7 +129,7 @@ impl<T: GolemTypes, Inner: Plugins<T>> CachedPlugins<T, Inner> {
 }
 
 #[async_trait]
-impl<T: GolemTypes, Inner: Plugins<T>> PluginsObservations for CachedPlugins<T, Inner> {
+impl<Inner: Plugins> PluginsObservations for CachedPlugins<Inner> {
     async fn observe_plugin_installation(
         &self,
         account_id: &AccountId,
@@ -165,7 +153,7 @@ impl<T: GolemTypes, Inner: Plugins<T>> PluginsObservations for CachedPlugins<T, 
 }
 
 #[async_trait]
-impl<T: GolemTypes, Inner: Plugins<T> + Clone + 'static> Plugins<T> for CachedPlugins<T, Inner> {
+impl<Inner: Plugins + Clone + 'static> Plugins for CachedPlugins<Inner> {
     async fn get_plugin_installation(
         &self,
         account_id: &AccountId,
@@ -205,7 +193,7 @@ impl<T: GolemTypes, Inner: Plugins<T> + Clone + 'static> Plugins<T> for CachedPl
         component_id: &ComponentId,
         component_version: ComponentVersion,
         plugin_installation: &PluginInstallation,
-    ) -> Result<PluginDefinition<T::PluginOwner, T::PluginScope>, GolemError> {
+    ) -> Result<PluginDefinition, GolemError> {
         let key = (account_id.clone(), plugin_installation.plugin_id.clone());
         let inner = self.inner.clone();
         let account_id = account_id.clone();
@@ -245,7 +233,7 @@ impl PluginsObservations for PluginsUnavailable {
 }
 
 #[async_trait]
-impl<T: GolemTypes> Plugins<T> for PluginsUnavailable {
+impl Plugins for PluginsUnavailable {
     async fn get_plugin_installation(
         &self,
         _account_id: &AccountId,
@@ -262,7 +250,7 @@ impl<T: GolemTypes> Plugins<T> for PluginsUnavailable {
         _component_id: &ComponentId,
         _component_version: ComponentVersion,
         _plugin_installation: &PluginInstallation,
-    ) -> Result<PluginDefinition<T::PluginOwner, T::PluginScope>, GolemError> {
+    ) -> Result<PluginDefinition, GolemError> {
         Err(GolemError::runtime("Not available"))
     }
 }

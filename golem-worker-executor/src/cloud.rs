@@ -39,10 +39,8 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{rdbms, resource_limits, All, NoAdditionalDeps};
 use crate::wasi_host::create_linker;
 use crate::workerctx::cloud::Context;
-use crate::{Bootstrap, GolemTypes, RunDetails};
+use crate::{Bootstrap, RunDetails};
 use async_trait::async_trait;
-use golem_common::model::component::CloudComponentOwner;
-use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
 use golem_service_base::storage::blob::BlobStorage;
 use prometheus::Registry;
 use std::sync::Arc;
@@ -55,14 +53,6 @@ use wasmtime::Engine;
 #[cfg(test)]
 test_r::enable!();
 
-pub struct CloudGolemTypes;
-
-impl GolemTypes for CloudGolemTypes {
-    type ComponentOwner = CloudComponentOwner;
-    type PluginOwner = CloudPluginOwner;
-    type PluginScope = CloudPluginScope;
-}
-
 struct ServerBootstrap {}
 
 #[async_trait]
@@ -74,10 +64,7 @@ impl Bootstrap<Context> for ServerBootstrap {
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
-    ) -> (
-        Arc<dyn Plugins<CloudGolemTypes>>,
-        Arc<dyn PluginsObservations>,
-    ) {
+    ) -> (Arc<dyn Plugins>, Arc<dyn PluginsObservations>) {
         let plugins =
             crate::services::cloud::plugins::cloud_configured(&golem_config.plugin_service);
         (plugins.clone(), plugins)
@@ -86,9 +73,9 @@ impl Bootstrap<Context> for ServerBootstrap {
     fn create_component_service(
         &self,
         golem_config: &GolemConfig,
-        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
-    ) -> Arc<dyn ComponentService<CloudGolemTypes>> {
+    ) -> Arc<dyn ComponentService> {
         crate::services::cloud::component::configured(
             &golem_config.component_service,
             &golem_config.project_service,
@@ -105,7 +92,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<Context>>,
         runtime: Handle,
-        component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
+        component_service: Arc<dyn ComponentService>,
         shard_manager_service: Arc<dyn ShardManagerService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -122,7 +109,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<CloudGolemTypes>>,
+        plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<Context>> {
         let resource_limits = resource_limits::configured(&golem_config.resource_limits);

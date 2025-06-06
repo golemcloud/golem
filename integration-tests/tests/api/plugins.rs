@@ -18,7 +18,7 @@ use axum::extract::Multipart;
 use axum::routing::post;
 use axum::Router;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
-use golem_common::model::plugin::CloudPluginScope;
+use golem_common::model::plugin::PluginScope;
 use golem_common::model::plugin::{
     AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
     OplogProcessorDefinition, PluginTypeSpecificDefinition,
@@ -115,7 +115,7 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies, _tracing: &Trac
             validate_url: "not-used".to_string(),
             transform_url: format!("http://localhost:{port}/transform"),
         }),
-        scope: CloudPluginScope::Global(Empty {}),
+        scope: PluginScope::Global(Empty {}),
     })
     .await;
 
@@ -236,7 +236,7 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Trac
             validate_url: "not-used".to_string(),
             transform_url: format!("http://localhost:{port}/transform"),
         }),
-        scope: CloudPluginScope::Global(Empty {}),
+        scope: PluginScope::Global(Empty {}),
     })
     .await;
 
@@ -305,7 +305,7 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies, _tracing:
             validate_url: "not-used".to_string(),
             transform_url: format!("http://localhost:{port}/transform"),
         }),
-        scope: CloudPluginScope::Global(Empty {}),
+        scope: PluginScope::Global(Empty {}),
     })
     .await;
 
@@ -343,7 +343,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
             component_id: plugin_component_id.clone(),
             component_version: 0,
         }),
-        scope: CloudPluginScope::Global(Empty {}),
+        scope: PluginScope::Global(Empty {}),
     })
     .await;
 
@@ -505,7 +505,7 @@ async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
             blob_storage_key: plugin_wasm_key,
         }),
-        scope: CloudPluginScope::Global(Empty {}),
+        scope: PluginScope::Global(Empty {}),
     })
     .await;
 
@@ -550,7 +550,7 @@ async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         specs: PluginTypeSpecificDefinition::App(AppPluginDefinition {
             blob_storage_key: plugin_wasm_key,
         }),
-        scope: CloudPluginScope::Global(Empty {}),
+        scope: PluginScope::Global(Empty {}),
     })
     .await;
 
@@ -592,7 +592,7 @@ async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
             blob_storage_key: plugin_wasm_key,
         }),
-        scope: CloudPluginScope::Global(Empty {}),
+        scope: PluginScope::Global(Empty {}),
     };
 
     deps.create_plugin(plugin_definition.clone()).await;
@@ -639,7 +639,7 @@ async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing:
         specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
             blob_storage_key: plugin_wasm_key,
         }),
-        scope: CloudPluginScope::Global(Empty {}),
+        scope: PluginScope::Global(Empty {}),
     };
 
     deps.create_plugin(plugin_definition.clone()).await;

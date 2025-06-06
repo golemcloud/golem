@@ -53,20 +53,18 @@ impl PluginTypeSpecificCreation {
 #[derive(Debug, Clone, PartialEq, Serialize, poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
-pub struct PluginDefinitionCreation<Scope: PluginScope> {
+pub struct PluginDefinitionCreation {
     pub name: String,
     pub version: String,
     pub description: String,
     pub icon: Vec<u8>,
     pub homepage: String,
     pub specs: PluginTypeSpecificCreation,
-    pub scope: Scope,
+    pub scope: PluginScope,
 }
 
-impl<Scope: PluginScope> From<PluginDefinitionCreation<Scope>>
-    for local_plugin_model::PluginDefinitionCreation<Scope>
-{
-    fn from(value: PluginDefinitionCreation<Scope>) -> Self {
+impl From<PluginDefinitionCreation> for local_plugin_model::PluginDefinitionCreation {
+    fn from(value: PluginDefinitionCreation) -> Self {
         local_plugin_model::PluginDefinitionCreation {
             name: value.name,
             version: value.version,
@@ -81,20 +79,18 @@ impl<Scope: PluginScope> From<PluginDefinitionCreation<Scope>>
 
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
-pub struct LibraryPluginDefinitionCreation<Scope: PluginScope> {
+pub struct LibraryPluginDefinitionCreation {
     pub name: String,
     pub version: String,
     pub description: String,
     pub icon: Binary<Vec<u8>>,
     pub homepage: String,
-    pub scope: Scope,
+    pub scope: PluginScope,
     pub wasm: TempFileUpload,
 }
 
-impl<Scope: PluginScope> From<LibraryPluginDefinitionCreation<Scope>>
-    for local_plugin_model::PluginDefinitionCreation<Scope>
-{
-    fn from(value: LibraryPluginDefinitionCreation<Scope>) -> Self {
+impl From<LibraryPluginDefinitionCreation> for local_plugin_model::PluginDefinitionCreation {
+    fn from(value: LibraryPluginDefinitionCreation) -> Self {
         local_plugin_model::PluginDefinitionCreation {
             name: value.name,
             version: value.version,
@@ -113,20 +109,18 @@ impl<Scope: PluginScope> From<LibraryPluginDefinitionCreation<Scope>>
 
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
-pub struct AppPluginDefinitionCreation<Scope: PluginScope> {
+pub struct AppPluginDefinitionCreation {
     pub name: String,
     pub version: String,
     pub description: String,
     pub icon: Binary<Vec<u8>>,
     pub homepage: String,
-    pub scope: Scope,
+    pub scope: PluginScope,
     pub wasm: TempFileUpload,
 }
 
-impl<Scope: PluginScope> From<AppPluginDefinitionCreation<Scope>>
-    for local_plugin_model::PluginDefinitionCreation<Scope>
-{
-    fn from(value: AppPluginDefinitionCreation<Scope>) -> Self {
+impl From<AppPluginDefinitionCreation> for local_plugin_model::PluginDefinitionCreation {
+    fn from(value: AppPluginDefinitionCreation) -> Self {
         local_plugin_model::PluginDefinitionCreation {
             name: value.name,
             version: value.version,
@@ -197,21 +191,19 @@ impl From<common_plugin_model::AppPluginDefinition> for AppPluginDefinition {
 #[derive(Debug, Clone, PartialEq, Serialize, poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
-pub struct PluginDefinition<Owner: PluginOwner, Scope: PluginScope> {
+pub struct PluginDefinition {
     pub name: String,
     pub version: String,
     pub description: String,
     pub icon: Vec<u8>,
     pub homepage: String,
     pub specs: PluginTypeSpecificDefinition,
-    pub scope: Scope,
-    pub owner: Owner,
+    pub scope: PluginScope,
+    pub owner: PluginOwner,
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope>
-    From<common_plugin_model::PluginDefinition<Owner, Scope>> for PluginDefinition<Owner, Scope>
-{
-    fn from(value: common_plugin_model::PluginDefinition<Owner, Scope>) -> Self {
+impl From<common_plugin_model::PluginDefinition> for PluginDefinition {
+    fn from(value: common_plugin_model::PluginDefinition) -> Self {
         Self {
             name: value.name,
             version: value.version,
@@ -239,9 +231,9 @@ pub struct PluginInstallation {
 }
 
 impl PluginInstallation {
-    pub fn from_model<Owner: PluginOwner, Scope: PluginScope>(
+    pub fn from_model(
         model: common_plugin_model::PluginInstallation,
-        plugin_definition: common_plugin_model::PluginDefinition<Owner, Scope>,
+        plugin_definition: common_plugin_model::PluginDefinition,
     ) -> Self {
         Self {
             id: model.id,

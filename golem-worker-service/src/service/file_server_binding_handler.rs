@@ -15,7 +15,7 @@
 use crate::service::worker::{WorkerError, WorkerService};
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use golem_common::model::auth::CloudNamespace;
+use golem_common::model::auth::Namespace;
 use golem_common::model::{ComponentFilePath, TargetWorkerId, WorkerId};
 use golem_common::SafeDisplay;
 use golem_worker_service_base::gateway_execution::file_server_binding_handler::{
@@ -35,11 +35,11 @@ impl CloudWorkerServiceAdapter {
 }
 
 #[async_trait::async_trait]
-impl WorkerServiceAdapter<CloudNamespace> for CloudWorkerServiceAdapter {
+impl WorkerServiceAdapter<Namespace> for CloudWorkerServiceAdapter {
     async fn get_worker_version(
         &self,
         worker_id: &WorkerId,
-        namespace: &CloudNamespace,
+        namespace: &Namespace,
     ) -> Result<Option<u64>, FileServerBindingError> {
         let worker_metadata = self
             .worker_service
@@ -59,7 +59,7 @@ impl WorkerServiceAdapter<CloudNamespace> for CloudWorkerServiceAdapter {
         &self,
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
-        namespace: &CloudNamespace,
+        namespace: &Namespace,
     ) -> Result<BoxStream<'static, WorkerResult<Bytes>>, FileServerBindingError> {
         self.worker_service
             .get_file_contents(worker_id, path, namespace.clone())

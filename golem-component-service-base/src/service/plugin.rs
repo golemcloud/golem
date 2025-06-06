@@ -21,12 +21,15 @@ use crate::service::component::ComponentError;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
-use golem_common::model::component::{ComponentOwner, VersionedComponentId};
+use golem_common::model::auth::AuthCtx;
+use golem_common::model::component::VersionedComponentId;
+use golem_common::model::plugin::ComponentOwnershipQuery;
 use golem_common::model::plugin::{
     AppPluginDefinition, LibraryPluginDefinition, OplogProcessorDefinition, PluginDefinition,
     PluginOwner, PluginScope, PluginTypeSpecificDefinition, PluginWasmFileKey,
 };
 use golem_common::model::{ComponentId, PluginId};
+use golem_common::repo::{PluginOwnerRow, PluginScopeRow};
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -140,66 +143,69 @@ impl From<PluginError> for golem_api_grpc::proto::golem::component::v1::Componen
 }
 
 #[async_trait]
-pub trait PluginService<Owner: PluginOwner, Scope: PluginScope>: Debug + Send + Sync {
+pub trait PluginService: Debug + Send + Sync {
     /// Get all the registered plugins owned by `owner`, regardless of their scope
-    async fn list_plugins(
-        &self,
-        owner: &Owner,
-    ) -> Result<Vec<PluginDefinition<Owner, Scope>>, PluginError>;
+    async fn list_plugins(&self, owner: &PluginOwner)
+        -> Result<Vec<PluginDefinition>, PluginError>;
 
     /// Gets the registered plugins owned by `owner` which are available in the given `scope`
     async fn list_plugins_for_scope(
         &self,
-        owner: &Owner,
-        scope: &Scope,
-        request_context: Scope::RequestContext,
-    ) -> Result<Vec<PluginDefinition<Owner, Scope>>, PluginError>;
+        owner: &PluginOwner,
+        scope: &PluginScope,
+        request_context: (Arc<dyn ComponentOwnershipQuery>, AuthCtx),
+    ) -> Result<Vec<PluginDefinition>, PluginError>;
 
     /// Gets all the registered versions of a plugin owned by `owner` and having the name `name`
     async fn list_plugin_versions(
         &self,
-        owner: &Owner,
+        owner: &PluginOwner,
         name: &str,
-    ) -> Result<Vec<PluginDefinition<Owner, Scope>>, PluginError>;
+    ) -> Result<Vec<PluginDefinition>, PluginError>;
 
     /// Registers a new plugin
     async fn create_plugin(
         &self,
-        owner: &Owner,
-        plugin: PluginDefinitionCreation<Scope>,
-    ) -> Result<PluginDefinition<Owner, Scope>, PluginError>;
+        owner: &PluginOwner,
+        plugin: PluginDefinitionCreation,
+    ) -> Result<PluginDefinition, PluginError>;
 
     /// Gets a registered plugin belonging to a given `owner`, identified by its `name` and `version`
     async fn get(
         &self,
-        owner: &Owner,
+        owner: &PluginOwner,
         name: &str,
         version: &str,
-    ) -> Result<Option<PluginDefinition<Owner, Scope>>, PluginError>;
+    ) -> Result<Option<PluginDefinition>, PluginError>;
 
     /// Get a plugin by id for a given owner. Returns the plugin even if it was unregistered / deleted.
     async fn get_by_id(
         &self,
-        owner: &Owner,
+        owner: &PluginOwner,
         id: &PluginId,
-    ) -> Result<Option<PluginDefinition<Owner, Scope>>, PluginError>;
+    ) -> Result<Option<PluginDefinition>, PluginError>;
 
     /// Deletes a registered plugin belonging to a given `owner`, identified by its `name` and `version`
-    async fn delete(&self, owner: &Owner, name: &str, version: &str) -> Result<(), PluginError>;
+    async fn delete(
+        &self,
+        owner: &PluginOwner,
+        name: &str,
+        version: &str,
+    ) -> Result<(), PluginError>;
 }
 
 #[derive(Debug)]
-pub struct PluginServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
-    plugin_repo: Arc<dyn PluginRepo<Owner::PluginOwner, Scope>>,
+pub struct PluginServiceDefault {
+    plugin_repo: Arc<dyn PluginRepo>,
     plugin_wasm_files: Arc<PluginWasmFilesService>,
-    component_service: Arc<dyn ComponentService<Owner>>,
+    component_service: Arc<dyn ComponentService>,
 }
 
-impl<Owner: ComponentOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scope> {
+impl PluginServiceDefault {
     pub fn new(
-        plugin_repo: Arc<dyn PluginRepo<Owner::PluginOwner, Scope>>,
+        plugin_repo: Arc<dyn PluginRepo>,
         library_plugin_files: Arc<PluginWasmFilesService>,
-        component_service: Arc<dyn ComponentService<Owner>>,
+        component_service: Arc<dyn ComponentService>,
     ) -> Self {
         Self {
             plugin_repo,
@@ -209,8 +215,8 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scop
     }
 
     fn decode_plugin_definitions(
-        records: Vec<PluginRecord<Owner::PluginOwner, Scope>>,
-    ) -> Result<Vec<PluginDefinition<Owner::PluginOwner, Scope>>, PluginError> {
+        records: Vec<PluginRecord>,
+    ) -> Result<Vec<PluginDefinition>, PluginError> {
         records
             .into_iter()
             .map(PluginDefinition::try_from)
@@ -221,14 +227,14 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scop
     async fn store_plugin_wasm(
         &self,
         data: &PluginWasmFileReference,
-        owner: &Owner::PluginOwner,
+        owner: &PluginOwner,
     ) -> Result<PluginWasmFileKey, PluginError> {
         match data {
             PluginWasmFileReference::BlobStorage(key) => Ok(key.clone()),
             PluginWasmFileReference::Data(stream) => {
                 let key = self
                     .plugin_wasm_files
-                    .put_if_not_exists(&owner.account_id(), stream)
+                    .put_if_not_exists(&owner.account_id, stream)
                     .await
                     .map_err(PluginError::BlobStorageError)?;
                 Ok(key)
@@ -238,7 +244,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scop
 
     async fn check_oplog_processor_plugin(
         &self,
-        plugin_owner: &Owner::PluginOwner,
+        plugin_owner: &PluginOwner,
         definition: &OplogProcessorDefinition,
     ) -> Result<(), PluginError> {
         let owner = self
@@ -249,7 +255,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scop
 
         // Check that the component is visible from this plugin
         let owner = match owner {
-            Some(inner) if Owner::PluginOwner::from(inner.clone()) == *plugin_owner => inner,
+            Some(inner) if PluginOwner::from(inner.clone()) == *plugin_owner => inner,
             _ => Err(PluginError::ComponentNotFound {
                 component_id: definition.component_id.clone(),
             })?,
@@ -289,25 +295,23 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scop
 }
 
 #[async_trait]
-impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner::PluginOwner, Scope>
-    for PluginServiceDefault<Owner, Scope>
-{
+impl PluginService for PluginServiceDefault {
     async fn list_plugins(
         &self,
-        owner: &Owner::PluginOwner,
-    ) -> Result<Vec<PluginDefinition<Owner::PluginOwner, Scope>>, PluginError> {
-        let owner_record: <Owner::PluginOwner as PluginOwner>::Row = owner.clone().into();
+        owner: &PluginOwner,
+    ) -> Result<Vec<PluginDefinition>, PluginError> {
+        let owner_record: PluginOwnerRow = owner.clone().into();
         let records = self.plugin_repo.get_all(&owner_record).await?;
         Self::decode_plugin_definitions(records)
     }
 
     async fn list_plugins_for_scope(
         &self,
-        owner: &Owner::PluginOwner,
-        scope: &Scope,
-        request_context: Scope::RequestContext,
-    ) -> Result<Vec<PluginDefinition<Owner::PluginOwner, Scope>>, PluginError> {
-        let owner_record: <Owner::PluginOwner as PluginOwner>::Row = owner.clone().into();
+        owner: &PluginOwner,
+        scope: &PluginScope,
+        request_context: (Arc<dyn ComponentOwnershipQuery>, AuthCtx),
+    ) -> Result<Vec<PluginDefinition>, PluginError> {
+        let owner_record: PluginOwnerRow = owner.clone().into();
 
         let valid_scopes = scope
             .accessible_scopes(request_context)
@@ -315,7 +319,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner::PluginOwner
             .map_err(|error| PluginError::FailedToGetAvailableScopes { error })?
             .into_iter()
             .map(|scope| scope.into())
-            .collect::<Vec<Scope::Row>>();
+            .collect::<Vec<PluginScopeRow>>();
         let records = self
             .plugin_repo
             .get_for_scope(&owner_record, &valid_scopes)
@@ -325,10 +329,10 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner::PluginOwner
 
     async fn list_plugin_versions(
         &self,
-        owner: &Owner::PluginOwner,
+        owner: &PluginOwner,
         name: &str,
-    ) -> Result<Vec<PluginDefinition<Owner::PluginOwner, Scope>>, PluginError> {
-        let owner_record: <Owner::PluginOwner as PluginOwner>::Row = owner.clone().into();
+    ) -> Result<Vec<PluginDefinition>, PluginError> {
+        let owner_record: PluginOwnerRow = owner.clone().into();
         let records = self
             .plugin_repo
             .get_all_with_name(&owner_record, name)
@@ -338,9 +342,9 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner::PluginOwner
 
     async fn create_plugin(
         &self,
-        owner: &Owner::PluginOwner,
-        plugin: PluginDefinitionCreation<Scope>,
-    ) -> Result<PluginDefinition<Owner::PluginOwner, Scope>, PluginError> {
+        owner: &PluginOwner,
+        plugin: PluginDefinitionCreation,
+    ) -> Result<PluginDefinition, PluginError> {
         let type_specific_definition = match &plugin.specs {
             PluginTypeSpecificCreation::OplogProcessor(inner) => {
                 self.check_oplog_processor_plugin(owner, inner).await?;
@@ -367,11 +371,11 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner::PluginOwner
 
     async fn get(
         &self,
-        owner: &Owner::PluginOwner,
+        owner: &PluginOwner,
         name: &str,
         version: &str,
-    ) -> Result<Option<PluginDefinition<Owner::PluginOwner, Scope>>, PluginError> {
-        let owner_record: <Owner::PluginOwner as PluginOwner>::Row = owner.clone().into();
+    ) -> Result<Option<PluginDefinition>, PluginError> {
+        let owner_record: PluginOwnerRow = owner.clone().into();
         let record = self.plugin_repo.get(&owner_record, name, version).await?;
         record
             .map(PluginDefinition::try_from)
@@ -381,10 +385,10 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner::PluginOwner
 
     async fn get_by_id(
         &self,
-        owner: &Owner::PluginOwner,
+        owner: &PluginOwner,
         id: &PluginId,
-    ) -> Result<Option<PluginDefinition<Owner::PluginOwner, Scope>>, PluginError> {
-        let owner_record: <Owner::PluginOwner as PluginOwner>::Row = owner.clone().into();
+    ) -> Result<Option<PluginDefinition>, PluginError> {
+        let owner_record: PluginOwnerRow = owner.clone().into();
         let record = self.plugin_repo.get_by_id(&owner_record, &id.0).await?;
         record
             .map(PluginDefinition::try_from)
@@ -394,11 +398,11 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner::PluginOwner
 
     async fn delete(
         &self,
-        owner: &Owner::PluginOwner,
+        owner: &PluginOwner,
         name: &str,
         version: &str,
     ) -> Result<(), PluginError> {
-        let owner_record: <Owner::PluginOwner as PluginOwner>::Row = owner.clone().into();
+        let owner_record: PluginOwnerRow = owner.clone().into();
 
         self.plugin_repo
             .delete(&owner_record, name, version)

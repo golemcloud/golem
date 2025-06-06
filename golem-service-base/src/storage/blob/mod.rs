@@ -28,7 +28,7 @@ pub mod s3;
 pub mod sqlite;
 
 #[async_trait]
-pub trait BlobStorage: Debug {
+pub trait BlobStorage: Debug + Send + Sync {
     async fn get_raw(
         &self,
         target_label: &'static str,

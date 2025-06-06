@@ -12,19 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use crate::cloud::CloudGolemTypes;
 use crate::error::GolemError;
 use crate::metrics::component::record_compilation_time;
 use crate::services::compiled_component::CompiledComponentService;
 use async_lock::{RwLock, Semaphore};
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::component::CloudComponentOwner;
+use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_metadata::{DynamicLinkedInstance, LinearMemory};
 use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::{
@@ -33,15 +27,17 @@ use golem_common::model::{
 use golem_service_base::testing::LocalFileSystemComponentMetadata;
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::task::spawn_blocking;
 use tracing::{debug, warn, Instrument};
 use wasmtime::component::Component;
 use wasmtime::Engine;
 
-use crate::GolemTypes;
-
 #[derive(Debug, Clone)]
-pub struct ComponentMetadataPoly<ComponentOwner> {
+pub struct ComponentMetadata {
     pub version: ComponentVersion,
     pub size: u64,
     pub memories: Vec<LinearMemory>,
@@ -54,9 +50,7 @@ pub struct ComponentMetadataPoly<ComponentOwner> {
     pub env: HashMap<String, String>,
 }
 
-pub type ComponentMetadata<T> = ComponentMetadataPoly<<T as GolemTypes>::ComponentOwner>;
-
-impl From<LocalFileSystemComponentMetadata> for ComponentMetadata<CloudGolemTypes> {
+impl From<LocalFileSystemComponentMetadata> for ComponentMetadata {
     fn from(value: LocalFileSystemComponentMetadata) -> Self {
         Self {
             version: value.version,
@@ -66,7 +60,7 @@ impl From<LocalFileSystemComponentMetadata> for ComponentMetadata<CloudGolemType
             component_type: value.component_type,
             files: value.files,
             plugin_installations: vec![],
-            component_owner: CloudComponentOwner {
+            component_owner: ComponentOwner {
                 account_id: value.account_id,
                 project_id: value.project_id,
             },
@@ -78,28 +72,28 @@ impl From<LocalFileSystemComponentMetadata> for ComponentMetadata<CloudGolemType
 
 /// Service for downloading a specific Golem component from the Golem Component API
 #[async_trait]
-pub trait ComponentService<T: GolemTypes>: Send + Sync {
+pub trait ComponentService: Send + Sync {
     async fn get(
         &self,
         engine: &Engine,
         account_id: &AccountId,
         component_id: &ComponentId,
         component_version: ComponentVersion,
-    ) -> Result<(Component, ComponentMetadata<T>), GolemError>;
+    ) -> Result<(Component, ComponentMetadata), GolemError>;
 
     async fn get_metadata(
         &self,
         account_id: &AccountId,
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
-    ) -> Result<ComponentMetadata<T>, GolemError>;
+    ) -> Result<ComponentMetadata, GolemError>;
 
     /// Resolve a component given a user provided string. The syntax of the provided string is allowed to vary between implementations.
     /// Resolving component is the component in whoose context the resolution is being performed
     async fn resolve_component(
         &self,
         component_reference: String,
-        resolving_component: T::ComponentOwner,
+        resolving_component: ComponentOwner,
     ) -> Result<Option<ComponentId>, GolemError>;
 }
 
@@ -333,7 +327,7 @@ impl ComponentServiceLocalFileSystem {
         &self,
         component_id: &ComponentId,
         component_version: ComponentVersion,
-    ) -> Result<ComponentMetadata<CloudGolemTypes>, GolemError> {
+    ) -> Result<ComponentMetadata, GolemError> {
         let key = ComponentKey {
             component_id: component_id.clone(),
             component_version,
@@ -357,7 +351,7 @@ impl ComponentServiceLocalFileSystem {
     async fn get_latest_metadata(
         &self,
         component_id: &ComponentId,
-    ) -> Result<ComponentMetadata<CloudGolemTypes>, GolemError> {
+    ) -> Result<ComponentMetadata, GolemError> {
         self.refresh_index().await?;
 
         let index = self.index.read().await;
@@ -386,14 +380,14 @@ impl ComponentServiceLocalFileSystem {
 }
 
 #[async_trait]
-impl ComponentService<CloudGolemTypes> for ComponentServiceLocalFileSystem {
+impl ComponentService for ComponentServiceLocalFileSystem {
     async fn get(
         &self,
         engine: &Engine,
         _account_id: &AccountId,
         component_id: &ComponentId,
         component_version: ComponentVersion,
-    ) -> Result<(Component, ComponentMetadata<CloudGolemTypes>), GolemError> {
+    ) -> Result<(Component, ComponentMetadata), GolemError> {
         let key = ComponentKey {
             component_id: component_id.clone(),
             component_version,
@@ -425,7 +419,7 @@ impl ComponentService<CloudGolemTypes> for ComponentServiceLocalFileSystem {
         _account_id: &AccountId,
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
-    ) -> Result<ComponentMetadata<CloudGolemTypes>, GolemError> {
+    ) -> Result<ComponentMetadata, GolemError> {
         match forced_version {
             Some(version) => self.get_metadata_for_version(component_id, version).await,
             None => self.get_latest_metadata(component_id).await,
@@ -435,7 +429,7 @@ impl ComponentService<CloudGolemTypes> for ComponentServiceLocalFileSystem {
     async fn resolve_component(
         &self,
         component_reference: String,
-        _resolving_component: CloudComponentOwner,
+        _resolving_component: ComponentOwner,
     ) -> Result<Option<ComponentId>, GolemError> {
         Ok(self
             .index

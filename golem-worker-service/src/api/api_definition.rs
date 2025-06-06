@@ -17,7 +17,7 @@ use crate::service::auth::AuthService;
 use futures_util::future::try_join_all;
 use golem_common::json_yaml::JsonOrYaml;
 use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -35,16 +35,14 @@ use std::sync::Arc;
 use tracing::{error, Instrument};
 
 pub struct ApiDefinitionApi {
-    definition_service: Arc<dyn ApiDefinitionService<CloudAuthCtx, CloudNamespace> + Send + Sync>,
+    definition_service: Arc<dyn ApiDefinitionService<AuthCtx, Namespace> + Send + Sync>,
     auth_service: Arc<dyn AuthService + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl ApiDefinitionApi {
     pub fn new(
-        definition_service: Arc<
-            dyn ApiDefinitionService<CloudAuthCtx, CloudNamespace> + Send + Sync,
-        >,
+        definition_service: Arc<dyn ApiDefinitionService<AuthCtx, Namespace> + Send + Sync>,
         auth_service: Arc<dyn AuthService + Sync + Send>,
     ) -> Self {
         Self {
@@ -85,7 +83,7 @@ impl ApiDefinitionApi {
         openapi: OpenApiHttpApiDefinition,
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
-        let auth_ctx = CloudAuthCtx::new(token.secret());
+        let auth_ctx = AuthCtx::new(token.secret());
         let namespace = self
             .auth_service
             .authorize_project_action(&project_id, ProjectAction::CreateApiDefinition, &auth_ctx)
@@ -155,7 +153,7 @@ impl ApiDefinitionApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let token = token.secret();
-        let auth_ctx = CloudAuthCtx::new(token);
+        let auth_ctx = AuthCtx::new(token);
         let namespace = self
             .auth_service
             .authorize_project_action(&project_id, ProjectAction::CreateApiDefinition, &auth_ctx)
@@ -226,7 +224,7 @@ impl ApiDefinitionApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let token = token.secret();
-        let auth_ctx = CloudAuthCtx::new(token);
+        let auth_ctx = AuthCtx::new(token);
         let namespace = self
             .auth_service
             .authorize_project_action(&project_id, ProjectAction::UpdateApiDefinition, &auth_ctx)
@@ -304,7 +302,7 @@ impl ApiDefinitionApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let token = token.secret();
-        let auth_ctx = CloudAuthCtx::new(token);
+        let auth_ctx = AuthCtx::new(token);
         let namespace = self
             .auth_service
             .authorize_project_action(&project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
@@ -364,7 +362,7 @@ impl ApiDefinitionApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<HttpApiDefinitionResponseData>>, ApiEndpointError> {
         let token = token.secret();
-        let auth_ctx = CloudAuthCtx::new(token);
+        let auth_ctx = AuthCtx::new(token);
         let namespace = self
             .auth_service
             .authorize_project_action(&project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
@@ -419,7 +417,7 @@ impl ApiDefinitionApi {
             project_id = project_id.0.to_string()
         );
 
-        let auth_ctx = CloudAuthCtx::new(token);
+        let auth_ctx = AuthCtx::new(token);
         let namespace = self
             .auth_service
             .authorize_project_action(&project_id.0, ProjectAction::DeleteApiDefinition, &auth_ctx)

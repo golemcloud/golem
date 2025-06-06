@@ -14,9 +14,9 @@
 
 use crate::service::component::CloudComponentService;
 use crate::service::CloudComponentError;
-use golem_common::model::auth::CloudAuthCtx;
+use golem_common::model::auth::AuthCtx;
 use golem_common::model::plugin::PluginDefinition;
-use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
+use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_common::model::PluginId;
 use golem_component_service_base::model::plugin::PluginDefinitionCreation;
 use golem_component_service_base::service::plugin::PluginService;
@@ -26,16 +26,14 @@ use std::sync::Arc;
 /// Wraps a `PluginService` implementation (defined in `golem-component-service-base`) so that each
 /// operation receives a `CloudAuthCtx` and gets authorized
 pub struct CloudPluginService {
-    base_plugin_service: Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope> + Sync + Send>,
+    base_plugin_service: Arc<dyn PluginService>,
     cloud_component_service: Arc<CloudComponentService>,
     auth_service: Arc<dyn BaseAuthService + Sync + Send>,
 }
 
 impl CloudPluginService {
     pub fn new(
-        base_plugin_service: Arc<
-            dyn PluginService<CloudPluginOwner, CloudPluginScope> + Sync + Send,
-        >,
+        base_plugin_service: Arc<dyn PluginService>,
         cloud_component_service: Arc<CloudComponentService>,
         auth_service: Arc<dyn BaseAuthService + Sync + Send>,
     ) -> Self {
@@ -48,19 +46,17 @@ impl CloudPluginService {
 
     pub async fn list_plugins(
         &self,
-        auth: &CloudAuthCtx,
-    ) -> Result<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, CloudComponentError>
-    {
+        auth: &AuthCtx,
+    ) -> Result<Vec<PluginDefinition>, CloudComponentError> {
         let owner = self.get_owner(auth).await?;
         Ok(self.base_plugin_service.list_plugins(&owner).await?)
     }
 
     pub async fn list_plugins_for_scope(
         &self,
-        auth: &CloudAuthCtx,
-        scope: &CloudPluginScope,
-    ) -> Result<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, CloudComponentError>
-    {
+        auth: &AuthCtx,
+        scope: &PluginScope,
+    ) -> Result<Vec<PluginDefinition>, CloudComponentError> {
         let owner = self.get_owner(auth).await?;
         Ok(self
             .base_plugin_service
@@ -74,10 +70,9 @@ impl CloudPluginService {
 
     pub async fn list_plugin_versions(
         &self,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         name: &str,
-    ) -> Result<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, CloudComponentError>
-    {
+    ) -> Result<Vec<PluginDefinition>, CloudComponentError> {
         let owner = self.get_owner(auth).await?;
         Ok(self
             .base_plugin_service
@@ -87,8 +82,8 @@ impl CloudPluginService {
 
     pub async fn create_plugin(
         &self,
-        auth: &CloudAuthCtx,
-        definition: PluginDefinitionCreation<CloudPluginScope>,
+        auth: &AuthCtx,
+        definition: PluginDefinitionCreation,
     ) -> Result<(), CloudComponentError> {
         let owner = self.get_owner(auth).await?;
         self.base_plugin_service
@@ -99,28 +94,26 @@ impl CloudPluginService {
 
     pub async fn get(
         &self,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         name: &str,
         version: &str,
-    ) -> Result<Option<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, CloudComponentError>
-    {
+    ) -> Result<Option<PluginDefinition>, CloudComponentError> {
         let owner = self.get_owner(auth).await?;
         Ok(self.base_plugin_service.get(&owner, name, version).await?)
     }
 
     pub async fn get_by_id(
         &self,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         id: &PluginId,
-    ) -> Result<Option<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, CloudComponentError>
-    {
+    ) -> Result<Option<PluginDefinition>, CloudComponentError> {
         let owner = self.get_owner(auth).await?;
         Ok(self.base_plugin_service.get_by_id(&owner, id).await?)
     }
 
     pub async fn delete(
         &self,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
         name: &str,
         version: &str,
     ) -> Result<(), CloudComponentError> {
@@ -131,11 +124,8 @@ impl CloudPluginService {
         Ok(())
     }
 
-    async fn get_owner(
-        &self,
-        auth: &CloudAuthCtx,
-    ) -> Result<CloudPluginOwner, CloudComponentError> {
+    async fn get_owner(&self, auth: &AuthCtx) -> Result<PluginOwner, CloudComponentError> {
         let account_id = self.auth_service.get_account(auth).await?;
-        Ok(CloudPluginOwner { account_id })
+        Ok(PluginOwner { account_id })
     }
 }

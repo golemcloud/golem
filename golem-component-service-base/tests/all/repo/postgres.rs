@@ -30,9 +30,6 @@ mod tests {
     use super::PostgresDb;
     use crate::Tracing;
 
-    use crate::all::repo::UuidOwner;
-    use golem_common::model::component::CloudComponentOwner;
-    use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
     use golem_component_service_base::repo::component::{
         ComponentRepo, DbComponentRepo, LoggedComponentRepo,
     };
@@ -49,66 +46,45 @@ mod tests {
     }
 
     #[test_dep]
-    fn postgres_component_repo(
-        db: &PostgresDb,
-    ) -> Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send> {
+    fn postgres_component_repo(db: &PostgresDb) -> Arc<dyn ComponentRepo> {
         Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
             db.pool.clone(),
         )))
     }
 
     #[test_dep]
-    fn postgres_component_repo_uuid_owner(
-        db: &PostgresDb,
-    ) -> Arc<dyn ComponentRepo<UuidOwner> + Sync + Send> {
-        Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
-            db.pool.clone(),
-        )))
-    }
-
-    #[test_dep]
-    fn postgres_plugin_repo(
-        db: &PostgresDb,
-    ) -> Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync> {
+    fn postgres_plugin_repo(db: &PostgresDb) -> Arc<dyn PluginRepo> {
         Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db.pool.clone())))
     }
 
     #[test]
     #[tracing::instrument]
-    async fn repo_component_id_unique(
-        component_repo: &Arc<dyn ComponentRepo<UuidOwner> + Sync + Send>,
-    ) {
+    async fn repo_component_id_unique(component_repo: &Arc<dyn ComponentRepo>) {
         crate::all::repo::test_repo_component_id_unique(component_repo.clone()).await
     }
 
     #[test]
     #[tracing::instrument]
-    async fn repo_component_name_unique_in_namespace(
-        component_repo: &Arc<dyn ComponentRepo<UuidOwner> + Sync + Send>,
-    ) {
+    async fn repo_component_name_unique_in_namespace(component_repo: &Arc<dyn ComponentRepo>) {
         crate::all::repo::test_repo_component_name_unique_in_namespace(component_repo.clone()).await
     }
 
     #[test]
-    async fn repo_component_delete(
-        component_repo: &Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
-    ) {
+    async fn repo_component_delete(component_repo: &Arc<dyn ComponentRepo>) {
         crate::all::repo::test_repo_component_delete(component_repo.clone()).await
     }
 
     #[test]
     #[tracing::instrument]
-    async fn repo_component_constraints(
-        component_repo: &Arc<dyn ComponentRepo<UuidOwner> + Sync + Send>,
-    ) {
+    async fn repo_component_constraints(component_repo: &Arc<dyn ComponentRepo>) {
         crate::all::repo::test_repo_component_constraints(component_repo.clone()).await
     }
 
     #[test]
     #[tracing::instrument]
     async fn default_plugin_repo(
-        component_repo: &Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
-        plugin_repo: &Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync>,
+        component_repo: &Arc<dyn ComponentRepo>,
+        plugin_repo: &Arc<dyn PluginRepo>,
     ) -> Result<(), RepoError> {
         crate::all::repo::test_default_plugin_repo(component_repo.clone(), plugin_repo.clone())
             .await
@@ -117,8 +93,8 @@ mod tests {
     #[test]
     #[tracing::instrument]
     async fn default_component_plugin_installation(
-        component_repo: &Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
-        plugin_repo: &Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync>,
+        component_repo: &Arc<dyn ComponentRepo>,
+        plugin_repo: &Arc<dyn PluginRepo>,
     ) -> Result<(), RepoError> {
         crate::all::repo::test_default_component_plugin_installation(
             component_repo.clone(),
@@ -129,9 +105,7 @@ mod tests {
 
     #[test]
     #[tracing::instrument]
-    async fn component_find_by_names(
-        component_repo: &Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
-    ) {
+    async fn component_find_by_names(component_repo: &Arc<dyn ComponentRepo>) {
         crate::all::repo::test_repo_component_find_by_names(component_repo.clone()).await
     }
 }

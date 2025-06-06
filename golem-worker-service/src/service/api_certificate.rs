@@ -24,7 +24,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use derive_more::Display;
 use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_common::model::RetryConfig;
@@ -119,21 +119,21 @@ pub trait CertificateService {
     async fn create(
         &self,
         request: &CertificateRequest,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<crate::model::Certificate, CertificateServiceError>;
 
     async fn delete(
         &self,
         project_id: &ProjectId,
         certificate_id: &CertificateId,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<(), CertificateServiceError>;
 
     async fn get(
         &self,
         project_id: ProjectId,
         certificate_id: Option<CertificateId>,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<Vec<crate::model::Certificate>, CertificateServiceError>;
 }
 
@@ -160,8 +160,8 @@ impl CertificateServiceDefault {
         &self,
         project_id: &ProjectId,
         permission: ProjectAction,
-        auth: &CloudAuthCtx,
-    ) -> Result<CloudNamespace, CertificateServiceError> {
+        auth: &AuthCtx,
+    ) -> Result<Namespace, CertificateServiceError> {
         self.auth_service
             .authorize_project_action(project_id, permission, auth)
             .await
@@ -174,7 +174,7 @@ impl CertificateService for CertificateServiceDefault {
     async fn create(
         &self,
         request: &CertificateRequest,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<crate::model::Certificate, CertificateServiceError> {
         let project_id = &request.project_id;
         let namespace = self
@@ -218,7 +218,7 @@ impl CertificateService for CertificateServiceDefault {
         &self,
         project_id: &ProjectId,
         certificate_id: &CertificateId,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<(), CertificateServiceError> {
         let namespace = self
             .is_authorized(project_id, ProjectAction::DeleteApiDefinition, auth)
@@ -258,7 +258,7 @@ impl CertificateService for CertificateServiceDefault {
         &self,
         project_id: ProjectId,
         certificate_id: Option<CertificateId>,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<Vec<crate::model::Certificate>, CertificateServiceError> {
         let namespace = self
             .is_authorized(&project_id, ProjectAction::ViewApiDefinition, auth)
