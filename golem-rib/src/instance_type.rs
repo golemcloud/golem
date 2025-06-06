@@ -29,14 +29,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::{write, Debug, Display, Formatter};
 use std::ops::Deref;
-// InstanceType will be the type (`InferredType`) of the variable associated with creation of an instance
+
+// `InstanceType` will be the type (`InferredType`) of the variable associated with creation of an instance
 // This will be more or less a propagation of the original component metadata (structured as FunctionTypeRegistry),
 // but with better structure and mandates the fact that it belongs to a specific component
 // with better lookups in terms of namespace:package and interfaces.
 // Here we will add the resource type as well as the resource creation itself can be be part of this InstanceType
 // allowing lazy loading of resource and invoke the functions in them!
 // The distinction is only to disallow compiler to see only the functions that are part of a location (package/interface/package-interface/resoruce or all)
-
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum InstanceType {
     // Holds functions across every package and interface in every components
@@ -458,9 +458,11 @@ pub struct Function {
     pub function_type: FunctionType,
 }
 
-// Global Function Dictionary across Components,
-// In a FunctionDictionary, unlike registry, the function names becomes more biased
-// to Rib
+// Global Function Dictionary is a user friendly projection of FunctionTypeRegistry.
+// In fact, type inference phases make use of FunctionDictionary for each component
+// Unlike FunctionTypeRegistry, the function names in `FunctionDictionary` is closer to Rib grammar
+// of invoking functions. Example: A RegistryKey of `[constructor]cart` in FunctionTypeRegistry becomes
+// FunctionName::ResourceConstructor(cart) in FunctionDictionary
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd, Default)]
 pub struct FunctionDictionary {
     pub name_and_types: Vec<(FunctionName, FunctionType)>,
@@ -515,6 +517,12 @@ impl FunctionDictionary {
     }
 }
 
+// A `ResourceMethodDictionary` is a typesafe subset or projection of resource methods in
+// `FunctionDictionary`.
+// The `InstanceType` holds resource method dictionary instead of a full function method dictionary,
+// if the instance is a resource creation.
+// Given the Dictionaries do become part of InferredType (InferredType::InstanceType::Dictionaries)
+// order of component loading into the rib context shouldn't change it's type.
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct ResourceMethodDictionary {
     pub map: BTreeMap<ComponentInfo, Vec<(FullyQualifiedResourceMethod, FunctionType)>>,

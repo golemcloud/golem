@@ -20,7 +20,7 @@ use crate::{
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt::{format, Display, Formatter};
+use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
 #[derive(Debug, Default, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
