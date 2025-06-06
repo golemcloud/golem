@@ -521,7 +521,7 @@ impl From<&ResourceMethodDictionary> for ComponentDependencies {
     fn from(value: &ResourceMethodDictionary) -> Self {
         let mut dict = BTreeMap::new();
 
-        for (info, function_dictionary) in value.map {
+        for (info, function_dictionary) in value.map.iter() {
             let function_dictionary = FunctionDictionary {
                 name_and_types: function_dictionary
                     .iter()
@@ -529,7 +529,7 @@ impl From<&ResourceMethodDictionary> for ComponentDependencies {
                     .collect(),
             };
 
-            dict.insert(info, function_dictionary);
+            dict.insert(info.clone(), function_dictionary);
         }
 
         ComponentDependencies { dependencies: dict }

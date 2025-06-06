@@ -181,7 +181,7 @@ impl ComponentDependencies {
                     tree.insert(
                         component_info.clone(),
                         FunctionDictionary {
-                            name_and_types: name_and_types.cloned(),
+                            name_and_types: name_and_types.into_iter().cloned().collect(),
                         },
                     );
                 }
@@ -222,7 +222,7 @@ impl ComponentDependencies {
                     tree.insert(
                         component_info.clone(),
                         FunctionDictionary {
-                            name_and_types: name_and_types.cloned(),
+                            name_and_types: name_and_types.into_iter().cloned().collect(),
                         },
                     );
                 }

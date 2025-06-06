@@ -49,7 +49,9 @@ impl WorkerFunctionsInRib {
                     .iter()
                     .map(|param| AnalysedType::try_from(param).unwrap())
                     .collect(),
-                return_type,
+                return_type: function_type.return_type
+                    .as_ref()
+                    .map(|return_type| AnalysedType::try_from(return_type).unwrap()),
             };
 
             function_calls.push(function_call_in_rib)
