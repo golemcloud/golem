@@ -466,7 +466,10 @@ mod type_pull_up_tests {
     use crate::function_name::DynamicParsedFunctionName;
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
-    use crate::{ArmPattern, ComponentDependencies, Expr, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
+    use crate::{
+        ArmPattern, ComponentDependencies, Expr, FunctionTypeRegistry, InferredType, MatchArm,
+        VariableId,
+    };
 
     #[test]
     pub fn test_pull_up_identifier() {

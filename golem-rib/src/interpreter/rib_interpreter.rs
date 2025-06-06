@@ -1447,7 +1447,11 @@ mod tests {
         get_analysed_type_variant, get_metadata_with_enum_and_variant, get_value_and_type,
         strip_spaces,
     };
-    use crate::{ComponentDependencies, ComponentDependency, Expr, FunctionTypeRegistry, GlobalVariableTypeSpec, InferredType, InstructionId, Path, RibCompiler, RibCompilerConfig, VariableId};
+    use crate::{
+        ComponentDependencies, ComponentDependency, Expr, FunctionTypeRegistry,
+        GlobalVariableTypeSpec, InferredType, InstructionId, Path, RibCompiler, RibCompilerConfig,
+        VariableId,
+    };
     use golem_wasm_ast::analysis::analysed_type::{
         bool, case, f32, field, list, option, r#enum, record, result, s32, s8, str, tuple, u32,
         u64, u8, variant,
@@ -4642,7 +4646,11 @@ mod tests {
 
     mod test_utils {
         use crate::interpreter::rib_interpreter::Interpreter;
-        use crate::{ComponentDependency, ComponentInfo, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue, InstructionId, RibFunctionInvoke, RibFunctionInvokeResult, RibInput};
+        use crate::{
+            ComponentDependency, ComponentInfo, EvaluatedFnArgs, EvaluatedFqFn,
+            EvaluatedWorkerName, GetLiteralValue, InstructionId, RibFunctionInvoke,
+            RibFunctionInvokeResult, RibInput,
+        };
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, handle, list, option, r#enum, record, result, s32, str, tuple, u32,
@@ -4759,7 +4767,6 @@ mod tests {
                     result,
                 })],
             }]
-
         }
 
         pub(crate) fn get_metadata_with_resource_with_params() -> Vec<ComponentDependency> {
@@ -4773,7 +4780,7 @@ mod tests {
             get_metadata_with_resource(vec![])
         }
 
-        pub(crate) fn get_metadata() -> Vec<ComponentDependency>{
+        pub(crate) fn get_metadata() -> Vec<ComponentDependency> {
             // Exist in only amazon:shopping-cart/api1
             let analysed_function_in_api1 = AnalysedFunction {
                 name: "foo".to_string(),
@@ -4861,7 +4868,7 @@ mod tests {
 
             vec![ComponentDependency {
                 component_info,
-                exports:  vec![analysed_export1, analysed_export2, analysed_export3]
+                exports: vec![analysed_export1, analysed_export2, analysed_export3],
             }]
         }
 
@@ -5193,7 +5200,7 @@ mod tests {
 
             vec![ComponentDependency {
                 component_info,
-                exports
+                exports,
             }]
         }
 

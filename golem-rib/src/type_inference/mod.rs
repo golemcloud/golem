@@ -66,12 +66,17 @@ mod tests {
     use crate::type_checker::Path;
     use crate::type_inference::global_variable_type_binding::GlobalVariableTypeSpec;
     use crate::type_inference::tests::test_utils::{
-        call, concat, cond, equal_to, expr_block, get_component_dependency, get_analysed_type_enum,
-        get_analysed_type_variant, greater_than, greater_than_or_equal_to, identifier, less_than,
-        less_than_or_equal_to, let_binding, number, option, pattern_match, plus, record, result,
-        select_dynamic, select_field, sequence, tuple,
+        call, concat, cond, equal_to, expr_block, get_analysed_type_enum,
+        get_analysed_type_variant, get_component_dependency, greater_than,
+        greater_than_or_equal_to, identifier, less_than, less_than_or_equal_to, let_binding,
+        number, option, pattern_match, plus, record, result, select_dynamic, select_field,
+        sequence, tuple,
     };
-    use crate::{ArmPattern, ComponentDependencies, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionTypeRegistry, InferredExpr, InferredType, MatchArm, Number, ParsedFunctionSite, TypeName, VariableId};
+    use crate::{
+        ArmPattern, ComponentDependencies, DynamicParsedFunctionName,
+        DynamicParsedFunctionReference, Expr, FunctionTypeRegistry, InferredExpr, InferredType,
+        MatchArm, Number, ParsedFunctionSite, TypeName, VariableId,
+    };
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
 
@@ -248,8 +253,8 @@ mod tests {
         // foo.bar.baz + 1u32 should fail compilation since we are adding string with a u32.
         let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz + 1u32"#).unwrap();
 
-        let result =
-            invalid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![type_spec.clone()]);
+        let result = invalid_rib_expr
+            .infer_types(&ComponentDependencies::default(), &vec![type_spec.clone()]);
 
         assert!(result.is_err());
 
@@ -270,8 +275,8 @@ mod tests {
         // foo + 1u32 should fail compilation since we are adding string with a u32.
         let mut invalid_rib_expr = Expr::from_text(r#"foo + 1u32"#).unwrap();
 
-        let result =
-            invalid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![type_spec.clone()]);
+        let result = invalid_rib_expr
+            .infer_types(&ComponentDependencies::default(), &vec![type_spec.clone()]);
 
         assert!(result.is_err());
 
@@ -676,7 +681,6 @@ mod tests {
 
             "#;
 
-
         let mut expr = Expr::from_text(expr).unwrap();
 
         expr.infer_types(&component_dependencies, &vec![]).unwrap();
@@ -739,7 +743,6 @@ mod tests {
               { x: x, y: y, z: z }
 
             "#;
-
 
         let mut expr = Expr::from_text(expr).unwrap();
 
@@ -2044,7 +2047,6 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-
         expr.infer_types(&component_metadata, &vec![]).unwrap();
 
         let expected = test_utils::expected_expr_for_select_index();
@@ -2286,9 +2288,12 @@ mod tests {
         use crate::generic_type_parameter::GenericTypeParameter;
         use crate::parser::type_name::TypeName;
         use crate::rib_source_span::SourceSpan;
-        use crate::{ArmPattern, ComponentDependencies, ComponentDependency, ComponentInfo, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier, Number, ParsedFunctionSite, VariableId};
+        use crate::{
+            ArmPattern, ComponentDependencies, ComponentDependency, ComponentInfo, Expr,
+            FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier, Number,
+            ParsedFunctionSite, VariableId,
+        };
         use bigdecimal::BigDecimal;
-        use uuid::Uuid;
         use golem_wasm_ast::analysis::analysed_type::u64;
         use golem_wasm_ast::analysis::TypeVariant;
         use golem_wasm_ast::analysis::{
@@ -2296,6 +2301,7 @@ mod tests {
             AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeU32,
         };
         use golem_wasm_rpc::{Value, ValueAndType};
+        use uuid::Uuid;
 
         pub(crate) fn result(
             expr: Result<Expr, Expr>,
@@ -2581,9 +2587,7 @@ mod tests {
                 root_package_version: None,
             };
 
-            ComponentDependencies::from_raw(vec![(component_info, &metadata)])
-                .unwrap()
-
+            ComponentDependencies::from_raw(vec![(component_info, &metadata)]).unwrap()
         }
 
         pub(crate) fn get_analysed_type_enum(cases: Vec<&str>) -> AnalysedType {
@@ -2650,16 +2654,15 @@ mod tests {
                 root_package_version: None,
             };
 
-            ComponentDependencies::from_raw(
-                vec![(
-                    component_info,
-                    &vec![AnalysedExport::Function(AnalysedFunction {
-                        name: function_name.to_string(),
-                        parameters: analysed_function_parameters,
-                        result: Some(AnalysedFunctionResult { typ: output }),
-                    })],
-                )],
-            ).unwrap()
+            ComponentDependencies::from_raw(vec![(
+                component_info,
+                &vec![AnalysedExport::Function(AnalysedFunction {
+                    name: function_name.to_string(),
+                    parameters: analysed_function_parameters,
+                    result: Some(AnalysedFunctionResult { typ: output }),
+                })],
+            )])
+            .unwrap()
         }
 
         pub(crate) fn expected_expr_for_enum_test() -> Expr {

@@ -458,16 +458,19 @@ mod internal {
 
 #[cfg(test)]
 mod function_parameters_inference_tests {
-    use bigdecimal::BigDecimal;
-    use test_r::test;
-    use uuid::Uuid;
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::rib_source_span::SourceSpan;
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{ComponentDependencies, ComponentDependency, ComponentInfo, Expr, InferredType, ParsedFunctionSite};
+    use crate::{
+        ComponentDependencies, ComponentDependency, ComponentInfo, Expr, InferredType,
+        ParsedFunctionSite,
+    };
+    use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
+    use test_r::test;
+    use uuid::Uuid;
 
     fn get_component_dependencies() -> ComponentDependencies {
         let metadata = vec![
@@ -496,7 +499,7 @@ mod function_parameters_inference_tests {
             root_package_version: None,
         };
 
-       ComponentDependencies::from_raw(vec![(component_info, metadata.as_ref())])
+        ComponentDependencies::from_raw(vec![(component_info, metadata.as_ref())])
             .expect("Failed to create component dependencies")
     }
 

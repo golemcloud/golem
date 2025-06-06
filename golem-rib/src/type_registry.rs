@@ -69,8 +69,13 @@ impl ComponentDependencies {
                         .name_and_types
                         .iter()
                         .filter_map(|(f_name, function_type)| {
-                            if (f_name == function_name) { Some(function_type) } else { None }
-                        }).collect::<Vec<_>>();
+                            if (f_name == function_name) {
+                                Some(function_type)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
 
                     function_types_in_component.push((component_info.clone(), types));
                 }

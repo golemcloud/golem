@@ -768,9 +768,9 @@ fn expected_analysed_type() -> AnalysedType {
 }
 
 mod component_metadata {
-    use uuid::Uuid;
     use crate::function_metadata;
     use rib::{ComponentDependency, ComponentInfo};
+    use uuid::Uuid;
 
     pub(crate) fn component_metadata() -> Vec<ComponentDependency> {
         let mut exports = vec![];

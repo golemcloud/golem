@@ -622,6 +622,7 @@ mod internal {
 mod desugar_tests {
     use test_r::test;
 
+    use super::*;
     use crate::compiler::desugar::desugar_tests::expectations::expected_condition_with_identifiers;
     use crate::type_registry::FunctionTypeRegistry;
     use crate::{ComponentDependencies, ComponentDependency, ComponentInfo, Expr};
@@ -630,7 +631,6 @@ mod desugar_tests {
     };
     use std::ops::Deref;
     use uuid::Uuid;
-    use super::*;
 
     fn get_component_dependency() -> ComponentDependencies {
         let metadata = vec![
@@ -659,13 +659,7 @@ mod desugar_tests {
             root_package_version: None,
         };
 
-       ComponentDependencies::from_raw(
-            vec![(
-                component_info,
-                &metadata,
-            )],
-        ).unwrap()
-
+        ComponentDependencies::from_raw(vec![(component_info, &metadata)]).unwrap()
     }
 
     #[test]

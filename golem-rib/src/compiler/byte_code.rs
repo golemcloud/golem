@@ -993,7 +993,10 @@ mod compiler_tests {
     use test_r::test;
 
     use super::*;
-    use crate::{ArmPattern, ComponentDependencies, FunctionTypeRegistry, InferredType, MatchArm, RibCompiler, VariableId};
+    use crate::{
+        ArmPattern, ComponentDependencies, FunctionTypeRegistry, InferredType, MatchArm,
+        RibCompiler, VariableId,
+    };
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
@@ -2236,7 +2239,6 @@ mod compiler_tests {
                 component_info,
                 exports: vec![instance],
             }]
-
         }
         pub(crate) fn get_component_metadata(
             function_name: &str,
@@ -2261,11 +2263,11 @@ mod compiler_tests {
 
             vec![ComponentDependency {
                 component_info,
-                exports:   vec![AnalysedExport::Function(AnalysedFunction {
+                exports: vec![AnalysedExport::Function(AnalysedFunction {
                     name: function_name.to_string(),
                     parameters: analysed_function_parameters,
                     result: Some(AnalysedFunctionResult { typ: output }),
-                })]
+                })],
             }]
         }
 
