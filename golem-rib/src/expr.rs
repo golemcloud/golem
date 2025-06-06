@@ -19,7 +19,6 @@ use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
-use crate::type_registry::FunctionTypeRegistry;
 use crate::{
     from_string, text, type_checker, type_inference, ComponentDependencies,
     DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType,

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::rib_type_error::RibTypeError;
-use crate::{ComponentDependencies, Expr, FunctionTypeRegistry};
+use crate::{ComponentDependencies, Expr};
 
 // Handling the following and making sure the types are inferred fully at this stage.
 // The expr `Call` will still be expr `Call` itself but CallType will be worker instance creation

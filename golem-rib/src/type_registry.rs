@@ -145,7 +145,12 @@ impl ComponentDependencies {
                 .collect::<Vec<_>>();
 
             if !name_and_types.is_empty() {
-                tree.insert(component_info.clone(), FunctionDictionary { name_and_types: name_and_types.into_iter().cloned().collect() });
+                tree.insert(
+                    component_info.clone(),
+                    FunctionDictionary {
+                        name_and_types: name_and_types.into_iter().cloned().collect(),
+                    },
+                );
             }
         }
 

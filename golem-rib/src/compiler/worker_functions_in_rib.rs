@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ComponentDependencies, FunctionName, FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue, RibCompilationError};
+use crate::{ComponentDependencies, InferredExpr, RegistryKey, RibCompilationError};
 use golem_wasm_ast::analysis::AnalysedType;
 
 // An easier data type that focus just on the side effecting function calls in Rib script.
@@ -32,24 +32,24 @@ impl WorkerFunctionsInRib {
         inferred_expr: &InferredExpr,
         component_dependency: &ComponentDependencies,
     ) -> Result<Option<WorkerFunctionsInRib>, RibCompilationError> {
-        let worker_invoke_registry_keys =
-            inferred_expr.worker_invoke_registry_keys();
+        let worker_invoke_registry_keys = inferred_expr.worker_invoke_registry_keys();
 
         let mut function_calls = vec![];
 
         for key in worker_invoke_registry_keys {
-
-            let function_type = component_dependency.get_function_type(&None, &key).map_err(
-                |e| RibCompilationError::RibStaticAnalysisError(e.to_string()),
-            )?;
+            let function_type = component_dependency
+                .get_function_type(&None, &key)
+                .map_err(|e| RibCompilationError::RibStaticAnalysisError(e.to_string()))?;
 
             let function_call_in_rib = WorkerFunctionType {
                 function_key: key.name(),
-                parameter_types: function_type.parameter_types
+                parameter_types: function_type
+                    .parameter_types
                     .iter()
                     .map(|param| AnalysedType::try_from(param).unwrap())
                     .collect(),
-                return_type: function_type.return_type
+                return_type: function_type
+                    .return_type
                     .as_ref()
                     .map(|return_type| AnalysedType::try_from(return_type).unwrap()),
             };

@@ -14,7 +14,10 @@
 
 use crate::call_type::CallType;
 use crate::rib_type_error::RibTypeError;
-use crate::{ComponentDependencies, DynamicParsedFunctionName, Expr, ExprVisitor, FunctionName, FunctionTypeRegistry, GlobalVariableTypeSpec, RegistryKey};
+use crate::{
+    ComponentDependencies, DynamicParsedFunctionName, Expr, ExprVisitor, FunctionName,
+    FunctionTypeRegistry, GlobalVariableTypeSpec, RegistryKey,
+};
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]

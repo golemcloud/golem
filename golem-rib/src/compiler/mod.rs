@@ -23,7 +23,10 @@ pub use worker_functions_in_rib::*;
 
 use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{ComponentDependencies, ComponentInfo, Expr, FunctionDictionary, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo};
+use crate::{
+    ComponentDependencies, ComponentInfo, Expr, GlobalVariableTypeSpec, InferredExpr,
+    RibInputTypeInfo, RibOutputTypeInfo,
+};
 
 mod byte_code;
 mod compiler_output;
@@ -77,10 +80,14 @@ pub struct RibCompiler {
 
 impl RibCompiler {
     pub fn new(config: RibCompilerConfig) -> RibCompiler {
-        let component_dependencies =
-            ComponentDependencies::from_raw(config.component_dependencies.iter().map(|dep| {
-                (dep.component_info.clone(), &dep.exports)
-            }).collect::<Vec<_>>()).unwrap();
+        let component_dependencies = ComponentDependencies::from_raw(
+            config
+                .component_dependencies
+                .iter()
+                .map(|dep| (dep.component_info.clone(), &dep.exports))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
 
         let input_spec = config.input_spec;
 
@@ -859,7 +866,7 @@ mod compiler_error_tests {
     }
 
     mod test_utils {
-        use uuid::Uuid;
+        use crate::{ComponentDependency, ComponentInfo};
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, handle, list, record, s32, str, tuple, u32, u64, variant,
         };
@@ -867,7 +874,7 @@ mod compiler_error_tests {
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, NameTypePair,
         };
-        use crate::{ComponentDependency, ComponentInfo};
+        use uuid::Uuid;
 
         pub(crate) fn strip_spaces(input: &str) -> String {
             let lines = input.lines();
