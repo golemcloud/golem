@@ -49,14 +49,14 @@ mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::inferred_type::TypeOrigin;
     use crate::type_inference::GetTypeHint;
-    use crate::{ActualType, DynamicParsedFunctionName, ExpectedType, Expr, FullyQualifiedResourceConstructor, FunctionCallError, FunctionName, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeMismatchError};
+    use crate::{ActualType, ComponentDependency, DynamicParsedFunctionName, ExpectedType, Expr, FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod, FunctionCallError, FunctionName, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeMismatchError};
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
 
     pub(crate) fn resolve_call_argument_types(
         original_expr: &Expr,
         call_type: &mut CallType,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependency,
         args: &mut [Expr],
         function_result_inferred_type: &mut InferredType,
     ) -> Result<(), FunctionCallError> {
@@ -77,7 +77,7 @@ mod internal {
                         original_expr,
                         &resource_name,
                         Some(args),
-                        function_type_registry,
+                        component_dependency,
                     )?;
 
                     Ok(())
@@ -85,19 +85,20 @@ mod internal {
             },
 
             CallType::Function { function_name, .. } => {
-                let resource_constructor_registry_key =
-                    RegistryKey::resource_constructor_registry_key(function_name);
+                let function_name0 =
+                    RegistryKey::from_dynamic_parsed_function_name(function_name);
 
-                match resource_constructor_registry_key {
-                    Some(resource_constructor_name) => handle_function_with_resource(
+                match function_name0 {
+                    FunctionName::ResourceMethod(fqn_resource_method) =>
+                        handle_function_with_resource(
                         original_expr,
-                        &resource_constructor_name,
+                        &fqn_resource_method,
                         function_name,
-                        function_type_registry,
+                        component_dependency,
                         function_result_inferred_type,
                         args,
                     ),
-                    None => {
+                    _ => {
                         let registry_key = RegistryKey::from_call_type(&cloned).ok_or(
                             FunctionCallError::InvalidFunctionCall {
                                 function_name: function_name.to_string(),
@@ -109,7 +110,7 @@ mod internal {
                         infer_args_and_result_type(
                             original_expr,
                             &FunctionDetails::Fqn(function_name.clone()),
-                            function_type_registry,
+                            component_dependency,
                             &registry_key,
                             args,
                             Some(function_result_inferred_type),
@@ -132,12 +133,12 @@ mod internal {
             }
 
             CallType::VariantConstructor(variant_name) => {
-                let registry_key = RegistryKey::FunctionName(variant_name.clone());
+                let function_name = FunctionName::Variant(variant_name.clone());
                 infer_args_and_result_type(
                     original_expr,
                     &FunctionDetails::VariantName(variant_name.clone()),
-                    function_type_registry,
-                    &registry_key,
+                    component_dependency,
+                    &function_name,
                     args,
                     Some(function_result_inferred_type),
                 )
@@ -147,27 +148,25 @@ mod internal {
 
     fn handle_function_with_resource(
         original_expr: &Expr,
-        resource_constructor_registry_key: &RegistryKey,
+        fqn_resource_method: &FullyQualifiedResourceMethod,
         dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
-        function_type_registry: &FunctionTypeRegistry,
+        function_type_registry: &ComponentDependency,
         function_result_inferred_type: &mut InferredType,
         resource_method_args: &mut [Expr],
     ) -> Result<(), FunctionCallError> {
+        let constructor = fqn_resource_method.get_constructor();
         // Infer the resource constructors
         infer_resource_constructor_arguments(
             original_expr,
-            resource_constructor_registry_key,
+            &constructor,
             dynamic_parsed_function_name.raw_resource_params_mut(),
             function_type_registry,
         )?;
 
-        let resource_method_registry_key =
-            RegistryKey::fqn_registry_key(dynamic_parsed_function_name);
-
         // Infer the resource arguments
         infer_resource_method_arguments(
             original_expr,
-            &resource_method_registry_key,
+            &fqn_resource_method,
             dynamic_parsed_function_name,
             function_type_registry,
             resource_method_args,
@@ -177,28 +176,29 @@ mod internal {
 
     fn infer_resource_method_arguments(
         original_expr: &Expr,
-        resource_method_registry_key: &RegistryKey,
+        fqn_resource_method: &FullyQualifiedResourceMethod,
         dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
-        function_type_registry: &FunctionTypeRegistry,
+        function_type_registry: &ComponentDependency,
         resource_method_args: &mut [Expr],
         function_result_inferred_type: &mut InferredType,
     ) -> Result<(), FunctionCallError> {
         // Infer the types of resource method parameters
-        let resource_method_name_in_metadata =
-            dynamic_parsed_function_name.function_name_with_prefix_identifiers();
 
         let resource_constructor_name = dynamic_parsed_function_name
             .resource_name_simplified()
             .unwrap_or_default();
 
+        let resource_method =
+            fqn_resource_method.method_name.clone();
+
         infer_args_and_result_type(
             original_expr,
             &FunctionDetails::ResourceMethodName {
                 resource_name: resource_constructor_name,
-                resource_method_name: resource_method_name_in_metadata,
+                resource_method_name: resource_method,
             },
             function_type_registry,
-            resource_method_registry_key,
+            &FunctionName::ResourceMethod(fqn_resource_method.clone()),
             resource_method_args,
             Some(function_result_inferred_type),
         )
@@ -208,7 +208,7 @@ mod internal {
         original_expr: &Expr,
         resource_constructor: &FullyQualifiedResourceConstructor,
         raw_resource_parameters: Option<&mut [Expr]>,
-        function_type_registry: &FunctionTypeRegistry,
+        function_type_registry: &ComponentDependency,
     ) -> Result<(), FunctionCallError> {
         let mut constructor_params: &mut [Expr] = &mut [];
 
@@ -235,7 +235,7 @@ mod internal {
     fn infer_args_and_result_type(
         original_expr: &Expr,
         function_name: &FunctionDetails,
-        function_type_registry: &FunctionTypeRegistry,
+        function_type_registry: &ComponentDependency,
         key: &FunctionName,
         args: &mut [Expr],
         function_result_inferred_type: Option<&mut InferredType>,

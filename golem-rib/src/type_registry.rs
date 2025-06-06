@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FullyQualifiedFunctionName, FullyQualifiedInterfaceName, FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod, FunctionDictionary, FunctionName, InstanceCreationType, InstanceType, InterfaceName, PackageName, ParsedFunctionSite, TypeParameter};
+use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FullyQualifiedFunctionName, FullyQualifiedInterfaceName, FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod, FunctionDictionary, FunctionName, FunctionType, InstanceCreationType, InstanceType, InterfaceName, PackageName, ParsedFunctionSite, TypeParameter};
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -26,6 +26,24 @@ pub struct ComponentDependency {
 }
 
 impl ComponentDependency {
+
+    pub fn get_component_dependency(&self, component_info: &Option<ComponentInfo>, function_name: &FunctionName) -> Result<FunctionType, String> {
+        // If function name is unique across all components, we are not in need of a component_info per se
+        // and we can return the exact component dependency
+
+        match component_info {
+            None => {}
+            Some(component_info) => {
+                let function_dictionary = self.dependencies.get(component_info)
+                    .cloned()
+                    .ok_or_else(|| format!("component dependency for `{}` not found", component_info.component_name));
+
+                
+            }
+        }
+    }
+
+
     pub fn function_dictionary(&self) -> Vec<&FunctionDictionary> {
         self.dependencies
             .values()
@@ -466,6 +484,104 @@ impl RegistryKey {
         })
     }
 
+    pub fn from_dynamic_parsed_function_name(function_name: &DynamicParsedFunctionName) -> FunctionName {
+        let site = &function_name.site;
+        let (package_name, interface_name) = match site {
+            ParsedFunctionSite::Global => {
+                (None, None)
+            }
+
+            ParsedFunctionSite::Interface { name } => {
+                (None, Some(InterfaceName {
+                    name: name.clone(),
+                    version: None,
+                }))
+            }
+            ParsedFunctionSite::PackagedInterface { namespace, package, interface, version } => {
+                (Some(PackageName {
+                    namespace: namespace.clone(),
+                    package_name: package.clone(),
+                    version: None,
+                }), Some(InterfaceName {
+                    name: interface.clone(),
+                    version: version.as_ref().map(|v| v.to_string()),
+                }))
+            }
+        };
+
+        match &function_name.function {
+            DynamicParsedFunctionReference::Function { function } => {
+                FunctionName::Function(FullyQualifiedFunctionName {
+                    package_name,
+                    interface_name,
+                    function_name: function.clone(),
+                })
+            }
+            DynamicParsedFunctionReference::RawResourceConstructor { resource } => {
+                FunctionName::ResourceConstructor(FullyQualifiedResourceConstructor {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                })
+            }
+            DynamicParsedFunctionReference::RawResourceDrop { resource } => {
+                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                    method_name: "drop".to_string(),
+                })
+            }
+            DynamicParsedFunctionReference::RawResourceMethod { resource, method } => {
+                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                    method_name: method.clone(),
+                })
+            }
+            DynamicParsedFunctionReference::RawResourceStaticMethod { resource, method } => {
+                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                    method_name: method.clone(),
+                })
+            }
+            DynamicParsedFunctionReference::IndexedResourceConstructor { resource, .. } => {
+                FunctionName::ResourceConstructor(FullyQualifiedResourceConstructor {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                })
+            }
+            DynamicParsedFunctionReference::IndexedResourceMethod { resource, method, .. } => {
+                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                    method_name: method.clone(),
+                })
+            }
+            DynamicParsedFunctionReference::IndexedResourceStaticMethod { resource, method, .. } => {
+                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                    method_name: method.clone(),
+                })
+            }
+            DynamicParsedFunctionReference::IndexedResourceDrop { resource, .. } => {
+                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                    method_name: "drop".to_string(),
+                })
+            }
+        };
+    }
+
     pub fn from_call_type(call_type: &CallType) -> Option<FunctionName> {
         match call_type {
             CallType::VariantConstructor(variant_name) => {
@@ -475,103 +591,7 @@ impl RegistryKey {
                 Some(FunctionName::Enum(enum_name.clone()))
             }
             CallType::Function { function_name, .. } => {
-                let site = &function_name.site;
-                let (package_name, interface_name) = match site {
-                    ParsedFunctionSite::Global => {
-                        (None, None)
-                    }
-
-                    ParsedFunctionSite::Interface { name } => {
-                        (None, Some(InterfaceName {
-                            name: name.clone(),
-                            version: None,
-                        }))
-                    }
-                    ParsedFunctionSite::PackagedInterface { namespace, package, interface, version } => {
-                        (Some(PackageName {
-                            namespace: namespace.clone(),
-                            package_name: package.clone(),
-                            version: None,
-                        }), Some(InterfaceName {
-                            name: interface.clone(),
-                            version: version.as_ref().map(|v| v.to_string()),
-                        }))
-                    }
-                };
-
-                let function_name = match &function_name.function {
-                    DynamicParsedFunctionReference::Function { function } => {
-                        FunctionName::Function(FullyQualifiedFunctionName {
-                            package_name,
-                            interface_name,
-                            function_name: function.clone(),
-                        })
-                    }
-                    DynamicParsedFunctionReference::RawResourceConstructor { resource } => {
-                        FunctionName::ResourceConstructor(FullyQualifiedResourceConstructor {
-                            package_name,
-                            interface_name,
-                            resource_name: resource.clone(),
-                        })
-                    }
-                    DynamicParsedFunctionReference::RawResourceDrop { resource } => {
-                        FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
-                            package_name,
-                            interface_name,
-                            resource_name: resource.clone(),
-                            method_name: "drop".to_string(),
-                        })
-                    }
-                    DynamicParsedFunctionReference::RawResourceMethod { resource, method } => {
-                        FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
-                            package_name,
-                            interface_name,
-                            resource_name: resource.clone(),
-                            method_name: method.clone(),
-                        })
-                    }
-                    DynamicParsedFunctionReference::RawResourceStaticMethod { resource, method } => {
-                        FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
-                            package_name,
-                            interface_name,
-                            resource_name: resource.clone(),
-                            method_name: method.clone(),
-                        })
-                    }
-                    DynamicParsedFunctionReference::IndexedResourceConstructor { resource, .. } => {
-                        FunctionName::ResourceConstructor(FullyQualifiedResourceConstructor {
-                            package_name,
-                            interface_name,
-                            resource_name: resource.clone(),
-                        })
-                    }
-                    DynamicParsedFunctionReference::IndexedResourceMethod { resource, method, .. } => {
-                        FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
-                            package_name,
-                            interface_name,
-                            resource_name: resource.clone(),
-                            method_name: method.clone(),
-                        })
-                    }
-                    DynamicParsedFunctionReference::IndexedResourceStaticMethod { resource, method, .. } => {
-                        FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
-                            package_name,
-                            interface_name,
-                            resource_name: resource.clone(),
-                            method_name: method.clone(),
-                        })
-                    }
-                    DynamicParsedFunctionReference::IndexedResourceDrop { resource, .. } => {
-                        FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
-                            package_name,
-                            interface_name,
-                            resource_name: resource.clone(),
-                            method_name: "drop".to_string(),
-                        })
-                    }
-                };
-
-                Some(function_name)
+                Some(Self::from_dynamic_parsed_function_name(function_name))
             },
             CallType::InstanceCreation(_) => None,
         }

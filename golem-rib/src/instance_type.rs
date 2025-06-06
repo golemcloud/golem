@@ -705,6 +705,14 @@ pub struct FullyQualifiedResourceMethod {
 }
 
 impl FullyQualifiedResourceMethod {
+    pub fn get_constructor(&self) -> FullyQualifiedResourceConstructor {
+        FullyQualifiedResourceConstructor {
+            package_name: self.package_name.clone(),
+            interface_name: self.interface_name.clone(),
+            resource_name: self.resource_name.clone(),
+        }
+    }
+
     // We rely on the fully parsed function name itself to retrieve the original function name
     pub fn dynamic_parsed_function_name(
         &self,
