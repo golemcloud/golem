@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::instance_type::FullyQualifiedResourceConstructor;
+use crate::FullyQualifiedResourceConstructor;
 use crate::{ComponentInfo, DynamicParsedFunctionName, Expr};
 use std::fmt::Display;
 
@@ -108,7 +108,7 @@ impl Display for CallType {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::call_type::{CallType, InstanceCreationType};
-    use crate::instance_type::FullyQualifiedResourceConstructor;
+    use crate::FullyQualifiedResourceConstructor;
     use crate::{ComponentInfo, DynamicParsedFunctionName, Expr, ParsedFunctionName};
     use golem_api_grpc::proto::golem::rib::WorkerInstance;
 

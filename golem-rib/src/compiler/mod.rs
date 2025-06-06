@@ -22,7 +22,7 @@ pub use type_with_unit::*;
 pub use worker_functions_in_rib::*;
 
 use crate::rib_type_error::RibTypeError;
-use crate::type_registry::FunctionTypeRegistry;
+use crate::FunctionTypeRegistry;
 use crate::{
     ComponentDependencies, ComponentInfo, Expr, GlobalVariableTypeSpec, InferredExpr,
     RibInputTypeInfo, RibOutputTypeInfo,

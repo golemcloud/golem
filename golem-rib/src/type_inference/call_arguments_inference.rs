@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::type_registry::FunctionTypeRegistry;
+use crate::FunctionTypeRegistry;
 use crate::{ComponentDependencies, Expr, ExprVisitor, FunctionCallError};
 
 // Resolving function arguments and return types based on function type registry
@@ -460,9 +460,9 @@ mod internal {
 mod function_parameters_inference_tests {
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::rib_source_span::SourceSpan;
-    use crate::type_registry::FunctionTypeRegistry;
+    use crate::FunctionTypeRegistry;
     use crate::{
-        ComponentDependencies, ComponentDependency, ComponentInfo, Expr, InferredType,
+        ComponentDependencies, ComponentInfo, Expr, InferredType,
         ParsedFunctionSite,
     };
     use bigdecimal::BigDecimal;

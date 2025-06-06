@@ -35,7 +35,6 @@ mod internal {
     use crate::instance_type::InstanceType;
     use crate::rib_type_error::RibTypeError;
     use crate::type_parameter::TypeParameter;
-    use crate::type_registry::FunctionTypeRegistry;
     use crate::{
         ComponentDependencies, CustomError, Expr, ExprVisitor, FunctionCallError, InferredType,
         ParsedFunctionReference, TypeInternal, TypeOrigin,

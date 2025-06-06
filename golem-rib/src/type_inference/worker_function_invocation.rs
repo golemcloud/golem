@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::{CallType, InstanceCreationType};
-use crate::instance_type::{FunctionName, InstanceType};
+use crate::{FunctionName, InstanceType};
 use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
 use crate::{

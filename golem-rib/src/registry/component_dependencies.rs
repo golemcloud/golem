@@ -1,0 +1,331 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::{Expr, FullyQualifiedInterfaceName, FunctionDictionary, FunctionName, FunctionType, FunctionTypeRegistry, InstanceCreationType, InterfaceName, PackageName, TypeParameter};
+use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
+use golem_wasm_ast::analysis::{TypeEnum};
+use std::collections::{BTreeMap};
+use std::fmt::{Display, Formatter};
+use uuid::Uuid;
+
+#[derive(Debug, Default, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
+pub struct ComponentDependencies {
+    pub dependencies: BTreeMap<ComponentInfo, FunctionDictionary>,
+}
+
+impl ComponentDependencies {
+    pub fn size(&self) -> usize {
+        self.dependencies.len()
+    }
+
+    pub fn get_variants(&self) -> Vec<TypeVariant> {
+        let mut variants = vec![];
+
+        for function_dict in self.dependencies.values() {
+            variants.extend(function_dict.get_all_variants());
+        }
+
+        variants
+    }
+
+    pub fn get_enums(&self) -> Vec<TypeEnum> {
+        let mut enums = vec![];
+
+        for function_dict in self.dependencies.values() {
+            enums.extend(function_dict.get_all_enums());
+        }
+
+        enums
+    }
+
+    pub fn get_function_type(
+        &self,
+        component_info: &Option<crate::ComponentInfo>,
+        function_name: &FunctionName,
+    ) -> Result<FunctionType, String> {
+        // If function name is unique across all components, we are not in need of a component_info per se
+        // and we can return the exact component dependency
+        match component_info {
+            None => {
+                let mut function_types_in_component = vec![];
+
+                for (component_info, function_dict) in &self.dependencies {
+                    let types = function_dict
+                        .name_and_types
+                        .iter()
+                        .filter_map(|(f_name, function_type)| {
+                            if (f_name == function_name) {
+                                Some(function_type)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    function_types_in_component.push((component_info.clone(), types));
+                }
+
+                if function_types_in_component.is_empty() {
+                    Err("unknown function".to_string())
+                } else {
+                    if function_types_in_component.len() > 1 {
+                        Err(format!(
+                            "function `{}` is ambiguous across components",
+                            function_name
+                        ))
+                    } else {
+                        Ok(function_types_in_component[0].1[0].clone())
+                    }
+                }
+            }
+            Some(component_info) => {
+                let function_dictionary = self
+                    .dependencies
+                    .get(component_info)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!(
+                            "component dependency for `{}` not found",
+                            component_info.component_name
+                        )
+                    })?;
+
+                let function_type = function_dictionary.name_and_types.iter().find_map(
+                    |(f_name, function_type)| {
+                        if f_name == f_name {
+                            Some(function_type.clone())
+                        } else {
+                            None
+                        }
+                    },
+                );
+
+                if let Some(function_type) = function_type {
+                    Ok(function_type)
+                } else {
+                    Err(format!(
+                        "function `{}` not found in component `{}`",
+                        function_name, component_info.component_name
+                    ))
+                }
+            }
+        }
+    }
+
+    pub fn function_dictionary(&self) -> Vec<&FunctionDictionary> {
+        self.dependencies.values().collect::<Vec<_>>()
+    }
+
+    pub fn filter_by_interface(
+        &self,
+        interface_name: &InterfaceName,
+    ) -> Result<crate::ComponentDependencies, String> {
+        let mut tree = BTreeMap::new();
+
+        for (component_info, function_dict) in self.dependencies.iter() {
+            let name_and_types: Vec<&(FunctionName, FunctionType)> = function_dict
+                .name_and_types
+                .iter()
+                .filter(|(f, _)| f.interface_name().as_ref() == Some(interface_name))
+                .collect::<Vec<_>>();
+
+            if !name_and_types.is_empty() {
+                tree.insert(
+                    component_info.clone(),
+                    FunctionDictionary {
+                        name_and_types: name_and_types.into_iter().cloned().collect(),
+                    },
+                );
+            }
+        }
+
+        if tree.is_empty() {
+            return Err(format!("interface `{}` not found", interface_name));
+        }
+
+        Ok(crate::ComponentDependencies { dependencies: tree })
+    }
+
+    pub fn filter_by_package_name(
+        &self,
+        package_name: &PackageName,
+    ) -> Result<crate::ComponentDependencies, String> {
+        // If the package name corresponds to the root package name we pick that up
+        let mut tree = BTreeMap::new();
+
+        for (component_info, function_dict) in self.dependencies.iter() {
+            if let Some(root_package_name) = &component_info.root_package_name {
+                if root_package_name == &package_name.to_string() {
+                    tree.insert(component_info.clone(), function_dict.clone());
+                }
+            } else {
+                // If this package doesn't correspond to a root, but happens to be part of the component then
+
+                let name_and_types = function_dict
+                    .name_and_types
+                    .iter()
+                    .filter(|(f, _)| f.package_name() == Some(package_name.clone()))
+                    .collect::<Vec<_>>();
+
+                if !name_and_types.is_empty() {
+                    tree.insert(
+                        component_info.clone(),
+                        FunctionDictionary {
+                            name_and_types: name_and_types.into_iter().cloned().collect(),
+                        },
+                    );
+                }
+            }
+        }
+
+        if tree.is_empty() {
+            return Err(format!("package `{}` not found", package_name));
+        }
+
+        Ok(crate::ComponentDependencies { dependencies: tree })
+    }
+
+    pub fn filter_by_fully_qualified_interface(
+        &self,
+        fqi: &FullyQualifiedInterfaceName,
+    ) -> Result<Self, String> {
+        let mut tree = BTreeMap::new();
+
+        for (component_info, function_dict) in self.dependencies.iter() {
+            if let Some(root_package_name) = &component_info.root_package_name {
+                if root_package_name == &fqi.package_name.to_string() {
+                    tree.insert(component_info.clone(), function_dict.clone());
+                }
+            } else {
+                // If this package doesn't correspond to a root, but happens to be part of the component then
+
+                let name_and_types = function_dict
+                    .name_and_types
+                    .iter()
+                    .filter(|(f, _)| {
+                        f.package_name() == Some(fqi.package_name.clone())
+                            && f.interface_name() == Some(fqi.interface_name.clone())
+                    })
+                    .collect::<Vec<_>>();
+
+                if !name_and_types.is_empty() {
+                    tree.insert(
+                        component_info.clone(),
+                        FunctionDictionary {
+                            name_and_types: name_and_types.into_iter().cloned().collect(),
+                        },
+                    );
+                }
+            }
+        }
+
+        if tree.is_empty() {
+            return Err(format!("fully qualified interface `{}` not found", fqi));
+        }
+
+        Ok(crate::ComponentDependencies { dependencies: tree })
+    }
+
+    // type-parameter can be None.
+    // If present, it may represent the root package name of the component
+    // or it could represent the package or interface within a component
+    pub fn get_worker_instance_type(
+        &self,
+        type_parameter: Option<TypeParameter>,
+        worker_name: Option<Expr>,
+    ) -> Result<InstanceCreationType, String> {
+        match type_parameter {
+            None => Ok(InstanceCreationType::Worker {
+                component_info: None,
+                worker_name: worker_name.map(|expr| Box::new(expr)),
+            }),
+
+            Some(type_parameter) => {
+                match type_parameter {
+                    // If the user has specified the root package name, annotate the InstanceCreationType with the component already
+                    TypeParameter::PackageName(package_name) => {
+                        let result =
+                            self.dependencies
+                                .iter()
+                                .find(|(x, y)| match &x.root_package_name {
+                                    Some(name) => {
+                                        let pkg = match &x.root_package_version {
+                                            None => name.to_string(),
+                                            Some(version) => format!("{}@{}", name, version),
+                                        };
+
+                                        pkg == package_name.to_string()
+                                    }
+
+                                    None => false,
+                                });
+
+                        if let Some(result) = result {
+                            Ok(InstanceCreationType::Worker {
+                                component_info: Some(result.0.clone()),
+                                worker_name: worker_name.map(|expr| Box::new(expr)),
+                            })
+                        } else {
+                            Ok(InstanceCreationType::Worker {
+                                component_info: None,
+                                worker_name: worker_name.map(|expr| Box::new(expr)),
+                            })
+                        }
+                    }
+
+                    _ => Ok(InstanceCreationType::Worker {
+                        component_info: None,
+                        worker_name: worker_name.map(|expr| Box::new(expr)),
+                    }),
+                }
+            }
+        }
+    }
+
+    pub fn from_raw(
+        component_and_exports: Vec<(crate::ComponentInfo, &Vec<AnalysedExport>)>,
+    ) -> Result<Self, String> {
+        let mut dependencies = BTreeMap::new();
+
+        for (component_info, exports) in component_and_exports {
+            let function_type_registry = FunctionTypeRegistry::from_export_metadata(exports);
+            let function_dictionary =
+                FunctionDictionary::from_function_type_registry(&function_type_registry)?;
+            dependencies.insert(component_info, function_dictionary);
+        }
+
+        Ok(crate::ComponentDependencies { dependencies })
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
+pub struct ComponentInfo {
+    pub component_name: String,
+    pub component_id: Uuid,
+    pub root_package_name: Option<String>,
+    pub root_package_version: Option<String>,
+}
+
+impl Display for crate::ComponentInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Component: {}, ID: {}, Root Package: {}@{}",
+            self.component_name,
+            self.component_id,
+            self.root_package_name.as_deref().unwrap_or("unknown"),
+            self.root_package_version.as_deref().unwrap_or("unknown")
+        )
+    }
+}

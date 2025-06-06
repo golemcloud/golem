@@ -23,11 +23,11 @@ pub use inferred_type::*;
 pub use instance_type::*;
 pub use interpreter::*;
 pub use parser::type_name::TypeName;
+pub use registry::*;
 pub use text::*;
 pub use type_checker::*;
 pub use type_inference::*;
 pub use type_parameter::*;
-pub use type_registry::*;
 pub use variable_id::*;
 
 mod call_type;
@@ -48,8 +48,8 @@ mod type_inference;
 mod type_parameter;
 mod type_parameter_parser;
 mod type_refinement;
-mod type_registry;
 mod variable_id;
+mod registry;
 
 #[cfg(test)]
 test_r::enable!();
