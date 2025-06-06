@@ -31,15 +31,15 @@ use std::fmt::{write, Debug, Display, Formatter};
 use std::ops::Deref;
 
 // `InstanceType` will be the type (`InferredType`) of the variable associated with creation of an instance
-// This will be more or less a propagation of the original component metadata (structured as FunctionTypeRegistry),
-// but with better structure and mandates the fact that it belongs to a specific component
-// with better lookups in terms of namespace:package and interfaces.
-// Here we will add the resource type as well as the resource creation itself can be be part of this InstanceType
-// allowing lazy loading of resource and invoke the functions in them!
-// The distinction is only to disallow compiler to see only the functions that are part of a location (package/interface/package-interface/resoruce or all)
+// `InstanceType` is structured to help with compilation logic better. Example: a random `instance()` call
+// is of type `Global` to begin with and as soon as method invocations becomes a real function call,
+// the type of instance becomes more and more precise.
+//
+// Please look at `InstanceCreationType`
+// for a tangible view on the fact that an instance can be either worker or a resource.
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum InstanceType {
-    // Holds functions across every package and interface in every components
+    // Holds functions across every package and interface in every component
     Global {
         worker_name: Option<Box<Expr>>,
         component_dependency: ComponentDependencies,
@@ -661,9 +661,7 @@ impl FunctionDictionary {
                                 function_name,
                                 FunctionType {
                                     parameter_types: vec![],
-                                    return_type: Some(InferredType::variant(
-                                       cases
-                                    )),
+                                    return_type: Some(InferredType::variant(cases)),
                                 },
                             ));
                         }

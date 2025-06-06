@@ -1987,12 +1987,9 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let metadata =  get_metadata_with_enum_and_variant();
+        let metadata = get_metadata_with_enum_and_variant();
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(
-            metadata,
-            vec![],
-        ));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
 
         let compiled = compiler.compile(expr);
 
