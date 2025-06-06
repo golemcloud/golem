@@ -36,7 +36,10 @@ mod internal {
     use crate::rib_type_error::RibTypeError;
     use crate::type_parameter::TypeParameter;
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{ComponentDependency, CustomError, Expr, ExprVisitor, FunctionCallError, InferredType, ParsedFunctionReference, TypeInternal, TypeOrigin};
+    use crate::{
+        ComponentDependency, CustomError, Expr, ExprVisitor, FunctionCallError, InferredType,
+        ParsedFunctionReference, TypeInternal, TypeOrigin,
+    };
 
     pub(crate) fn search_for_invalid_instance_declarations(
         expr: &mut Expr,
@@ -106,9 +109,12 @@ mod internal {
                     })
                     .transpose()?;
 
-
-                let instance_creation_type =
-                    get_instance_creation_details(call_type, type_parameter.clone(), args, component_dependency)?;
+                let instance_creation_type = get_instance_creation_details(
+                    call_type,
+                    type_parameter.clone(),
+                    args,
+                    component_dependency,
+                )?;
 
                 if let Some(instance_creation_type) = instance_creation_type {
                     let worker_name = instance_creation_type.worker_name().cloned();
@@ -154,28 +160,30 @@ mod internal {
         component_dependency: &ComponentDependency,
     ) -> Result<Option<InstanceCreationType>, RibTypeError> {
         match call_type {
-            CallType::Function {  function_name, .. } => {
+            CallType::Function { function_name, .. } => {
                 let function_name = function_name.to_parsed_function_name().function;
                 match function_name {
                     ParsedFunctionReference::Function { function } if function == "instance" => {
                         let optional_worker_name_expression = args.first();
 
-                        let instance_creation = component_dependency.get_worker_instance_type(
-                            type_parameter,
-                            optional_worker_name_expression.cloned(),
-                        ).map_err(|err| {
-                            RibTypeError::from(CustomError::new(
-                                &Expr::Call {
-                                    call_type: call_type.clone(),
-                                    generic_type_parameter: None,
-                                    args: args.to_vec(),
-                                    inferred_type: InferredType::unknown(),
-                                    source_span: Default::default(),
-                                    type_annotation: None,
-                                },
-                                format!("failed to create instance: {}", err),
-                            ))
-                        })?;
+                        let instance_creation = component_dependency
+                            .get_worker_instance_type(
+                                type_parameter,
+                                optional_worker_name_expression.cloned(),
+                            )
+                            .map_err(|err| {
+                                RibTypeError::from(CustomError::new(
+                                    &Expr::Call {
+                                        call_type: call_type.clone(),
+                                        generic_type_parameter: None,
+                                        args: args.to_vec(),
+                                        inferred_type: InferredType::unknown(),
+                                        source_span: Default::default(),
+                                        type_annotation: None,
+                                    },
+                                    format!("failed to create instance: {}", err),
+                                ))
+                            })?;
 
                         Ok(Some(instance_creation))
                     }

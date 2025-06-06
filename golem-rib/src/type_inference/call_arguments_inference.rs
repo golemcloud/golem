@@ -16,7 +16,10 @@ use crate::type_registry::FunctionTypeRegistry;
 use crate::{ComponentDependency, Expr, ExprVisitor, FunctionCallError};
 
 // Resolving function arguments and return types based on function type registry
-// If the function call is a mere instance creation, then the return type i
+// If the function call is a mere instance creation, then the return type
+// At this point we can even annotate the call_type with the actual component name
+// If component  is ambiguous at this stage, compiler has no other choice than bailing
+// and asking the user to specify the type parameter that may help with drilling down the component explicitly.
 pub fn infer_function_call_types(
     expr: &mut Expr,
     component_dependency: &ComponentDependency,
@@ -49,7 +52,12 @@ mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::inferred_type::TypeOrigin;
     use crate::type_inference::GetTypeHint;
-    use crate::{ActualType, ComponentDependency, DynamicParsedFunctionName, ExpectedType, Expr, FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod, FunctionCallError, FunctionName, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeMismatchError};
+    use crate::{
+        ActualType, ComponentDependency, DynamicParsedFunctionName, ExpectedType, Expr,
+        FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod, FunctionCallError,
+        FunctionName, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
+        TypeMismatchError,
+    };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
 
@@ -85,21 +93,21 @@ mod internal {
             },
 
             CallType::Function { function_name, .. } => {
-                let function_name0 =
-                    RegistryKey::from_dynamic_parsed_function_name(function_name);
+                let function_name0 = RegistryKey::from_dynamic_parsed_function_name(function_name);
 
                 match function_name0 {
-                    FunctionName::ResourceMethod(fqn_resource_method) =>
+                    FunctionName::ResourceMethod(fqn_resource_method) => {
                         handle_function_with_resource(
-                        original_expr,
-                        &fqn_resource_method,
-                        function_name,
-                        component_dependency,
-                        function_result_inferred_type,
-                        args,
-                    ),
+                            original_expr,
+                            &fqn_resource_method,
+                            function_name,
+                            component_dependency,
+                            function_result_inferred_type,
+                            args,
+                        )
+                    }
                     _ => {
-                        let registry_key = RegistryKey::from_call_type(&cloned).ok_or(
+                        let registry_key = FunctionName::from_call_type(&cloned).ok_or(
                             FunctionCallError::InvalidFunctionCall {
                                 function_name: function_name.to_string(),
                                 expr: original_expr.clone(),
@@ -188,8 +196,7 @@ mod internal {
             .resource_name_simplified()
             .unwrap_or_default();
 
-        let resource_method =
-            fqn_resource_method.method_name.clone();
+        let resource_method = fqn_resource_method.method_name.clone();
 
         infer_args_and_result_type(
             original_expr,
@@ -216,8 +223,7 @@ mod internal {
             constructor_params = resource_params
         }
 
-        let function_name =
-            FunctionName::ResourceConstructor(resource_constructor.clone());
+        let function_name = FunctionName::ResourceConstructor(resource_constructor.clone());
 
         // Infer the types of constructor parameter expressions
         infer_args_and_result_type(
@@ -235,79 +241,112 @@ mod internal {
     fn infer_args_and_result_type(
         original_expr: &Expr,
         function_name: &FunctionDetails,
-        function_type_registry: &ComponentDependency,
+        component_dependency: &ComponentDependency,
         key: &FunctionName,
         args: &mut [Expr],
         function_result_inferred_type: Option<&mut InferredType>,
     ) -> Result<(), FunctionCallError> {
-        if let Some(value) = function_type_registry.types.get(key) {
-            match value {
-                RegistryValue::Value(_) => Ok(()),
-                RegistryValue::Variant {
-                    parameter_types,
-                    variant_type,
-                } => {
-                    let parameter_types = parameter_types.clone();
-
-                    if parameter_types.len() == args.len() {
-                        tag_argument_types(original_expr, function_name, args, &parameter_types)?;
-
-                        if let Some(function_result_type) = function_result_inferred_type {
-                            *function_result_type = InferredType::from_type_variant(variant_type);
-                        }
-
-                        Ok(())
-                    } else {
-                        Err(FunctionCallError::ArgumentSizeMisMatch {
-                            function_name: function_name.name(),
-                            expr: original_expr.clone(),
-                            expected: parameter_types.len(),
-                            provided: args.len(),
-                        })
-                    }
-                }
-                RegistryValue::Function {
-                    parameter_types,
-                    return_type,
-                } => {
-                    let mut parameter_types = parameter_types.clone();
-
-                    if let FunctionDetails::ResourceMethodName { .. } = function_name {
-                        if let Some(AnalysedType::Handle(_)) = parameter_types.first() {
-                            parameter_types.remove(0);
-                        }
-                    }
-
-                    if parameter_types.len() == args.len() {
-                        tag_argument_types(original_expr, function_name, args, &parameter_types)?;
-
-                        if let Some(function_result_type) = function_result_inferred_type {
-                            *function_result_type = {
-                                if let Some(tpe) = return_type {
-                                    tpe.into()
-                                } else {
-                                    InferredType::sequence(vec![])
-                                }
-                            }
-                        };
-
-                        Ok(())
-                    } else {
-                        Err(FunctionCallError::ArgumentSizeMisMatch {
-                            function_name: function_name.name(),
-                            expr: original_expr.clone(),
-                            expected: parameter_types.len(),
-                            provided: args.len(),
-                        })
-                    }
-                }
-            }
-        } else {
-            Err(FunctionCallError::InvalidFunctionCall {
+        let function_type = component_dependency
+            .get_function_type(&None, key)
+            .map_err(|err| FunctionCallError::InvalidFunctionCall {
                 function_name: function_name.to_string(),
                 expr: original_expr.clone(),
-                message: "unknown function".to_string(),
-            })
+                message: err.to_string(),
+            })?;
+
+        let mut parameter_types: Vec<AnalysedType> = function_type
+            .parameter_types
+            .iter()
+            .map(|t| AnalysedType::try_from(t).unwrap())
+            .collect::<Vec<_>>();
+
+        match key {
+            FunctionName::Variant(_) => {
+                let result_type = function_type.as_type_variant().ok_or(
+                    FunctionCallError::InvalidFunctionCall {
+                        function_name: function_name.to_string(),
+                        expr: original_expr.clone(),
+                        message: "expected a variant type".to_string(),
+                    },
+                )?;
+
+                if parameter_types.len() == args.len() {
+                    tag_argument_types(original_expr, function_name, args, &parameter_types)?;
+
+                    if let Some(function_result_type) = function_result_inferred_type {
+                        *function_result_type = InferredType::from_type_variant(&result_type);
+                    }
+
+                    Ok(())
+                } else {
+                    Err(FunctionCallError::ArgumentSizeMisMatch {
+                        function_name: function_name.name(),
+                        expr: original_expr.clone(),
+                        expected: parameter_types.len(),
+                        provided: args.len(),
+                    })
+                }
+            }
+
+            FunctionName::Enum(_) => Ok(()),
+
+            FunctionName::ResourceConstructor(_) | FunctionName::Function(_) => {
+                if parameter_types.len() == args.len() {
+                    let result_type = function_type.return_type.as_ref().map(|t| t.clone());
+
+                    tag_argument_types(original_expr, function_name, args, &parameter_types)?;
+
+                    if let Some(function_result_type) = function_result_inferred_type {
+                        *function_result_type = {
+                            if let Some(tpe) = result_type {
+                                tpe.into()
+                            } else {
+                                InferredType::sequence(vec![])
+                            }
+                        };
+                    }
+
+                    Ok(())
+                } else {
+                    Err(FunctionCallError::ArgumentSizeMisMatch {
+                        function_name: function_name.name(),
+                        expr: original_expr.clone(),
+                        expected: parameter_types.len(),
+                        provided: args.len(),
+                    })
+                }
+            }
+
+            FunctionName::ResourceMethod(_) => {
+                if let Some(AnalysedType::Handle(_)) = parameter_types.first() {
+                    parameter_types.remove(0);
+                }
+
+                let return_type = function_type.return_type.as_ref().map(|t| t.clone());
+
+                if parameter_types.len() == args.len() {
+                    tag_argument_types(original_expr, function_name, args, &parameter_types)?;
+
+                    if let Some(function_result_type) = function_result_inferred_type {
+                        *function_result_type = {
+                            if let Some(tpe) = return_type {
+                                tpe
+                            } else {
+                                InferredType::sequence(vec![])
+                            }
+                        }
+                    };
+
+                    Ok(())
+                } else {
+                    Err(FunctionCallError::ArgumentSizeMisMatch {
+                        function_name: function_name.name(),
+                        expr: original_expr.clone(),
+                        expected: parameter_types.len(),
+                        provided: args.len(),
+                    })
+                }
+            }
         }
     }
 

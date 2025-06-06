@@ -13,7 +13,12 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FullyQualifiedFunctionName, FullyQualifiedInterfaceName, FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod, FunctionDictionary, FunctionName, FunctionType, InstanceCreationType, InstanceType, InterfaceName, PackageName, ParsedFunctionSite, TypeParameter};
+use crate::{
+    DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FullyQualifiedFunctionName,
+    FullyQualifiedInterfaceName, FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod,
+    FunctionDictionary, FunctionName, FunctionType, InstanceCreationType, InstanceType,
+    InterfaceName, PackageName, ParsedFunctionSite, TypeParameter,
+};
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -26,31 +31,108 @@ pub struct ComponentDependency {
 }
 
 impl ComponentDependency {
+    pub fn get_variants(&self) -> Vec<TypeVariant> {
+        let mut variants = vec![];
 
-    pub fn get_component_dependency(&self, component_info: &Option<ComponentInfo>, function_name: &FunctionName) -> Result<FunctionType, String> {
+        for function_dict in self.dependencies.values() {
+            variants.extend(function_dict.get_all_variants());
+        }
+
+        variants
+    }
+
+    pub fn get_enums(&self) -> Vec<TypeEnum> {
+        let mut enums = vec![];
+
+        for function_dict in self.dependencies.values() {
+            enums.extend(function_dict.get_all_enums());
+        }
+
+        enums
+    }
+
+    pub fn get_function_type(
+        &self,
+        component_info: &Option<ComponentInfo>,
+        function_name: &FunctionName,
+    ) -> Result<FunctionType, String> {
         // If function name is unique across all components, we are not in need of a component_info per se
         // and we can return the exact component dependency
 
         match component_info {
-            None => {}
-            Some(component_info) => {
-                let function_dictionary = self.dependencies.get(component_info)
-                    .cloned()
-                    .ok_or_else(|| format!("component dependency for `{}` not found", component_info.component_name));
+            None => {
+                let mut function_types_in_component = vec![];
 
-                
+                for (component_info, function_dict) in &self.dependencies {
+                    function_dict
+                        .name_and_types
+                        .iter()
+                        .for_each(|(f_name, function_type)| {
+                            if f_name == f_name {
+                                function_types_in_component
+                                    .push((component_info, function_type.clone()));
+                            }
+                        });
+                }
+
+                if function_types_in_component.is_empty() {
+                    Err(format!(
+                        "function `{}` not found in any component",
+                        function_name
+                    ))
+                } else {
+                    if function_types_in_component.len() > 1 {
+                        Err(format!(
+                            "function `{}` is ambiguous across components",
+                            function_name
+                        ))
+                    } else {
+                        Ok(function_types_in_component[0].1.clone())
+                    }
+                }
+            }
+            Some(component_info) => {
+                let function_dictionary = self
+                    .dependencies
+                    .get(component_info)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!(
+                            "component dependency for `{}` not found",
+                            component_info.component_name
+                        )
+                    })?;
+
+                let function_type = function_dictionary.name_and_types.iter().find_map(
+                    |(f_name, function_type)| {
+                        if f_name == f_name {
+                            Some(function_type.clone())
+                        } else {
+                            None
+                        }
+                    },
+                );
+
+                if let Some(function_type) = function_type {
+                    Ok(function_type)
+                } else {
+                    Err(format!(
+                        "function `{}` not found in component `{}`",
+                        function_name, component_info.component_name
+                    ))
+                }
             }
         }
     }
 
-
     pub fn function_dictionary(&self) -> Vec<&FunctionDictionary> {
-        self.dependencies
-            .values()
-            .collect::<Vec<_>>()
+        self.dependencies.values().collect::<Vec<_>>()
     }
 
-    pub fn filter_by_interface(&self, interface_name: &InterfaceName) -> Result<ComponentDependency, String> {
+    pub fn filter_by_interface(
+        &self,
+        interface_name: &InterfaceName,
+    ) -> Result<ComponentDependency, String> {
         let mut tree = BTreeMap::new();
 
         for (component_info, function_dict) in self.dependencies {
@@ -61,10 +143,7 @@ impl ComponentDependency {
                 .collect::<Vec<_>>();
 
             if !name_and_types.is_empty() {
-                tree.insert(
-                    component_info,
-                    FunctionDictionary { name_and_types },
-                );
+                tree.insert(component_info, FunctionDictionary { name_and_types });
             }
         }
 
@@ -72,16 +151,13 @@ impl ComponentDependency {
             return Err(format!("interface `{}` not found", interface_name));
         }
 
-        Ok(ComponentDependency {
-            dependencies: tree,
-        })
+        Ok(ComponentDependency { dependencies: tree })
     }
 
     pub fn filter_by_package_name(
         &self,
         package_name: &PackageName,
     ) -> Result<ComponentDependency, String> {
-
         // If the package name corresponds to the root package name we pick that up
         let mut tree = BTreeMap::new();
 
@@ -102,7 +178,9 @@ impl ComponentDependency {
                 if !name_and_types.is_empty() {
                     tree.insert(
                         component_info.clone(),
-                        FunctionDictionary { name_and_types: name_and_types.cloned() },
+                        FunctionDictionary {
+                            name_and_types: name_and_types.cloned(),
+                        },
                     );
                 }
             }
@@ -112,12 +190,13 @@ impl ComponentDependency {
             return Err(format!("package `{}` not found", package_name));
         }
 
-        Ok(ComponentDependency {
-            dependencies: tree,
-        })
+        Ok(ComponentDependency { dependencies: tree })
     }
 
-    pub fn filter_by_fully_qualified_interface(&self, fqi: &FullyQualifiedInterfaceName) -> Result<Self, String> {
+    pub fn filter_by_fully_qualified_interface(
+        &self,
+        fqi: &FullyQualifiedInterfaceName,
+    ) -> Result<Self, String> {
         let mut tree = BTreeMap::new();
 
         for (component_info, function_dict) in self.dependencies.iter() {
@@ -137,11 +216,12 @@ impl ComponentDependency {
                     })
                     .collect::<Vec<_>>();
 
-
                 if !name_and_types.is_empty() {
                     tree.insert(
                         component_info.clone(),
-                        FunctionDictionary { name_and_types: name_and_types.cloned() },
+                        FunctionDictionary {
+                            name_and_types: name_and_types.cloned(),
+                        },
                     );
                 }
             }
@@ -151,9 +231,7 @@ impl ComponentDependency {
             return Err(format!("fully qualified interface `{}` not found", fqi));
         }
 
-        Ok(ComponentDependency {
-            dependencies: tree,
-        })
+        Ok(ComponentDependency { dependencies: tree })
     }
 
     // type-parameter can be None.
@@ -162,7 +240,7 @@ impl ComponentDependency {
     pub fn get_worker_instance_type(
         &self,
         type_parameter: Option<TypeParameter>,
-        worker_name: Option<Expr>
+        worker_name: Option<Expr>,
     ) -> Result<InstanceCreationType, String> {
         match type_parameter {
             None => Ok(InstanceCreationType::Worker {
@@ -173,21 +251,22 @@ impl ComponentDependency {
             Some(type_parameter) => {
                 match type_parameter {
                     // If the user has specified the root package name, annotate the InstanceCreationType with the component already
-                    TypeParameter::PackageName(package_name ) => {
-                        let result = self.dependencies.iter().find(|(x, y)| {
-                            match &x.root_package_name {
-                                Some(name) => {
-                                    let pkg = match &x.root_package_version {
-                                        None => name.to_string(),
-                                        Some(version) => format!("{}@{}", name, version),
-                                    };
+                    TypeParameter::PackageName(package_name) => {
+                        let result =
+                            self.dependencies
+                                .iter()
+                                .find(|(x, y)| match &x.root_package_name {
+                                    Some(name) => {
+                                        let pkg = match &x.root_package_version {
+                                            None => name.to_string(),
+                                            Some(version) => format!("{}@{}", name, version),
+                                        };
 
-                                    pkg == package_name.to_string()
-                                }
+                                        pkg == package_name.to_string()
+                                    }
 
-                                None => false,
-                            }
-                        });
+                                    None => false,
+                                });
 
                         if let Some(result) = result {
                             Ok(InstanceCreationType::Worker {
@@ -211,19 +290,19 @@ impl ComponentDependency {
         }
     }
 
-
-    pub fn from_raw(component_and_exports: Vec<(ComponentInfo, &Vec<AnalysedExport>)>) -> Result<Self, String> {
+    pub fn from_raw(
+        component_and_exports: Vec<(ComponentInfo, &Vec<AnalysedExport>)>,
+    ) -> Result<Self, String> {
         let mut dependencies = BTreeMap::new();
 
         for (component_info, exports) in component_and_exports {
             let function_type_registry = FunctionTypeRegistry::from_export_metadata(exports);
-            let function_dictionary = FunctionDictionary::from_function_type_registry(&function_type_registry)?;
+            let function_dictionary =
+                FunctionDictionary::from_function_type_registry(&function_type_registry)?;
             dependencies.insert(component_info, function_dictionary);
         }
 
-        Ok(ComponentDependency {
-            dependencies,
-        })
+        Ok(ComponentDependency { dependencies })
     }
 }
 
@@ -484,29 +563,36 @@ impl RegistryKey {
         })
     }
 
-    pub fn from_dynamic_parsed_function_name(function_name: &DynamicParsedFunctionName) -> FunctionName {
+    pub fn from_dynamic_parsed_function_name(
+        function_name: &DynamicParsedFunctionName,
+    ) -> FunctionName {
         let site = &function_name.site;
         let (package_name, interface_name) = match site {
-            ParsedFunctionSite::Global => {
-                (None, None)
-            }
+            ParsedFunctionSite::Global => (None, None),
 
-            ParsedFunctionSite::Interface { name } => {
-                (None, Some(InterfaceName {
+            ParsedFunctionSite::Interface { name } => (
+                None,
+                Some(InterfaceName {
                     name: name.clone(),
                     version: None,
-                }))
-            }
-            ParsedFunctionSite::PackagedInterface { namespace, package, interface, version } => {
-                (Some(PackageName {
+                }),
+            ),
+            ParsedFunctionSite::PackagedInterface {
+                namespace,
+                package,
+                interface,
+                version,
+            } => (
+                Some(PackageName {
                     namespace: namespace.clone(),
                     package_name: package.clone(),
                     version: None,
-                }), Some(InterfaceName {
+                }),
+                Some(InterfaceName {
                     name: interface.clone(),
                     version: version.as_ref().map(|v| v.to_string()),
-                }))
-            }
+                }),
+            ),
         };
 
         match &function_name.function {
@@ -555,22 +641,24 @@ impl RegistryKey {
                     resource_name: resource.clone(),
                 })
             }
-            DynamicParsedFunctionReference::IndexedResourceMethod { resource, method, .. } => {
-                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
-                    package_name,
-                    interface_name,
-                    resource_name: resource.clone(),
-                    method_name: method.clone(),
-                })
-            }
-            DynamicParsedFunctionReference::IndexedResourceStaticMethod { resource, method, .. } => {
-                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
-                    package_name,
-                    interface_name,
-                    resource_name: resource.clone(),
-                    method_name: method.clone(),
-                })
-            }
+            DynamicParsedFunctionReference::IndexedResourceMethod {
+                resource, method, ..
+            } => FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                package_name,
+                interface_name,
+                resource_name: resource.clone(),
+                method_name: method.clone(),
+            }),
+            DynamicParsedFunctionReference::IndexedResourceStaticMethod {
+                resource,
+                method,
+                ..
+            } => FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                package_name,
+                interface_name,
+                resource_name: resource.clone(),
+                method_name: method.clone(),
+            }),
             DynamicParsedFunctionReference::IndexedResourceDrop { resource, .. } => {
                 FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
                     package_name,
@@ -580,21 +668,6 @@ impl RegistryKey {
                 })
             }
         };
-    }
-
-    pub fn from_call_type(call_type: &CallType) -> Option<FunctionName> {
-        match call_type {
-            CallType::VariantConstructor(variant_name) => {
-                Some(FunctionName::Variant(variant_name.clone()))
-            }
-            CallType::EnumConstructor(enum_name) => {
-                Some(FunctionName::Enum(enum_name.clone()))
-            }
-            CallType::Function { function_name, .. } => {
-                Some(Self::from_dynamic_parsed_function_name(function_name))
-            },
-            CallType::InstanceCreation(_) => None,
-        }
     }
 }
 

@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::type_checker;
 use crate::type_checker::missing_fields::find_missing_fields_in_record;
+use crate::{type_checker, ComponentDependency, FunctionName};
 use crate::{Expr, ExprVisitor, FunctionCallError, FunctionTypeRegistry, RegistryKey};
+use golem_wasm_ast::analysis::AnalysedType;
 
 // While we have a dedicated generic phases (refer submodules) within type_checker module,
 // we have this special phase to grab errors in the context function calls.
@@ -24,7 +25,7 @@ use crate::{Expr, ExprVisitor, FunctionCallError, FunctionTypeRegistry, Registry
 #[allow(clippy::result_large_err)]
 pub fn check_invalid_function_args(
     expr: &mut Expr,
-    type_registry: &FunctionTypeRegistry,
+    component_dependency: &ComponentDependency,
 ) -> Result<(), FunctionCallError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
@@ -35,7 +36,7 @@ pub fn check_invalid_function_args(
         {
             match call_type {
                 CallType::InstanceCreation(_) => {}
-                call_type => get_missing_record_keys(call_type, args, type_registry, expr)?,
+                call_type => get_missing_record_keys(call_type, args, component_dependency, expr)?,
             }
         }
     }
@@ -47,29 +48,30 @@ pub fn check_invalid_function_args(
 fn get_missing_record_keys(
     call_type: &CallType,
     args: &[Expr],
-    type_registry: &FunctionTypeRegistry,
+    component_dependency: &ComponentDependency,
     function_call_expr: &Expr,
 ) -> Result<(), FunctionCallError> {
-    let registry_key =
-        RegistryKey::from_call_type(call_type).ok_or(FunctionCallError::InvalidFunctionCall {
+    let function_name =
+        FunctionName::from_call_type(call_type).ok_or(FunctionCallError::InvalidFunctionCall {
             function_name: call_type.to_string(),
             expr: function_call_expr.clone(),
             message: "invalid function call type".to_string(),
         })?;
 
-    let registry_value =
-        type_registry
-            .types
-            .get(&registry_key)
-            .ok_or(FunctionCallError::InvalidFunctionCall {
-                function_name: call_type.to_string(),
-                expr: function_call_expr.clone(),
-                message: "missing function in component metadata".to_string(),
-            })?;
+    let function_type = component_dependency
+        .get_function_type(&None, &function_name)
+        .map_err(|err| FunctionCallError::InvalidFunctionCall {
+            function_name: call_type.to_string(),
+            expr: function_call_expr.clone(),
+            message: err.to_string(),
+        })?;
 
-    let expected_arg_types = registry_value.argument_types();
+    let expected_arg_types = function_type.parameter_types;
 
-    let mut filtered_expected_types = expected_arg_types.clone();
+    let mut filtered_expected_types = expected_arg_types
+        .iter()
+        .map(|x| AnalysedType::try_from(x).unwrap())
+        .collect::<Vec<_>>();
 
     if call_type.is_resource_method() {
         filtered_expected_types.remove(0);

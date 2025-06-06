@@ -22,7 +22,9 @@ pub fn infer_enums(expr: &mut Expr, function_type_registry: &ComponentDependency
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::{ComponentDependency, Expr, ExprVisitor, FunctionTypeRegistry, RegistryKey, RegistryValue};
+    use crate::{
+        ComponentDependency, Expr, ExprVisitor, FunctionTypeRegistry, RegistryKey, RegistryValue,
+    };
     use golem_wasm_ast::analysis::AnalysedType;
 
     pub(crate) fn convert_identifiers_to_enum_function_calls(
@@ -72,12 +74,12 @@ mod internal {
                 // If variable is local, it takes priority over being a global enum
                 if !variable_id.is_local() {
                     // Retrieve the possible no-arg variant from the registry
-                    let result =
-                        component_dependency.function_dictionary().iter()
-                            .find_map(|x| x.get_type_enum(variable_id.name().as_str()));
+                    let result = component_dependency
+                        .function_dictionary()
+                        .iter()
+                        .find_map(|x| x.get_enum_info(variable_id.name().as_str()));
 
-                    if let Some(RegistryValue::Value(AnalysedType::Enum(typed_enum))) = result
-                    {
+                    if let Some(RegistryValue::Value(AnalysedType::Enum(typed_enum))) = result {
                         enum_cases.push(variable_id.name());
                         *inferred_type =
                             inferred_type.merge((&AnalysedType::Enum(typed_enum.clone())).into());

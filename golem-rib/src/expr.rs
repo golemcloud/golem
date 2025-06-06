@@ -20,7 +20,11 @@ use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{from_string, text, type_checker, type_inference, ComponentDependency, DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType, ParsedFunctionName, VariableId};
+use crate::{
+    from_string, text, type_checker, type_inference, ComponentDependency,
+    DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType,
+    ParsedFunctionName, VariableId,
+};
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
 use combine::stream::position;
@@ -1204,9 +1208,9 @@ impl Expr {
 
     pub fn check_types(
         &mut self,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependency,
     ) -> Result<(), RibTypeError> {
-        type_checker::type_check(self, function_type_registry)
+        type_checker::type_check(self, component_dependency)
     }
 
     pub fn unify_types(&mut self) -> Result<(), RibTypeError> {

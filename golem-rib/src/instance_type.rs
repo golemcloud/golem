@@ -14,7 +14,11 @@
 
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
-use crate::{ComponentDependency, ComponentInfo, DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
+use crate::{
+    CallType, ComponentDependency, ComponentInfo, DynamicParsedFunctionName,
+    DynamicParsedFunctionReference, Expr, FunctionTypeRegistry, InferredType, ParsedFunctionSite,
+    RegistryKey, RegistryValue,
+};
 use golem_api_grpc::proto::golem::rib::instance_type::Instance;
 use golem_api_grpc::proto::golem::rib::{
     function_name_type, FullyQualifiedFunctionName as ProtoFullyQualifiedFunctionName,
@@ -357,7 +361,7 @@ impl InstanceType {
             InstanceType::Resource {
                 component_dependency,
                 ..
-            } =>  panic!("resource method dictionary") //resource_method_dict.into(),
+            } => panic!("resource method dictionary"), //resource_method_dict.into(),
         }
     }
 
@@ -366,7 +370,6 @@ impl InstanceType {
         worker_name: Option<&Expr>,
         type_parameter: Option<TypeParameter>,
     ) -> Result<InstanceType, String> {
-
         match type_parameter {
             None => Ok(InstanceType::Global {
                 worker_name: worker_name.cloned().map(Box::new),
@@ -374,8 +377,7 @@ impl InstanceType {
             }),
             Some(type_parameter) => match type_parameter {
                 TypeParameter::Interface(interface_name) => {
-                    let new_dependency =
-                        dependency.filter_by_interface(&interface_name)?;
+                    let new_dependency = dependency.filter_by_interface(&interface_name)?;
 
                     Ok(InstanceType::Interface {
                         worker_name: worker_name.cloned().map(Box::new),
@@ -384,8 +386,7 @@ impl InstanceType {
                     })
                 }
                 TypeParameter::PackageName(package_name) => {
-                    let new_dependency =
-                        dependency.filter_by_package_name(&package_name)?;
+                    let new_dependency = dependency.filter_by_package_name(&package_name)?;
 
                     Ok(InstanceType::Package {
                         worker_name: worker_name.cloned().map(Box::new),
@@ -422,38 +423,43 @@ pub struct FunctionDictionary {
 }
 
 impl FunctionDictionary {
-    pub fn get_type_enum(&self, identifier_name: &str) -> Option<TypeEnum> {
+    pub fn get_all_variants(&self) -> Vec<TypeVariant> {
         self.name_and_types
             .iter()
-            .find_map(|(f, ftype)| {
-                match f {
-                    FunctionName::Enum(name) => {
-                        if name == identifier_name {
-                            ftype.as_type_enum()
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None
-                }
-            })
+            .filter_map(|(_, ftype)| ftype.as_type_variant())
+            .collect()
     }
-    pub fn get_type_variant(&self, identifier_name: &str) -> Option<TypeVariant> {
+
+    pub fn get_all_enums(&self) -> Vec<TypeEnum> {
         self.name_and_types
             .iter()
-            .find_map(|(f, ftype)| {
-                match f {
-                    FunctionName::Variant(name) => {
-                        if name == identifier_name {
-                            ftype.as_type_variant()
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None
-                }
-            })
+            .filter_map(|(_, ftype)| ftype.as_type_enum())
+            .collect()
+    }
 
+    pub fn get_enum_info(&self, identifier_name: &str) -> Option<TypeEnum> {
+        self.name_and_types.iter().find_map(|(f, ftype)| match f {
+            FunctionName::Enum(name) => {
+                if name == identifier_name {
+                    ftype.as_type_enum()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+    }
+    pub fn get_variant_info(&self, identifier_name: &str) -> Option<TypeVariant> {
+        self.name_and_types.iter().find_map(|(f, ftype)| match f {
+            FunctionName::Variant(name) => {
+                if name == identifier_name {
+                    ftype.as_type_variant()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
     }
 
     pub fn function_names(&self) -> Vec<String> {
@@ -536,42 +542,36 @@ impl FunctionDictionary {
                 RegistryValue::Variant {
                     parameter_types,
                     variant_type,
-                } => {
-                    match key {
+                } => match key {
+                    RegistryKey::FunctionName(name) => {
+                        let function_name = FunctionName::Variant(name.to_string());
+                        map.push((
+                            function_name,
+                            FunctionType {
+                                parameter_types: parameter_types.iter().map(|x| x.into()).collect(),
+                                return_type: Some(InferredType::from(variant_type)),
+                            },
+                        ));
+                    }
+                    RegistryKey::FunctionNameWithInterface { .. } => {}
+                },
+
+                RegistryValue::Value(value) => match value {
+                    AnalysedType::Enum(type_enum) => match key {
                         RegistryKey::FunctionName(name) => {
-                            let function_name = FunctionName::Variant(name.to_string());
+                            let function_name = FunctionName::Enum(name.to_string());
                             map.push((
                                 function_name,
                                 FunctionType {
-                                    parameter_types: parameter_types.iter().map(|x| x.into()).collect(),
-                                    return_type: Some(InferredType::from(variant_type)),
+                                    parameter_types: vec![],
+                                    return_type: Some(InferredType::enum_(type_enum.cases.clone())),
                                 },
                             ));
                         }
                         RegistryKey::FunctionNameWithInterface { .. } => {}
-                    }
-                }
-
-                RegistryValue::Value(value) => {
-                    match value {
-                        AnalysedType::Enum(type_enum) => {
-                            match key {
-                                RegistryKey::FunctionName(name) => {
-                                    let function_name = FunctionName::Enum(name.to_string());
-                                    map.push((
-                                        function_name,
-                                        FunctionType {
-                                            parameter_types: vec![],
-                                            return_type: Some(InferredType::enum_(type_enum.cases.clone())),
-                                        },
-                                    ));
-                                }
-                                RegistryKey::FunctionNameWithInterface { .. } => {}
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                    },
+                    _ => {}
+                },
             };
         }
 
@@ -657,11 +657,133 @@ pub enum FunctionName {
 }
 
 impl FunctionName {
+    pub fn from_dynamic_parsed_function_name(
+        function_name: &DynamicParsedFunctionName,
+    ) -> FunctionName {
+        let site = &function_name.site;
+        let (package_name, interface_name) = match site {
+            ParsedFunctionSite::Global => (None, None),
+
+            ParsedFunctionSite::Interface { name } => (
+                None,
+                Some(InterfaceName {
+                    name: name.clone(),
+                    version: None,
+                }),
+            ),
+            ParsedFunctionSite::PackagedInterface {
+                namespace,
+                package,
+                interface,
+                version,
+            } => (
+                Some(PackageName {
+                    namespace: namespace.clone(),
+                    package_name: package.clone(),
+                    version: None,
+                }),
+                Some(InterfaceName {
+                    name: interface.clone(),
+                    version: version.as_ref().map(|v| v.to_string()),
+                }),
+            ),
+        };
+
+        match &function_name.function {
+            DynamicParsedFunctionReference::Function { function } => {
+                FunctionName::Function(FullyQualifiedFunctionName {
+                    package_name,
+                    interface_name,
+                    function_name: function.clone(),
+                })
+            }
+            DynamicParsedFunctionReference::RawResourceConstructor { resource } => {
+                FunctionName::ResourceConstructor(FullyQualifiedResourceConstructor {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                })
+            }
+            DynamicParsedFunctionReference::RawResourceDrop { resource } => {
+                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                    method_name: "drop".to_string(),
+                })
+            }
+            DynamicParsedFunctionReference::RawResourceMethod { resource, method } => {
+                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                    method_name: method.clone(),
+                })
+            }
+            DynamicParsedFunctionReference::RawResourceStaticMethod { resource, method } => {
+                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                    method_name: method.clone(),
+                })
+            }
+            DynamicParsedFunctionReference::IndexedResourceConstructor { resource, .. } => {
+                FunctionName::ResourceConstructor(FullyQualifiedResourceConstructor {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                })
+            }
+            DynamicParsedFunctionReference::IndexedResourceMethod {
+                resource, method, ..
+            } => FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                package_name,
+                interface_name,
+                resource_name: resource.clone(),
+                method_name: method.clone(),
+            }),
+            DynamicParsedFunctionReference::IndexedResourceStaticMethod {
+                resource,
+                method,
+                ..
+            } => FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                package_name,
+                interface_name,
+                resource_name: resource.clone(),
+                method_name: method.clone(),
+            }),
+            DynamicParsedFunctionReference::IndexedResourceDrop { resource, .. } => {
+                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
+                    package_name,
+                    interface_name,
+                    resource_name: resource.clone(),
+                    method_name: "drop".to_string(),
+                })
+            }
+        };
+    }
+
+    pub fn from_call_type(call_type: &CallType) -> Option<FunctionName> {
+        match call_type {
+            CallType::VariantConstructor(variant_name) => {
+                Some(FunctionName::Variant(variant_name.clone()))
+            }
+            CallType::EnumConstructor(enum_name) => Some(FunctionName::Enum(enum_name.clone())),
+            CallType::Function { function_name, .. } => {
+                Some(Self::from_dynamic_parsed_function_name(function_name))
+            }
+            CallType::InstanceCreation(_) => None,
+        }
+    }
+
     pub fn interface_name(&self) -> Option<InterfaceName> {
         match self {
             FunctionName::Function(fqfn) => fqfn.interface_name.clone(),
             FunctionName::ResourceConstructor(fqfn) => fqfn.interface_name.clone(),
             FunctionName::ResourceMethod(resource_method) => resource_method.interface_name.clone(),
+            FunctionName::Variant(_) => None,
+            FunctionName::Enum(_) => None,
         }
     }
 
@@ -670,6 +792,8 @@ impl FunctionName {
             FunctionName::Function(fqfn) => fqfn.package_name.clone(),
             FunctionName::ResourceConstructor(fqfn) => fqfn.package_name.clone(),
             FunctionName::ResourceMethod(fqfn) => fqfn.package_name.clone(),
+            FunctionName::Variant(_) => None,
+            FunctionName::Enum(_) => None,
         }
     }
 
@@ -678,6 +802,8 @@ impl FunctionName {
             FunctionName::Function(fqfn) => fqfn.function_name.to_string(),
             FunctionName::ResourceConstructor(fqfn) => fqfn.resource_name.to_string(),
             FunctionName::ResourceMethod(fqfn) => fqfn.method_name.to_string(),
+            FunctionName::Variant(name) => name.clone(),
+            FunctionName::Enum(name) => name.clone(),
         }
     }
 }
@@ -783,20 +909,20 @@ pub struct FunctionType {
 }
 
 impl FunctionType {
-
     pub fn as_type_variant(&self) -> Option<TypeVariant> {
-        let analysed_type = AnalysedType::try_from(&self.return_type.clone().unwrap()).unwrap();
+        let analysed_type = AnalysedType::try_from(&self.return_type.clone()?).ok();
+
         match analysed_type {
-            AnalysedType::Variant(type_variant) => Some(type_variant,),
-            _ => None
+            AnalysedType::Variant(type_variant) => Some(type_variant),
+            _ => None,
         }
     }
 
     pub fn as_type_enum(&self) -> Option<TypeEnum> {
-        let analysed_type = AnalysedType::try_from(&self.return_type.clone().unwrap()).unwrap();
+        let analysed_type = AnalysedType::try_from(&self.return_type.clone()?).ok();
         match analysed_type {
             AnalysedType::Enum(type_enum) => Some(type_enum),
-            _ => None
+            _ => None,
         }
     }
 
@@ -1126,9 +1252,7 @@ impl TryFrom<ProtoInstanceType> for InstanceType {
                         .map(Box::new),
                     package_name: TryFrom::try_from(package_name)?,
                     interface_name: TryFrom::try_from(interface_name)?,
-                    component_dependency: TryFrom::try_from(
-                        functions_in_package_interface,
-                    )?,
+                    component_dependency: TryFrom::try_from(functions_in_package_interface)?,
                 })
             }
             Instance::Resource(resource_instance) => {

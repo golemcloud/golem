@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ArmPattern, Expr, ExprVisitor, FunctionTypeRegistry};
+use crate::{ArmPattern, ComponentDependency, Expr, ExprVisitor, FunctionTypeRegistry};
 
 // When checking exhaustive pattern match, there is no need to ensure
 // if the pattern aligns with conditions because those checks are done
@@ -20,7 +20,7 @@ use crate::{ArmPattern, Expr, ExprVisitor, FunctionTypeRegistry};
 // is whether the arms in the pattern match is exhaustive.
 pub fn check_exhaustive_pattern_match(
     expr: &mut Expr,
-    function_type_registry: &FunctionTypeRegistry,
+    component_dependency: &ComponentDependency,
 ) -> Result<(), ExhaustivePatternMatchError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
@@ -30,7 +30,7 @@ pub fn check_exhaustive_pattern_match(
                 .iter()
                 .map(|p| p.arm_pattern.clone())
                 .collect::<Vec<_>>();
-            internal::check_exhaustive_pattern_match(expr, &match_arm, function_type_registry)?;
+            internal::check_exhaustive_pattern_match(expr, &match_arm, component_dependency)?;
         }
     }
 
@@ -52,7 +52,7 @@ pub enum ExhaustivePatternMatchError {
 
 mod internal {
     use crate::type_checker::exhaustive_pattern_match::ExhaustivePatternMatchError;
-    use crate::{ArmPattern, Expr, FunctionTypeRegistry};
+    use crate::{ArmPattern, ComponentDependency, Expr, FunctionTypeRegistry};
     use golem_wasm_ast::analysis::TypeVariant;
     use std::collections::HashMap;
 
@@ -61,12 +61,12 @@ mod internal {
     pub(crate) fn check_exhaustive_pattern_match(
         predicate: &Expr,
         arms: &[ArmPattern],
-        function_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependency,
     ) -> Result<(), ExhaustivePatternMatchError> {
         let mut exhaustive_check_result =
             check_exhaustive(predicate, arms, ConstructorDetail::option());
 
-        let variants = function_registry.get_variants();
+        let variants = component_dependency.get_variants();
 
         let mut constructor_details = vec![];
 
@@ -86,7 +86,7 @@ mod internal {
         let inner_constructors = exhaustive_check_result.value()?;
 
         for (field, patterns) in inner_constructors.inner() {
-            check_exhaustive_pattern_match(predicate, patterns, function_registry).map_err(
+            check_exhaustive_pattern_match(predicate, patterns, component_dependency).map_err(
                 |e| match e {
                     ExhaustivePatternMatchError::MissingConstructors {
                         missing_constructors,
