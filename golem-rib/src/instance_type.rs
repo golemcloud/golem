@@ -76,7 +76,7 @@ pub enum InstanceType {
         interface_name: Option<InterfaceName>,
         resource_constructor: String,
         resource_args: Vec<Expr>,
-        component_dependency: ResourceMethodDictionary,
+        resource_method_dictionary: ResourceMethodDictionary,
     },
 }
 
@@ -146,7 +146,7 @@ impl InstanceType {
         let resource_constructor_name = fully_qualified_resource_constructor.resource_name.clone();
 
         let mut tree = BTreeMap::new();
-        for (component_info, function_type) in self.component_dependency().dependencies.iter() {
+        for (component_info, function_type) in self.component_dependencies().dependencies.iter() {
             let mut resource_method_dict = vec![];
 
             for (name, typ) in function_type.name_and_types.iter() {
@@ -171,7 +171,7 @@ impl InstanceType {
             interface_name,
             resource_constructor: resource_constructor_name,
             resource_args,
-            component_dependency: resource_method_dict,
+            resource_method_dictionary: resource_method_dict,
         }
     }
 
@@ -213,7 +213,7 @@ impl InstanceType {
             Some(tp) => match tp {
                 TypeParameter::Interface(iface) => {
                     let component_dependency =
-                        self.component_dependency().filter_by_interface(&iface)?;
+                        self.component_dependencies().filter_by_interface(&iface)?;
 
                     if component_dependency.size() == 1 {
                         let (info, function_dictionary) =
@@ -254,7 +254,7 @@ impl InstanceType {
 
                 TypeParameter::PackageName(pkg) => {
                     let component_dependency =
-                        self.component_dependency().filter_by_package_name(&pkg)?;
+                        self.component_dependencies().filter_by_package_name(&pkg)?;
 
                     if component_dependency.size() == 1 {
                         let (info, function_dictionary) =
@@ -304,7 +304,7 @@ impl InstanceType {
 
                 TypeParameter::FullyQualifiedInterface(fq_iface) => {
                     let component_dependency = self
-                        .component_dependency()
+                        .component_dependencies()
                         .filter_by_fully_qualified_interface(&fq_iface)?;
 
                     if component_dependency.size() == 1 {
@@ -355,7 +355,7 @@ impl InstanceType {
     // A flattened list of all resource methods
     pub fn resource_method_dictionary(&self) -> FunctionDictionary {
         let name_and_types = self
-            .component_dependency()
+            .component_dependencies()
             .dependencies
             .values()
             .flat_map(|function_dictionary| {
@@ -373,7 +373,7 @@ impl InstanceType {
 
     pub fn function_dict_without_resource_methods(&self) -> FunctionDictionary {
         let name_and_types = self
-            .component_dependency()
+            .component_dependencies()
             .dependencies
             .values()
             .flat_map(|function_dictionary| {
@@ -389,28 +389,30 @@ impl InstanceType {
         FunctionDictionary { name_and_types }
     }
 
-    pub fn component_dependency(&self) -> &ComponentDependencies {
+    pub fn component_dependencies(&self) -> ComponentDependencies {
         match self {
             InstanceType::Global {
                 component_dependency,
                 ..
-            } => component_dependency,
+            } => component_dependency.clone(),
             InstanceType::Package {
                 component_dependency,
                 ..
-            } => component_dependency,
+            } => component_dependency.clone(),
             InstanceType::Interface {
                 component_dependency,
                 ..
-            } => component_dependency,
+            } => component_dependency.clone(),
             InstanceType::PackageInterface {
                 component_dependency,
                 ..
-            } => component_dependency,
+            } => component_dependency.clone(),
             InstanceType::Resource {
-                component_dependency,
+                resource_method_dictionary,
                 ..
-            } => panic!("resource method dictionary"), //resource_method_dict.into(),
+            } => {
+                ComponentDependencies::from(resource_method_dictionary)
+            }
         }
     }
 
@@ -472,8 +474,10 @@ fn search_function_in_instance(
 ) -> Result<(ComponentInfo, Function), String> {
     match component_info {
         Some(component_info) => {
-            let function_dictionary = instance
-                .component_dependency()
+            let dependencies = instance
+                .component_dependencies();
+
+            let function_dictionary = dependencies
                 .dependencies
                 .get(component_info)
                 .ok_or(format!(
@@ -522,7 +526,7 @@ fn search_function_in_instance(
         None => {
             let mut component_info_functions = vec![];
 
-            for (info, function_dictionary) in instance.component_dependency().dependencies.iter() {
+            for (info, function_dictionary) in instance.component_dependencies().dependencies.iter() {
                 let functions = function_dictionary
                     .name_and_types
                     .iter()
