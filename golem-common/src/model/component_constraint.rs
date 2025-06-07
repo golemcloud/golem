@@ -264,11 +264,12 @@ mod protobuf {
                 .map(AnalysedType::try_from)
                 .collect::<Result<_, _>>()?;
 
-            let function_name_proto =
-                value.function_key.and_then(|x| x.function_name).ok_or("Function key missing")?;
+            let function_name_proto = value
+                .function_key
+                .and_then(|x| x.function_name)
+                .ok_or("Function key missing")?;
 
-            let function_key =
-                FunctionName::try_from(function_name_proto)?;
+            let function_key = FunctionName::try_from(function_name_proto)?;
 
             let usage_count = value.usage_count;
 
@@ -287,7 +288,7 @@ mod protobuf {
         fn from(value: FunctionUsageConstraint) -> Self {
             let function_name =
                 golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::from(
-                    value.function_signature.clone().function_name
+                    value.function_signature.clone().function_name,
                 );
 
             let function_name_type = golem_api_grpc::proto::golem::rib::FunctionNameType {

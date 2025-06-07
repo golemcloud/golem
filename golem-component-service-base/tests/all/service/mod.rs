@@ -64,6 +64,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_ast::analysis::analysed_type::{str, u64};
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
 use http::StatusCode;
+use rib::{FullyQualifiedFunctionName, FunctionName, InterfaceName, PackageName};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -727,12 +728,25 @@ async fn test_component_constraint_incompatible_updates(
         .to_safe_string();
 
     let expected_error = ComponentError::ComponentConstraintConflictError(ConflictReport {
-        missing_functions: vec![RegistryKey::FunctionName("foo".to_string())],
+        missing_functions: vec![FunctionName::Function(FullyQualifiedFunctionName {
+            package_name: None,
+            interface_name: None,
+            function_name: "foo".to_string(),
+        })],
+
         conflicting_functions: vec![ConflictingFunction {
-            function: RegistryKey::FunctionNameWithInterface {
-                interface_name: "golem:it/api".to_string(),
+            function: FunctionName::Function(FullyQualifiedFunctionName {
+                package_name: Some(PackageName {
+                    namespace: "golem".to_string(),
+                    package_name: "it".to_string(),
+                    version: None,
+                }),
+                interface_name: Some(InterfaceName {
+                    name: "api".to_string(),
+                    version: None,
+                }),
                 function_name: "initialize-cart".to_string(),
-            },
+            }),
             parameter_type_conflict: Some(ParameterTypeConflict {
                 existing: vec![u64()],
                 new: vec![str()],

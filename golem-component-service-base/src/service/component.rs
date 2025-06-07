@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::transformer_plugin_caller::{TransformationFailedReason, TransformerPluginCaller};
 use crate::model::{Component, ComponentConstraints};
 use crate::model::{ComponentSearchParameters, InitialComponentFilesArchiveAndPermissions};
 use crate::repo::component::{
@@ -54,6 +55,7 @@ use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_wasm_ast::analysis::AnalysedType;
+use rib::{FunctionDictionary, FunctionName};
 use sqlx::types::Json;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
@@ -70,8 +72,6 @@ use tracing::{debug, error, info, info_span};
 use tracing_futures::Instrument;
 use wac_graph::types::Package;
 use wac_graph::{CompositionGraph, EncodeOptions, PlugError};
-use rib::{FunctionDictionary, FunctionName};
-use super::transformer_plugin_caller::{TransformationFailedReason, TransformerPluginCaller};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -547,13 +547,11 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                 let mut parameter_conflict = false;
                 let mut return_conflict = false;
 
-                if existing_function_call.parameter_types() != &function_type.parameter_types()
-                {
+                if existing_function_call.parameter_types() != &function_type.parameter_types() {
                     parameter_conflict = true;
                 }
 
-                let new_return_type =
-                    &function_type.return_type();
+                let new_return_type = &function_type.return_type();
 
                 if existing_function_call.return_type() != new_return_type {
                     return_conflict = true;
@@ -802,8 +800,13 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
             .get_constraint(&owner.to_string(), component_id.0)
             .await?;
 
-        let new_function_dictionary = FunctionDictionary::from_exports(&metadata.exports)
-            .map_err(|e| ComponentError::InternalConversionError{ what: "exports".to_string(), error: e})?;
+        let new_function_dictionary =
+            FunctionDictionary::from_exports(&metadata.exports).map_err(|e| {
+                ComponentError::InternalConversionError {
+                    what: "exports".to_string(),
+                    error: e,
+                }
+            })?;
 
         if let Some(constraints) = constraints {
             let conflicts =

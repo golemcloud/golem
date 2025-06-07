@@ -35,13 +35,14 @@ pub struct FunctionDictionary {
 }
 
 impl FunctionDictionary {
-    pub fn get(
-        &self,
-        function_name: &FunctionName,
-    ) -> Option<&FunctionType> {
-        self.name_and_types
-            .iter()
-            .find_map(|(name, ftype)| if name == function_name { Some(ftype) } else { None })
+    pub fn get(&self, function_name: &FunctionName) -> Option<&FunctionType> {
+        self.name_and_types.iter().find_map(|(name, ftype)| {
+            if name == function_name {
+                Some(ftype)
+            } else {
+                None
+            }
+        })
     }
 
     pub fn get_all_variants(&self) -> Vec<TypeVariant> {
@@ -122,9 +123,7 @@ impl From<&ResourceMethodDictionary> for ComponentDependencies {
 }
 
 impl FunctionDictionary {
-    pub fn from_exports(
-        exports: &Vec<AnalysedExport>
-    ) -> Result<FunctionDictionary, String> {
+    pub fn from_exports(exports: &Vec<AnalysedExport>) -> Result<FunctionDictionary, String> {
         let registry = FunctionTypeRegistry::from_export_metadata(exports);
         Self::from_function_type_registry(&registry)
     }
@@ -578,8 +577,6 @@ pub struct FunctionType {
 }
 
 impl FunctionType {
-
-
     pub fn as_type_variant(&self) -> Option<TypeVariant> {
         let analysed_type = AnalysedType::try_from(&self.return_type.clone()?).ok()?;
 
@@ -598,14 +595,16 @@ impl FunctionType {
     }
 
     pub fn parameter_types(&self) -> Vec<AnalysedType> {
-        self.parameter_types.iter()
+        self.parameter_types
+            .iter()
             .map(|x| AnalysedType::try_from(x).unwrap())
             .collect()
     }
 
-
     pub fn return_type(&self) -> Option<AnalysedType> {
-        self.return_type.clone().map(|x| AnalysedType::try_from(&x).unwrap())
+        self.return_type
+            .clone()
+            .map(|x| AnalysedType::try_from(&x).unwrap())
     }
 }
 
