@@ -461,10 +461,7 @@ mod function_parameters_inference_tests {
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::rib_source_span::SourceSpan;
     use crate::FunctionTypeRegistry;
-    use crate::{
-        ComponentDependencies, ComponentInfo, Expr, InferredType,
-        ParsedFunctionSite,
-    };
+    use crate::{ComponentDependencies, ComponentInfo, Expr, InferredType, ParsedFunctionSite};
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,

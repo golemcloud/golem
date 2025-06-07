@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, FullyQualifiedInterfaceName, FunctionDictionary, FunctionName, FunctionType, FunctionTypeRegistry, InstanceCreationType, InterfaceName, PackageName, TypeParameter};
+use crate::{
+    Expr, FullyQualifiedInterfaceName, FunctionDictionary, FunctionName, FunctionType,
+    FunctionTypeRegistry, InstanceCreationType, InterfaceName, PackageName, TypeParameter,
+};
+use golem_wasm_ast::analysis::TypeEnum;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
-use golem_wasm_ast::analysis::{TypeEnum};
-use std::collections::{BTreeMap};
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
@@ -51,7 +54,7 @@ impl ComponentDependencies {
 
     pub fn get_function_type(
         &self,
-        component_info: &Option<crate::ComponentInfo>,
+        component_info: &Option<ComponentInfo>,
         function_name: &FunctionName,
     ) -> Result<FunctionType, String> {
         // If function name is unique across all components, we are not in need of a component_info per se
@@ -115,7 +118,7 @@ impl ComponentDependencies {
                     Ok(function_type)
                 } else {
                     Err(format!(
-                        "function `{}` not found in component `{}`",
+                        "function `{}` not found in component sassas`{}`",
                         function_name, component_info.component_name
                     ))
                 }
@@ -231,7 +234,7 @@ impl ComponentDependencies {
         }
 
         if tree.is_empty() {
-            return Err(format!("fully qualified interface `{}` not found", fqi));
+            return Err(format!("`{}` not found", fqi));
         }
 
         Ok(crate::ComponentDependencies { dependencies: tree })

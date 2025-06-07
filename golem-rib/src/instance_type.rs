@@ -14,14 +14,17 @@
 
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
-use crate::{ComponentDependencies, ComponentInfo, Expr, FullyQualifiedResourceConstructor, FunctionDictionary, FunctionType, InferredType, ResourceMethodDictionary};
+use crate::FunctionName;
+use crate::{
+    ComponentDependencies, ComponentInfo, Expr, FullyQualifiedResourceConstructor,
+    FunctionDictionary, FunctionType, InferredType, ResourceMethodDictionary,
+};
 use golem_api_grpc::proto::golem::rib::{
     FullyQualifiedResourceConstructor as ProtoFullyQualifiedResourceConstructor,
     FunctionType as ProtoFunctionType, InterfaceName as ProtoInterfaceName,
     PackageName as ProtoPackageName,
 };
-use crate::FunctionName;
-use golem_wasm_ast::analysis::{AnalysedType};
+use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
@@ -272,6 +275,13 @@ impl InstanceType {
                             .filter(|(f, _)| f.name() == method_name)
                             .collect::<Vec<_>>();
 
+                        if functions.is_empty() {
+                            return Err(format!(
+                                "function '{}' not found in package '{}'",
+                                method_name, pkg
+                            ));
+                        }
+
                         if functions.len() == 1 {
                             let (fqfn, ftype) = &functions[0];
                             Ok((
@@ -461,12 +471,15 @@ fn search_function_in_instance(
     component_info: Option<&ComponentInfo>,
 ) -> Result<(ComponentInfo, Function), String> {
     match component_info {
-        Some(info) => {
+        Some(component_info) => {
             let function_dictionary = instance
                 .component_dependency()
                 .dependencies
-                .get(info)
-                .ok_or(format!("Component info '{}' not found in instance", info))?;
+                .get(component_info)
+                .ok_or(format!(
+                    "component '{}' not found in dependencies",
+                    component_info
+                ))?;
 
             let functions = function_dictionary
                 .name_and_types
@@ -477,12 +490,19 @@ fn search_function_in_instance(
             if functions.is_empty() {
                 return Err(format!(
                     "function '{}' not found in component '{}'",
-                    function_name, info
+                    function_name, component_info
                 ));
             }
 
             let mut package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>> =
                 HashMap::new();
+
+            for (fqfn, _) in &functions {
+                package_map
+                    .entry(fqfn.package_name())
+                    .or_default()
+                    .insert(fqfn.interface_name());
+            }
 
             match package_map.len() {
                 1 => {
@@ -490,12 +510,12 @@ fn search_function_in_instance(
                     let function =
                         search_function_in_single_package(interfaces, functions, function_name)?;
 
-                    Ok((info.clone(), function))
+                    Ok((component_info.clone(), function))
                 }
                 _ => {
                     let function =
                         search_function_in_multiple_packages(function_name, package_map)?;
-                    Ok((info.clone(), function))
+                    Ok((component_info.clone(), function))
                 }
             }
         }

@@ -40,6 +40,7 @@ mod inferred_type;
 mod instance_type;
 mod interpreter;
 mod parser;
+mod registry;
 mod rib_source_span;
 mod rib_type_error;
 mod text;
@@ -49,7 +50,6 @@ mod type_parameter;
 mod type_parameter_parser;
 mod type_refinement;
 mod variable_id;
-mod registry;
 
 #[cfg(test)]
 test_r::enable!();

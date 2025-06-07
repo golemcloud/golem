@@ -1,7 +1,7 @@
 pub use component_dependencies::*;
-pub use raw_type_registry::*;
 pub use function_dictionary::*;
+pub use raw_type_registry::*;
 
 mod component_dependencies;
-mod raw_type_registry;
 mod function_dictionary;
+mod raw_type_registry;

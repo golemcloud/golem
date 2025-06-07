@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::{
-    DynamicParsedFunctionName
-};
+use crate::DynamicParsedFunctionName;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum};
 use std::collections::{HashMap, HashSet};
@@ -351,31 +349,31 @@ mod internal {
             }
 
             AnalysedType::Result(TypeResult {
-                                     ok: Some(ok_type),
-                                     err: Some(err_type),
-                                 }) => {
+                ok: Some(ok_type),
+                err: Some(err_type),
+            }) => {
                 update_registry(ok_type.as_ref(), registry);
                 update_registry(err_type.as_ref(), registry);
             }
             AnalysedType::Result(TypeResult {
-                                     ok: None,
-                                     err: Some(err_type),
-                                 }) => {
+                ok: None,
+                err: Some(err_type),
+            }) => {
                 update_registry(err_type.as_ref(), registry);
             }
             AnalysedType::Result(TypeResult {
-                                     ok: Some(ok_type),
-                                     err: None,
-                                 }) => {
+                ok: Some(ok_type),
+                err: None,
+            }) => {
                 update_registry(ok_type.as_ref(), registry);
             }
             AnalysedType::Option(type_option) => {
                 update_registry(type_option.inner.as_ref(), registry);
             }
             AnalysedType::Result(TypeResult {
-                                     ok: None,
-                                     err: None,
-                                 }) => {}
+                ok: None,
+                err: None,
+            }) => {}
             AnalysedType::Flags(_) => {}
             AnalysedType::Str(_) => {}
             AnalysedType::Chr(_) => {}

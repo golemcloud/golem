@@ -20,7 +20,7 @@ use crate::{
     RegistryKey, RegistryValue,
 };
 use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeVariant};
-use std::collections::{BTreeMap};
+use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
 
