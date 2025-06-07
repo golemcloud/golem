@@ -158,13 +158,35 @@ where
 {
     async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error> {
         let start = Instant::now();
-        let key = RdbmsPoolKey::from(address).map_err(Error::ConnectionFailure)?;
-        info!(
-            rdbms_type = self.rdbms_type.to_string(),
-            pool_key = key.to_string(),
-            "create connection",
-        );
-        let result = self.get_or_create(&key, worker_id).await.map(|_| key);
+
+        let result = match RdbmsPoolKey::from(address) {
+            Ok(key) => {
+                info!(
+                    rdbms_type = self.rdbms_type.to_string(),
+                    pool_key = key.to_string(),
+                    "create connection",
+                );
+                self.get_or_create(&key, worker_id)
+                    .await
+                    .map(|_| key.clone())
+                    .map_err(|e| {
+                        error!(
+                            rdbms_type = self.rdbms_type.to_string(),
+                            pool_key = key.to_string(),
+                            "create connection error: {}",
+                            e
+                        );
+                        e
+                    })
+            }
+            Err(e) => {
+                error!(
+                    rdbms_type = self.rdbms_type.to_string(),
+                    "create connection error: {}", e
+                );
+                Err(Error::ConnectionFailure(e))
+            }
+        };
         self.record_metrics("create-connection", start, result)
     }
 

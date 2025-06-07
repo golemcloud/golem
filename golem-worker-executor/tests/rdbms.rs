@@ -36,6 +36,7 @@ use golem_wasm_rpc::{Value, ValueAndType};
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::RdbmsType;
+use rand::RngCore;
 use serde_json::json;
 use tokio::task::JoinSet;
 use try_match::try_match;
@@ -294,12 +295,21 @@ async fn rdbms_postgres_crud(
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
+    check_transaction_oplog_entries::<PostgresType>(oplog, None, None);
+
     workers_interrupt_test(&executor, worker_ids1.clone()).await;
     workers_interrupt_test(&executor, worker_ids3.clone()).await;
 
     drop(executor);
 
     let executor = start(deps, &context).await.unwrap();
+
+    // rdbms_workers_test::<PostgresType>(
+    //     &executor,
+    //     worker_ids1.clone(),
+    //     RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
+    // )
+    // .await;
 
     rdbms_workers_test::<PostgresType>(
         &executor,
@@ -421,7 +431,7 @@ async fn postgres_transaction_recovery_test(
     postgres: &DockerPostgresRdb,
     fail_on_oplog_entry: &str,
     fail_count: u8,
-    transaction_end: Option<TransactionEnd>,
+    transaction_end: TransactionEnd,
     expected_restart: bool,
 ) {
     let db_address = postgres.public_connection_string();
@@ -440,7 +450,11 @@ async fn postgres_transaction_recovery_test(
 
     let worker_id = worker_ids[0].clone();
 
-    let table_name = format!("test_users_{}", fail_on_oplog_entry.to_lowercase());
+    let table_name = format!(
+        "test_users_{}_{}",
+        fail_on_oplog_entry.to_lowercase(),
+        rand::rng().next_u64()
+    );
 
     let create_test = RdbmsTest::new(
         vec![StatementTest::execute_test(
@@ -467,7 +481,7 @@ async fn postgres_transaction_recovery_test(
 
     let insert_test = RdbmsTest::new(
         postgres_insert_statements(&table_name, expected_values.clone(), None),
-        transaction_end,
+        Some(transaction_end),
     );
 
     let result1 = execute_worker_test::<PostgresType>(
@@ -481,7 +495,7 @@ async fn postgres_transaction_recovery_test(
     check_test_result(&worker_id, result1.clone(), insert_test.clone());
 
     // println!("after insert");
-    let select_test = if transaction_end == Some(TransactionEnd::Commit) {
+    let select_test = if transaction_end == TransactionEnd::Commit {
         RdbmsTest::new(
             postgres_select_statements(&table_name, expected_values),
             None,
@@ -571,7 +585,7 @@ async fn rdbms_postgres_commit_recovery(
             postgres,
             "CommitedRemoteTransaction",
             fail_count,
-            Some(TransactionEnd::Commit),
+            TransactionEnd::Commit,
             false,
         )
         .await;
@@ -593,7 +607,7 @@ async fn rdbms_postgres_pre_commit_recovery(
             postgres,
             "PreCommitRemoteTransaction",
             fail_count,
-            Some(TransactionEnd::Commit),
+            TransactionEnd::Commit,
             true,
         )
         .await;
@@ -615,7 +629,7 @@ async fn rdbms_postgres_rollback_recovery(
             postgres,
             "RolledBackRemoteTransaction",
             fail_count,
-            Some(TransactionEnd::Rollback),
+            TransactionEnd::Rollback,
             false,
         )
         .await;
@@ -637,7 +651,7 @@ async fn rdbms_postgres_pre_rollback_recovery(
             postgres,
             "PreRollbackRemoteTransaction",
             fail_count,
-            Some(TransactionEnd::Rollback),
+            TransactionEnd::Rollback,
             true,
         )
         .await;
@@ -941,11 +955,20 @@ async fn rdbms_mysql_crud(
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
+    check_transaction_oplog_entries::<MysqlType>(oplog, None, None);
+
     workers_interrupt_test(&executor, worker_ids1.clone()).await;
     workers_interrupt_test(&executor, worker_ids3.clone()).await;
 
     drop(executor);
     let executor = start(deps, &context).await.unwrap();
+
+    // rdbms_workers_test::<MysqlType>(
+    //     &executor,
+    //     worker_ids1.clone(),
+    //     RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
+    // )
+    // .await;
 
     rdbms_workers_test::<MysqlType>(
         &executor,
@@ -1063,7 +1086,7 @@ async fn mysql_transaction_recovery_test(
     mysql: &DockerMysqlRdb,
     fail_on_oplog_entry: &str,
     fail_count: u8,
-    transaction_end: Option<TransactionEnd>,
+    transaction_end: TransactionEnd,
     expected_restart: bool,
 ) {
     let db_address = mysql.public_connection_string();
@@ -1082,7 +1105,11 @@ async fn mysql_transaction_recovery_test(
 
     let worker_id = worker_ids[0].clone();
 
-    let table_name = format!("test_users_{}", fail_on_oplog_entry.to_lowercase());
+    let table_name = format!(
+        "test_users_{}_{}",
+        fail_on_oplog_entry.to_lowercase(),
+        rand::rng().next_u64()
+    );
 
     let create_test = RdbmsTest::new(
         vec![StatementTest::execute_test(
@@ -1109,7 +1136,7 @@ async fn mysql_transaction_recovery_test(
 
     let insert_test = RdbmsTest::new(
         mysql_insert_statements(&table_name, expected_values.clone(), None),
-        transaction_end,
+        Some(transaction_end),
     );
 
     let result1 = execute_worker_test::<MysqlType>(
@@ -1122,7 +1149,7 @@ async fn mysql_transaction_recovery_test(
 
     check_test_result(&worker_id, result1.clone(), insert_test.clone());
 
-    let select_test = if transaction_end == Some(TransactionEnd::Commit) {
+    let select_test = if transaction_end == TransactionEnd::Commit {
         RdbmsTest::new(mysql_select_statements(&table_name, expected_values), None)
     } else {
         RdbmsTest::new(mysql_select_statements(&table_name, vec![]), None)
@@ -1205,7 +1232,7 @@ async fn rdbms_mysql_commit_recovery(
             mysql,
             "CommitedRemoteTransaction",
             fail_count,
-            Some(TransactionEnd::Commit),
+            TransactionEnd::Commit,
             false,
         )
         .await;
@@ -1227,7 +1254,7 @@ async fn rdbms_mysql_pre_commit_recovery(
             mysql,
             "PreCommitRemoteTransaction",
             fail_count,
-            Some(TransactionEnd::Commit),
+            TransactionEnd::Commit,
             true,
         )
         .await;
@@ -1249,7 +1276,7 @@ async fn rdbms_mysql_rollback_recovery(
             mysql,
             "RolledBackRemoteTransaction",
             fail_count,
-            Some(TransactionEnd::Rollback),
+            TransactionEnd::Rollback,
             false,
         )
         .await;
@@ -1271,7 +1298,7 @@ async fn rdbms_mysql_pre_rollback_recovery(
             mysql,
             "PreRollbackRemoteTransaction",
             fail_count,
-            Some(TransactionEnd::Rollback),
+            TransactionEnd::Rollback,
             true,
         )
         .await;
