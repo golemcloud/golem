@@ -20,8 +20,7 @@ use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
 pub(crate) use gateway_binding_compiled::*;
 use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType;
 use golem_common::model::component::VersionedComponentId;
-use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{Expr, RibByteCode, RibCompilationError, RibInputTypeInfo};
+use rib::{ComponentDependency, Expr, RibByteCode, RibCompilationError, RibInputTypeInfo};
 pub use static_binding::*;
 
 mod gateway_binding_compiled;
@@ -244,9 +243,10 @@ pub struct WorkerNameCompiled {
 impl WorkerNameCompiled {
     pub fn from_worker_name(
         worker_name: &Expr,
-        exports: &[AnalysedExport],
+        component_dependency: &Vec<ComponentDependency>,
     ) -> Result<Self, RibCompilationError> {
-        let compiled_worker_name = DefaultWorkerServiceRibCompiler::compile(worker_name, exports)?;
+        let compiled_worker_name =
+            DefaultWorkerServiceRibCompiler::compile(worker_name, component_dependency)?;
 
         Ok(WorkerNameCompiled {
             worker_name: worker_name.clone(),
@@ -264,12 +264,9 @@ pub struct IdempotencyKeyCompiled {
 }
 
 impl IdempotencyKeyCompiled {
-    pub fn from_idempotency_key(
-        idempotency_key: &Expr,
-        exports: &[AnalysedExport],
-    ) -> Result<Self, RibCompilationError> {
+    pub fn from_idempotency_key(idempotency_key: &Expr) -> Result<Self, RibCompilationError> {
         let idempotency_key_compiled =
-            DefaultWorkerServiceRibCompiler::compile(idempotency_key, exports)?;
+            DefaultWorkerServiceRibCompiler::compile(idempotency_key, &vec![])?;
 
         Ok(IdempotencyKeyCompiled {
             idempotency_key: idempotency_key.clone(),
@@ -289,7 +286,7 @@ pub struct InvocationContextCompiled {
 impl InvocationContextCompiled {
     pub fn from_invocation_context(
         invocation_context: &Expr,
-        exports: &[AnalysedExport],
+        exports: &Vec<ComponentDependency>,
     ) -> Result<Self, RibCompilationError> {
         let invocation_context_compiled =
             DefaultWorkerServiceRibCompiler::compile(invocation_context, exports)?;

@@ -16,10 +16,9 @@ use super::{IdempotencyKeyCompiled, InvocationContextCompiled, WorkerNameCompile
 use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
 use golem_common::model::component::VersionedComponentId;
-use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{
-    Expr, RibByteCode, RibCompilationError, RibInputTypeInfo, RibOutputTypeInfo,
-    WorkerFunctionsInRib,
+    ComponentDependency, Expr, RibByteCode, RibCompilationError, RibInputTypeInfo,
+    RibOutputTypeInfo, WorkerFunctionsInRib,
 };
 use serde::{Deserialize, Serialize};
 
@@ -44,31 +43,30 @@ pub struct WorkerBindingCompiled {
 impl WorkerBindingCompiled {
     pub fn from_raw_worker_binding(
         gateway_worker_binding: &WorkerBinding,
-        export_metadata: &[AnalysedExport],
+        component_dependency: &Vec<ComponentDependency>,
     ) -> Result<Self, RibCompilationError> {
         let worker_name_compiled: Option<WorkerNameCompiled> = gateway_worker_binding
             .worker_name
             .clone()
             .map(|worker_name_expr| {
-                WorkerNameCompiled::from_worker_name(&worker_name_expr, export_metadata)
+                WorkerNameCompiled::from_worker_name(&worker_name_expr, component_dependency)
             })
             .transpose()?;
 
         let idempotency_key_compiled = match &gateway_worker_binding.idempotency_key {
             Some(idempotency_key) => Some(IdempotencyKeyCompiled::from_idempotency_key(
                 idempotency_key,
-                export_metadata,
             )?),
             None => None,
         };
         let response_compiled = ResponseMappingCompiled::from_response_mapping(
             &gateway_worker_binding.response_mapping,
-            export_metadata,
+            component_dependency,
         )?;
         let invocation_context_compiled = match &gateway_worker_binding.invocation_context {
             Some(invocation_context) => Some(InvocationContextCompiled::from_invocation_context(
                 invocation_context,
-                export_metadata,
+                component_dependency,
             )?),
             None => None,
         };
@@ -122,10 +120,10 @@ pub struct ResponseMappingCompiled {
 impl ResponseMappingCompiled {
     pub fn from_response_mapping(
         response_mapping: &ResponseMapping,
-        exports: &[AnalysedExport],
+        component_dependency: &Vec<ComponentDependency>,
     ) -> Result<Self, RibCompilationError> {
         let response_compiled =
-            DefaultWorkerServiceRibCompiler::compile(&response_mapping.0, exports)?;
+            DefaultWorkerServiceRibCompiler::compile(&response_mapping.0, component_dependency)?;
 
         Ok(ResponseMappingCompiled {
             response_mapping_expr: response_mapping.0.clone(),

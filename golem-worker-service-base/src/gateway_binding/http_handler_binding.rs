@@ -14,7 +14,6 @@
 
 use super::{IdempotencyKeyCompiled, WorkerNameCompiled};
 use golem_common::model::component::VersionedComponentId;
-use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibCompilationError};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,20 +33,18 @@ pub struct HttpHandlerBindingCompiled {
 impl HttpHandlerBindingCompiled {
     pub fn from_raw_http_handler_binding(
         http_handler_binding: &HttpHandlerBinding,
-        export_metadata: &[AnalysedExport],
     ) -> Result<Self, RibCompilationError> {
         let worker_name_compiled: Option<WorkerNameCompiled> = http_handler_binding
             .worker_name
             .clone()
             .map(|worker_name_expr| {
-                WorkerNameCompiled::from_worker_name(&worker_name_expr, export_metadata)
+                WorkerNameCompiled::from_worker_name(&worker_name_expr, &vec![])
             })
             .transpose()?;
 
         let idempotency_key_compiled = match &http_handler_binding.idempotency_key {
             Some(idempotency_key) => Some(IdempotencyKeyCompiled::from_idempotency_key(
                 idempotency_key,
-                export_metadata,
             )?),
             None => None,
         };

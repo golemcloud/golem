@@ -54,7 +54,7 @@ pub struct RibCompilerConfig {
     input_spec: Vec<GlobalVariableTypeSpec>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ComponentDependency {
     pub component_info: ComponentInfo,
     pub exports: Vec<AnalysedExport>,

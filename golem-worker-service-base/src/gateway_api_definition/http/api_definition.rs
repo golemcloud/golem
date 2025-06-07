@@ -35,7 +35,7 @@ use golem_common::model::component::VersionedComponentId;
 use golem_service_base::model::Component;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType};
 use poem_openapi::Enum;
-use rib::{RibCompilationError, RibInputTypeInfo};
+use rib::{ComponentDependency, ComponentInfo, RibCompilationError, RibInputTypeInfo};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -745,17 +745,33 @@ pub enum RouteCompilationErrors {
 
 #[derive(Clone, Debug)]
 pub struct ComponentMetadataDictionary {
-    pub metadata: HashMap<VersionedComponentId, Vec<AnalysedExport>>,
+    pub metadata: HashMap<VersionedComponentId, ComponentDetails>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ComponentDetails {
+    pub component_info: ComponentInfo,
+    pub metadata: Vec<AnalysedExport>,
 }
 
 impl ComponentMetadataDictionary {
     pub fn from_components(components: &Vec<Component>) -> ComponentMetadataDictionary {
         let mut metadata = HashMap::new();
+
         for component in components {
-            metadata.insert(
-                component.versioned_component_id.clone(),
-                component.metadata.exports.clone(),
-            );
+            let component_info = ComponentInfo {
+                component_name: component.component_name.0.clone(),
+                component_id: component.versioned_component_id.component_id.0.clone(),
+                root_package_name: component.metadata.root_package_name.clone(),
+                root_package_version: component.metadata.root_package_version.clone(),
+            };
+
+            let component_details = ComponentDetails {
+                component_info,
+                metadata: component.metadata.exports.clone(),
+            };
+
+            metadata.insert(component.versioned_component_id.clone(), component_details);
         }
 
         ComponentMetadataDictionary { metadata }
@@ -787,16 +803,23 @@ impl CompiledRoute {
 
         match &route.binding {
             GatewayBinding::Default(worker_binding) => {
-                let metadata = metadata_dictionary
+                let component_details = metadata_dictionary
                     .metadata
                     .get(&worker_binding.component_id)
                     .ok_or(RouteCompilationErrors::MetadataNotFoundError(
                         worker_binding.component_id.clone(),
                     ))?;
 
-                let binding =
-                    WorkerBindingCompiled::from_raw_worker_binding(worker_binding, metadata)
-                        .map_err(RouteCompilationErrors::RibError)?;
+                let component_dependency = vec![ComponentDependency {
+                    component_info: component_details.component_info.clone(),
+                    exports: component_details.metadata.clone(),
+                }];
+
+                let binding = WorkerBindingCompiled::from_raw_worker_binding(
+                    worker_binding,
+                    &component_dependency,
+                )
+                .map_err(RouteCompilationErrors::RibError)?;
 
                 Self::validate_rib_scripts(
                     query_params,
@@ -816,16 +839,23 @@ impl CompiledRoute {
             }
 
             GatewayBinding::FileServer(worker_binding) => {
-                let metadata = metadata_dictionary
+                let component_details = metadata_dictionary
                     .metadata
                     .get(&worker_binding.component_id)
                     .ok_or(RouteCompilationErrors::MetadataNotFoundError(
                         worker_binding.component_id.clone(),
                     ))?;
 
-                let binding =
-                    WorkerBindingCompiled::from_raw_worker_binding(worker_binding, metadata)
-                        .map_err(RouteCompilationErrors::RibError)?;
+                let component_dependency = vec![ComponentDependency {
+                    component_info: component_details.component_info.clone(),
+                    exports: component_details.metadata.clone(),
+                }];
+
+                let binding = WorkerBindingCompiled::from_raw_worker_binding(
+                    worker_binding,
+                    &component_dependency,
+                )
+                .map_err(RouteCompilationErrors::RibError)?;
 
                 Self::validate_rib_scripts(
                     query_params,
@@ -845,18 +875,9 @@ impl CompiledRoute {
             }
 
             GatewayBinding::HttpHandler(http_handler_binding) => {
-                let metadata = metadata_dictionary
-                    .metadata
-                    .get(&http_handler_binding.component_id)
-                    .ok_or(RouteCompilationErrors::MetadataNotFoundError(
-                        http_handler_binding.component_id.clone(),
-                    ))?;
-
-                let binding = HttpHandlerBindingCompiled::from_raw_http_handler_binding(
-                    http_handler_binding,
-                    metadata,
-                )
-                .map_err(RouteCompilationErrors::RibError)?;
+                let binding =
+                    HttpHandlerBindingCompiled::from_raw_http_handler_binding(http_handler_binding)
+                        .map_err(RouteCompilationErrors::RibError)?;
 
                 Self::validate_rib_scripts(
                     query_params,
