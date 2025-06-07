@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ComponentDependencies, Expr, FunctionTypeRegistry};
+use crate::{ComponentDependencies, Expr};
 
 pub fn infer_variants(expr: &mut Expr, component_dependency: &ComponentDependencies) {
     let variants = internal::get_variants_info(expr, component_dependency);
@@ -25,10 +25,7 @@ pub fn infer_variants(expr: &mut Expr, component_dependency: &ComponentDependenc
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::{
-        ComponentDependencies, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
-    };
-    use golem_wasm_ast::analysis::AnalysedType;
+    use crate::{ComponentDependencies, Expr, InferredType};
     use std::collections::VecDeque;
 
     pub(crate) fn convert_function_calls_to_variant_calls(

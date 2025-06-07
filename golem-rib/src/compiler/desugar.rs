@@ -624,7 +624,6 @@ mod desugar_tests {
 
     use super::*;
     use crate::compiler::desugar::desugar_tests::expectations::expected_condition_with_identifiers;
-    use crate::FunctionTypeRegistry;
     use crate::{ComponentDependencies, ComponentInfo, Expr};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,

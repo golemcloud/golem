@@ -994,8 +994,7 @@ mod compiler_tests {
 
     use super::*;
     use crate::{
-        ArmPattern, ComponentDependencies, FunctionTypeRegistry, InferredType, MatchArm,
-        RibCompiler, VariableId,
+        ArmPattern, ComponentDependencies, InferredType, MatchArm, RibCompiler, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};

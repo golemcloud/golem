@@ -15,7 +15,7 @@
 use crate::call_type::CallType;
 use crate::type_checker::missing_fields::find_missing_fields_in_record;
 use crate::{type_checker, ComponentDependencies, FunctionName};
-use crate::{Expr, ExprVisitor, FunctionCallError, FunctionTypeRegistry, RegistryKey};
+use crate::{Expr, ExprVisitor, FunctionCallError};
 use golem_wasm_ast::analysis::AnalysedType;
 
 // While we have a dedicated generic phases (refer submodules) within type_checker module,

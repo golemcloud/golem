@@ -68,7 +68,7 @@ impl ComponentDependencies {
                         .name_and_types
                         .iter()
                         .filter_map(|(f_name, function_type)| {
-                            if (f_name == function_name) {
+                            if f_name == function_name {
                                 Some(function_type)
                             } else {
                                 None
@@ -268,7 +268,7 @@ impl ComponentDependencies {
                         let result =
                             self.dependencies
                                 .iter()
-                                .find(|(x, y)| match &x.root_package_name {
+                                .find(|(x, _)| match &x.root_package_name {
                                     Some(name) => {
                                         let pkg = match &x.root_package_version {
                                             None => name.to_string(),

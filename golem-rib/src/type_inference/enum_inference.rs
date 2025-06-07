@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ComponentDependencies, Expr, FunctionTypeRegistry};
+use crate::{ComponentDependencies, Expr};
 
 pub fn infer_enums(expr: &mut Expr, component_dependencies: &ComponentDependencies) {
     let eum_info = internal::get_enum_info(expr, component_dependencies);
@@ -22,9 +22,7 @@ pub fn infer_enums(expr: &mut Expr, component_dependencies: &ComponentDependenci
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::{
-        ComponentDependencies, Expr, ExprVisitor, FunctionTypeRegistry, RegistryKey, RegistryValue,
-    };
+    use crate::{ComponentDependencies, Expr, ExprVisitor};
     use golem_wasm_ast::analysis::AnalysedType;
 
     pub(crate) fn convert_identifiers_to_enum_function_calls(

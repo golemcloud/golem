@@ -27,7 +27,7 @@ use crate::rib_type_error::RibTypeError;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
 use crate::type_checker::invalid_function_args::check_invalid_function_args;
 use crate::type_checker::invalid_worker_name::check_invalid_worker_name;
-use crate::{ComponentDependencies, Expr, FunctionTypeRegistry};
+use crate::{ComponentDependencies, Expr};
 
 pub fn type_check(
     expr: &mut Expr,
@@ -36,7 +36,6 @@ pub fn type_check(
     check_invalid_function_args(expr, component_dependency)?;
     check_unresolved_types(expr)?;
     check_invalid_worker_name(expr)?;
-    //check_invalid_program_return(expr)?;
     check_exhaustive_pattern_match(expr, component_dependency)?;
     Ok(())
 }

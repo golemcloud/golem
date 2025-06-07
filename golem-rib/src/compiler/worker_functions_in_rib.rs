@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ComponentDependencies, InferredExpr, RegistryKey, RibCompilationError};
+use crate::{ComponentDependencies, InferredExpr, RibCompilationError};
 use golem_wasm_ast::analysis::AnalysedType;
 
 // An easier data type that focus just on the side effecting function calls in Rib script.
@@ -75,7 +75,7 @@ pub struct WorkerFunctionType {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use crate::{RegistryKey, WorkerFunctionType, WorkerFunctionsInRib};
+    use crate::{WorkerFunctionType, WorkerFunctionsInRib};
     use golem_api_grpc::proto::golem::rib::WorkerFunctionType as WorkerFunctionTypeProto;
     use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
     use golem_wasm_ast::analysis::AnalysedType;

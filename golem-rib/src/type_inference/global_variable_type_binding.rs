@@ -151,7 +151,7 @@ fn override_type(expr: &mut Expr, type_spec: &GlobalVariableTypeSpec) {
 mod tests {
     use super::*;
     use crate::rib_source_span::SourceSpan;
-    use crate::{ComponentDependencies, FunctionTypeRegistry, Id, TypeName};
+    use crate::{ComponentDependencies, Id, TypeName};
     use test_r::test;
 
     #[test]

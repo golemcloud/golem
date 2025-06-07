@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::FunctionTypeRegistry;
 use crate::{ComponentDependencies, Expr, ExprVisitor, FunctionCallError};
 
 // Resolving function arguments and return types based on function type registry
@@ -55,8 +54,7 @@ mod internal {
     use crate::{
         ActualType, ComponentDependencies, DynamicParsedFunctionName, ExpectedType, Expr,
         FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod, FunctionCallError,
-        FunctionName, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue,
-        TypeMismatchError,
+        FunctionName, InferredType, TypeMismatchError,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
@@ -458,15 +456,15 @@ mod internal {
 
 #[cfg(test)]
 mod function_parameters_inference_tests {
+    use test_r::test;
+
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::rib_source_span::SourceSpan;
-    use crate::FunctionTypeRegistry;
     use crate::{ComponentDependencies, ComponentInfo, Expr, InferredType, ParsedFunctionSite};
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
-    use test_r::test;
     use uuid::Uuid;
 
     fn get_component_dependencies() -> ComponentDependencies {

@@ -74,8 +74,8 @@ mod tests {
     };
     use crate::{
         ArmPattern, ComponentDependencies, DynamicParsedFunctionName,
-        DynamicParsedFunctionReference, Expr, FunctionTypeRegistry, InferredExpr, InferredType,
-        MatchArm, Number, ParsedFunctionSite, TypeName, VariableId,
+        DynamicParsedFunctionReference, Expr, InferredExpr, InferredType, MatchArm, Number,
+        ParsedFunctionSite, TypeName, VariableId,
     };
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
@@ -2290,9 +2290,8 @@ mod tests {
         use crate::parser::type_name::TypeName;
         use crate::rib_source_span::SourceSpan;
         use crate::{
-            ArmPattern, ComponentDependencies, ComponentDependency, ComponentInfo, Expr,
-            FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier, Number,
-            ParsedFunctionSite, VariableId,
+            ArmPattern, ComponentDependencies, ComponentInfo, Expr, InferredType, MatchArm,
+            MatchIdentifier, Number, ParsedFunctionSite, VariableId,
         };
         use bigdecimal::BigDecimal;
         use golem_wasm_ast::analysis::analysed_type::u64;

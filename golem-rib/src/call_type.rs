@@ -145,21 +145,6 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor>
-        for FullyQualifiedResourceConstructor
-    {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor,
-        ) -> Result<Self, Self::Error> {
-            Err(
-                "Conversion from proto to FullyQualifiedResourceConstructor is not implemented"
-                    .to_string(),
-            )
-        }
-    }
-
     impl TryFrom<golem_api_grpc::proto::golem::rib::InstanceCreationType> for InstanceCreationType {
         type Error = String;
         fn try_from(
