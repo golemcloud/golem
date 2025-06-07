@@ -3480,6 +3480,18 @@ components:
           type: string
         subdomain:
           type: string
+    BeginRemoteTransactionParameters:
+      type: object
+      title: BeginRemoteTransactionParameters
+      required:
+      - timestamp
+      - transactionId
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        transactionId:
+          type: string
     CancelInvocationParameters:
       type: object
       title: CancelInvocationParameters
@@ -4930,6 +4942,7 @@ components:
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
       - $ref: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
+      - $ref: '#/components/schemas/PublicDurableFunctionType_WriteRemoteTransactionParameters'
       discriminator:
         propertyName: type
         mapping:
@@ -4938,6 +4951,7 @@ components:
           ReadRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
           WriteRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
           WriteRemoteBatched: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
+          WriteRemoteTransaction: '#/components/schemas/PublicDurableFunctionType_WriteRemoteTransactionParameters'
     PublicDurableFunctionType_Empty:
       allOf:
       - type: object
@@ -4962,6 +4976,18 @@ components:
             - WriteRemoteBatched
             example: WriteRemoteBatched
       - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
+    PublicDurableFunctionType_WriteRemoteTransactionParameters:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - WriteRemoteTransaction
+            example: WriteRemoteTransaction
+      - $ref: '#/components/schemas/WriteRemoteTransactionParameters'
     PublicExternalSpanData:
       type: object
       title: PublicExternalSpanData
@@ -5040,6 +5066,12 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_BeginRemoteTransactionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
       discriminator:
         propertyName: type
         mapping:
@@ -5076,6 +5108,12 @@ components:
           FinishSpan: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
           SetSpanAttribute: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
           ChangePersistenceLevel: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
+          BeginRemoteTransaction: '#/components/schemas/PublicOplogEntry_BeginRemoteTransactionParameters'
+          PreCommitRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+          PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+          CommitedRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+          RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+          AbortedRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
     PublicOplogEntryWithIndex:
       type: object
       title: PublicOplogEntryWithIndex
@@ -5109,6 +5147,27 @@ components:
             - ActivatePlugin
             example: ActivatePlugin
       - $ref: '#/components/schemas/ActivatePluginParameters'
+    PublicOplogEntry_BeginRemoteTransactionParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - BeginRemoteTransaction
+            example: BeginRemoteTransaction
+      - $ref: '#/components/schemas/BeginRemoteTransactionParameters'
     PublicOplogEntry_CancelInvocationParameters:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -5487,6 +5546,27 @@ components:
             - PendingWorkerInvocation
             example: PendingWorkerInvocation
       - $ref: '#/components/schemas/PendingWorkerInvocationParameters'
+    PublicOplogEntry_RemoteTransactionParameters:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - AbortedRemoteTransaction
+            example: AbortedRemoteTransaction
+      - $ref: '#/components/schemas/RemoteTransactionParameters'
     PublicOplogEntry_ResourceParameters:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -5739,6 +5819,19 @@ components:
             - ManualUpdate
             example: ManualUpdate
       - $ref: '#/components/schemas/ManualUpdateParameters'
+    RemoteTransactionParameters:
+      type: object
+      title: RemoteTransactionParameters
+      required:
+      - timestamp
+      - beginIndex
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        beginIndex:
+          type: integer
+          format: uint64
     ResolvedGatewayBindingComponent:
       type: object
       title: ResolvedGatewayBindingComponent
@@ -6670,6 +6763,13 @@ components:
     WriteRemoteBatchedParameters:
       type: object
       title: WriteRemoteBatchedParameters
+      properties:
+        index:
+          type: integer
+          format: uint64
+    WriteRemoteTransactionParameters:
+      type: object
+      title: WriteRemoteTransactionParameters
       properties:
         index:
           type: integer

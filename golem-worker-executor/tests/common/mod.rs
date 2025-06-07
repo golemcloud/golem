@@ -1,18 +1,21 @@
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_test_framework::components::cloud_service::CloudService;
 use golem_worker_executor::cloud::CloudGolemTypes;
 use std::collections::HashSet;
 
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
 use golem_worker_executor::services::file_loader::FileLoader;
 use prometheus::Registry;
+use std::fmt::{Debug, Formatter};
 
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
+use bytes::Bytes;
+use dashmap::DashMap;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
@@ -20,20 +23,10 @@ use golem_common::model::{
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
-use golem_worker_executor::error::GolemError;
-use golem_worker_executor::services::golem_config::{
-    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
-    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, ProjectServiceConfig,
-    ProjectServiceDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
-};
-use std::path::Path;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, RwLock, Weak};
-
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
+use golem_worker_executor::error::GolemError;
 use golem_worker_executor::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
     ReadFileResult, TrapType, WorkerConfig,
@@ -41,8 +34,14 @@ use golem_worker_executor::model::{
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::{ComponentMetadata, ComponentService};
+use golem_worker_executor::services::golem_config::{
+    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
+    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
+    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, ProjectServiceConfig,
+    ProjectServiceDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+};
 use golem_worker_executor::services::key_value::KeyValueService;
-use golem_worker_executor::services::oplog::{Oplog, OplogService};
+use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
@@ -60,6 +59,10 @@ use golem_worker_executor::workerctx::{
     UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails};
+use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, RwLock, Weak};
+use std::time::Duration;
 
 use tokio::runtime::Handle;
 
@@ -72,10 +75,11 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
 };
+use golem_common::base_model::OplogIndex;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::WorkerResourceId;
+use golem_common::model::oplog::{OplogEntry, OplogPayload, WorkerResourceId};
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::rdb::Rdb;
 use golem_test_framework::components::redis::Redis;
@@ -99,6 +103,7 @@ use golem_worker_executor::services::worker_enumeration::{
 use golem_worker_executor::services::worker_fork::{DefaultWorkerFork, WorkerForkService};
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::worker::{RetryDecision, Worker};
+use regex::Regex;
 use tonic::transport::Channel;
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -431,7 +436,7 @@ impl IndexedResourceStore for TestWorkerCtx {
 
 #[async_trait]
 impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
-    type ExtraDeps = ();
+    type ExtraDeps = AdditionalTestDeps;
 
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
@@ -669,7 +674,7 @@ impl WorkerCtx for TestWorkerCtx {
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
-        _extra_deps: Self::ExtraDeps,
+        extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
@@ -678,6 +683,12 @@ impl WorkerCtx for TestWorkerCtx {
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
     ) -> Result<Self, GolemError> {
+        let oplog = Arc::new(TestOplog::new(
+            owned_worker_id.clone(),
+            oplog.clone(),
+            extra_deps,
+        ));
+
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
             component_metadata,
@@ -1033,6 +1044,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(&golem_config.resource_limits);
+        let extra_deps = AdditionalTestDeps::new();
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
@@ -1062,7 +1074,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
-            (),
+            extra_deps.clone(),
         ));
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
@@ -1094,7 +1106,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
-            (),
+            extra_deps.clone(),
         ));
         Ok(All::new(
             active_workers,
@@ -1123,7 +1135,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             plugins,
             oplog_processor_plugin,
             resource_limits,
-            (),
+            extra_deps.clone(),
         ))
     }
 
@@ -1143,4 +1155,163 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
 
 fn get_durable_ctx(ctx: &mut TestWorkerCtx) -> &mut DurableWorkerCtx<TestWorkerCtx> {
     &mut ctx.durable_ctx
+}
+
+#[derive(Clone)]
+struct TestOplog {
+    owned_worker_id: OwnedWorkerId,
+    oplog: Arc<dyn Oplog>,
+    additional_test_deps: AdditionalTestDeps,
+}
+
+impl TestOplog {
+    fn new(
+        owned_worker_id: OwnedWorkerId,
+        oplog: Arc<dyn Oplog>,
+        additional_test_deps: AdditionalTestDeps,
+    ) -> Self {
+        println!("TestOplog for worker {}", owned_worker_id);
+        Self {
+            owned_worker_id,
+            oplog,
+            additional_test_deps,
+        }
+    }
+
+    fn check_oplog(&self, entry: &OplogEntry) -> Result<(), String> {
+        let entry_name = match entry {
+            OplogEntry::BeginRemoteTransaction { .. } => "BeginRemoteTransaction",
+            OplogEntry::PreRollbackRemoteTransaction { .. } => "PreRollbackRemoteTransaction",
+            OplogEntry::PreCommitRemoteTransaction { .. } => "PreCommitRemoteTransaction",
+            OplogEntry::CommitedRemoteTransaction { .. } => "CommitedRemoteTransaction",
+            OplogEntry::RolledBackRemoteTransaction { .. } => "RolledBackRemoteTransaction",
+            OplogEntry::AbortedRemoteTransaction { .. } => "AbortedRemoteTransaction",
+            OplogEntry::BeginRemoteWrite { .. } => "BeginRemoteWrite",
+            OplogEntry::EndRemoteWrite { .. } => "EndRemoteWrite",
+            _ => "Other",
+        };
+
+        // Fail{times}On{entry}
+        let re = Regex::new(r"Fail(\d+)On([A-Za-z]+)").unwrap();
+
+        let worker_name = self.owned_worker_id.worker_id.worker_name.as_str();
+        if let Some(captures) = re.captures(worker_name) {
+            let times = &captures[1].parse::<usize>().unwrap_or_default();
+            let entry = &captures[2];
+            if entry == entry_name {
+                println!("worker {} entry {}", worker_name, entry_name);
+
+                let failed_before = self
+                    .additional_test_deps
+                    .get_oplog_failures_count(self.owned_worker_id.clone(), entry_name.to_string());
+
+                if failed_before >= *times {
+                    println!(
+                        "worker {} failed on {} before {} times",
+                        worker_name, entry_name, failed_before
+                    );
+                    Ok(())
+                } else {
+                    self.additional_test_deps
+                        .add_oplog_failure(self.owned_worker_id.clone(), entry_name.to_string());
+                    println!(
+                        "worker {} failed on {} {} times",
+                        worker_name,
+                        entry_name,
+                        failed_before + 1
+                    );
+                    Err(format!(
+                        "worker {} failed on {} {} times",
+                        worker_name,
+                        entry_name,
+                        failed_before + 1
+                    ))
+                }
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[async_trait]
+impl Oplog for TestOplog {
+    async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
+        self.check_oplog(&entry)?;
+        self.oplog.add_safe(entry).await
+    }
+
+    async fn add(&self, entry: OplogEntry) {
+        self.oplog.add(entry).await
+    }
+
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
+        self.oplog.drop_prefix(last_dropped_id).await
+    }
+
+    async fn commit(&self, level: CommitLevel) {
+        self.oplog.commit(level).await
+    }
+
+    async fn current_oplog_index(&self) -> OplogIndex {
+        self.oplog.current_oplog_index().await
+    }
+
+    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
+        self.oplog.wait_for_replicas(replicas, timeout).await
+    }
+
+    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+        self.oplog.read(oplog_index).await
+    }
+
+    async fn length(&self) -> u64 {
+        self.oplog.length().await
+    }
+
+    async fn upload_payload(&self, data: &[u8]) -> Result<OplogPayload, String> {
+        self.oplog.upload_payload(data).await
+    }
+
+    async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
+        self.oplog.download_payload(payload).await
+    }
+}
+
+impl Debug for TestOplog {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.oplog)
+    }
+}
+
+#[derive(Clone)]
+pub struct AdditionalTestDeps {
+    oplog_failures: Arc<DashMap<OwnedWorkerId, DashMap<String, usize>>>,
+}
+
+impl AdditionalTestDeps {
+    pub fn new() -> Self {
+        let oplog_failures = Arc::new(DashMap::new());
+        Self { oplog_failures }
+    }
+
+    pub fn get_oplog_failures_count(&self, owned_worker_id: OwnedWorkerId, entry: String) -> usize {
+        let v = self
+            .oplog_failures
+            .get(&owned_worker_id)
+            .and_then(|v| v.get(&entry).map(|v| *v.value()));
+        v.unwrap_or_default()
+    }
+
+    pub fn add_oplog_failure(&self, owned_worker_id: OwnedWorkerId, entry: String) {
+        *self
+            .oplog_failures
+            .entry(owned_worker_id)
+            .or_default()
+            .entry(entry)
+            .or_default()
+            .value_mut() += 1;
+    }
 }

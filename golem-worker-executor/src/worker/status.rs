@@ -265,6 +265,24 @@ fn calculate_latest_worker_status(
             OplogEntry::ChangePersistenceLevel { .. } => {
                 result = WorkerStatus::Running;
             }
+            OplogEntry::BeginRemoteTransaction { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::PreCommitRemoteTransaction { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::PreRollbackRemoteTransaction { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::CommitedRemoteTransaction { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::RolledBackRemoteTransaction { .. } => {
+                result = WorkerStatus::Running;
+            }
+            OplogEntry::AbortedRemoteTransaction { .. } => {
+                result = WorkerStatus::Running;
+            }
         }
     }
     result
