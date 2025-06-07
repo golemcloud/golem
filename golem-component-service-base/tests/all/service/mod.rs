@@ -64,7 +64,6 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_ast::analysis::analysed_type::{str, u64};
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
 use http::StatusCode;
-use rib::RegistryKey;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;

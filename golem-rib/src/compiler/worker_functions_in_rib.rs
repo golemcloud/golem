@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ComponentDependencies, InferredExpr, RibCompilationError};
+use crate::{ComponentDependencies, FunctionName, InferredExpr, RibCompilationError};
 use golem_wasm_ast::analysis::AnalysedType;
 
 // An easier data type that focus just on the side effecting function calls in Rib script.
@@ -42,7 +42,7 @@ impl WorkerFunctionsInRib {
                 .map_err(|e| RibCompilationError::RibStaticAnalysisError(e.to_string()))?;
 
             let function_call_in_rib = WorkerFunctionType {
-                function_key: key.name(),
+                function_name: key,
                 parameter_types: function_type
                     .parameter_types
                     .iter()
@@ -68,14 +68,14 @@ impl WorkerFunctionsInRib {
 // The type of a function call with worker (ephmeral or durable) in Rib script
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerFunctionType {
-    pub function_key: String, // TODO; to be changed to FunctionName once all the rib test cases pass
+    pub function_name: FunctionName,
     pub parameter_types: Vec<AnalysedType>,
     pub return_type: Option<AnalysedType>,
 }
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use crate::{WorkerFunctionType, WorkerFunctionsInRib};
+    use crate::{FunctionName, WorkerFunctionType, WorkerFunctionsInRib};
     use golem_api_grpc::proto::golem::rib::WorkerFunctionType as WorkerFunctionTypeProto;
     use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
     use golem_wasm_ast::analysis::AnalysedType;
@@ -123,10 +123,15 @@ mod protobuf {
                 .map(AnalysedType::try_from)
                 .collect::<Result<_, _>>()?;
 
-            let function_key = value.function_key;
+            let function_key_type = value.function_name.and_then(|x| x.function_name).ok_or(
+                "WorkerFunctionTypeProto function_key must have a function_name".to_string(),
+            )?;
+
+            let function_name = FunctionName::try_from(function_key_type)
+                .map_err(|e| format!("Failed to convert function key: {}", e))?;
 
             Ok(Self {
-                function_key,
+                function_name,
                 return_type,
                 parameter_types,
             })
@@ -135,10 +140,17 @@ mod protobuf {
 
     impl From<WorkerFunctionType> for WorkerFunctionTypeProto {
         fn from(value: WorkerFunctionType) -> Self {
-            let function_key = value.function_key;
+            let function_key =
+                golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::from(
+                    value.function_name,
+                );
+
+            let function_name_type = golem_api_grpc::proto::golem::rib::FunctionNameType {
+                function_name: Some(function_key),
+            };
 
             WorkerFunctionTypeProto {
-                function_key,
+                function_name: Some(function_name_type),
                 parameter_types: value
                     .parameter_types
                     .iter()

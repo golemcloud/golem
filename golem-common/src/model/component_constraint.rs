@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedType;
-use rib::{RegistryKey, WorkerFunctionType, WorkerFunctionsInRib};
+use rib::{FunctionName, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
 
 // This is very similar to WorkerFunctionsInRib data structure in `rib`, however
@@ -78,7 +78,7 @@ impl FunctionConstraints {
     pub fn try_merge(
         worker_functions: Vec<FunctionConstraints>,
     ) -> Result<FunctionConstraints, String> {
-        let mut merged_function_calls: HashMap<RegistryKey, FunctionUsageConstraint> =
+        let mut merged_function_calls: HashMap<FunctionName, FunctionUsageConstraint> =
             HashMap::new();
 
         for wf in worker_functions {
@@ -134,14 +134,14 @@ impl FunctionConstraints {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionSignature {
-    function_key: RegistryKey,
+    function_key: FunctionName,
     parameter_types: Vec<AnalysedType>,
     return_type: Option<AnalysedType>,
 }
 
 impl FunctionSignature {
     pub fn new(
-        function_key: RegistryKey,
+        function_key: FunctionName,
         parameter_types: Vec<AnalysedType>,
         return_type: Option<AnalysedType>,
     ) -> Self {
@@ -164,7 +164,7 @@ pub struct FunctionUsageConstraint {
 impl From<FunctionUsageConstraint> for WorkerFunctionType {
     fn from(value: FunctionUsageConstraint) -> Self {
         WorkerFunctionType {
-            function_key: value.function_signature.function_key.clone(),
+            function_name: value.function_signature.function_key.clone(),
             parameter_types: value.function_signature.parameter_types.clone(),
             return_type: value.function_signature.return_type.clone(),
         }
@@ -189,7 +189,7 @@ impl FunctionUsageConstraint {
     ) -> FunctionUsageConstraint {
         FunctionUsageConstraint {
             function_signature: FunctionSignature {
-                function_key: worker_function_type.function_key.clone(),
+                function_key: worker_function_type.function_name.clone(),
                 parameter_types: worker_function_type.parameter_types.clone(),
                 return_type: worker_function_type.return_type.clone(),
             },

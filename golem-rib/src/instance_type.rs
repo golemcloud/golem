@@ -691,6 +691,16 @@ mod protobuf {
         }
     }
 
+    impl From<FullyQualifiedFunctionName> for ProtoFullyQualifiedFunctionName {
+        fn from(value: FullyQualifiedFunctionName) -> Self {
+            ProtoFullyQualifiedFunctionName {
+                package_name: value.package_name.map(ProtoPackageName::from),
+                interface_name: value.interface_name.map(ProtoInterfaceName::from),
+                function_name: value.function_name,
+            }
+        }
+    }
+
     impl TryFrom<ProtoFullyQualifiedResourceMethod> for FullyQualifiedResourceMethod {
         type Error = String;
 
@@ -701,6 +711,17 @@ mod protobuf {
                 package_name: proto.package_name.map(TryFrom::try_from).transpose()?,
                 interface_name: proto.interface_name.map(TryFrom::try_from).transpose()?,
             })
+        }
+    }
+
+    impl From<FullyQualifiedResourceMethod> for ProtoFullyQualifiedResourceMethod {
+        fn from(value: FullyQualifiedResourceMethod) -> Self {
+            ProtoFullyQualifiedResourceMethod {
+                resource_name: value.resource_name,
+                method_name: value.method_name,
+                package_name: value.package_name.map(ProtoPackageName::from),
+                interface_name: value.interface_name.map(ProtoInterfaceName::from),
+            }
         }
     }
 
