@@ -22,7 +22,7 @@ use crate::rib_context::ReplContext;
 use crate::rib_edit::RibEdit;
 use crate::{CommandRegistry, ReplBootstrapError, RibExecutionError, UntypedCommand};
 use colored::Colorize;
-use rib::{RibCompiler, RibCompilerConfig, RibResult};
+use rib::{ComponentDependency, ComponentInfo, RibCompiler, RibCompilerConfig, RibResult};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
@@ -120,13 +120,23 @@ impl RibRepl {
             }
         }?;
 
+        let compiler_info = ComponentInfo {
+            component_name: component_dependency.component_name.clone(),
+            component_id: component_dependency.component_id,
+            root_package_name: None,
+            root_package_version: None,
+        };
+
         // Once https://github.com/golemcloud/golem/issues/1608 is resolved,
         // component dependency will not be required in the REPL state
         let repl_state = ReplState::new(
             component_dependency.clone(),
             config.worker_function_invoke,
             RibCompiler::new(RibCompilerConfig::new(
-                component_dependency.metadata,
+                vec![ComponentDependency {
+                    exports: component_dependency.metadata,
+                    component_info: compiler_info,
+                }],
                 vec![],
             )),
             history_file_path.clone(),

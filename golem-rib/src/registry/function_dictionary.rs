@@ -19,7 +19,7 @@ use crate::{
     DynamicParsedFunctionReference, Expr, FunctionTypeRegistry, InferredType, ParsedFunctionSite,
     RegistryKey, RegistryValue,
 };
-use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeVariant};
+use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, TypeEnum, TypeVariant};
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
@@ -35,6 +35,15 @@ pub struct FunctionDictionary {
 }
 
 impl FunctionDictionary {
+    pub fn get(
+        &self,
+        function_name: &FunctionName,
+    ) -> Option<&FunctionType> {
+        self.name_and_types
+            .iter()
+            .find_map(|(name, ftype)| if name == function_name { Some(ftype) } else { None })
+    }
+
     pub fn get_all_variants(&self) -> Vec<TypeVariant> {
         self.name_and_types
             .iter()
@@ -113,6 +122,13 @@ impl From<&ResourceMethodDictionary> for ComponentDependencies {
 }
 
 impl FunctionDictionary {
+    pub fn from_exports(
+        exports: &Vec<AnalysedExport>
+    ) -> Result<FunctionDictionary, String> {
+        let registry = FunctionTypeRegistry::from_export_metadata(exports);
+        Self::from_function_type_registry(&registry)
+    }
+
     pub fn from_function_type_registry(
         registry: &FunctionTypeRegistry,
     ) -> Result<FunctionDictionary, String> {
@@ -562,6 +578,8 @@ pub struct FunctionType {
 }
 
 impl FunctionType {
+
+
     pub fn as_type_variant(&self) -> Option<TypeVariant> {
         let analysed_type = AnalysedType::try_from(&self.return_type.clone()?).ok()?;
 
@@ -579,12 +597,15 @@ impl FunctionType {
         }
     }
 
-    pub fn parameter_types(&self) -> Vec<InferredType> {
-        self.parameter_types.clone()
+    pub fn parameter_types(&self) -> Vec<AnalysedType> {
+        self.parameter_types.iter()
+            .map(|x| AnalysedType::try_from(x).unwrap())
+            .collect()
     }
 
-    pub fn return_type(&self) -> Option<InferredType> {
-        self.return_type.clone()
+
+    pub fn return_type(&self) -> Option<AnalysedType> {
+        self.return_type.clone().map(|x| AnalysedType::try_from(&x).unwrap())
     }
 }
 

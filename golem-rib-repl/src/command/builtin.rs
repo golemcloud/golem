@@ -140,8 +140,8 @@ impl Command for Exports {
         repl_context: &mut ReplContext,
     ) -> Result<Self::Output, Self::ExecutionError> {
         let compiler = repl_context.get_rib_compiler();
-        let exports = compiler.get_exports()?;
-        Ok(exports)
+        let exports = compiler.get_exports();
+        Ok(exports.dependencies.first_key_value().unwrap().1.clone())
     }
 
     fn print_output(&self, output: &Self::Output, repl_context: &ReplContext) {
