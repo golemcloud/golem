@@ -110,6 +110,12 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
                     .methods
                     .push((method.method_name.clone(), ftype));
             }
+            FunctionName::Variant(_) => {
+                continue;
+            }
+            FunctionName::Enum(_) => {
+                continue;
+            }
         }
     }
 

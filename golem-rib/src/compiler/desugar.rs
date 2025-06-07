@@ -622,17 +622,16 @@ mod internal {
 mod desugar_tests {
     use test_r::test;
 
+    use super::*;
     use crate::compiler::desugar::desugar_tests::expectations::expected_condition_with_identifiers;
-    use crate::type_registry::FunctionTypeRegistry;
-    use crate::Expr;
+    use crate::{ComponentDependencies, ComponentInfo, Expr};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
     use std::ops::Deref;
+    use uuid::Uuid;
 
-    use super::*;
-
-    fn get_function_type_registry() -> FunctionTypeRegistry {
+    fn get_component_dependency() -> ComponentDependencies {
         let metadata = vec![
             AnalysedExport::Function(AnalysedFunction {
                 name: "foo".to_string(),
@@ -651,7 +650,15 @@ mod desugar_tests {
                 result: None,
             }),
         ];
-        FunctionTypeRegistry::from_export_metadata(&metadata)
+
+        let component_info = ComponentInfo {
+            component_name: "foo".to_string(),
+            component_id: Uuid::new_v4(),
+            root_package_name: None,
+            root_package_version: None,
+        };
+
+        ComponentDependencies::from_raw(vec![(component_info, &metadata)]).unwrap()
     }
 
     #[test]
@@ -664,7 +671,7 @@ mod desugar_tests {
           }
         "#;
 
-        let function_type_registry = get_function_type_registry();
+        let function_type_registry = get_component_dependency();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry, &vec![]).unwrap();

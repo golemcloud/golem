@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, FunctionTypeRegistry};
+use crate::{ComponentDependencies, Expr};
 
-pub fn infer_variants(expr: &mut Expr, function_type_registry: &FunctionTypeRegistry) {
-    let variants = internal::get_variants_info(expr, function_type_registry);
+pub fn infer_variants(expr: &mut Expr, component_dependency: &ComponentDependencies) {
+    let variants = internal::get_variants_info(expr, component_dependency);
 
     internal::convert_identifiers_to_no_arg_variant_calls(expr, &variants);
 
@@ -25,8 +25,7 @@ pub fn infer_variants(expr: &mut Expr, function_type_registry: &FunctionTypeRegi
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::{Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
-    use golem_wasm_ast::analysis::AnalysedType;
+    use crate::{ComponentDependencies, Expr, InferredType};
     use std::collections::VecDeque;
 
     pub(crate) fn convert_function_calls_to_variant_calls(
@@ -91,7 +90,7 @@ mod internal {
 
     pub(crate) fn get_variants_info(
         expr: &mut Expr,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
     ) -> VariantInfo {
         let mut no_arg_variants = vec![];
         let mut variant_with_args = vec![];
@@ -106,13 +105,16 @@ mod internal {
                     ..
                 } => {
                     if !variable_id.is_local() {
-                        let key = RegistryKey::FunctionName(variable_id.name().clone());
-                        if let Some(RegistryValue::Value(AnalysedType::Variant(type_variant))) =
-                            function_type_registry.types.get(&key)
-                        {
+                        let result = component_dependency
+                            .function_dictionary()
+                            .iter()
+                            .find_map(|x| x.get_variant_info(variable_id.name().as_str()));
+
+                        // Conflicts of having the same variant names across multiple components is not handled
+                        if let Some(type_variant) = result {
                             no_arg_variants.push(variable_id.name());
                             *inferred_type =
-                                inferred_type.merge(InferredType::from_type_variant(type_variant));
+                                inferred_type.merge(InferredType::from_type_variant(&type_variant));
                         }
                     }
                 }
@@ -123,11 +125,14 @@ mod internal {
                     inferred_type,
                     ..
                 } => {
-                    let key = RegistryKey::FunctionName(function_name.to_string());
-                    if let Some(RegistryValue::Variant { variant_type, .. }) =
-                        function_type_registry.types.get(&key)
-                    {
-                        let variant_inferred_type = InferredType::from_type_variant(variant_type);
+                    // Conflicts of having the same variant names across multiple components is not handled
+                    let result = component_dependency
+                        .function_dictionary()
+                        .iter()
+                        .find_map(|x| x.get_variant_info(function_name.to_string().as_str()));
+
+                    if let Some(variant_type) = result {
+                        let variant_inferred_type = InferredType::from_type_variant(&variant_type);
                         *inferred_type = inferred_type.merge(variant_inferred_type);
 
                         variant_with_args.push(function_name.to_string());

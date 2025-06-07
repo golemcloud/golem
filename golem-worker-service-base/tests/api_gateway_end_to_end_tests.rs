@@ -2605,7 +2605,7 @@ mod internal {
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
     use golem_wasm_rpc::ValueAndType;
     use golem_worker_service_base::gateway_api_definition::http::{
-        CompiledHttpApiDefinition, ComponentMetadataDictionary,
+        CompiledHttpApiDefinition, ComponentDetails, ComponentMetadataDictionary,
     };
     use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
     use golem_worker_service_base::gateway_execution::api_definition_lookup::{
@@ -2635,10 +2635,11 @@ mod internal {
         ACCESS_CONTROL_MAX_AGE,
     };
     use poem::Response;
-    use rib::RibResult;
+    use rib::{ComponentInfo, RibResult};
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+    use uuid::Uuid;
 
     pub struct TestApiDefinitionLookup {
         pub api_definition: CompiledHttpApiDefinition<DefaultNamespace>,
@@ -2871,7 +2872,17 @@ mod internal {
         exports.extend(get_bigw_shopping_metadata_with_resource());
         exports.extend(get_golem_shopping_cart_metadata());
 
-        metadata_dict.insert(versioned_component_id, exports);
+        let component_details = ComponentDetails {
+            component_info: ComponentInfo {
+                component_name: "test-component".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            },
+            metadata: exports,
+        };
+
+        metadata_dict.insert(versioned_component_id, component_details);
 
         ComponentMetadataDictionary {
             metadata: metadata_dict,

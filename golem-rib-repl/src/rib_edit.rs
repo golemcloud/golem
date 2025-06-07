@@ -16,7 +16,7 @@ use crate::compiler::{InstanceVariables, ReplCompilerOutput};
 use crate::value_generator::generate_value;
 use crate::CommandRegistry;
 use colored::Colorize;
-use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeVariant};
+use golem_wasm_ast::analysis::{TypeEnum, TypeVariant};
 use golem_wasm_rpc::ValueAndType;
 use rib::{Expr, VariableId};
 use rustyline::completion::Completer;
@@ -128,9 +128,8 @@ impl RibEdit {
                     let args = tpe
                         .parameter_types()
                         .iter()
-                        .filter_map(|arg| AnalysedType::try_from(arg).ok())
                         .map(|analysed_type| {
-                            ValueAndType::new(generate_value(&analysed_type), analysed_type)
+                            ValueAndType::new(generate_value(analysed_type), analysed_type.clone())
                         })
                         .collect::<Vec<_>>();
 
@@ -162,9 +161,8 @@ impl RibEdit {
                         .parameter_types()
                         .iter()
                         .skip(1) // Skip the first argument, which is the instance itself
-                        .filter_map(|arg| AnalysedType::try_from(arg).ok())
                         .map(|analysed_type| {
-                            ValueAndType::new(generate_value(&analysed_type), analysed_type)
+                            ValueAndType::new(generate_value(analysed_type), analysed_type.clone())
                         })
                         .collect::<Vec<_>>();
 

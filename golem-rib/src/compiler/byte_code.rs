@@ -583,7 +583,7 @@ mod internal {
                     // we need to push a place holder in the stack that does nothing
                     CallType::InstanceCreation(instance_creation_type) => {
                         match instance_creation_type {
-                            InstanceCreationType::Worker { worker_name } => {
+                            InstanceCreationType::Worker { worker_name, .. } => {
                                 for expr in args.iter().rev() {
                                     stack.push(ExprState::from_expr(expr));
                                 }
@@ -994,7 +994,7 @@ mod compiler_tests {
 
     use super::*;
     use crate::{
-        ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, RibCompiler, VariableId,
+        ArmPattern, ComponentDependencies, InferredType, MatchArm, RibCompiler, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
@@ -1003,7 +1003,7 @@ mod compiler_tests {
     #[test]
     fn test_instructions_for_literal() {
         let literal = Expr::literal("hello");
-        let empty_registry = FunctionTypeRegistry::empty();
+        let empty_registry = ComponentDependencies::default();
         let inferred_expr = InferredExpr::from_expr(literal, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
@@ -1472,7 +1472,7 @@ mod compiler_tests {
         )
         .with_inferred_type(InferredType::string());
 
-        let empty_registry = FunctionTypeRegistry::empty();
+        let empty_registry = ComponentDependencies::default();
         let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
 
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
@@ -1554,7 +1554,7 @@ mod compiler_tests {
 
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 4, column 16\n`add-item(\"apple\")`\ncause: invalid function call `[constructor]cart0`\nunknown function\n"
+                "error in the following rib found at line 4, column 16\n`add-item(\"apple\")`\ncause: invalid function call `cart0`\nunknown function\n"
             );
         }
 
@@ -1577,7 +1577,7 @@ mod compiler_tests {
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 4, column 16\n`foo(\"apple\")`\ncause: invalid function call `[method]cart.foo`\nunknown function\n"
+                "error in the following rib found at line 4, column 16\n`foo(\"apple\")`\ncause: invalid function call `foo`\nunknown function\n"
             );
         }
 
@@ -2134,11 +2134,12 @@ mod compiler_tests {
     }
 
     mod internal {
-        use crate::RibInputTypeInfo;
+        use crate::{ComponentDependency, ComponentInfo, RibInputTypeInfo};
         use golem_wasm_ast::analysis::*;
         use std::collections::HashMap;
+        use uuid::Uuid;
 
-        pub(crate) fn metadata_with_variants() -> Vec<AnalysedExport> {
+        pub(crate) fn metadata_with_variants() -> Vec<ComponentDependency> {
             let instance = AnalysedExport::Instance(AnalysedInstance {
                 name: "golem:it/api".to_string(),
                 functions: vec![AnalysedFunction {
@@ -2171,10 +2172,20 @@ mod compiler_tests {
                 }],
             });
 
-            vec![instance]
+            let component_info = ComponentInfo {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency {
+                component_info,
+                exports: vec![instance],
+            }]
         }
 
-        pub(crate) fn metadata_with_resource_methods() -> Vec<AnalysedExport> {
+        pub(crate) fn metadata_with_resource_methods() -> Vec<ComponentDependency> {
             let instance = AnalysedExport::Instance(AnalysedInstance {
                 name: "golem:it/api".to_string(),
                 functions: vec![
@@ -2216,13 +2227,23 @@ mod compiler_tests {
                 ],
             });
 
-            vec![instance]
+            let component_info = ComponentInfo {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency {
+                component_info,
+                exports: vec![instance],
+            }]
         }
         pub(crate) fn get_component_metadata(
             function_name: &str,
             input_types: Vec<AnalysedType>,
             output: AnalysedType,
-        ) -> Vec<AnalysedExport> {
+        ) -> Vec<ComponentDependency> {
             let analysed_function_parameters = input_types
                 .into_iter()
                 .enumerate()
@@ -2232,11 +2253,21 @@ mod compiler_tests {
                 })
                 .collect();
 
-            vec![AnalysedExport::Function(AnalysedFunction {
-                name: function_name.to_string(),
-                parameters: analysed_function_parameters,
-                result: Some(AnalysedFunctionResult { typ: output }),
-            })]
+            let component_info = ComponentInfo {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency {
+                component_info,
+                exports: vec![AnalysedExport::Function(AnalysedFunction {
+                    name: function_name.to_string(),
+                    parameters: analysed_function_parameters,
+                    result: Some(AnalysedFunctionResult { typ: output }),
+                })],
+            }]
         }
 
         pub(crate) fn rib_input_type_info(types: Vec<(&str, AnalysedType)>) -> RibInputTypeInfo {

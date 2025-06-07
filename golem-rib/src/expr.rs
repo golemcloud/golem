@@ -19,10 +19,10 @@ use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
-use crate::type_registry::FunctionTypeRegistry;
 use crate::{
-    from_string, text, type_checker, type_inference, DynamicParsedFunctionName, ExprVisitor,
-    GlobalVariableTypeSpec, InferredType, ParsedFunctionName, VariableId,
+    from_string, text, type_checker, type_inference, ComponentDependencies,
+    DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType,
+    ParsedFunctionName, VariableId,
 };
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
@@ -1074,30 +1074,30 @@ impl Expr {
 
     pub fn infer_types(
         &mut self,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibTypeError> {
-        self.infer_types_initial_phase(function_type_registry, type_spec)?;
+        self.infer_types_initial_phase(component_dependency, type_spec)?;
         self.bind_instance_types();
         // Identifying the first fix point with method calls to infer all
         // worker function invocations as this forms the foundation for the rest of the
         // compilation. This is compiler doing its best to infer all the calls such
         // as worker invokes or instance calls etc.
         type_inference::type_inference_fix_point(Self::resolve_method_calls, self)?;
-        self.infer_function_call_types(function_type_registry)?;
+        self.infer_function_call_types(component_dependency)?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)?;
-        self.check_types(function_type_registry)?;
+        self.check_types(component_dependency)?;
         self.unify_types()?;
         Ok(())
     }
 
     pub fn infer_types_initial_phase(
         &mut self,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibTypeError> {
         self.set_origin();
-        self.identify_instance_creation(function_type_registry)?;
+        self.identify_instance_creation(component_dependency)?;
         self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
         self.bind_default_types_to_index_expressions();
@@ -1105,8 +1105,8 @@ impl Expr {
         self.bind_variables_of_list_reduce();
         self.bind_variables_of_pattern_match();
         self.bind_variables_of_let_assignment();
-        self.infer_variants(function_type_registry);
-        self.infer_enums(function_type_registry);
+        self.infer_variants(component_dependency);
+        self.infer_enums(component_dependency);
         Ok(())
     }
 
@@ -1172,16 +1172,16 @@ impl Expr {
 
     pub fn identify_instance_creation(
         &mut self,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
     ) -> Result<(), RibTypeError> {
-        type_inference::identify_instance_creation(self, function_type_registry)
+        type_inference::identify_instance_creation(self, component_dependency)
     }
 
     pub fn infer_function_call_types(
         &mut self,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
     ) -> Result<(), RibTypeError> {
-        type_inference::infer_function_call_types(self, function_type_registry)?;
+        type_inference::infer_function_call_types(self, component_dependency)?;
         Ok(())
     }
 
@@ -1207,9 +1207,9 @@ impl Expr {
 
     pub fn check_types(
         &mut self,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
     ) -> Result<(), RibTypeError> {
-        type_checker::type_check(self, function_type_registry)
+        type_checker::type_check(self, component_dependency)
     }
 
     pub fn unify_types(&mut self) -> Result<(), RibTypeError> {
@@ -1677,12 +1677,12 @@ impl Expr {
         }
     }
 
-    pub fn infer_enums(&mut self, function_type_registry: &FunctionTypeRegistry) {
-        type_inference::infer_enums(self, function_type_registry);
+    pub fn infer_enums(&mut self, component_dependency: &ComponentDependencies) {
+        type_inference::infer_enums(self, component_dependency);
     }
 
-    pub fn infer_variants(&mut self, function_type_registry: &FunctionTypeRegistry) {
-        type_inference::infer_variants(self, function_type_registry);
+    pub fn infer_variants(&mut self, component_dependency: &ComponentDependencies) {
+        type_inference::infer_variants(self, component_dependency);
     }
 
     pub fn visit_expr_nodes_lazy<'a>(&'a mut self, queue: &mut VecDeque<&'a mut Expr>) {

@@ -386,7 +386,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                         )
                     }
                     CallType::InstanceCreation(instance) => match instance {
-                        InstanceCreationType::Worker { worker_name } => {
+                        InstanceCreationType::Worker { worker_name, .. } => {
                             let worker_name = worker_name
                                 .as_ref()
                                 .map_or("".to_string(), |x| format!(", with worker `{}`", x));
@@ -398,6 +398,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                         InstanceCreationType::Resource {
                             worker_name,
                             resource_name,
+                            ..
                         } => {
                             let worker_name = worker_name
                                 .as_ref()

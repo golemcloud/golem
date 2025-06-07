@@ -22,10 +22,9 @@ pub use type_with_unit::*;
 pub use worker_functions_in_rib::*;
 
 use crate::rib_type_error::RibTypeError;
-use crate::type_registry::FunctionTypeRegistry;
 use crate::{
-    Expr, FunctionDictionary, GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo,
-    RibOutputTypeInfo,
+    ComponentDependencies, ComponentInfo, Expr, GlobalVariableTypeSpec, InferredExpr,
+    RibInputTypeInfo, RibOutputTypeInfo,
 };
 
 mod byte_code;
@@ -51,17 +50,23 @@ mod worker_functions_in_rib;
 ///   be of type `string`. Note that not all global variables require a type specification.
 #[derive(Default)]
 pub struct RibCompilerConfig {
-    component_metadata: Vec<AnalysedExport>,
+    component_dependencies: Vec<ComponentDependency>,
     input_spec: Vec<GlobalVariableTypeSpec>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComponentDependency {
+    pub component_info: ComponentInfo,
+    pub exports: Vec<AnalysedExport>,
 }
 
 impl RibCompilerConfig {
     pub fn new(
-        component_metadata: Vec<AnalysedExport>,
+        component_dependencies: Vec<ComponentDependency>,
         input_spec: Vec<GlobalVariableTypeSpec>,
     ) -> RibCompilerConfig {
         RibCompilerConfig {
-            component_metadata,
+            component_dependencies,
             input_spec,
         }
     }
@@ -69,48 +74,44 @@ impl RibCompilerConfig {
 
 #[derive(Default)]
 pub struct RibCompiler {
-    function_type_registry: FunctionTypeRegistry,
+    component_dependency: ComponentDependencies,
     input_spec: Vec<GlobalVariableTypeSpec>,
 }
 
 impl RibCompiler {
     pub fn new(config: RibCompilerConfig) -> RibCompiler {
-        let type_registry = FunctionTypeRegistry::from_export_metadata(&config.component_metadata);
+        let component_dependencies = ComponentDependencies::from_raw(
+            config
+                .component_dependencies
+                .iter()
+                .map(|dep| (dep.component_info.clone(), &dep.exports))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
 
         let input_spec = config.input_spec;
 
         RibCompiler {
-            function_type_registry: type_registry,
+            component_dependency: component_dependencies,
             input_spec,
         }
     }
 
-    pub fn with_component_metadata(&mut self, component_metadata: Vec<AnalysedExport>) {
-        let type_registry = FunctionTypeRegistry::from_export_metadata(&component_metadata);
-
-        self.function_type_registry = type_registry;
-    }
-
-    pub fn with_global_variables(&mut self, global_variables: Vec<GlobalVariableTypeSpec>) {
-        self.input_spec = global_variables;
-    }
-
     pub fn infer_types(&self, expr: Expr) -> Result<InferredExpr, RibCompilationError> {
-        InferredExpr::from_expr(expr, &self.function_type_registry, &self.input_spec)
+        InferredExpr::from_expr(expr, &self.component_dependency, &self.input_spec)
             .map_err(RibCompilationError::RibTypeError)
     }
 
     // Currently supports only 1 component and hence really only one InstanceType
-    pub fn get_exports(&self) -> Result<FunctionDictionary, RibCompilationError> {
-        FunctionDictionary::from_function_type_registry(&self.function_type_registry)
-            .map_err(|e| RibCompilationError::RibStaticAnalysisError(e.to_string()))
+    pub fn get_exports(&self) -> ComponentDependencies {
+        self.component_dependency.clone()
     }
 
     pub fn compile(&self, expr: Expr) -> Result<CompilerOutput, RibCompilationError> {
         let inferred_expr = self.infer_types(expr)?;
 
         let function_calls_identified =
-            WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &self.function_type_registry)?;
+            WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &self.component_dependency)?;
 
         // The types that are tagged as global input in the script
         let global_input_type_info = RibInputTypeInfo::from_expr(&inferred_expr)?;
@@ -151,11 +152,11 @@ impl RibCompiler {
     }
 
     pub fn get_variants(&self) -> Vec<TypeVariant> {
-        self.function_type_registry.get_variants()
+        self.component_dependency.get_variants()
     }
 
     pub fn get_enums(&self) -> Vec<TypeEnum> {
-        self.function_type_registry.get_enums()
+        self.component_dependency.get_enums()
     }
 }
 
@@ -865,6 +866,7 @@ mod compiler_error_tests {
     }
 
     mod test_utils {
+        use crate::{ComponentDependency, ComponentInfo};
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, handle, list, record, s32, str, tuple, u32, u64, variant,
         };
@@ -872,6 +874,7 @@ mod compiler_error_tests {
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, NameTypePair,
         };
+        use uuid::Uuid;
 
         pub(crate) fn strip_spaces(input: &str) -> String {
             let lines = input.lines();
@@ -896,7 +899,7 @@ mod compiler_error_tests {
             result.strip_prefix("\n").unwrap_or(&result).to_string()
         }
 
-        pub(crate) fn get_metadata() -> Vec<AnalysedExport> {
+        pub(crate) fn get_metadata() -> Vec<ComponentDependency> {
             let function_export = AnalysedExport::Function(AnalysedFunction {
                 name: "foo".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
@@ -1067,7 +1070,17 @@ mod compiler_error_tests {
                 ],
             });
 
-            vec![function_export, resource_export]
+            let component_dependency = ComponentDependency {
+                component_info: ComponentInfo {
+                    component_name: "some_name".to_string(),
+                    component_id: Uuid::new_v4(),
+                    root_package_name: None,
+                    root_package_version: None,
+                },
+                exports: vec![function_export, resource_export],
+            };
+
+            vec![component_dependency]
         }
     }
 }
