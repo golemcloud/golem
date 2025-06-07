@@ -43,14 +43,12 @@ pub struct WorkerBindingCompiled {
 impl WorkerBindingCompiled {
     pub fn from_raw_worker_binding(
         gateway_worker_binding: &WorkerBinding,
-        component_dependency: &Vec<ComponentDependency>,
+        component_dependency: &[ComponentDependency],
     ) -> Result<Self, RibCompilationError> {
         let worker_name_compiled: Option<WorkerNameCompiled> = gateway_worker_binding
             .worker_name
             .clone()
-            .map(|worker_name_expr| {
-                WorkerNameCompiled::from_worker_name(&worker_name_expr, component_dependency)
-            })
+            .map(|worker_name_expr| WorkerNameCompiled::from_worker_name(&worker_name_expr))
             .transpose()?;
 
         let idempotency_key_compiled = match &gateway_worker_binding.idempotency_key {
@@ -120,7 +118,7 @@ pub struct ResponseMappingCompiled {
 impl ResponseMappingCompiled {
     pub fn from_response_mapping(
         response_mapping: &ResponseMapping,
-        component_dependency: &Vec<ComponentDependency>,
+        component_dependency: &[ComponentDependency],
     ) -> Result<Self, RibCompilationError> {
         let response_compiled =
             DefaultWorkerServiceRibCompiler::compile(&response_mapping.0, component_dependency)?;

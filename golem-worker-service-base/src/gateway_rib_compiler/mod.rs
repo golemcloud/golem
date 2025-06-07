@@ -22,7 +22,7 @@ use rib::{
 pub trait WorkerServiceRibCompiler {
     fn compile(
         rib: &Expr,
-        component_dependency: &Vec<ComponentDependency>,
+        component_dependency: &[ComponentDependency],
     ) -> Result<CompilerOutput, RibCompilationError>;
 }
 
@@ -31,7 +31,7 @@ pub struct DefaultWorkerServiceRibCompiler;
 impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
     fn compile(
         rib: &Expr,
-        component_dependency: &Vec<ComponentDependency>,
+        component_dependency: &[ComponentDependency],
     ) -> Result<CompilerOutput, RibCompilationError> {
         let rib_input_spec = vec![
             GlobalVariableTypeSpec::new(
@@ -56,7 +56,7 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
             ),
         ];
 
-        let compiler_config = RibCompilerConfig::new(component_dependency.clone(), rib_input_spec);
+        let compiler_config = RibCompilerConfig::new(component_dependency.to_vec(), rib_input_spec);
 
         let compiler = RibCompiler::new(compiler_config);
 

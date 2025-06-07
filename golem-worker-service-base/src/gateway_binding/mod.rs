@@ -241,12 +241,8 @@ pub struct WorkerNameCompiled {
 }
 
 impl WorkerNameCompiled {
-    pub fn from_worker_name(
-        worker_name: &Expr,
-        component_dependency: &Vec<ComponentDependency>,
-    ) -> Result<Self, RibCompilationError> {
-        let compiled_worker_name =
-            DefaultWorkerServiceRibCompiler::compile(worker_name, component_dependency)?;
+    pub fn from_worker_name(worker_name: &Expr) -> Result<Self, RibCompilationError> {
+        let compiled_worker_name = DefaultWorkerServiceRibCompiler::compile(worker_name, &[])?;
 
         Ok(WorkerNameCompiled {
             worker_name: worker_name.clone(),
@@ -266,7 +262,7 @@ pub struct IdempotencyKeyCompiled {
 impl IdempotencyKeyCompiled {
     pub fn from_idempotency_key(idempotency_key: &Expr) -> Result<Self, RibCompilationError> {
         let idempotency_key_compiled =
-            DefaultWorkerServiceRibCompiler::compile(idempotency_key, &vec![])?;
+            DefaultWorkerServiceRibCompiler::compile(idempotency_key, &[])?;
 
         Ok(IdempotencyKeyCompiled {
             idempotency_key: idempotency_key.clone(),
@@ -286,7 +282,7 @@ pub struct InvocationContextCompiled {
 impl InvocationContextCompiled {
     pub fn from_invocation_context(
         invocation_context: &Expr,
-        exports: &Vec<ComponentDependency>,
+        exports: &[ComponentDependency],
     ) -> Result<Self, RibCompilationError> {
         let invocation_context_compiled =
             DefaultWorkerServiceRibCompiler::compile(invocation_context, exports)?;

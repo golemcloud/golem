@@ -37,9 +37,7 @@ impl HttpHandlerBindingCompiled {
         let worker_name_compiled: Option<WorkerNameCompiled> = http_handler_binding
             .worker_name
             .clone()
-            .map(|worker_name_expr| {
-                WorkerNameCompiled::from_worker_name(&worker_name_expr, &vec![])
-            })
+            .map(|worker_name_expr| WorkerNameCompiled::from_worker_name(&worker_name_expr))
             .transpose()?;
 
         let idempotency_key_compiled = match &http_handler_binding.idempotency_key {
