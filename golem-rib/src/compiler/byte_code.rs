@@ -1555,7 +1555,7 @@ mod compiler_tests {
 
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 4, column 16\n`add-item(\"apple\")`\ncause: invalid function call `[constructor]cart0`\nunknown function\n"
+                "error in the following rib found at line 4, column 16\n`add-item(\"apple\")`\ncause: invalid function call `cart0`\nunknown function\n"
             );
         }
 
@@ -1578,7 +1578,7 @@ mod compiler_tests {
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 4, column 16\n`foo(\"apple\")`\ncause: invalid function call `[method]cart.foo`\nunknown function\n"
+                "error in the following rib found at line 4, column 16\n`foo(\"apple\")`\ncause: invalid function call `foo`\nunknown function\n"
             );
         }
 

@@ -88,7 +88,14 @@ impl ComponentDependencies {
                             function_name
                         ))
                     } else {
-                        Ok(function_types_in_component[0].1[0].clone())
+                        let function_types = function_types_in_component.pop().unwrap();
+                        let function_type = function_types.1;
+
+                        if function_type.is_empty() {
+                            Err("unknown function".to_string())
+                        } else {
+                            Ok(function_type[0].clone())
+                        }
                     }
                 }
             }

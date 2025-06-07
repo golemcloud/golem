@@ -410,9 +410,7 @@ impl InstanceType {
             InstanceType::Resource {
                 resource_method_dictionary,
                 ..
-            } => {
-                ComponentDependencies::from(resource_method_dictionary)
-            }
+            } => ComponentDependencies::from(resource_method_dictionary),
         }
     }
 
@@ -474,16 +472,16 @@ fn search_function_in_instance(
 ) -> Result<(ComponentInfo, Function), String> {
     match component_info {
         Some(component_info) => {
-            let dependencies = instance
-                .component_dependencies();
+            let dependencies = instance.component_dependencies();
 
-            let function_dictionary = dependencies
-                .dependencies
-                .get(component_info)
-                .ok_or(format!(
-                    "component '{}' not found in dependencies",
-                    component_info
-                ))?;
+            let function_dictionary =
+                dependencies
+                    .dependencies
+                    .get(component_info)
+                    .ok_or(format!(
+                        "component '{}' not found in dependencies",
+                        component_info
+                    ))?;
 
             let functions = function_dictionary
                 .name_and_types
@@ -526,7 +524,8 @@ fn search_function_in_instance(
         None => {
             let mut component_info_functions = vec![];
 
-            for (info, function_dictionary) in instance.component_dependencies().dependencies.iter() {
+            for (info, function_dictionary) in instance.component_dependencies().dependencies.iter()
+            {
                 let functions = function_dictionary
                     .name_and_types
                     .iter()
