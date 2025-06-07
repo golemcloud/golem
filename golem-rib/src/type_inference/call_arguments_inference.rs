@@ -81,7 +81,7 @@ mod internal {
                 InstanceCreationType::Resource { resource_name, .. } => {
                     infer_resource_constructor_arguments(
                         original_expr,
-                        &resource_name,
+                        resource_name,
                         Some(args),
                         component_dependency,
                     )?;
@@ -172,7 +172,7 @@ mod internal {
         // Infer the resource arguments
         infer_resource_method_arguments(
             original_expr,
-            &fqn_resource_method,
+            fqn_resource_method,
             dynamic_parsed_function_name,
             function_type_registry,
             resource_method_args,
@@ -290,14 +290,14 @@ mod internal {
 
             FunctionName::ResourceConstructor(_) | FunctionName::Function(_) => {
                 if parameter_types.len() == args.len() {
-                    let result_type = function_type.return_type.as_ref().map(|t| t.clone());
+                    let result_type = function_type.return_type.clone();
 
                     tag_argument_types(original_expr, function_name, args, &parameter_types)?;
 
                     if let Some(function_result_type) = function_result_inferred_type {
                         *function_result_type = {
                             if let Some(tpe) = result_type {
-                                tpe.into()
+                                tpe
                             } else {
                                 InferredType::sequence(vec![])
                             }
@@ -320,7 +320,7 @@ mod internal {
                     parameter_types.remove(0);
                 }
 
-                let return_type = function_type.return_type.as_ref().map(|t| t.clone());
+                let return_type = function_type.return_type.clone();
 
                 if parameter_types.len() == args.len() {
                     tag_argument_types(original_expr, function_name, args, &parameter_types)?;

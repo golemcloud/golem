@@ -200,7 +200,7 @@ mod protobuf {
                 InstanceCreationType::Worker { component_info, worker_name } => {
                     golem_api_grpc::proto::golem::rib::InstanceCreationType {
                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Worker(Box::new(WorkerInstance {
-                            component: component_info.map(|c| golem_api_grpc::proto::golem::rib::ComponentInfo::from(c)),
+                            component: component_info.map(golem_api_grpc::proto::golem::rib::ComponentInfo::from),
                             worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
                         }))),
                     }
@@ -208,7 +208,7 @@ mod protobuf {
                 InstanceCreationType::Resource { component_info, worker_name, resource_name } => {
                     golem_api_grpc::proto::golem::rib::InstanceCreationType {
                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(golem_api_grpc::proto::golem::rib::ResourceInstanceWithWorkerName {
-                            component: component_info.map(|c| golem_api_grpc::proto::golem::rib::ComponentInfo::from(c)),
+                            component: component_info.map(golem_api_grpc::proto::golem::rib::ComponentInfo::from),
                             worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
                             resource_name: Some(golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor::from(resource_name)),
                         }))),
@@ -287,7 +287,7 @@ mod protobuf {
                                 name:  Some(golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
                                     Box::new(golem_api_grpc::proto::golem::rib::InstanceCreationType {
                                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Worker(Box::new(WorkerInstance {
-                                            component: component_info.map(|c| golem_api_grpc::proto::golem::rib::ComponentInfo::from(c)),
+                                            component: component_info.map(golem_api_grpc::proto::golem::rib::ComponentInfo::from),
                                             worker_name: worker_name.map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
                                         }))),
                                     })
@@ -300,7 +300,7 @@ mod protobuf {
                                 name:  Some(golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
                                     Box::new(golem_api_grpc::proto::golem::rib::InstanceCreationType {
                                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(golem_api_grpc::proto::golem::rib::ResourceInstanceWithWorkerName {
-                                            component: component_info.map(|c| golem_api_grpc::proto::golem::rib::ComponentInfo::from(c)),
+                                            component: component_info.map(golem_api_grpc::proto::golem::rib::ComponentInfo::from),
                                             worker_name: worker_name.map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
                                             resource_name: Some(golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor::from(resource_name)),
                                         }))),

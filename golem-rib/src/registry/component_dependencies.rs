@@ -81,21 +81,19 @@ impl ComponentDependencies {
 
                 if function_types_in_component.is_empty() {
                     Err("unknown function".to_string())
+                } else if function_types_in_component.len() > 1 {
+                    Err(format!(
+                        "function `{}` is ambiguous across components",
+                        function_name
+                    ))
                 } else {
-                    if function_types_in_component.len() > 1 {
-                        Err(format!(
-                            "function `{}` is ambiguous across components",
-                            function_name
-                        ))
-                    } else {
-                        let function_types = function_types_in_component.pop().unwrap();
-                        let function_type = function_types.1;
+                    let function_types = function_types_in_component.pop().unwrap();
+                    let function_type = function_types.1;
 
-                        if function_type.is_empty() {
-                            Err("unknown function".to_string())
-                        } else {
-                            Ok(function_type[0].clone())
-                        }
+                    if function_type.is_empty() {
+                        Err("unknown function".to_string())
+                    } else {
+                        Ok(function_type[0].clone())
                     }
                 }
             }
@@ -113,7 +111,7 @@ impl ComponentDependencies {
 
                 let function_type = function_dictionary.name_and_types.iter().find_map(
                     |(f_name, function_type)| {
-                        if f_name == f_name {
+                        if f_name == function_name {
                             Some(function_type.clone())
                         } else {
                             None
@@ -258,48 +256,44 @@ impl ComponentDependencies {
         match type_parameter {
             None => Ok(InstanceCreationType::Worker {
                 component_info: None,
-                worker_name: worker_name.map(|expr| Box::new(expr)),
+                worker_name: worker_name.map(Box::new),
             }),
 
-            Some(type_parameter) => {
-                match type_parameter {
-                    // If the user has specified the root package name, annotate the InstanceCreationType with the component already
-                    TypeParameter::PackageName(package_name) => {
-                        let result =
-                            self.dependencies
-                                .iter()
-                                .find(|(x, _)| match &x.root_package_name {
-                                    Some(name) => {
-                                        let pkg = match &x.root_package_version {
-                                            None => name.to_string(),
-                                            Some(version) => format!("{}@{}", name, version),
-                                        };
+            Some(TypeParameter::PackageName(package_name)) => {
+                // If the user has specified the root package name, annotate the InstanceCreationType with the component already
+                let result = self
+                    .dependencies
+                    .iter()
+                    .find(|(x, _)| match &x.root_package_name {
+                        Some(name) => {
+                            let pkg = match &x.root_package_version {
+                                None => name.to_string(),
+                                Some(version) => format!("{}@{}", name, version),
+                            };
 
-                                        pkg == package_name.to_string()
-                                    }
-
-                                    None => false,
-                                });
-
-                        if let Some(result) = result {
-                            Ok(InstanceCreationType::Worker {
-                                component_info: Some(result.0.clone()),
-                                worker_name: worker_name.map(|expr| Box::new(expr)),
-                            })
-                        } else {
-                            Ok(InstanceCreationType::Worker {
-                                component_info: None,
-                                worker_name: worker_name.map(|expr| Box::new(expr)),
-                            })
+                            pkg == package_name.to_string()
                         }
-                    }
 
-                    _ => Ok(InstanceCreationType::Worker {
+                        None => false,
+                    });
+
+                if let Some(result) = result {
+                    Ok(InstanceCreationType::Worker {
+                        component_info: Some(result.0.clone()),
+                        worker_name: worker_name.map(Box::new),
+                    })
+                } else {
+                    Ok(InstanceCreationType::Worker {
                         component_info: None,
-                        worker_name: worker_name.map(|expr| Box::new(expr)),
-                    }),
+                        worker_name: worker_name.map(Box::new),
+                    })
                 }
             }
+
+            _ => Ok(InstanceCreationType::Worker {
+                component_info: None,
+                worker_name: worker_name.map(Box::new),
+            }),
         }
     }
 

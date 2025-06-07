@@ -65,8 +65,7 @@ impl FunctionDictionary {
         self.name_and_types.iter().find_map(|(f, ftype)| match f {
             FunctionName::Variant(name) => {
                 if name == identifier_name {
-                    let result = ftype.as_type_variant();
-                    result
+                    ftype.as_type_variant()
                 } else {
                     None
                 }
@@ -168,12 +167,7 @@ impl FunctionDictionary {
                         let cases = variant_type
                             .cases
                             .iter()
-                            .map(|x| {
-                                (
-                                    x.name.clone(),
-                                    x.typ.as_ref().map(|x| InferredType::from(x)),
-                                )
-                            })
+                            .map(|x| (x.name.clone(), x.typ.as_ref().map(InferredType::from)))
                             .collect::<Vec<_>>();
 
                         map.push((
@@ -209,12 +203,7 @@ impl FunctionDictionary {
                             let cases = variant_type
                                 .cases
                                 .iter()
-                                .map(|x| {
-                                    (
-                                        x.name.clone(),
-                                        x.typ.as_ref().map(|x| InferredType::from(x)),
-                                    )
-                                })
+                                .map(|x| (x.name.clone(), x.typ.as_ref().map(InferredType::from)))
                                 .collect::<Vec<_>>();
 
                             map.push((
