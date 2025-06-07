@@ -158,19 +158,13 @@ where
 {
     async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error> {
         let start = Instant::now();
-
-        let result = {
-            let key = RdbmsPoolKey::from(address).map_err(Error::ConnectionFailure)?;
-            info!(
-                rdbms_type = self.rdbms_type.to_string(),
-                pool_key = key.to_string(),
-                "create connection",
-            );
-
-            let _ = self.get_or_create(&key, worker_id).await?;
-
-            Ok(key)
-        };
+        let key = RdbmsPoolKey::from(address).map_err(Error::ConnectionFailure)?;
+        info!(
+            rdbms_type = self.rdbms_type.to_string(),
+            pool_key = key.to_string(),
+            "create connection",
+        );
+        let result = self.get_or_create(&key, worker_id).await.map(|_| key);
         self.record_metrics("create-connection", start, result)
     }
 
@@ -206,10 +200,10 @@ where
             params.len()
         );
 
-        let result = {
-            let pool = self.get_or_create(key, worker_id).await?;
-
-            T::execute(statement, params, pool.deref()).await
+        let pool = self.get_or_create(key, worker_id).await;
+        let result = match pool {
+            Ok(pool) => T::execute(statement, params, pool.deref()).await,
+            Err(e) => Err(e),
         };
 
         let result = result.map_err(|e| {
@@ -244,15 +238,18 @@ where
             params.len()
         );
 
-        let result = {
-            let pool = self.get_or_create(key, worker_id).await?;
-            T::query_stream(
-                statement,
-                params,
-                self.config.query.query_batch,
-                pool.deref(),
-            )
-            .await
+        let pool = self.get_or_create(key, worker_id).await;
+        let result = match pool {
+            Ok(pool) => {
+                T::query_stream(
+                    statement,
+                    params,
+                    self.config.query.query_batch,
+                    pool.deref(),
+                )
+                .await
+            }
+            Err(e) => Err(e),
         };
 
         let result = result.map_err(|e| {
@@ -287,9 +284,10 @@ where
             params.len()
         );
 
-        let result = {
-            let pool = self.get_or_create(key, worker_id).await?;
-            T::query(statement, params, pool.deref()).await
+        let pool = self.get_or_create(key, worker_id).await;
+        let result = match pool {
+            Ok(pool) => T::query(statement, params, pool.deref()).await,
+            Err(e) => Err(e),
         };
 
         let result = result.map_err(|e| {
@@ -317,11 +315,12 @@ where
             "begin transaction",
         );
 
-        let result = {
-            let pool = self.get_or_create(key, worker_id).await?;
-            T::begin_transaction(key, pool, self.config.query)
+        let pool = self.get_or_create(key, worker_id).await;
+        let result = match pool {
+            Ok(pool) => T::begin_transaction(key, pool, self.config.query)
                 .await
-                .map(|r| r as Arc<dyn DbTransaction<T> + Send + Sync>)
+                .map(|r| r as Arc<dyn DbTransaction<T> + Send + Sync>),
+            Err(e) => Err(e),
         };
 
         let result = result.map_err(|e| {
@@ -350,9 +349,10 @@ where
             "get transaction status",
         );
 
-        let result = {
-            let pool = self.get_or_create(key, worker_id).await?;
-            T::get_transaction_status(pool.deref(), transaction_id).await
+        let pool = self.get_or_create(key, worker_id).await;
+        let result = match pool {
+            Ok(pool) => T::get_transaction_status(pool.deref(), transaction_id).await,
+            Err(e) => Err(e),
         };
 
         let result = result.map_err(|e| {
@@ -382,9 +382,10 @@ where
             "cleanup transaction",
         );
 
-        let result = {
-            let pool = self.get_or_create(key, worker_id).await?;
-            T::cleanup_transaction(pool.deref(), transaction_id).await
+        let pool = self.get_or_create(key, worker_id).await;
+        let result = match pool {
+            Ok(pool) => T::cleanup_transaction(pool.deref(), transaction_id).await,
+            Err(e) => Err(e),
         };
 
         let result = result.map_err(|e| {

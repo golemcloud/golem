@@ -421,7 +421,7 @@ async fn postgres_transaction_recovery_test(
     postgres: &DockerPostgresRdb,
     fail_on_oplog_entry: &str,
     fail_count: u8,
-    commit: bool,
+    transaction_end: Option<TransactionEnd>,
     expected_restart: bool,
 ) {
     let db_address = postgres.public_connection_string();
@@ -465,15 +465,9 @@ async fn postgres_transaction_recovery_test(
 
     let expected_values: Vec<(Uuid, String, String)> = postgres_get_values(count);
 
-    let transaction_end = if commit {
-        TransactionEnd::Commit
-    } else {
-        TransactionEnd::Rollback
-    };
-
     let insert_test = RdbmsTest::new(
         postgres_insert_statements(&table_name, expected_values.clone(), None),
-        Some(transaction_end),
+        transaction_end,
     );
 
     let result1 = execute_worker_test::<PostgresType>(
@@ -487,7 +481,7 @@ async fn postgres_transaction_recovery_test(
     check_test_result(&worker_id, result1.clone(), insert_test.clone());
 
     // println!("after insert");
-    let select_test = if commit {
+    let select_test = if transaction_end == Some(TransactionEnd::Commit) {
         RdbmsTest::new(
             postgres_select_statements(&table_name, expected_values),
             None,
@@ -577,7 +571,7 @@ async fn rdbms_postgres_commit_recovery(
             postgres,
             "CommitedRemoteTransaction",
             fail_count,
-            true,
+            Some(TransactionEnd::Commit),
             false,
         )
         .await;
@@ -599,7 +593,7 @@ async fn rdbms_postgres_pre_commit_recovery(
             postgres,
             "PreCommitRemoteTransaction",
             fail_count,
-            true,
+            Some(TransactionEnd::Commit),
             true,
         )
         .await;
@@ -621,7 +615,7 @@ async fn rdbms_postgres_rollback_recovery(
             postgres,
             "RolledBackRemoteTransaction",
             fail_count,
-            false,
+            Some(TransactionEnd::Rollback),
             false,
         )
         .await;
@@ -643,7 +637,7 @@ async fn rdbms_postgres_pre_rollback_recovery(
             postgres,
             "PreRollbackRemoteTransaction",
             fail_count,
-            false,
+            Some(TransactionEnd::Rollback),
             true,
         )
         .await;
@@ -1069,7 +1063,7 @@ async fn mysql_transaction_recovery_test(
     mysql: &DockerMysqlRdb,
     fail_on_oplog_entry: &str,
     fail_count: u8,
-    commit: bool,
+    transaction_end: Option<TransactionEnd>,
     expected_restart: bool,
 ) {
     let db_address = mysql.public_connection_string();
@@ -1113,15 +1107,9 @@ async fn mysql_transaction_recovery_test(
 
     let expected_values: Vec<(String, String)> = mysql_get_values(count);
 
-    let transaction_end = if commit {
-        TransactionEnd::Commit
-    } else {
-        TransactionEnd::Rollback
-    };
-
     let insert_test = RdbmsTest::new(
         mysql_insert_statements(&table_name, expected_values.clone(), None),
-        Some(transaction_end),
+        transaction_end,
     );
 
     let result1 = execute_worker_test::<MysqlType>(
@@ -1134,7 +1122,7 @@ async fn mysql_transaction_recovery_test(
 
     check_test_result(&worker_id, result1.clone(), insert_test.clone());
 
-    let select_test = if commit {
+    let select_test = if transaction_end == Some(TransactionEnd::Commit) {
         RdbmsTest::new(mysql_select_statements(&table_name, expected_values), None)
     } else {
         RdbmsTest::new(mysql_select_statements(&table_name, vec![]), None)
@@ -1217,7 +1205,7 @@ async fn rdbms_mysql_commit_recovery(
             mysql,
             "CommitedRemoteTransaction",
             fail_count,
-            true,
+            Some(TransactionEnd::Commit),
             false,
         )
         .await;
@@ -1239,7 +1227,7 @@ async fn rdbms_mysql_pre_commit_recovery(
             mysql,
             "PreCommitRemoteTransaction",
             fail_count,
-            true,
+            Some(TransactionEnd::Commit),
             true,
         )
         .await;
@@ -1261,7 +1249,7 @@ async fn rdbms_mysql_rollback_recovery(
             mysql,
             "RolledBackRemoteTransaction",
             fail_count,
-            false,
+            Some(TransactionEnd::Rollback),
             false,
         )
         .await;
@@ -1283,7 +1271,7 @@ async fn rdbms_mysql_pre_rollback_recovery(
             mysql,
             "PreRollbackRemoteTransaction",
             fail_count,
-            false,
+            Some(TransactionEnd::Rollback),
             true,
         )
         .await;
