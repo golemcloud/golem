@@ -994,12 +994,20 @@ where
             let next = stream.next().await;
 
             if let Some(rows) = next {
-                let mut values = Vec::with_capacity(rows.len());
-                for row in rows.into_iter() {
-                    let row = row.map_err(Error::query_response_failure)?;
-                    let value = (&row).try_into().map_err(Error::QueryResponseFailure)?;
-                    values.push(value);
-                }
+                let values: Vec<DbRow<T::DbValue>> = rows
+                    .into_iter()
+                    .map(|row| {
+                        let row = row.map_err(Error::query_response_failure)?;
+                        (&row).try_into().map_err(Error::QueryResponseFailure)
+                    })
+                    .collect::<Result<Vec<_>, Error>>()
+                    .map_err(|e| {
+                        error!(
+                            rdbms_type = self.rdbms_type.to_string(),
+                            "get next - error: {}", e
+                        );
+                        e
+                    })?;
                 Ok(Some(values))
             } else {
                 Ok(None)
