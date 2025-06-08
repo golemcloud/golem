@@ -304,12 +304,12 @@ async fn rdbms_postgres_crud(
 
     let executor = start(deps, &context).await.unwrap();
 
-    // rdbms_workers_test::<PostgresType>(
-    //     &executor,
-    //     worker_ids1.clone(),
-    //     RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
-    // )
-    // .await;
+    rdbms_workers_test::<PostgresType>(
+        &executor,
+        worker_ids1.clone(),
+        RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
+    )
+    .await;
 
     rdbms_workers_test::<PostgresType>(
         &executor,
@@ -963,12 +963,12 @@ async fn rdbms_mysql_crud(
     drop(executor);
     let executor = start(deps, &context).await.unwrap();
 
-    // rdbms_workers_test::<MysqlType>(
-    //     &executor,
-    //     worker_ids1.clone(),
-    //     RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
-    // )
-    // .await;
+    rdbms_workers_test::<MysqlType>(
+        &executor,
+        worker_ids1.clone(),
+        RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
+    )
+    .await;
 
     rdbms_workers_test::<MysqlType>(
         &executor,

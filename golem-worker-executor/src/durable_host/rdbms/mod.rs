@@ -718,6 +718,21 @@ where
                 )
                 .await;
         }
+    } else {
+        let begin_oplog_idx = ctx.state.open_function_table.get(&handle).cloned();
+        if let Some(begin_oplog_idx) = begin_oplog_idx {
+            let _ = ctx
+                .state
+                .replay_state
+                .try_get_oplog_entry(|e| e.is_pre_rollback_remote_transaction(begin_oplog_idx))
+                .await;
+            let _ = ctx
+                .state
+                .replay_state
+                .try_get_oplog_entry(|e| e.is_rolled_back_remote_transaction(begin_oplog_idx))
+                .await;
+            ctx.state.open_function_table.remove(&handle);
+        }
     }
 
     Ok(())
