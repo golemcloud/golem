@@ -22,7 +22,7 @@ use crate::rib_context::ReplContext;
 use crate::rib_edit::RibEdit;
 use crate::{CommandRegistry, ReplBootstrapError, RibExecutionError, UntypedCommand};
 use colored::Colorize;
-use rib::{ComponentDependency, RibCompiler, RibCompilerConfig, RibResult};
+use rib::{RibCompiler, RibCompilerConfig, RibResult};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
@@ -93,16 +93,13 @@ impl RibRepl {
 
         let component_dependencies = match config.component_source {
             Some(ref details) => {
-                let result = config
+                let component_dependency = config
                     .dependency_manager
                     .add_component(&details.source_path, details.component_name.clone())
                     .await
                     .map_err(|err| ReplBootstrapError::ComponentLoadError(err.to_string()))?;
 
-                Ok(vec![ComponentDependency {
-                    component_dependency_key: result.component_key,
-                    component_exports: result.component_metadata,
-                }])
+                Ok(vec![component_dependency])
             }
             None => {
                 let dependencies = config.dependency_manager.get_dependencies().await;
@@ -115,15 +112,7 @@ impl RibRepl {
                             return Err(ReplBootstrapError::NoComponentsFound);
                         }
 
-                        let dependencies = component_dependencies
-                            .iter()
-                            .map(|x| ComponentDependency {
-                                component_dependency_key: x.component_key.clone(),
-                                component_exports: x.component_metadata.clone(),
-                            })
-                            .collect::<Vec<ComponentDependency>>();
-
-                        Ok(dependencies)
+                        Ok(component_dependencies)
                     }
                     Err(err) => Err(ReplBootstrapError::ComponentLoadError(format!(
                         "failed to register components: {}",

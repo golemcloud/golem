@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::AnalysedExport;
-use rib::ComponentDependencyKey;
+use rib::ComponentDependency;
 use std::path::Path;
 
 /// Dependency manager for the Rib REPL environment.
@@ -43,14 +42,9 @@ pub trait RibDependencyManager {
         &self,
         source_path: &Path,
         component_name: String,
-    ) -> anyhow::Result<ReplComponentDependency>;
+    ) -> anyhow::Result<ComponentDependency>;
 }
 
 pub struct ReplComponentDependencies {
-    pub component_dependencies: Vec<ReplComponentDependency>,
-}
-
-pub struct ReplComponentDependency {
-    pub component_key: ComponentDependencyKey,
-    pub component_metadata: Vec<AnalysedExport>,
+    pub component_dependencies: Vec<ComponentDependency>,
 }
