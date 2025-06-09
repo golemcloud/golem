@@ -36,10 +36,10 @@ mod worker_binding;
 // from anything dynamic in nature. This implies, there will not be Rib in either pre-compiled or raw form.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GatewayBinding {
-    Default(WorkerBinding),
-    FileServer(FileServerBinding),
+    Default(Box<WorkerBinding>),
+    FileServer(Box<FileServerBinding>),
     Static(StaticBinding),
-    HttpHandler(HttpHandlerBinding),
+    HttpHandler(Box<HttpHandlerBinding>),
 }
 
 impl GatewayBinding {
@@ -175,12 +175,12 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 let response_proto = value.response.ok_or("Missing response field")?;
                 let response = Expr::try_from(response_proto)?;
 
-                Ok(GatewayBinding::Default(WorkerBinding {
+                Ok(GatewayBinding::Default(Box::new(WorkerBinding {
                     component_id,
                     idempotency_key,
                     response_mapping: ResponseMapping(response),
                     invocation_context,
-                }))
+                })))
             }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer => {
                 let component_id = VersionedComponentId::try_from(
@@ -191,13 +191,13 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 let response_proto = value.response.ok_or("Missing response field")?;
                 let response = Expr::try_from(response_proto)?;
 
-                Ok(GatewayBinding::FileServer(FileServerBinding {
+                Ok(GatewayBinding::FileServer(Box::new(FileServerBinding {
                     component_id,
                     worker_name,
                     idempotency_key,
                     response_mapping: ResponseMapping(response),
                     invocation_context: None,
-                }))
+                })))
             }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler => {
                 let component_id = VersionedComponentId::try_from(
@@ -206,11 +206,11 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 let worker_name = value.worker_name.map(Expr::try_from).transpose()?;
                 let idempotency_key = value.idempotency_key.map(Expr::try_from).transpose()?;
 
-                Ok(GatewayBinding::HttpHandler(HttpHandlerBinding {
+                Ok(GatewayBinding::HttpHandler(Box::new(HttpHandlerBinding {
                     component_id,
                     worker_name,
                     idempotency_key,
-                }))
+                })))
             }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {
                 let static_binding = value.static_binding.ok_or("Missing static binding")?;

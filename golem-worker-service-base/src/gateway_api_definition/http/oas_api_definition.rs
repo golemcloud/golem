@@ -255,7 +255,7 @@ mod internal {
                         Ok(RouteRequest {
                             path: path_pattern.clone(),
                             method,
-                            binding: GatewayBinding::Default(binding),
+                            binding: GatewayBinding::Default(Box::new(binding)),
                             security,
                         })
                     }
@@ -265,7 +265,7 @@ mod internal {
                         Ok(RouteRequest {
                             path: path_pattern.clone(),
                             method,
-                            binding: GatewayBinding::Default(binding),
+                            binding: GatewayBinding::Default(Box::new(binding)),
                             security,
                         })
                     }
@@ -275,7 +275,7 @@ mod internal {
                         Ok(RouteRequest {
                             path: path_pattern.clone(),
                             method,
-                            binding: GatewayBinding::HttpHandler(binding),
+                            binding: GatewayBinding::HttpHandler(Box::new(binding)),
                             security,
                         })
                     }

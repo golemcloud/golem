@@ -59,21 +59,21 @@ impl From<GatewayBindingCompiled> for GatewayBinding {
 
                 let worker_binding = WorkerBinding::from(*worker_binding);
 
-                GatewayBinding::Default(worker_binding)
+                GatewayBinding::Default(Box::new(worker_binding))
             }
             GatewayBindingCompiled::FileServer(value) => {
                 let file_server_binding_compiled = value.clone();
 
                 let worker_binding = FileServerBinding::from(*file_server_binding_compiled);
 
-                GatewayBinding::FileServer(worker_binding)
+                GatewayBinding::FileServer(Box::new(worker_binding))
             }
             GatewayBindingCompiled::HttpHandler(value) => {
                 let http_handler_binding = value.clone();
 
                 let worker_binding = HttpHandlerBinding::from(*http_handler_binding);
 
-                GatewayBinding::HttpHandler(worker_binding)
+                GatewayBinding::HttpHandler(Box::new(worker_binding))
             }
         }
     }

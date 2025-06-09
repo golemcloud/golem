@@ -389,7 +389,9 @@ impl GatewayBindingData {
                         invocation_context,
                     };
 
-                    Ok(GatewayBinding::FileServer(file_server_worker_binding))
+                    Ok(GatewayBinding::FileServer(Box::new(
+                        file_server_worker_binding,
+                    )))
                 } else {
                     let default_worker_binding = WorkerBinding {
                         component_id: VersionedComponentId {
@@ -401,7 +403,7 @@ impl GatewayBindingData {
                         invocation_context,
                     };
 
-                    Ok(GatewayBinding::Default(default_worker_binding))
+                    Ok(GatewayBinding::Default(Box::new(default_worker_binding)))
                 }
             }
 
@@ -431,7 +433,7 @@ impl GatewayBindingData {
                     idempotency_key,
                 };
 
-                Ok(GatewayBinding::HttpHandler(binding))
+                Ok(GatewayBinding::HttpHandler(Box::new(binding)))
             }
 
             Some(GatewayBindingType::CorsPreflight) => {
