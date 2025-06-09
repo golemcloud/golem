@@ -752,13 +752,6 @@ mod tests {
 
         expr.infer_types(&component_dependencies, &vec![]).unwrap();
 
-        let expected_component_in_function_calls = component_dependencies
-            .dependencies
-            .first_key_value()
-            .unwrap()
-            .0
-            .clone();
-
         let expected = test_utils::expected_expr_for_enum_test(&component_dependencies);
 
         assert_eq!(expr, expected);
@@ -2160,13 +2153,6 @@ mod tests {
         let mut expr = Expr::from_text(expr_str).unwrap();
 
         expr.infer_types(&component_metadata, &vec![]).unwrap();
-
-        let expected_component_in_function_calls = component_metadata
-            .dependencies
-            .first_key_value()
-            .unwrap()
-            .0
-            .clone();
 
         let expected = test_utils::expected_expr_for_select_index(&component_metadata);
 

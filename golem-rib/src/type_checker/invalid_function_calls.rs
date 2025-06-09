@@ -13,24 +13,14 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::type_checker::missing_fields::find_missing_fields_in_record;
-use crate::{type_checker, ComponentDependencies, FunctionName};
 use crate::{Expr, ExprVisitor, FunctionCallError};
-use golem_wasm_ast::analysis::AnalysedType;
 
-// While we have a dedicated generic phases (refer submodules) within type_checker module,
-// we have this special phase to grab errors in the context function calls.
-// This is grab as many errors as possible.
-// Refer `FunctionCallTypeCheckError`.
 #[allow(clippy::result_large_err)]
 pub fn check_invalid_function_calls(expr: &mut Expr) -> Result<(), FunctionCallError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(expr) = visitor.pop_front() {
-        if let Expr::Call {
-            call_type, args, ..
-        } = &expr
-        {
+        if let Expr::Call { call_type, .. } = &expr {
             match call_type {
                 CallType::Function {
                     component_info,
@@ -41,7 +31,7 @@ pub fn check_invalid_function_calls(expr: &mut Expr) -> Result<(), FunctionCallE
                         return Err(FunctionCallError::InvalidFunctionCall {
                             function_name: function_name.function.name_pretty().to_string(),
                             expr: expr.clone(),
-                            message: "function call without component. make sure component functions are called on an instance".to_string(),
+                            message: "function call is not associated with a wasm component. make sure component functions are called after creating an instance using `instance()`".to_string(),
                         });
                     }
                 }
