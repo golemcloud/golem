@@ -460,7 +460,9 @@ mod function_parameters_inference_tests {
 
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::rib_source_span::SourceSpan;
-    use crate::{ComponentDependencies, ComponentInfo, Expr, InferredType, ParsedFunctionSite};
+    use crate::{
+        ComponentDependencies, ComponentDependencyKey, Expr, InferredType, ParsedFunctionSite,
+    };
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
@@ -487,7 +489,7 @@ mod function_parameters_inference_tests {
             }),
         ];
 
-        let component_info = ComponentInfo {
+        let component_info = ComponentDependencyKey {
             component_name: "foo".to_string(),
             component_id: Uuid::new_v4(),
             root_package_name: None,
@@ -523,6 +525,7 @@ mod function_parameters_inference_tests {
             None,
             None,
             vec![Expr::identifier_global("x", None).with_inferred_type(InferredType::u64())],
+            None,
         )
         .with_inferred_type(InferredType::sequence(vec![]));
 

@@ -110,6 +110,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 None,
                                 worker_name,
                                 args.clone(),
+                                Some(component),
                             )
                             .with_source_span(source_span.clone());
                             *expr = new_call;
@@ -240,6 +241,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                         None,
                                         worker_name,
                                         args.clone(),
+                                        Some(component),
                                     )
                                     .with_source_span(source_span.clone());
 

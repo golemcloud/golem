@@ -2290,8 +2290,8 @@ mod tests {
         use crate::parser::type_name::TypeName;
         use crate::rib_source_span::SourceSpan;
         use crate::{
-            ArmPattern, ComponentDependencies, ComponentInfo, Expr, InferredType, MatchArm,
-            MatchIdentifier, Number, ParsedFunctionSite, VariableId,
+            ArmPattern, ComponentDependencies, ComponentDependencyKey, Expr, InferredType,
+            MatchArm, MatchIdentifier, Number, ParsedFunctionSite, VariableId,
         };
         use bigdecimal::BigDecimal;
         use golem_wasm_ast::analysis::analysed_type::u64;
@@ -2580,7 +2580,7 @@ mod tests {
                 }),
             ];
 
-            let component_info = ComponentInfo {
+            let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
                 root_package_name: None,
@@ -2647,7 +2647,7 @@ mod tests {
                 })
                 .collect();
 
-            let component_info = ComponentInfo {
+            let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
                 root_package_name: None,

@@ -625,6 +625,7 @@ mod internal {
             CallType::Function {
                 function_name,
                 worker,
+                ..
             } => (
                 function_name.function.raw_resource_params_mut(),
                 worker.as_mut(),

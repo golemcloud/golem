@@ -22,7 +22,7 @@ use crate::rib_context::ReplContext;
 use crate::rib_edit::RibEdit;
 use crate::{CommandRegistry, ReplBootstrapError, RibExecutionError, UntypedCommand};
 use colored::Colorize;
-use rib::{ComponentDependency, ComponentInfo, RibCompiler, RibCompilerConfig, RibResult};
+use rib::{ComponentDependency, ComponentDependencyKey, RibCompiler, RibCompilerConfig, RibResult};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
@@ -120,7 +120,7 @@ impl RibRepl {
             }
         }?;
 
-        let compiler_info = ComponentInfo {
+        let compiler_info = ComponentDependencyKey {
             component_name: component_dependency.component_name.clone(),
             component_id: component_dependency.component_id,
             root_package_name: None,

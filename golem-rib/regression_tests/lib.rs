@@ -769,7 +769,7 @@ fn expected_analysed_type() -> AnalysedType {
 
 mod component_metadata {
     use crate::function_metadata;
-    use rib::{ComponentDependency, ComponentInfo};
+    use rib::{ComponentDependency, ComponentDependencyKey};
     use uuid::Uuid;
 
     pub(crate) fn component_metadata() -> Vec<ComponentDependency> {
@@ -828,7 +828,7 @@ mod component_metadata {
         exports.extend(function_metadata::function_record_response());
         exports.extend(function_metadata::function_all_inputs());
 
-        let component_info = ComponentInfo {
+        let component_info = ComponentDependencyKey {
             component_name: "foo".to_string(),
             component_id: Uuid::new_v4(),
             root_package_name: None,
@@ -2041,7 +2041,7 @@ mod mock_interpreter {
 
     use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
     use golem_wasm_rpc::ValueAndType;
-    use rib::InstructionId;
+    use rib::{ComponentDependencyKey, InstructionId};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -2246,6 +2246,7 @@ mod mock_interpreter {
     impl RibFunctionInvoke for DynamicRibFunctionInvoke {
         async fn invoke(
             &self,
+            _component_info: ComponentDependencyKey,
             _instruction_id: &InstructionId,
             _worker_name: Option<EvaluatedWorkerName>,
             function_name: EvaluatedFqFn,

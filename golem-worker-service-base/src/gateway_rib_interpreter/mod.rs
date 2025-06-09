@@ -19,10 +19,7 @@ use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::ValueAndType;
-use rib::{
-    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibByteCode,
-    RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult,
-};
+use rib::{ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibByteCode, RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult};
 use std::fmt::Display;
 use std::sync::Arc;
 
@@ -35,7 +32,6 @@ pub trait WorkerServiceRibInterpreter<Namespace> {
     async fn evaluate(
         &self,
         worker_name: Option<String>,
-        component_id: ComponentId,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
         rib_byte_code: RibByteCode,
@@ -81,14 +77,12 @@ impl<Namespace: Clone + Send + Sync + 'static> DefaultRibInterpreter<Namespace> 
     pub fn rib_invoke(
         &self,
         global_worker_name: Option<String>,
-        component_id: ComponentId,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
         namespace: Namespace,
     ) -> Arc<dyn RibFunctionInvoke + Sync + Send> {
         Arc::new(WorkerServiceRibInvoke {
             global_worker_name,
-            component_id,
             idempotency_key,
             invocation_context,
             executor: self.worker_request_executor.clone(),
@@ -104,7 +98,6 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
     async fn evaluate(
         &self,
         worker_name: Option<String>,
-        component_id: ComponentId,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
         expr: RibByteCode,
@@ -113,7 +106,6 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
     ) -> Result<RibResult, RibRuntimeError> {
         let worker_invoke_function = self.rib_invoke(
             worker_name,
-            component_id,
             idempotency_key,
             invocation_context,
             namespace,
@@ -132,7 +124,6 @@ struct WorkerServiceRibInvoke<Namespace> {
     // then it tries to fall back to this global_worker_name that came in as
     // part of the API definition.
     global_worker_name: Option<String>,
-    component_id: ComponentId,
     idempotency_key: Option<IdempotencyKey>,
     invocation_context: InvocationContextStack,
     executor: Arc<dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send>,
@@ -145,12 +136,12 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
 {
     async fn invoke(
         &self,
+        component_dependency_key: ComponentDependencyKey,
         _instruction_id: &InstructionId,
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         parameters: EvaluatedFnArgs,
     ) -> RibFunctionInvokeResult {
-        let component_id = self.component_id.clone();
         let worker_name: Option<String> =
             worker_name.map(|x| x.0).or(self.global_worker_name.clone());
         let idempotency_key = self.idempotency_key.clone();
@@ -168,7 +159,7 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
             .map_err(|errs: Vec<String>| errs.join(", "))?;
 
         let worker_request = GatewayResolvedWorkerRequest {
-            component_id,
+            component_id: ComponentId(component_dependency_key.component_id),
             worker_name,
             function_name,
             function_params,

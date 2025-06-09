@@ -15,7 +15,7 @@
 use crate::dependency_manager::RibComponentMetadata;
 use crate::{RawRibScript, WorkerFunctionInvoke};
 use golem_wasm_rpc::ValueAndType;
-use rib::{InstructionId, RibCompiler};
+use rib::{InstructionId, RibCompiler, RibFunctionInvoke};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard};

@@ -201,8 +201,9 @@ impl Interpreter {
                     )?;
                 }
 
-                RibIR::InvokeFunction(worker_type, arg_size, _) => {
+                RibIR::InvokeFunction(component_info, worker_type, arg_size, _) => {
                     internal::run_call_instruction(
+                        component_info,
                         &byte_code_cursor.position(),
                         arg_size,
                         worker_type,
@@ -321,10 +322,11 @@ mod internal {
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::stack::InterpreterStack;
     use crate::{
-        bail_corrupted_state, internal_corrupted_state, CoercedNumericValue, EvaluatedFnArgs,
-        EvaluatedFqFn, EvaluatedWorkerName, FunctionReferenceType, InstructionId,
-        ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke,
-        RibFunctionInvokeResult, RibInterpreterResult, TypeHint, VariableId, WorkerNamePresence,
+        bail_corrupted_state, internal_corrupted_state, CoercedNumericValue,
+        ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName,
+        FunctionReferenceType, InstructionId, ParsedFunctionName, ParsedFunctionReference,
+        ParsedFunctionSite, RibFunctionInvoke, RibFunctionInvokeResult, RibInterpreterResult,
+        TypeHint, VariableId, WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
@@ -348,6 +350,7 @@ mod internal {
     impl RibFunctionInvoke for NoopRibFunctionInvoke {
         async fn invoke(
             &self,
+            _component_dependency_key: ComponentDependencyKey,
             _instruction_id: &InstructionId,
             _worker_name: Option<EvaluatedWorkerName>,
             _function_name: EvaluatedFqFn,
@@ -1221,6 +1224,7 @@ mod internal {
     }
 
     pub(crate) async fn run_call_instruction(
+        component_info: crate::ComponentDependencyKey,
         instruction_id: &InstructionId,
         arg_size: usize,
         worker_type: WorkerNamePresence,
@@ -1259,6 +1263,7 @@ mod internal {
 
         let value_and_type_opt = interpreter_env
             .invoke_worker_function_async(
+                component_info,
                 instruction_id,
                 worker_name,
                 function_name_cloned,
@@ -4645,7 +4650,7 @@ mod tests {
     mod test_utils {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{
-            ComponentDependency, ComponentInfo, EvaluatedFnArgs, EvaluatedFqFn,
+            ComponentDependency, ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn,
             EvaluatedWorkerName, GetLiteralValue, InstructionId, RibFunctionInvoke,
             RibFunctionInvokeResult, RibInput,
         };
@@ -4750,7 +4755,7 @@ mod tests {
 
             let result = output.map(|typ| AnalysedFunctionResult { typ });
 
-            let component_info = ComponentInfo {
+            let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
                 root_package_name: None,
@@ -4857,7 +4862,7 @@ mod tests {
                 ],
             });
 
-            let component_info = ComponentInfo {
+            let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
                 root_package_name: None,
@@ -4987,7 +4992,7 @@ mod tests {
                 ],
             });
 
-            let component_info = ComponentInfo {
+            let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
                 root_package_name: None,
@@ -5067,6 +5072,7 @@ mod tests {
         impl RibFunctionInvoke for TestInvoke1 {
             async fn invoke(
                 &self,
+                _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
                 _worker_name: Option<EvaluatedWorkerName>,
                 _fqn: EvaluatedFqFn,
@@ -5083,6 +5089,7 @@ mod tests {
         impl RibFunctionInvoke for TestInvoke2 {
             async fn invoke(
                 &self,
+                _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
                 worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
@@ -5189,7 +5196,7 @@ mod tests {
                 }),
             ];
 
-            let component_info = ComponentInfo {
+            let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
                 root_package_name: None,
@@ -5208,6 +5215,7 @@ mod tests {
         impl RibFunctionInvoke for TestInvoke3 {
             async fn invoke(
                 &self,
+                _component_dependency: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
                 _worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,

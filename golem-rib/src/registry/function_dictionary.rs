@@ -15,7 +15,7 @@
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
 use crate::{
-    CallType, ComponentDependencies, ComponentInfo, DynamicParsedFunctionName,
+    CallType, ComponentDependencies, ComponentDependencyKey, DynamicParsedFunctionName,
     DynamicParsedFunctionReference, Expr, FunctionTypeRegistry, InferredType, ParsedFunctionSite,
     RegistryKey, RegistryValue,
 };
@@ -100,7 +100,7 @@ impl FunctionDictionary {
 // order of component loading into the rib context shouldn't change it's type.
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct ResourceMethodDictionary {
-    pub map: BTreeMap<ComponentInfo, Vec<(FullyQualifiedResourceMethod, FunctionType)>>,
+    pub map: BTreeMap<ComponentDependencyKey, Vec<(FullyQualifiedResourceMethod, FunctionType)>>,
 }
 
 impl From<&ResourceMethodDictionary> for ComponentDependencies {

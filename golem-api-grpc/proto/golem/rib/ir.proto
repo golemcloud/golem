@@ -5,6 +5,8 @@ package golem.rib;
 import "wasm/ast/type.proto";
 import "wasm/rpc/type_annotated_value.proto";
 import "golem/rib/function_name.proto";
+import "golem/rib/expr.proto";
+
 
 message RibIR {
     oneof instruction {
@@ -101,6 +103,7 @@ message JumpInstruction {
 }
 
 message CallInstruction {
+    golem.rib.ComponentDependencyKey component = 1;
     uint64 argument_count = 2;
     wasm.ast.Type return_type = 3;
     optional WorkerNamePresence worker_name_presence = 4;

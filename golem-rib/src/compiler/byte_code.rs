@@ -34,6 +34,9 @@ pub enum RibByteCodeGenerationError {
         expected: TypeHint,
         actual: TypeHint,
     },
+    UnresolvedWasmComponent {
+        function: String,
+    },
 }
 
 impl std::error::Error for RibByteCodeGenerationError {}
@@ -58,6 +61,9 @@ impl Display for RibByteCodeGenerationError {
                     expected.get_type_kind(),
                     actual.get_type_kind()
                 )
+            }
+            RibByteCodeGenerationError::UnresolvedWasmComponent { function } => {
+                write!(f, "Unresolved wasm component for function: {}", function)
             }
         }
     }
@@ -431,6 +437,7 @@ mod internal {
                     CallType::Function {
                         function_name,
                         worker,
+                        component_info,
                     } => {
                         for expr in args.iter().rev() {
                             stack.push(ExprState::from_expr(expr));
@@ -451,7 +458,14 @@ mod internal {
                             None => WorkerNamePresence::Absent,
                         };
 
+                        let component_info = component_info.as_ref().ok_or(
+                            RibByteCodeGenerationError::UnresolvedWasmComponent {
+                                function: function_name.to_string(),
+                            },
+                        )?;
+
                         instructions.push(RibIR::InvokeFunction(
+                            component_info.clone(),
                             worker_name,
                             args.len(),
                             function_result_type,
@@ -2134,7 +2148,7 @@ mod compiler_tests {
     }
 
     mod internal {
-        use crate::{ComponentDependency, ComponentInfo, RibInputTypeInfo};
+        use crate::{ComponentDependency, ComponentDependencyKey, RibInputTypeInfo};
         use golem_wasm_ast::analysis::*;
         use std::collections::HashMap;
         use uuid::Uuid;
@@ -2172,7 +2186,7 @@ mod compiler_tests {
                 }],
             });
 
-            let component_info = ComponentInfo {
+            let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
                 root_package_name: None,
@@ -2227,7 +2241,7 @@ mod compiler_tests {
                 ],
             });
 
-            let component_info = ComponentInfo {
+            let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
                 root_package_name: None,
@@ -2253,7 +2267,7 @@ mod compiler_tests {
                 })
                 .collect();
 
-            let component_info = ComponentInfo {
+            let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
                 root_package_name: None,

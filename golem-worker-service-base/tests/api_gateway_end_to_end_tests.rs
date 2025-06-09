@@ -2635,7 +2635,7 @@ mod internal {
         ACCESS_CONTROL_MAX_AGE,
     };
     use poem::Response;
-    use rib::{ComponentInfo, RibResult};
+    use rib::{ComponentDependencyKey, RibResult};
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -2873,7 +2873,7 @@ mod internal {
         exports.extend(get_golem_shopping_cart_metadata());
 
         let component_details = ComponentDetails {
-            component_info: ComponentInfo {
+            component_info: ComponentDependencyKey {
                 component_name: "test-component".to_string(),
                 component_id: Uuid::new_v4(),
                 root_package_name: None,

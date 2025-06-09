@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Default, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct ComponentDependencies {
-    pub dependencies: BTreeMap<ComponentInfo, FunctionDictionary>,
+    pub dependencies: BTreeMap<ComponentDependencyKey, FunctionDictionary>,
 }
 
 impl ComponentDependencies {
@@ -54,7 +54,7 @@ impl ComponentDependencies {
 
     pub fn get_function_type(
         &self,
-        component_info: &Option<ComponentInfo>,
+        component_info: &Option<ComponentDependencyKey>,
         function_name: &FunctionName,
     ) -> Result<FunctionType, String> {
         // If function name is unique across all components, we are not in need of a component_info per se
@@ -298,7 +298,7 @@ impl ComponentDependencies {
     }
 
     pub fn from_raw(
-        component_and_exports: Vec<(crate::ComponentInfo, &Vec<AnalysedExport>)>,
+        component_and_exports: Vec<(crate::ComponentDependencyKey, &Vec<AnalysedExport>)>,
     ) -> Result<Self, String> {
         let mut dependencies = BTreeMap::new();
 
@@ -309,19 +309,79 @@ impl ComponentDependencies {
             dependencies.insert(component_info, function_dictionary);
         }
 
-        Ok(crate::ComponentDependencies { dependencies })
+        Ok(ComponentDependencies { dependencies })
     }
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
-pub struct ComponentInfo {
+pub struct ComponentDependencyKey {
     pub component_name: String,
     pub component_id: Uuid,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
 }
 
-impl Display for crate::ComponentInfo {
+impl bincode::Encode for ComponentDependencyKey {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        use bincode::enc::write::Writer;
+
+        encoder.writer().write(self.component_name.as_bytes())?;
+        self.component_id.as_bytes().encode(encoder)?;
+        Option::<String>::encode(&self.root_package_name, encoder)?;
+        Option::<String>::encode(&self.root_package_version, encoder)?;
+
+        Ok(())
+    }
+}
+
+impl<Context> bincode::Decode<Context> for ComponentDependencyKey {
+    fn decode<D: bincode::de::Decoder>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        use bincode::de::read::Reader;
+
+        let component_name = String::decode(decoder)?;
+        let mut bytes = [0u8; 16];
+        decoder.reader().read(&mut bytes)?;
+        let component_id = Uuid::from_bytes(bytes);
+        let root_package_name = Option::<String>::decode(decoder)?;
+        let root_package_version = Option::<String>::decode(decoder)?;
+
+        Ok(ComponentDependencyKey {
+            component_name,
+            component_id,
+            root_package_name,
+            root_package_version,
+        })
+    }
+}
+
+impl<'de, Context> bincode::BorrowDecode<'de, Context> for ComponentDependencyKey {
+    fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        use bincode::de::read::Reader;
+
+        let component_name = String::borrow_decode(decoder)?;
+        let mut bytes = [0u8; 16];
+        decoder.reader().read(&mut bytes)?;
+        let component_id = Uuid::from_bytes(bytes);
+        let root_package_name = Option::<String>::borrow_decode(decoder)?;
+        let root_package_version = Option::<String>::borrow_decode(decoder)?;
+
+        Ok(ComponentDependencyKey {
+            component_name,
+            component_id,
+            root_package_name,
+            root_package_version,
+        })
+    }
+}
+
+impl Display for ComponentDependencyKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,

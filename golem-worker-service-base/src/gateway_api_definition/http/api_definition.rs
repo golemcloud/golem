@@ -35,7 +35,7 @@ use golem_common::model::component::VersionedComponentId;
 use golem_service_base::model::Component;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType};
 use poem_openapi::Enum;
-use rib::{ComponentDependency, ComponentInfo, RibCompilationError, RibInputTypeInfo};
+use rib::{ComponentDependency, ComponentDependencyKey, RibCompilationError, RibInputTypeInfo};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -750,7 +750,7 @@ pub struct ComponentMetadataDictionary {
 
 #[derive(Clone, Debug)]
 pub struct ComponentDetails {
-    pub component_info: ComponentInfo,
+    pub component_info: ComponentDependencyKey,
     pub metadata: Vec<AnalysedExport>,
 }
 
@@ -759,7 +759,7 @@ impl ComponentMetadataDictionary {
         let mut metadata = HashMap::new();
 
         for component in components {
-            let component_info = ComponentInfo {
+            let component_info = ComponentDependencyKey {
                 component_name: component.component_name.0.clone(),
                 component_id: component.versioned_component_id.component_id.0,
                 root_package_name: component.metadata.root_package_name.clone(),

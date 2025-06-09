@@ -624,7 +624,7 @@ mod desugar_tests {
 
     use super::*;
     use crate::compiler::desugar::desugar_tests::expectations::expected_condition_with_identifiers;
-    use crate::{ComponentDependencies, ComponentInfo, Expr};
+    use crate::{ComponentDependencies, ComponentDependencyKey, Expr};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
@@ -651,7 +651,7 @@ mod desugar_tests {
             }),
         ];
 
-        let component_info = ComponentInfo {
+        let component_info = ComponentDependencyKey {
             component_name: "foo".to_string(),
             component_id: Uuid::new_v4(),
             root_package_name: None,

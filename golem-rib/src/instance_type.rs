@@ -16,7 +16,7 @@ use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
 use crate::FunctionName;
 use crate::{
-    ComponentDependencies, ComponentInfo, Expr, FullyQualifiedResourceConstructor,
+    ComponentDependencies, ComponentDependencyKey, Expr, FullyQualifiedResourceConstructor,
     FunctionDictionary, FunctionType, InferredType, ResourceMethodDictionary,
 };
 use golem_api_grpc::proto::golem::rib::{
@@ -208,7 +208,7 @@ impl InstanceType {
         &self,
         method_name: &str,
         type_parameter: Option<TypeParameter>,
-    ) -> Result<(ComponentInfo, Function), String> {
+    ) -> Result<(ComponentDependencyKey, Function), String> {
         match type_parameter {
             Some(tp) => match tp {
                 TypeParameter::Interface(iface) => {
@@ -468,8 +468,8 @@ pub struct Function {
 fn search_function_in_instance(
     instance: &InstanceType,
     function_name: &str,
-    component_info: Option<&ComponentInfo>,
-) -> Result<(ComponentInfo, Function), String> {
+    component_info: Option<&ComponentDependencyKey>,
+) -> Result<(ComponentDependencyKey, Function), String> {
     match component_info {
         Some(component_info) => {
             let dependencies = instance.component_dependencies();

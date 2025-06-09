@@ -268,7 +268,7 @@ message CallType {
    optional golem.rib.Expr worker_name = 5;
 }
 
-message ComponentInfo {
+message ComponentDependencyKey {
   string component_name = 1;
   golem.common.UUID value = 2;
   optional string root_package_name = 3;
@@ -284,13 +284,13 @@ message InstanceCreationType {
 
 message WorkerInstance {
     optional golem.rib.Expr worker_name = 1;
-    optional ComponentInfo component = 2;
+    optional ComponentDependencyKey component = 2;
 }
 
 message ResourceInstanceWithWorkerName {
     optional golem.rib.Expr worker_name = 1;
     golem.rib.FullyQualifiedResourceConstructor resource_name = 2;
-    optional ComponentInfo component = 3;
+    optional ComponentDependencyKey component = 3;
 
 }
 

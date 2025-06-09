@@ -23,7 +23,7 @@ pub use worker_functions_in_rib::*;
 
 use crate::rib_type_error::RibTypeError;
 use crate::{
-    ComponentDependencies, ComponentInfo, Expr, GlobalVariableTypeSpec, InferredExpr,
+    ComponentDependencies, ComponentDependencyKey, Expr, GlobalVariableTypeSpec, InferredExpr,
     RibInputTypeInfo, RibOutputTypeInfo,
 };
 
@@ -56,7 +56,7 @@ pub struct RibCompilerConfig {
 
 #[derive(Debug, Clone)]
 pub struct ComponentDependency {
-    pub component_info: ComponentInfo,
+    pub component_info: ComponentDependencyKey,
     pub exports: Vec<AnalysedExport>,
 }
 
@@ -866,7 +866,7 @@ mod compiler_error_tests {
     }
 
     mod test_utils {
-        use crate::{ComponentDependency, ComponentInfo};
+        use crate::{ComponentDependency, ComponentDependencyKey};
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, handle, list, record, s32, str, tuple, u32, u64, variant,
         };
@@ -1071,7 +1071,7 @@ mod compiler_error_tests {
             });
 
             let component_dependency = ComponentDependency {
-                component_info: ComponentInfo {
+                component_info: ComponentDependencyKey {
                     component_name: "some_name".to_string(),
                     component_id: Uuid::new_v4(),
                     root_package_name: None,

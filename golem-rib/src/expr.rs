@@ -20,7 +20,7 @@ use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
 use crate::{
-    from_string, text, type_checker, type_inference, ComponentDependencies,
+    from_string, text, type_checker, type_inference, ComponentDependencies, ComponentDependencyKey,
     DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType,
     ParsedFunctionName, VariableId,
 };
@@ -556,11 +556,13 @@ impl Expr {
         generic_type_parameter: Option<GenericTypeParameter>,
         worker_name: Option<Expr>,
         args: Vec<Expr>,
+        component_info: Option<ComponentDependencyKey>,
     ) -> Self {
         Expr::Call {
             call_type: CallType::Function {
                 function_name: dynamic_parsed_fn_name,
                 worker: worker_name.map(Box::new),
+                component_info,
             },
             generic_type_parameter,
             args,
@@ -2319,28 +2321,28 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                                 // Reading the previous parsed-function-name in persistent store as a dynamic-parsed-function-name
                                 Expr::call_worker_function(DynamicParsedFunctionName::parse(
                                     ParsedFunctionName::try_from(name)?.to_string()
-                                )?, generic_type_parameter, None, params)
+                                )?, generic_type_parameter, None, params, None)
                             }
                             golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
                                 name,
-                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params, None),
                             golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(
                                 name,
-                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params, None),
                         }
                     }
                     (_, Some(call_type)) => {
                         let name = call_type.name.ok_or("Missing function call name")?;
                         match name {
                             golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(name) => {
-                                Expr::call_worker_function(name.try_into()?, generic_type_parameter, None, params)
+                                Expr::call_worker_function(name.try_into()?, generic_type_parameter, None, params, None)
                             }
                             golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(
                                 name,
-                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params, None),
                             golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(
                                 name,
-                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params, None),
                             golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(instance_creation) => {
                                 let instance_creation_type = InstanceCreationType::try_from(*instance_creation)?;
                                 let call_type = CallType::InstanceCreation(instance_creation_type);
@@ -3191,6 +3193,7 @@ mod tests {
                         Expr::identifier_global("baz", None),
                         Expr::identifier_global("qux", None),
                     ],
+                    None,
                 ),
                 None,
             ),

@@ -14,8 +14,8 @@
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::{
-    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibFunctionInvoke,
-    RibInput, VariableId,
+    ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId,
+    RibFunctionInvoke, RibInput, VariableId,
 };
 use golem_wasm_rpc::ValueAndType;
 use std::collections::HashMap;
@@ -47,6 +47,7 @@ impl Default for InterpreterEnv {
 impl InterpreterEnv {
     pub async fn invoke_worker_function_async(
         &self,
+        component_dependency_key: ComponentDependencyKey,
         instruction_id: &InstructionId,
         worker_name: Option<String>,
         function_name: String,
@@ -54,6 +55,7 @@ impl InterpreterEnv {
     ) -> Result<Option<ValueAndType>, Box<dyn std::error::Error + Send + Sync>> {
         self.call_worker_function_async
             .invoke(
+                component_dependency_key,
                 instruction_id,
                 worker_name.map(EvaluatedWorkerName),
                 EvaluatedFqFn(function_name),
@@ -119,7 +121,8 @@ impl EnvironmentKey {
 mod internal {
     use crate::interpreter::env::RibFunctionInvoke;
     use crate::{
-        EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibFunctionInvokeResult,
+        ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId,
+        RibFunctionInvokeResult,
     };
     use async_trait::async_trait;
 
@@ -129,6 +132,7 @@ mod internal {
     impl RibFunctionInvoke for NoopRibFunctionInvoke {
         async fn invoke(
             &self,
+            _component_info: ComponentDependencyKey,
             _instruction_id: &InstructionId,
             _worker_name: Option<EvaluatedWorkerName>,
             _function_name: EvaluatedFqFn,

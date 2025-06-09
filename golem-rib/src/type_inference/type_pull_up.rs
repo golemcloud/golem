@@ -757,6 +757,7 @@ mod type_pull_up_tests {
             None,
             None,
             vec![Expr::number(BigDecimal::from(1))],
+            None,
         );
 
         expr.pull_types_up().unwrap();
