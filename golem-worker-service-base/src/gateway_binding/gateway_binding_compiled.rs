@@ -31,7 +31,7 @@ pub enum GatewayBindingCompiled {
     Worker(Box<WorkerBindingCompiled>),
     Static(StaticBinding),
     FileServer(Box<FileServerBindingCompiled>),
-    HttpHandler(HttpHandlerBindingCompiled),
+    HttpHandler(Box<HttpHandlerBindingCompiled>),
 }
 
 impl GatewayBindingCompiled {
@@ -71,7 +71,7 @@ impl From<GatewayBindingCompiled> for GatewayBinding {
             GatewayBindingCompiled::HttpHandler(value) => {
                 let http_handler_binding = value.clone();
 
-                let worker_binding = HttpHandlerBinding::from(http_handler_binding);
+                let worker_binding = HttpHandlerBinding::from(*http_handler_binding);
 
                 GatewayBinding::HttpHandler(worker_binding)
             }
@@ -101,7 +101,7 @@ impl TryFrom<GatewayBindingCompiled>
 
             GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
                 Ok(internal::http_handler_to_gateway_binding_compiled_proto(
-                    http_handler_binding,
+                    *http_handler_binding,
                     GatewayBindingType::HttpHandler,
                 )?)
             }
@@ -308,13 +308,13 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                     _ => None,
                 };
 
-                Ok(GatewayBindingCompiled::HttpHandler(
+                Ok(GatewayBindingCompiled::HttpHandler(Box::new(
                     HttpHandlerBindingCompiled {
                         component_id,
                         worker_name_compiled,
                         idempotency_key_compiled,
                     },
-                ))
+                )))
             }
             ProtoGatewayBindingType::CorsPreflight | ProtoGatewayBindingType::AuthCallBack => {
                 let static_binding = value

@@ -571,7 +571,7 @@ impl GatewayBindingResponseData {
             }
             GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
                 Self::from_http_handler_binding_compiled(
-                    http_handler_binding,
+                    *http_handler_binding,
                     GatewayBindingType::HttpHandler,
                     conversion_ctx,
                 )

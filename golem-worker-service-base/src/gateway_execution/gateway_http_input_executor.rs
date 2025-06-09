@@ -626,7 +626,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                     .handle_http_handler_binding(
                         &namespace,
                         &mut rich_request,
-                        http_handler_binding,
+                        *http_handler_binding,
                     )
                     .await;
 
