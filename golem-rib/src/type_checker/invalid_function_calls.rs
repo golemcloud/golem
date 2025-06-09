@@ -31,7 +31,7 @@ pub fn check_invalid_function_calls(expr: &mut Expr) -> Result<(), FunctionCallE
                         return Err(FunctionCallError::InvalidFunctionCall {
                             function_name: function_name.function.name_pretty().to_string(),
                             expr: expr.clone(),
-                            message: "function call is not associated with a wasm component. make sure component functions are called after creating an instance using `instance()`".to_string(),
+                            message: "function call is not associated with a wasm component. make sure component functions are called after creating an instance using `instance(<optional-worker-name>)`".to_string(),
                         });
                     }
                 }

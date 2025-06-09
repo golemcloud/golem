@@ -23,7 +23,7 @@ use rib::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct WorkerBinding {
+pub struct FileServerBinding {
     pub component_id: VersionedComponentId,
     pub worker_name: Option<Expr>,
     pub idempotency_key: Option<Expr>,
@@ -32,7 +32,7 @@ pub struct WorkerBinding {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct WorkerBindingCompiled {
+pub struct FileServerBindingCompiled {
     pub component_id: VersionedComponentId,
     pub worker_name_compiled: Option<WorkerNameCompiled>,
     pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
@@ -40,9 +40,9 @@ pub struct WorkerBindingCompiled {
     pub invocation_context_compiled: Option<InvocationContextCompiled>,
 }
 
-impl WorkerBindingCompiled {
-    pub fn from_raw_worker_binding(
-        gateway_worker_binding: &WorkerBinding,
+impl FileServerBindingCompiled {
+    pub fn from_raw_file_server_worker_binding(
+        gateway_worker_binding: &FileServerBinding,
         component_dependency: &[ComponentDependency],
     ) -> Result<Self, RibCompilationError> {
         let worker_name_compiled: Option<WorkerNameCompiled> = gateway_worker_binding
@@ -69,9 +69,79 @@ impl WorkerBindingCompiled {
             None => None,
         };
 
-        Ok(WorkerBindingCompiled {
+        Ok(FileServerBindingCompiled {
             component_id: gateway_worker_binding.component_id.clone(),
             worker_name_compiled,
+            idempotency_key_compiled,
+            response_compiled,
+            invocation_context_compiled,
+        })
+    }
+}
+
+impl From<FileServerBindingCompiled> for FileServerBinding {
+    fn from(value: FileServerBindingCompiled) -> Self {
+        let worker_binding = value.clone();
+
+        FileServerBinding {
+            component_id: worker_binding.component_id,
+            worker_name: worker_binding
+                .worker_name_compiled
+                .map(|compiled| compiled.worker_name),
+            idempotency_key: worker_binding
+                .idempotency_key_compiled
+                .map(|compiled| compiled.idempotency_key),
+            response_mapping: ResponseMapping(
+                worker_binding.response_compiled.response_mapping_expr,
+            ),
+            invocation_context: worker_binding
+                .invocation_context_compiled
+                .map(|compiled| compiled.invocation_context),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkerBinding {
+    pub component_id: VersionedComponentId,
+    pub idempotency_key: Option<Expr>,
+    pub response_mapping: ResponseMapping,
+    pub invocation_context: Option<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkerBindingCompiled {
+    pub component_id: VersionedComponentId,
+    pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
+    pub response_compiled: ResponseMappingCompiled,
+    pub invocation_context_compiled: Option<InvocationContextCompiled>,
+}
+
+impl WorkerBindingCompiled {
+    pub fn from_raw_worker_binding(
+        gateway_worker_binding: &WorkerBinding,
+        component_dependency: &[ComponentDependency],
+    ) -> Result<Self, RibCompilationError> {
+        let idempotency_key_compiled = match &gateway_worker_binding.idempotency_key {
+            Some(idempotency_key) => Some(IdempotencyKeyCompiled::from_idempotency_key(
+                idempotency_key,
+            )?),
+            None => None,
+        };
+        let response_compiled = ResponseMappingCompiled::from_response_mapping(
+            &gateway_worker_binding.response_mapping,
+            component_dependency,
+        )?;
+        let invocation_context_compiled = match &gateway_worker_binding.invocation_context {
+            Some(invocation_context) => Some(InvocationContextCompiled::from_invocation_context(
+                invocation_context,
+                component_dependency,
+            )?),
+            None => None,
+        };
+
+        Ok(WorkerBindingCompiled {
+            component_id: gateway_worker_binding.component_id.clone(),
             idempotency_key_compiled,
             response_compiled,
             invocation_context_compiled,
@@ -85,9 +155,6 @@ impl From<WorkerBindingCompiled> for WorkerBinding {
 
         WorkerBinding {
             component_id: worker_binding.component_id,
-            worker_name: worker_binding
-                .worker_name_compiled
-                .map(|compiled| compiled.worker_name),
             idempotency_key: worker_binding
                 .idempotency_key_compiled
                 .map(|compiled| compiled.idempotency_key),

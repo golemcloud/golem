@@ -17,8 +17,8 @@ use crate::gateway_api_definition::http::{HttpApiDefinitionRequest, RouteRequest
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
 use crate::gateway_api_definition_transformer::transform_http_api_definition;
 use crate::gateway_binding::{
-    GatewayBinding, GatewayBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
-    ResponseMappingCompiled, StaticBinding, WorkerNameCompiled,
+    FileServerBindingCompiled, GatewayBinding, GatewayBindingCompiled, IdempotencyKeyCompiled,
+    InvocationContextCompiled, ResponseMappingCompiled, StaticBinding, WorkerNameCompiled,
 };
 use crate::gateway_binding::{HttpHandlerBindingCompiled, WorkerBindingCompiled};
 use crate::gateway_middleware::{
@@ -824,7 +824,7 @@ impl CompiledRoute {
                 Self::validate_rib_scripts(
                     query_params,
                     &path_params,
-                    binding.worker_name_compiled.as_ref(),
+                    None,
                     binding.invocation_context_compiled.as_ref(),
                     binding.idempotency_key_compiled.as_ref(),
                     Some(&binding.response_compiled),
@@ -851,7 +851,7 @@ impl CompiledRoute {
                     exports: component_details.metadata.clone(),
                 }];
 
-                let binding = WorkerBindingCompiled::from_raw_worker_binding(
+                let binding = FileServerBindingCompiled::from_raw_file_server_worker_binding(
                     worker_binding,
                     &component_dependency,
                 )

@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::gateway_binding::{
-    GatewayBinding, IdempotencyKeyCompiled, ResponseMappingCompiled, WorkerBinding,
-    WorkerBindingCompiled, WorkerNameCompiled,
+    FileServerBinding, FileServerBindingCompiled, GatewayBinding, IdempotencyKeyCompiled,
+    ResponseMappingCompiled, WorkerBinding, WorkerBindingCompiled, WorkerNameCompiled,
 };
 use crate::gateway_binding::{InvocationContextCompiled, StaticBinding};
 use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType as ProtoGatewayBindingType;
@@ -30,7 +30,7 @@ use super::HttpHandlerBinding;
 pub enum GatewayBindingCompiled {
     Worker(WorkerBindingCompiled),
     Static(StaticBinding),
-    FileServer(WorkerBindingCompiled),
+    FileServer(FileServerBindingCompiled),
     HttpHandler(HttpHandlerBindingCompiled),
 }
 
@@ -62,9 +62,9 @@ impl From<GatewayBindingCompiled> for GatewayBinding {
                 GatewayBinding::Default(worker_binding)
             }
             GatewayBindingCompiled::FileServer(value) => {
-                let worker_binding = value.clone();
+                let file_server_binding_compiled = value.clone();
 
-                let worker_binding = WorkerBinding::from(worker_binding);
+                let worker_binding = FileServerBinding::from(file_server_binding_compiled);
 
                 GatewayBinding::FileServer(worker_binding)
             }
@@ -85,19 +85,19 @@ impl TryFrom<GatewayBindingCompiled>
     type Error = String;
     fn try_from(value: GatewayBindingCompiled) -> Result<Self, String> {
         match value {
-            GatewayBindingCompiled::Worker(worker_binding) => {
+            GatewayBindingCompiled::Worker(worker_binding_compiled) => {
                 Ok(internal::worker_binding_to_gateway_binding_compiled_proto(
-                    worker_binding,
+                    worker_binding_compiled,
                     GatewayBindingType::Default,
                 )?)
             }
 
-            GatewayBindingCompiled::FileServer(worker_binding) => {
-                Ok(internal::worker_binding_to_gateway_binding_compiled_proto(
-                    worker_binding,
+            GatewayBindingCompiled::FileServer(file_server_binding_compiled) => Ok(
+                internal::file_server_binding_to_gateway_binding_compiled_proto(
+                    file_server_binding_compiled,
                     GatewayBindingType::FileServer,
-                )?)
-            }
+                )?,
+            ),
 
             GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
                 Ok(internal::http_handler_to_gateway_binding_compiled_proto(
@@ -249,19 +249,20 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                 if binding_type == 0 {
                     Ok(GatewayBindingCompiled::Worker(WorkerBindingCompiled {
                         component_id,
-                        worker_name_compiled,
                         idempotency_key_compiled,
                         response_compiled,
                         invocation_context_compiled,
                     }))
                 } else {
-                    Ok(GatewayBindingCompiled::FileServer(WorkerBindingCompiled {
-                        component_id,
-                        worker_name_compiled,
-                        idempotency_key_compiled,
-                        response_compiled,
-                        invocation_context_compiled,
-                    }))
+                    Ok(GatewayBindingCompiled::FileServer(
+                        FileServerBindingCompiled {
+                            component_id,
+                            worker_name_compiled,
+                            idempotency_key_compiled,
+                            response_compiled,
+                            invocation_context_compiled,
+                        },
+                    ))
                 }
             }
             ProtoGatewayBindingType::HttpHandler => {
@@ -325,15 +326,27 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
 }
 
 mod internal {
-    use crate::gateway_binding::{HttpHandlerBindingCompiled, WorkerBindingCompiled};
+    use crate::gateway_binding::{
+        FileServerBindingCompiled, HttpHandlerBindingCompiled, WorkerBindingCompiled,
+    };
 
     use golem_common::model::GatewayBindingType;
 
-    pub(crate) fn worker_binding_to_gateway_binding_compiled_proto(
-        worker_binding: WorkerBindingCompiled,
+    pub(crate) fn file_server_binding_to_gateway_binding_compiled_proto(
+        worker_binding: FileServerBindingCompiled,
         binding_type: GatewayBindingType,
     ) -> Result<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding, String> {
         let component = Some(worker_binding.component_id.into());
+        let (idempotency_key, compiled_idempotency_key_expr, idempotency_key_rib_input) =
+            match worker_binding.idempotency_key_compiled {
+                Some(x) => (
+                    Some(x.idempotency_key.into()),
+                    Some(x.compiled_idempotency_key.try_into()?),
+                    Some(x.rib_input.into()),
+                ),
+                None => (None, None, None),
+            };
+
         let worker_name = worker_binding
             .worker_name_compiled
             .clone()
@@ -346,6 +359,75 @@ mod internal {
         let worker_name_rib_input = worker_binding
             .worker_name_compiled
             .map(|w| w.rib_input_type_info.into());
+
+        let (invocation_context, compiled_invocation_context_expr, invocation_context_rib_input) =
+            match worker_binding.invocation_context_compiled {
+                Some(x) => (
+                    Some(x.invocation_context.into()),
+                    Some(x.compiled_invocation_context.try_into()?),
+                    Some(x.rib_input.into()),
+                ),
+                None => (None, None, None),
+            };
+
+        let response = Some(
+            worker_binding
+                .response_compiled
+                .response_mapping_expr
+                .into(),
+        );
+        let compiled_response_expr = Some(
+            worker_binding
+                .response_compiled
+                .response_mapping_compiled
+                .try_into()?,
+        );
+        let response_rib_input = Some(worker_binding.response_compiled.rib_input.into());
+        let response_rib_output = worker_binding
+            .response_compiled
+            .rib_output
+            .map(golem_api_grpc::proto::golem::rib::RibOutputType::from);
+
+        let worker_functions_in_response = worker_binding
+            .response_compiled
+            .worker_calls
+            .map(|x| x.into());
+
+        let binding_type = match binding_type {
+            GatewayBindingType::Default => 0,
+            GatewayBindingType::FileServer => 1,
+            GatewayBindingType::CorsPreflight => 2,
+            GatewayBindingType::HttpHandler => 4,
+        };
+
+        Ok(
+            golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
+                component,
+                worker_name,
+                compiled_worker_name_expr,
+                worker_name_rib_input,
+                idempotency_key,
+                compiled_idempotency_key_expr,
+                idempotency_key_rib_input,
+                response,
+                compiled_response_expr,
+                response_rib_input,
+                worker_functions_in_response,
+                binding_type: Some(binding_type),
+                static_binding: None,
+                response_rib_output,
+                invocation_context,
+                compiled_invocation_context_expr,
+                invocation_context_rib_input,
+            },
+        )
+    }
+
+    pub(crate) fn worker_binding_to_gateway_binding_compiled_proto(
+        worker_binding: WorkerBindingCompiled,
+        binding_type: GatewayBindingType,
+    ) -> Result<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding, String> {
+        let component = Some(worker_binding.component_id.into());
         let (idempotency_key, compiled_idempotency_key_expr, idempotency_key_rib_input) =
             match worker_binding.idempotency_key_compiled {
                 Some(x) => (
@@ -399,9 +481,9 @@ mod internal {
         Ok(
             golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
                 component,
-                worker_name,
-                compiled_worker_name_expr,
-                worker_name_rib_input,
+                worker_name: None,
+                compiled_worker_name_expr: None,
+                worker_name_rib_input: None,
                 idempotency_key,
                 compiled_idempotency_key_expr,
                 idempotency_key_rib_input,

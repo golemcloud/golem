@@ -37,7 +37,7 @@ mod worker_binding;
 #[derive(Debug, Clone, PartialEq)]
 pub enum GatewayBinding {
     Default(WorkerBinding),
-    FileServer(WorkerBinding),
+    FileServer(FileServerBinding),
     Static(StaticBinding),
     HttpHandler(HttpHandlerBinding),
 }
@@ -91,7 +91,7 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
                 golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
                     binding_type: Some(GatewayBindingType::Default.into()),
                     component: Some(worker_binding.component_id.into()),
-                    worker_name: worker_binding.worker_name.map(|x| x.into()),
+                    worker_name: None,
                     response: Some(worker_binding.response_mapping.0.into()),
                     idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
                     static_binding: None,
@@ -169,7 +169,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 let component_id = VersionedComponentId::try_from(
                     value.component.ok_or("Missing component id".to_string())?,
                 )?;
-                let worker_name = value.worker_name.map(Expr::try_from).transpose()?;
                 let idempotency_key = value.idempotency_key.map(Expr::try_from).transpose()?;
                 let invocation_context =
                     value.invocation_context.map(Expr::try_from).transpose()?;
@@ -178,7 +177,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
 
                 Ok(GatewayBinding::Default(WorkerBinding {
                     component_id,
-                    worker_name,
                     idempotency_key,
                     response_mapping: ResponseMapping(response),
                     invocation_context,
@@ -193,7 +191,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 let response_proto = value.response.ok_or("Missing response field")?;
                 let response = Expr::try_from(response_proto)?;
 
-                Ok(GatewayBinding::FileServer(WorkerBinding {
+                Ok(GatewayBinding::FileServer(FileServerBinding {
                     component_id,
                     worker_name,
                     idempotency_key,

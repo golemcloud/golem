@@ -26,15 +26,16 @@ use rib::{
 use std::fmt::Display;
 use std::sync::Arc;
 
-// A wrapper service over original RibInterpreter concerning
-// the details of the worker service.
+// A wrapper service over original RibInterpreter
+// Note that to execute a RibByteCode, there is no need to provide
+// worker_name and component details from outside, as these are already
+// encoded in the RibByteCode itself.
+// This implies file-server handlers and http-handlers will only execute
+// rib that's devoid of any instantiation of worker or worker function invocation
 #[async_trait]
 pub trait WorkerServiceRibInterpreter<Namespace> {
-    // Evaluate a Rib byte against a specific worker.
-    // RibByteCode may have actual function calls.
     async fn evaluate(
         &self,
-        worker_name: Option<String>,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
         rib_byte_code: RibByteCode,
@@ -79,13 +80,11 @@ impl<Namespace: Clone + Send + Sync + 'static> DefaultRibInterpreter<Namespace> 
 
     pub fn rib_invoke(
         &self,
-        global_worker_name: Option<String>,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
         namespace: Namespace,
     ) -> Arc<dyn RibFunctionInvoke + Sync + Send> {
         Arc::new(WorkerServiceRibInvoke {
-            global_worker_name,
             idempotency_key,
             invocation_context,
             executor: self.worker_request_executor.clone(),
@@ -100,7 +99,6 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
 {
     async fn evaluate(
         &self,
-        worker_name: Option<String>,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
         expr: RibByteCode,
@@ -108,7 +106,7 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
         namespace: Namespace,
     ) -> Result<RibResult, RibRuntimeError> {
         let worker_invoke_function =
-            self.rib_invoke(worker_name, idempotency_key, invocation_context, namespace);
+            self.rib_invoke(idempotency_key, invocation_context, namespace);
 
         let result = rib::interpret(expr, rib_input, worker_invoke_function)
             .await
@@ -118,11 +116,6 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
 }
 
 struct WorkerServiceRibInvoke<Namespace> {
-    // For backward compatibility.
-    // If there is no worker-name in the Rib (which is EvaluatedWorkerName),
-    // then it tries to fall back to this global_worker_name that came in as
-    // part of the API definition.
-    global_worker_name: Option<String>,
     idempotency_key: Option<IdempotencyKey>,
     invocation_context: InvocationContextStack,
     executor: Arc<dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send>,
@@ -141,8 +134,7 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
         function_name: EvaluatedFqFn,
         parameters: EvaluatedFnArgs,
     ) -> RibFunctionInvokeResult {
-        let worker_name: Option<String> =
-            worker_name.map(|x| x.0).or(self.global_worker_name.clone());
+        let worker_name: Option<String> = worker_name.map(|x| x.0);
         let idempotency_key = self.idempotency_key.clone();
         let invocation_context = self.invocation_context.clone();
         let executor = self.executor.clone();
