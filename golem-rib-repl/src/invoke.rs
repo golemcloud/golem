@@ -64,7 +64,7 @@ impl ReplRibFunctionInvoke {
 impl RibFunctionInvoke for ReplRibFunctionInvoke {
     async fn invoke(
         &self,
-        component_dependency: &ComponentDependencyKey,
+        component_dependency: ComponentDependencyKey,
         instruction_id: &InstructionId,
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,

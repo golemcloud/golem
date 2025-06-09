@@ -15,7 +15,7 @@
 use crate::dependency_manager::RibComponentMetadata;
 use crate::{RawRibScript, WorkerFunctionInvoke};
 use golem_wasm_rpc::ValueAndType;
-use rib::{InstructionId, RibCompiler, RibFunctionInvoke};
+use rib::{InstructionId, RibCompiler};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
@@ -23,7 +23,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 pub struct ReplState {
     // https://github.com/golemcloud/golem/issues/1608 will avoid having to keep
     // dependency separately in the ReplState
-    dependency: RibComponentMetadata,
+    _dependency: RibComponentMetadata,
     rib_script: RwLock<RawRibScript>,
     worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
     invocation_results: InvocationResultCache,
@@ -91,10 +91,6 @@ impl ReplState {
         self.rib_script.write().unwrap().pop();
     }
 
-    pub fn dependency(&self) -> &RibComponentMetadata {
-        &self.dependency
-    }
-
     pub fn new(
         dependency: RibComponentMetadata,
         worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
@@ -102,7 +98,7 @@ impl ReplState {
         history_file: PathBuf,
     ) -> Self {
         Self {
-            dependency,
+            _dependency: dependency,
             rib_script: RwLock::new(RawRibScript::default()),
             worker_function_invoke,
             invocation_results: InvocationResultCache {

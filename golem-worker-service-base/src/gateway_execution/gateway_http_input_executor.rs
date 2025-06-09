@@ -463,7 +463,6 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
         self.evaluator
             .evaluate(
                 worker_name,
-                component_id,
                 idempotency_key,
                 invocation_context,
                 response_mapping_compiled,
