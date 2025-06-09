@@ -19,7 +19,10 @@ use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::ValueAndType;
-use rib::{ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibByteCode, RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult};
+use rib::{
+    ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId,
+    RibByteCode, RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult,
+};
 use std::fmt::Display;
 use std::sync::Arc;
 
@@ -104,12 +107,8 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
         rib_input: RibInput,
         namespace: Namespace,
     ) -> Result<RibResult, RibRuntimeError> {
-        let worker_invoke_function = self.rib_invoke(
-            worker_name,
-            idempotency_key,
-            invocation_context,
-            namespace,
-        );
+        let worker_invoke_function =
+            self.rib_invoke(worker_name, idempotency_key, invocation_context, namespace);
 
         let result = rib::interpret(expr, rib_input, worker_invoke_function)
             .await
