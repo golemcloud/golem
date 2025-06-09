@@ -30,7 +30,7 @@ use super::HttpHandlerBinding;
 pub enum GatewayBindingCompiled {
     Worker(WorkerBindingCompiled),
     Static(StaticBinding),
-    FileServer(FileServerBindingCompiled),
+    FileServer(Box<FileServerBindingCompiled>),
     HttpHandler(HttpHandlerBindingCompiled),
 }
 
@@ -64,7 +64,7 @@ impl From<GatewayBindingCompiled> for GatewayBinding {
             GatewayBindingCompiled::FileServer(value) => {
                 let file_server_binding_compiled = value.clone();
 
-                let worker_binding = FileServerBinding::from(file_server_binding_compiled);
+                let worker_binding = FileServerBinding::from(*file_server_binding_compiled);
 
                 GatewayBinding::FileServer(worker_binding)
             }
@@ -94,7 +94,7 @@ impl TryFrom<GatewayBindingCompiled>
 
             GatewayBindingCompiled::FileServer(file_server_binding_compiled) => Ok(
                 internal::file_server_binding_to_gateway_binding_compiled_proto(
-                    file_server_binding_compiled,
+                    *file_server_binding_compiled,
                     GatewayBindingType::FileServer,
                 )?,
             ),
@@ -254,7 +254,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         invocation_context_compiled,
                     }))
                 } else {
-                    Ok(GatewayBindingCompiled::FileServer(
+                    Ok(GatewayBindingCompiled::FileServer(Box::new(
                         FileServerBindingCompiled {
                             component_id,
                             worker_name_compiled,
@@ -262,7 +262,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                             response_compiled,
                             invocation_context_compiled,
                         },
-                    ))
+                    )))
                 }
             }
             ProtoGatewayBindingType::HttpHandler => {

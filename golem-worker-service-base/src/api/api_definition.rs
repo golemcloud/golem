@@ -555,7 +555,7 @@ impl GatewayBindingResponseData {
         match gateway_binding {
             GatewayBindingCompiled::FileServer(file_server_binding_compiled) => {
                 Self::from_file_server_binding_compiled(
-                    file_server_binding_compiled,
+                    *file_server_binding_compiled,
                     GatewayBindingType::FileServer,
                     conversion_ctx,
                 )

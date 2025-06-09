@@ -642,7 +642,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
                     .handle_file_server_binding(
                         namespace,
                         &mut rich_request,
-                        resolved_file_server_binding,
+                        *resolved_file_server_binding,
                     )
                     .await;
 

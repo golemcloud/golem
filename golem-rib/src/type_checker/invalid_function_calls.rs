@@ -21,21 +21,19 @@ pub fn check_invalid_function_calls(expr: &mut Expr) -> Result<(), FunctionCallE
 
     while let Some(expr) = visitor.pop_front() {
         if let Expr::Call { call_type, .. } = &expr {
-            match call_type {
-                CallType::Function {
-                    component_info,
-                    function_name,
-                    ..
-                } => {
-                    if component_info.is_none() {
-                        return Err(FunctionCallError::InvalidFunctionCall {
-                            function_name: function_name.function.name_pretty().to_string(),
-                            expr: expr.clone(),
-                            message: "function call is not associated with a wasm component. make sure component functions are called after creating an instance using `instance(<optional-worker-name>)`".to_string(),
-                        });
-                    }
+            if let CallType::Function {
+                component_info,
+                function_name,
+                ..
+            } = call_type
+            {
+                if component_info.is_none() {
+                    return Err(FunctionCallError::InvalidFunctionCall {
+                        function_name: function_name.function.name_pretty().to_string(),
+                        expr: expr.clone(),
+                        message: "function call is not associated with a wasm component. make sure component functions are called after creating an instance using `instance(<optional-worker-name>)`".to_string(),
+                    });
                 }
-                _ => {}
             }
         }
     }

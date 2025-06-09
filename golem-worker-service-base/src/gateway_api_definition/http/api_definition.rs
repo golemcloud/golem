@@ -869,7 +869,7 @@ impl CompiledRoute {
                 Ok(CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
-                    binding: GatewayBindingCompiled::FileServer(binding),
+                    binding: GatewayBindingCompiled::FileServer(Box::new(binding)),
                     middlewares: route.middlewares.clone(),
                 })
             }

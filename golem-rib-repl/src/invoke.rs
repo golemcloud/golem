@@ -77,7 +77,7 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
                     .repl_state
                     .worker_function_invoke()
                     .invoke(
-                        component_dependency.component_id.clone(),
+                        component_dependency.component_id,
                         component_dependency.component_name.as_str(),
                         worker_name.map(|x| x.0),
                         function_name.0.as_str(),
