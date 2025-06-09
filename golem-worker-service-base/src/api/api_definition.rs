@@ -563,7 +563,7 @@ impl GatewayBindingResponseData {
             }
             GatewayBindingCompiled::Worker(worker_binding) => {
                 Self::from_worker_binding_compiled(
-                    worker_binding,
+                    *worker_binding,
                     GatewayBindingType::Default,
                     conversion_ctx,
                 )

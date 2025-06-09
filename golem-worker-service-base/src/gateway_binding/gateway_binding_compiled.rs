@@ -28,7 +28,7 @@ use super::HttpHandlerBinding;
 // get replaced with their compiled form - RibByteCode.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GatewayBindingCompiled {
-    Worker(WorkerBindingCompiled),
+    Worker(Box<WorkerBindingCompiled>),
     Static(StaticBinding),
     FileServer(Box<FileServerBindingCompiled>),
     HttpHandler(HttpHandlerBindingCompiled),
@@ -57,7 +57,7 @@ impl From<GatewayBindingCompiled> for GatewayBinding {
             GatewayBindingCompiled::Worker(value) => {
                 let worker_binding = value.clone();
 
-                let worker_binding = WorkerBinding::from(worker_binding);
+                let worker_binding = WorkerBinding::from(*worker_binding);
 
                 GatewayBinding::Default(worker_binding)
             }
@@ -87,7 +87,7 @@ impl TryFrom<GatewayBindingCompiled>
         match value {
             GatewayBindingCompiled::Worker(worker_binding_compiled) => {
                 Ok(internal::worker_binding_to_gateway_binding_compiled_proto(
-                    worker_binding_compiled,
+                    *worker_binding_compiled,
                     GatewayBindingType::Default,
                 )?)
             }
@@ -247,12 +247,12 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                     .unwrap_or(ProtoGatewayBindingType::Default.into());
 
                 if binding_type == 0 {
-                    Ok(GatewayBindingCompiled::Worker(WorkerBindingCompiled {
+                    Ok(GatewayBindingCompiled::Worker(Box::new(WorkerBindingCompiled {
                         component_id,
                         idempotency_key_compiled,
                         response_compiled,
                         invocation_context_compiled,
-                    }))
+                    })))
                 } else {
                     Ok(GatewayBindingCompiled::FileServer(Box::new(
                         FileServerBindingCompiled {

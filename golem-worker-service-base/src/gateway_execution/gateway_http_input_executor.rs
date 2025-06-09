@@ -611,7 +611,7 @@ impl<Namespace: Send + Sync + Clone + 'static> GatewayHttpInputExecutor
 
             GatewayBindingCompiled::Worker(resolved_worker_binding) => {
                 let result = self
-                    .handle_worker_binding(namespace, &mut rich_request, resolved_worker_binding)
+                    .handle_worker_binding(namespace, &mut rich_request, *resolved_worker_binding)
                     .await;
 
                 let response = result

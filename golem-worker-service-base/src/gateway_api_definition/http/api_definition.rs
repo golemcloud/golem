@@ -833,7 +833,7 @@ impl CompiledRoute {
                 Ok(CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
-                    binding: GatewayBindingCompiled::Worker(binding),
+                    binding: GatewayBindingCompiled::Worker(Box::new(binding)),
                     middlewares: route.middlewares.clone(),
                 })
             }
