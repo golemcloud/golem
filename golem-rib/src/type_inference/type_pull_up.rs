@@ -799,29 +799,32 @@ mod type_pull_up_tests {
                 None,
             ),
             Expr::call(
-                CallType::function_without_worker(DynamicParsedFunctionName {
-                    site: PackagedInterface {
-                        namespace: "golem".to_string(),
-                        package: "it".to_string(),
-                        interface: "api".to_string(),
-                        version: None,
+                CallType::function_without_worker(
+                    DynamicParsedFunctionName {
+                        site: PackagedInterface {
+                            namespace: "golem".to_string(),
+                            package: "it".to_string(),
+                            interface: "api".to_string(),
+                            version: None,
+                        },
+                        function: IndexedResourceMethod {
+                            resource: "cart".to_string(),
+                            resource_params: vec![Expr::select_field(
+                                Expr::identifier_local("input", 0, None).with_inferred_type(
+                                    InferredType::record(vec![
+                                        ("foo".to_string(), InferredType::string()),
+                                        ("bar".to_string(), InferredType::string()),
+                                    ]),
+                                ),
+                                "foo",
+                                None,
+                            )
+                            .with_inferred_type(InferredType::string())],
+                            method: "checkout".to_string(),
+                        },
                     },
-                    function: IndexedResourceMethod {
-                        resource: "cart".to_string(),
-                        resource_params: vec![Expr::select_field(
-                            Expr::identifier_local("input", 0, None).with_inferred_type(
-                                InferredType::record(vec![
-                                    ("foo".to_string(), InferredType::string()),
-                                    ("bar".to_string(), InferredType::string()),
-                                ]),
-                            ),
-                            "foo",
-                            None,
-                        )
-                        .with_inferred_type(InferredType::string())],
-                        method: "checkout".to_string(),
-                    },
-                }),
+                    None,
+                ),
                 None,
                 vec![],
             ),

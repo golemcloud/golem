@@ -15,108 +15,108 @@ use rib::{
 #[test]
 async fn test_rib_regression() {
     let expr = r#"
-
+              let worker = instance();
               let str1: string = request.body.name;
               let str2: string = request.headers.name;
               let str3: string = request.path.name;
 
-              let unused = function-unit-response(str1);
+              let unused = worker.function-unit-response(str1);
 
-              let str_output = function-no-arg();
+              let str_output = worker.function-no-arg();
 
-              let unused = function-no-arg-unit();
+              let unused = worker.function-no-arg-unit();
 
-              let str_response = function-str-response(str_output);
+              let str_response = worker.function-str-response(str_output);
 
-              let number_response = function-number-response(str1);
+              let number_response = worker.function-number-response(str1);
 
-              let some_str_response = function-some-str-response(str2);
+              let some_str_response = worker.function-some-str-response(str2);
 
-              let none_str_response = function-none-str-response(str2);
+              let none_str_response = worker.function-none-str-response(str2);
 
-              let some_number_response = function-some-number-response(str1);
+              let some_number_response = worker.function-some-number-response(str1);
 
-              let none_number_response = function-none-number-response(str1);
+              let none_number_response = worker.function-none-number-response(str1);
 
-              let some_option_response = function-some-option-response(str1);
+              let some_option_response = worker.function-some-option-response(str1);
 
-              let none_option_response = function-none-option-response(str1);
+              let none_option_response = worker.function-none-option-response(str1);
 
-              let some_variant_response = function-some-variant-response(str1);
+              let some_variant_response = worker.function-some-variant-response(str1);
 
-              let none_variant_response = function-none-variant-response(str1);
+              let none_variant_response = worker.function-none-variant-response(str1);
 
-              let some_enum_response = function-some-enum-response(str1);
+              let some_enum_response = worker.function-some-enum-response(str1);
 
-              let none_enum_response = function-none-enum-response(str1);
+              let none_enum_response = worker.function-none-enum-response(str1);
 
-              let some_tuple_response = function-some-tuple-response(str1);
+              let some_tuple_response = worker.function-some-tuple-response(str1);
 
-              let none_tuple_response = function-none-tuple-response(str1);
+              let none_tuple_response = worker.function-none-tuple-response(str1);
 
-              let some_record_response = function-some-record-response(str1);
+              let some_record_response = worker.function-some-record-response(str1);
 
-              let none_record_response = function-none-record-response(str1);
+              let none_record_response = worker.function-none-record-response(str1);
 
-              let some_list_response = function-some-list-response(str1);
+              let some_list_response = worker.function-some-list-response(str1);
 
-              let none_list_response = function-none-list-response(str1);
+              let none_list_response = worker.function-none-list-response(str1);
 
-              let list_number_response = function-list-number-response(str1);
+              let list_number_response = worker.function-list-number-response(str1);
 
-              let list_str_response = function-list-str-response(str1);
+              let list_str_response = worker.function-list-str-response(str1);
 
-              let list_option_response = function-list-option-response(str1);
+              let list_option_response = worker.function-list-option-response(str1);
 
-              let list_list_response = function-list-list-response(str1);
+              let list_list_response = worker.function-list-list-response(str1);
 
-              let list_variant_response = function-list-variant-response(str1);
+              let list_variant_response = worker.function-list-variant-response(str1);
 
-              let list_enum_response = function-list-enum-response(str1);
+              let list_enum_response = worker.function-list-enum-response(str1);
 
-              let list_tuple_response = function-list-tuple-response(str1);
+              let list_tuple_response = worker.function-list-tuple-response(str1);
 
-              let list_record_response = function-list-record-response(str1);
+              let list_record_response = worker.function-list-record-response(str1);
 
-              let ok_of_str_response = function-ok-str-response(str1);
+              let ok_of_str_response = worker.function-ok-str-response(str1);
 
-              let err_of_str_response = function-err-str-response(str1);
+              let err_of_str_response = worker.function-err-str-response(str1);
 
-              let ok_of_number_response = function-ok-number-response(str1);
+              let ok_of_number_response = worker.function-ok-number-response(str1);
 
-              let err_of_number_response = function-err-number-response(str1);
+              let err_of_number_response = worker.function-err-number-response(str1);
 
-              let ok_of_variant_response = function-ok-variant-response(str1);
+              let ok_of_variant_response = worker.function-ok-variant-response(str1);
 
-              let err_of_variant_response = function-err-variant-response(str1);
+              let err_of_variant_response = worker.function-err-variant-response(str1);
 
-              let ok_of_enum_response = function-ok-enum-response(str1);
+              let ok_of_enum_response = worker.function-ok-enum-response(str1);
 
-              let err_of_enum_response = function-err-enum-response(str1);
+              let err_of_enum_response = worker.function-err-enum-response(str1);
 
-              let ok_of_tuple_response = function-ok-tuple-response(str1);
+              let ok_of_tuple_response = worker.function-ok-tuple-response(str1);
 
-              let err_of_tuple_response = function-err-tuple-response(str1);
+              let err_of_tuple_response = worker.function-err-tuple-response(str1);
 
-              let ok_of_flag_response = function-ok-flag-response(str1);
+              let ok_of_flag_response = worker.function-ok-flag-response(str1);
 
-              let err_of_flag_response = function-err-flag-response(str1);
+              let err_of_flag_response = worker.function-err-flag-response(str1);
 
-              let ok_of_record_response = function-ok-record-response(str1);
+              let ok_of_record_response = worker.function-ok-record-response(str1);
 
-              let err_of_record_response = function-err-record-response(str1);
+              let err_of_record_response = worker.function-err-record-response(str1);
 
-              let ok_of_list_response = function-ok-list-response(str1);
+              let ok_of_list_response = worker.function-ok-list-response(str1);
 
-              let err_of_list_response = function-err-list-response(str1);
+              let err_of_list_response = worker.function-err-list-response(str1);
 
-              let tuple_response = function-tuple-response(str1);
+              let tuple_response = worker.function-tuple-response(str1);
 
-              let enum_response = function-enum-response(str1);
+              let enum_response = worker.function-enum-response(str1);
 
-              let flag_response = function-flag-response(str1);
+              let flag_response = worker.function-flag-response(str1);
 
-              let variant_response = function-variant-response(str1);
+              let variant_response = worker.function-variant-response(str1);
 
               let str_response_processed = str_response == "foo";
 

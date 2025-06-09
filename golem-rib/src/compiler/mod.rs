@@ -413,7 +413,8 @@ mod compiler_error_tests {
         #[test]
         fn test_invalid_function_call1() {
             let expr = r#"
-          let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}});
+          let worker = instance("my-worker");
+          let result = worker.foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}});
           result
         "#;
 
@@ -425,7 +426,7 @@ mod compiler_error_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 93
+            error in the following rib found at line 3, column 100
             `"foo"`
             cause: type mismatch. expected u64, found string
             the expression `"foo"` is inferred as `string` by default
@@ -437,7 +438,8 @@ mod compiler_error_tests {
         #[test]
         fn test_invalid_function_call2() {
             let expr = r#"
-          let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: ["foo", "bar"], d: {da: 4}});
+          let worker = instance("my-worker");
+          let result = worker.foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: ["foo", "bar"], d: {da: 4}});
           result
         "#;
 
@@ -449,7 +451,7 @@ mod compiler_error_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 100
+            error in the following rib found at line 3, column 107
             `"foo"`
             cause: type mismatch. expected s32, found string
             the expression `"foo"` is inferred as `string` by default
@@ -461,7 +463,8 @@ mod compiler_error_tests {
         #[test]
         fn test_invalid_function_call3() {
             let expr = r#"
-          let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: "foo"}});
+          let worker = instance();
+          let result = worker.foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: 2, c: [1, 2], d: {da: "foo"}});
           result
         "#;
 
@@ -473,7 +476,7 @@ mod compiler_error_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 115
+            error in the following rib found at line 3, column 122
             `"foo"`
             cause: type mismatch. expected s32, found string
             the expression `"foo"` is inferred as `string` by default
@@ -536,7 +539,8 @@ mod compiler_error_tests {
         #[test]
         fn test_invalid_function_call6() {
             let expr = r#"
-          let result = foo({a: {aa: "foo", ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}});
+          let worker = instance("my-worker");
+          let result = worker.foo({a: {aa: "foo", ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}});
           result
         "#;
 
@@ -548,7 +552,7 @@ mod compiler_error_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 37
+            error in the following rib found at line 3, column 44
             `"foo"`
             cause: type mismatch. expected s32, found string
             the expression `"foo"` is inferred as `string` by default
@@ -560,7 +564,8 @@ mod compiler_error_tests {
         #[test]
         fn test_invalid_function_call7() {
             let expr = r#"
-          let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}});
+          let worker = instance();
+          let result = worker.foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: "1"}, ae: (1, "foo")}, b: 3, c: [1, 2, 3], d: {da: 4}});
           result
         "#;
 
@@ -572,7 +577,7 @@ mod compiler_error_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 69
+            error in the following rib found at line 3, column 76
             `"1"`
             cause: type mismatch. expected s32, found string
             the expression `"1"` is inferred as `string` by default
@@ -584,8 +589,9 @@ mod compiler_error_tests {
         #[test]
         fn test_invalid_function_call8() {
             let expr = r#"
+            let worker = instance("my-worker");
             let bar = {a: {ac: 1}};
-            foo(bar)
+            worker.foo(bar)
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
@@ -596,7 +602,7 @@ mod compiler_error_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 32
+            error in the following rib found at line 3, column 32
             `1`
             cause: type mismatch. expected list<s32>, found s32
             the expression `1` is inferred as `s32` by default
@@ -608,7 +614,8 @@ mod compiler_error_tests {
         #[test]
         fn test_invalid_function_call9() {
             let expr = r#"
-          let result = foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3], d: {da: 4}});
+          let worker = instance("my-worker");
+          let result = worker.foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, 2)}, b: 3, c: [1, 2, 3], d: {da: 4}});
           result
         "#;
 
@@ -620,7 +627,7 @@ mod compiler_error_tests {
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
-            error in the following rib found at line 2, column 81
+            error in the following rib found at line 3, column 88
             `2`
             cause: type mismatch. expected string, found s32
             the expression `2` is inferred as `s32` by default

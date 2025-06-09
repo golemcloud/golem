@@ -1982,10 +1982,11 @@ mod tests {
         let expr = r#"
           let x = x;
           let y = x;
-          let result1 = add-enum(x, y);
+          let a = instance();
+          let result1 = a.add-enum(x, y);
           let validate = validate;
           let validate2 = validate;
-          let result2 = add-variant(validate, validate2);
+          let result2 = a.add-variant(validate, validate2);
           {res1: result1, res2: result2}
         "#;
 
@@ -2034,10 +2035,11 @@ mod tests {
         let expr = r#"
           let x = 1;
           let y = 2;
-          let result1 = add-u32(x, y);
+          let a = instance();
+          let result1 = a.add-u32(x, y);
           let process-user = 3;
           let validate = 4;
-          let result2 = add-u64(process-user, validate);
+          let result2 = a.add-u64(process-user, validate);
           {res1: result1, res2: result2}
         "#;
 
@@ -2491,10 +2493,10 @@ mod tests {
         let analysed_exports = test_utils::get_component_metadata("foo", vec![tuple], Some(str()));
 
         let expr = r#"
-
+           let worker = instance();
            let record = { request : { path : { user : "jak" } }, y : "bar" };
            let input = (1, ok(100), "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
-           foo(input);
+           worker.foo(input);
            match input {
              (n1, err(x1), txt, rec, process-user(x), register-user(n), validate, dev, prod, test) =>  "Invalid",
              (n1, ok(x2), txt, rec, process-user(x), register-user(n), validate, prod, dev, test) =>  "foo ${x2} ${n1} ${txt} ${rec.request.path.user} ${validate} ${prod} ${dev} ${test}"
@@ -2523,10 +2525,10 @@ mod tests {
             test_utils::get_component_metadata("my-worker-function", vec![tuple], Some(str()));
 
         let expr = r#"
-
+           let worker = instance();
            let record = { request : { path : { user : "jak" } }, y : "baz" };
            let input = (1, ok(1), "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
-           my-worker-function(input);
+           worker.my-worker-function(input);
            match input {
              (n1, ok(x), txt, rec, _, _, _, _, prod, _) =>  "prod ${n1} ${txt} ${rec.request.path.user} ${rec.y}",
              (n1, ok(x), txt, rec, _, _, _, _, dev, _) =>   "dev ${n1} ${txt} ${rec.request.path.user} ${rec.y}"
@@ -2560,8 +2562,9 @@ mod tests {
         );
 
         let expr = r#"
+           let worker = instance();
            let input = { request : { path : { user : "jak" } }, y : "baz" };
-           let result = my-worker-function(input);
+           let result = worker.my-worker-function(input);
            match result {
              ok(result) => { body: result, status: 200 },
              err(result) => { status: 400, body: 400 }
@@ -2597,9 +2600,9 @@ mod tests {
         );
 
         let expr = r#"
-
            let input = { request : { path : { user : "jak" } }, y : "baz" };
-           let result = my-worker-function(input);
+           let worker = instance();
+           let result = worker.my-worker-function(input);
            match result {
              ok(res) => ("${res}", "foo"),
              err(msg) => (msg, "bar")
@@ -2620,7 +2623,9 @@ mod tests {
     async fn test_interpreter_with_indexed_resource_drop() {
         let expr = r#"
            let user_id = "user";
-           golem:it/api.{cart(user_id).drop}();
+           let worker = instance();
+           let cart = worker.cart(user_id);
+           cart.drop();
            "success"
         "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -2640,7 +2645,9 @@ mod tests {
     async fn test_interpreter_with_indexed_resource_checkout() {
         let expr = r#"
            let user_id = "foo";
-           let result = golem:it/api.{cart(user_id).checkout}();
+           let worker = instance();
+           let cart = worker.cart(user_id);
+           let result = cart.checkout();
            result
         "#;
 
@@ -2675,7 +2682,9 @@ mod tests {
     async fn test_interpreter_with_indexed_resource_get_cart_contents() {
         let expr = r#"
            let user_id = "bar";
-           let result = golem:it/api.{cart(user_id).get-cart-contents}();
+           let worker = instance();
+           let cart = worker.cart(user_id);
+           let result = cart.get-cart-contents();
            result[0].product-id
         "#;
 
@@ -2714,7 +2723,9 @@ mod tests {
            let user_id = "jon";
            let product_id = "mac";
            let quantity = 1032;
-           golem:it/api.{cart(user_id).update-item-quantity}(product_id, quantity);
+           let worker = instance();
+           let cart = worker.cart(user_id);
+           cart.update-item-quantity(product_id, quantity);
            "successfully updated"
         "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -2741,7 +2752,9 @@ mod tests {
         let expr = r#"
            let user_id = "foo";
            let product = { product-id: "mac", name: "macbook", quantity: 1u32, price: 1f32 };
-           golem:it/api.{cart(user_id).add-item}(product);
+           let worker = instance();
+           let cart = worker.cart(user_id);
+           cart.add-item(product);
 
            "successfully added"
         "#;
@@ -2768,9 +2781,11 @@ mod tests {
     #[test]
     async fn test_interpreter_with_resource_add_item() {
         let expr = r#"
+           let worker = instance();
+           let cart = worker.cart();
            let user_id = "foo";
            let product = { product-id: "mac", name: "macbook", quantity: 1u32, price: 1f32 };
-           golem:it/api.{cart.add-item}(product);
+           cart.add-item(product);
 
            "successfully added"
         "#;
@@ -2797,7 +2812,9 @@ mod tests {
     #[test]
     async fn test_interpreter_with_resource_get_cart_contents() {
         let expr = r#"
-           let result = golem:it/api.{cart.get-cart-contents}();
+           let worker = instance();
+           let cart = worker.cart();
+           let result = cart.get-cart-contents();
            result[0].product-id
         "#;
 
@@ -2833,9 +2850,11 @@ mod tests {
     #[test]
     async fn test_interpreter_with_resource_update_item() {
         let expr = r#"
+           let worker = instance();
            let product_id = "mac";
            let quantity = 1032;
-           golem:it/api.{cart.update-item-quantity}(product_id, quantity);
+           let cart = worker.cart();
+           cart.update-item-quantity(product_id, quantity);
            "successfully updated"
         "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -2860,7 +2879,9 @@ mod tests {
     #[test]
     async fn test_interpreter_with_resource_checkout() {
         let expr = r#"
-           let result = golem:it/api.{cart.checkout}();
+           let worker = instance();
+           let cart = worker.cart();
+           let result = cart.checkout();
            result
         "#;
 
@@ -2894,7 +2915,9 @@ mod tests {
     #[test]
     async fn test_interpreter_with_resource_drop() {
         let expr = r#"
-           golem:it/api.{cart.drop}();
+           let worker = instance();
+           let cart = worker.cart();
+           cart.drop();
            "success"
         "#;
         let expr = Expr::from_text(expr).unwrap();

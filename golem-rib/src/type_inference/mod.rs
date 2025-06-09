@@ -74,8 +74,8 @@ mod tests {
     };
     use crate::{
         ArmPattern, ComponentDependencies, DynamicParsedFunctionName,
-        DynamicParsedFunctionReference, Expr, InferredExpr, InferredType, MatchArm, Number,
-        ParsedFunctionSite, TypeName, VariableId,
+        DynamicParsedFunctionReference, Expr, InferredExpr, InferredType, InstanceCreationType,
+        InstanceType, MatchArm, Number, ParsedFunctionSite, TypeName, VariableId,
     };
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
@@ -386,16 +386,23 @@ mod tests {
     fn test_inference_simple_let_binding_type_inference() {
         let rib_expr = r#"
           let x = 1;
-          foo(x)
+          let worker = instance();
+          worker.foo(x)
         "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
+        let component_dependencies = test_utils::get_component_dependencies();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        expr.infer_types(&component_dependencies, &vec![]).unwrap();
 
-        let let_binding = let_binding(
+        let expected_component_dependency = component_dependencies
+            .dependencies
+            .first_key_value()
+            .unwrap()
+            .0;
+
+        let let_variable = let_binding(
             VariableId::local("x", 0),
             None,
             number(
@@ -407,13 +414,33 @@ mod tests {
             ), // The number in let expression is identified to be a U64
         );
 
+        let let_instance = let_binding(
+            VariableId::local("worker", 0),
+            None,
+            Expr::call(
+                CallType::InstanceCreation(InstanceCreationType::Worker {
+                    component_info: None,
+                    worker_name: None,
+                }),
+                None,
+                vec![],
+            )
+            .with_inferred_type(InferredType::instance(InstanceType::Global {
+                worker_name: None,
+                component_dependency: component_dependencies.clone(),
+            })),
+        );
+
         let call_expr = call(
-            CallType::function_without_worker(DynamicParsedFunctionName {
-                site: ParsedFunctionSite::Global,
-                function: DynamicParsedFunctionReference::Function {
-                    function: "foo".to_string(),
+            CallType::function_without_worker(
+                DynamicParsedFunctionName {
+                    site: ParsedFunctionSite::Global,
+                    function: DynamicParsedFunctionReference::Function {
+                        function: "foo".to_string(),
+                    },
                 },
-            }),
+                Some(expected_component_dependency.clone()),
+            ),
             None,
             vec![identifier(
                 VariableId::local("x", 0),
@@ -423,7 +450,10 @@ mod tests {
             InferredType::sequence(vec![]),
         );
 
-        let expected = expr_block(vec![let_binding, call_expr], InferredType::sequence(vec![]));
+        let expected = expr_block(
+            vec![let_variable, let_instance, call_expr],
+            InferredType::sequence(vec![]),
+        );
 
         assert_eq!(expr, expected);
     }
@@ -433,15 +463,16 @@ mod tests {
         let rib_expr = r#"
           let x = 1;
           let y = 2;
-          foo(x);
-          baz(y)
+          let worker = instance();
+          worker.foo(x);
+          worker.baz(y)
         "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
+        let component_dependencies = test_utils::get_component_dependencies();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        expr.infer_types(&component_dependencies, &vec![]).unwrap();
 
         let let_binding1 = let_binding(
             VariableId::local("x", 0),
@@ -467,13 +498,39 @@ mod tests {
             ),
         );
 
+        let let_binding3 = let_binding(
+            VariableId::local("worker", 0),
+            None,
+            Expr::call(
+                CallType::InstanceCreation(InstanceCreationType::Worker {
+                    component_info: None,
+                    worker_name: None,
+                }),
+                None,
+                vec![],
+            )
+            .with_inferred_type(InferredType::instance(InstanceType::Global {
+                worker_name: None,
+                component_dependency: component_dependencies.clone(),
+            })),
+        );
+
+        let expected_component_in_function_call = component_dependencies
+            .dependencies
+            .first_key_value()
+            .unwrap()
+            .0;
+
         let call_expr1 = call(
-            CallType::function_without_worker(DynamicParsedFunctionName {
-                site: ParsedFunctionSite::Global,
-                function: DynamicParsedFunctionReference::Function {
-                    function: "foo".to_string(),
+            CallType::function_without_worker(
+                DynamicParsedFunctionName {
+                    site: ParsedFunctionSite::Global,
+                    function: DynamicParsedFunctionReference::Function {
+                        function: "foo".to_string(),
+                    },
                 },
-            }),
+                Some(expected_component_in_function_call.clone()),
+            ),
             None,
             vec![identifier(
                 VariableId::local("x", 0),
@@ -484,12 +541,15 @@ mod tests {
         );
 
         let call_expr2 = call(
-            CallType::function_without_worker(DynamicParsedFunctionName {
-                site: ParsedFunctionSite::Global,
-                function: DynamicParsedFunctionReference::Function {
-                    function: "baz".to_string(),
+            CallType::function_without_worker(
+                DynamicParsedFunctionName {
+                    site: ParsedFunctionSite::Global,
+                    function: DynamicParsedFunctionReference::Function {
+                        function: "baz".to_string(),
+                    },
                 },
-            }),
+                Some(expected_component_in_function_call.clone()),
+            ),
             None,
             vec![identifier(
                 VariableId::local("y", 0),
@@ -500,7 +560,13 @@ mod tests {
         );
 
         let expected = expr_block(
-            vec![let_binding1, let_binding2, call_expr1, call_expr2],
+            vec![
+                let_binding1,
+                let_binding2,
+                let_binding3,
+                call_expr1,
+                call_expr2,
+            ],
             InferredType::sequence(vec![]),
         );
 
@@ -657,7 +723,8 @@ mod tests {
               let query1 = foo;
               let query2 = bar;
               let query3 = foo-bar;
-              let result = process(query1, query2, query3, user);
+              let worker = instance();
+              let result = worker.process(query1, query2, query3, user);
 
               let x = match result {
                 success => "success ${user}",
@@ -685,7 +752,14 @@ mod tests {
 
         expr.infer_types(&component_dependencies, &vec![]).unwrap();
 
-        let expected = test_utils::expected_expr_for_enum_test();
+        let expected_component_in_function_calls = component_dependencies
+            .dependencies
+            .first_key_value()
+            .unwrap()
+            .0
+            .clone();
+
+        let expected = test_utils::expected_expr_for_enum_test(&component_dependencies);
 
         assert_eq!(expr, expected);
     }
@@ -716,11 +790,12 @@ mod tests {
         );
 
         let expr = r#"
+              let worker = instance();
               let user = request.body.user-id;
               let query1 = foo(user);
               let query2 = bar-baz("jon");
               let query3 = foo-bar;
-              let result = process(query1, query2, query3, user);
+              let result = worker.process(query1, query2, query3, user);
 
               let x = match result {
                 success(number) => "success ${number}",
@@ -1243,15 +1318,16 @@ mod tests {
         let rib_expr = r#"
                 let x = 1;
                 let y = 2;
+                let worker = instance();
 
                 match x {
-                  1 => foo(x),
-                  2 => baz(y)
+                  1 => worker.foo(x),
+                  2 => worker.baz(y)
                 }"#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
+        let component_dependencies = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        expr.infer_types(&component_dependencies, &vec![]).unwrap();
 
         let let_binding1 = let_binding(
             VariableId::local("x", 0),
@@ -1277,6 +1353,29 @@ mod tests {
             ),
         );
 
+        let let_binding3 = let_binding(
+            VariableId::local("worker", 0),
+            None,
+            Expr::call(
+                CallType::InstanceCreation(InstanceCreationType::Worker {
+                    component_info: None,
+                    worker_name: None,
+                }),
+                None,
+                vec![],
+            )
+            .with_inferred_type(InferredType::instance(InstanceType::Global {
+                worker_name: None,
+                component_dependency: component_dependencies.clone(),
+            })),
+        );
+
+        let expected_component_dependency = component_dependencies
+            .dependencies
+            .first_key_value()
+            .unwrap()
+            .0;
+
         let match_expr_expected = pattern_match(
             identifier(VariableId::local("x", 0), None, InferredType::u64()),
             vec![
@@ -1289,12 +1388,15 @@ mod tests {
                         InferredType::u64(),
                     ))),
                     call(
-                        CallType::function_without_worker(DynamicParsedFunctionName {
-                            site: ParsedFunctionSite::Global,
-                            function: DynamicParsedFunctionReference::Function {
-                                function: "foo".to_string(),
+                        CallType::function_without_worker(
+                            DynamicParsedFunctionName {
+                                site: ParsedFunctionSite::Global,
+                                function: DynamicParsedFunctionReference::Function {
+                                    function: "foo".to_string(),
+                                },
                             },
-                        }),
+                            Some(expected_component_dependency.clone()),
+                        ),
                         None,
                         vec![identifier(
                             VariableId::local("x", 0),
@@ -1313,12 +1415,15 @@ mod tests {
                         InferredType::u64(), // because predicate is u64
                     ))),
                     call(
-                        CallType::function_without_worker(DynamicParsedFunctionName {
-                            site: ParsedFunctionSite::Global,
-                            function: DynamicParsedFunctionReference::Function {
-                                function: "baz".to_string(),
+                        CallType::function_without_worker(
+                            DynamicParsedFunctionName {
+                                site: ParsedFunctionSite::Global,
+                                function: DynamicParsedFunctionReference::Function {
+                                    function: "baz".to_string(),
+                                },
                             },
-                        }),
+                            Some(expected_component_dependency.clone()),
+                        ),
                         None,
                         vec![identifier(
                             VariableId::local("y", 0),
@@ -1333,7 +1438,12 @@ mod tests {
         );
 
         let expected = expr_block(
-            vec![let_binding1, let_binding2, match_expr_expected],
+            vec![
+                let_binding1,
+                let_binding2,
+                let_binding3,
+                match_expr_expected,
+            ],
             InferredType::sequence(vec![]),
         );
 
@@ -2042,7 +2152,8 @@ mod tests {
 
         let expr_str = r#"
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
-              let result = foo(x);
+              let worker = instance();
+              let result = worker.foo(x);
               match result {  some(value) => "personal-id", none =>  x.body.titles[1] }
             "#;
 
@@ -2050,7 +2161,14 @@ mod tests {
 
         expr.infer_types(&component_metadata, &vec![]).unwrap();
 
-        let expected = test_utils::expected_expr_for_select_index();
+        let expected_component_in_function_calls = component_metadata
+            .dependencies
+            .first_key_value()
+            .unwrap()
+            .0
+            .clone();
+
+        let expected = test_utils::expected_expr_for_select_index(&component_metadata);
 
         assert_eq!(expr, expected);
     }
@@ -2291,7 +2409,8 @@ mod tests {
         use crate::rib_source_span::SourceSpan;
         use crate::{
             ArmPattern, ComponentDependencies, ComponentDependencyKey, Expr, InferredType,
-            MatchArm, MatchIdentifier, Number, ParsedFunctionSite, VariableId,
+            InstanceCreationType, InstanceType, MatchArm, MatchIdentifier, Number,
+            ParsedFunctionSite, VariableId,
         };
         use bigdecimal::BigDecimal;
         use golem_wasm_ast::analysis::analysed_type::u64;
@@ -2665,7 +2784,17 @@ mod tests {
             .unwrap()
         }
 
-        pub(crate) fn expected_expr_for_enum_test() -> Expr {
+        pub(crate) fn expected_expr_for_enum_test(
+            component_dependencies: &ComponentDependencies,
+        ) -> Expr {
+            let expected_component_in_function_calls = component_dependencies
+                .clone()
+                .dependencies
+                .first_key_value()
+                .unwrap()
+                .0
+                .clone();
+
             expr_block(
                 vec![
                     let_binding(
@@ -2739,15 +2868,36 @@ mod tests {
                         ),
                     ),
                     let_binding(
+                        VariableId::local("worker", 0),
+                        None,
+                        Expr::call(
+                            CallType::InstanceCreation(InstanceCreationType::Worker {
+                                component_info: None,
+                                worker_name: None,
+                            }),
+                            None,
+                            vec![],
+                        )
+                        .with_inferred_type(InferredType::instance(
+                            InstanceType::Global {
+                                worker_name: None,
+                                component_dependency: component_dependencies.clone(),
+                            },
+                        )),
+                    ),
+                    let_binding(
                         VariableId::local("result", 0),
                         None,
                         call(
-                            CallType::function_without_worker(DynamicParsedFunctionName {
-                                site: ParsedFunctionSite::Global,
-                                function: DynamicParsedFunctionReference::Function {
-                                    function: "process".to_string(),
+                            CallType::function_without_worker(
+                                DynamicParsedFunctionName {
+                                    site: ParsedFunctionSite::Global,
+                                    function: DynamicParsedFunctionReference::Function {
+                                        function: "process".to_string(),
+                                    },
                                 },
-                            }),
+                                Some(expected_component_in_function_calls.clone()),
+                            ),
                             None,
                             vec![
                                 identifier(
@@ -3060,7 +3210,17 @@ mod tests {
             )
         }
 
-        pub(crate) fn expected_expr_for_select_index() -> Expr {
+        pub(crate) fn expected_expr_for_select_index(
+            component_dependencies: &ComponentDependencies,
+        ) -> Expr {
+            let expected_component_in_function_calls = component_dependencies
+                .clone()
+                .dependencies
+                .first_key_value()
+                .unwrap()
+                .0
+                .clone();
+
             expr_block(
                 vec![
                     let_binding(
@@ -3237,15 +3397,36 @@ mod tests {
                         ),
                     ),
                     let_binding(
+                        VariableId::local("worker", 0),
+                        None,
+                        Expr::call(
+                            CallType::InstanceCreation(InstanceCreationType::Worker {
+                                component_info: None,
+                                worker_name: None,
+                            }),
+                            None,
+                            vec![],
+                        )
+                        .with_inferred_type(InferredType::instance(
+                            InstanceType::Global {
+                                worker_name: None,
+                                component_dependency: component_dependencies.clone(),
+                            },
+                        )),
+                    ),
+                    let_binding(
                         VariableId::local("result", 0),
                         None,
                         call(
-                            CallType::function_without_worker(DynamicParsedFunctionName {
-                                site: ParsedFunctionSite::Global,
-                                function: DynamicParsedFunctionReference::Function {
-                                    function: "foo".to_string(),
+                            CallType::function_without_worker(
+                                DynamicParsedFunctionName {
+                                    site: ParsedFunctionSite::Global,
+                                    function: DynamicParsedFunctionReference::Function {
+                                        function: "foo".to_string(),
+                                    },
                                 },
-                            }),
+                                Some(expected_component_in_function_calls.clone()),
+                            ),
                             None,
                             vec![identifier(
                                 VariableId::local("x", 0),

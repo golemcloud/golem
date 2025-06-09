@@ -1807,7 +1807,8 @@ mod compiler_tests {
 
             let expr = r#"
                let x = request;
-               my-worker-function(x);
+               let worker = instance();
+               worker.my-worker-function(x);
                match x {
                 "foo"  => "success",
                  _ => "fallback"
@@ -1837,7 +1838,8 @@ mod compiler_tests {
 
             let expr = r#"
                let x = request;
-               my-worker-function(x);
+               let worker = instance();
+               worker.my-worker-function(x);
                match x {
                 1  => "success",
                 0 => "failure"
@@ -1887,7 +1889,8 @@ mod compiler_tests {
             // This means the rib interpreter env has to have a request variable in it,
             // with a value that should be of the type Variant
             let expr = r#"
-               my-worker-function(request);
+               let worker = instance();
+               worker.my-worker-function(request);
                match request {
                  process-user(user) => user,
                  _ => "default"
@@ -1925,7 +1928,8 @@ mod compiler_tests {
             // This means the rib interpreter env has to have a request variable in it,
             // with a value that should be of the type Result
             let expr = r#"
-               my-worker-function(request);
+               let worker = instance();
+               worker.my-worker-function(request);
                match request {
                  ok(x) => "${x}",
                  err(msg) => msg
@@ -1962,7 +1966,8 @@ mod compiler_tests {
             // This means the rib interpreter env has to have a request variable in it,
             // with a value that should be of the type Option
             let expr = r#"
-               my-worker-function(request);
+               let worker = instance();
+               worker.my-worker-function(request);
                match request {
                  some(x) => x,
                  none => "error"
@@ -1999,7 +2004,8 @@ mod compiler_tests {
             // This means the rib interpreter env has to have a request variable in it,
             // with a value that should be of the type Option
             let expr = r#"
-               my-worker-function(request);
+               let worker = instance();
+               worker.my-worker-function(request);
                match request {
                  prod  => "p",
                  dev => "d",
@@ -2046,7 +2052,8 @@ mod compiler_tests {
             // with a value that should be of the type Record
             let expr = r#"
                let x = request;
-               my-worker-function(x);
+               let worker = instance();
+               worker.my-worker-function(x);
 
                let name = x.path.user;
 
@@ -2094,7 +2101,8 @@ mod compiler_tests {
             // implies the type of request is a Tuple.
             let expr = r#"
                let x = request;
-               my-worker-function(x);
+               let worker = instance();
+               worker.my-worker-function(x);
                match x {
                 (_, _, record) =>  record.user,
                  _ => "fallback"
@@ -2130,7 +2138,8 @@ mod compiler_tests {
             // implies the type of request should be a List
             let expr = r#"
                let x = request;
-               my-worker-function(x);
+               let worker = instance();
+               worker.my-worker-function(x);
                match x {
                [a, b, c]  => a,
                  _ => "fallback"
