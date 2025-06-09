@@ -138,7 +138,7 @@ mod tests {
             Route {
                 method,
                 path: crate::gateway_api_definition::http::AllPathPatterns::parse(path).unwrap(),
-                binding: GatewayBinding::Default(crate::gateway_binding::WorkerBinding {
+                binding: GatewayBinding::Default(Box::new(crate::gateway_binding::WorkerBinding {
                     component_id: VersionedComponentId {
                         component_id: ComponentId::new_v4(),
                         version: 1,
@@ -146,7 +146,7 @@ mod tests {
                     idempotency_key: None,
                     response_mapping: ResponseMapping(Expr::literal("sample")),
                     invocation_context: None,
-                }),
+                })),
                 middlewares: None,
             }
         }

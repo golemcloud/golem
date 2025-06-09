@@ -147,7 +147,7 @@ mod tests {
         Route {
             method: MethodPattern::Get,
             path: AllPathPatterns::parse("/test").unwrap(),
-            binding: GatewayBinding::Default(worker_binding.clone()),
+            binding: GatewayBinding::Default(Box::new(worker_binding.clone())),
             middlewares: None,
         }
     }
@@ -166,7 +166,7 @@ mod tests {
         Route {
             method: MethodPattern::Get,
             path: AllPathPatterns::parse("/test").unwrap(),
-            binding: GatewayBinding::Default(worker_binding.clone()),
+            binding: GatewayBinding::Default(Box::new(worker_binding.clone())),
             middlewares: Some(HttpMiddlewares(vec![HttpMiddleware::Cors(cors())])),
         }
     }
