@@ -247,12 +247,14 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                     .unwrap_or(ProtoGatewayBindingType::Default.into());
 
                 if binding_type == 0 {
-                    Ok(GatewayBindingCompiled::Worker(Box::new(WorkerBindingCompiled {
-                        component_id,
-                        idempotency_key_compiled,
-                        response_compiled,
-                        invocation_context_compiled,
-                    })))
+                    Ok(GatewayBindingCompiled::Worker(Box::new(
+                        WorkerBindingCompiled {
+                            component_id,
+                            idempotency_key_compiled,
+                            response_compiled,
+                            invocation_context_compiled,
+                        },
+                    )))
                 } else {
                     Ok(GatewayBindingCompiled::FileServer(Box::new(
                         FileServerBindingCompiled {
