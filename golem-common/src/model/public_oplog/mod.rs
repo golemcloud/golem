@@ -719,8 +719,6 @@ pub enum PublicOplogEntry {
     CommitedRemoteTransaction(RemoteTransactionParameters),
     /// Rolled back transaction operation, indicating that the transaction was rolled back
     RolledBackRemoteTransaction(RemoteTransactionParameters),
-    /// Aborted transaction operation, indicating that the transaction failed
-    AbortedRemoteTransaction(RemoteTransactionParameters),
 }
 
 impl PublicOplogEntry {
@@ -1043,10 +1041,6 @@ impl PublicOplogEntry {
             PublicOplogEntry::RolledBackRemoteTransaction(_params) => {
                 Self::string_match("rolledbackremotetransaction", &[], query_path, query)
                     || Self::string_match("rolled-back-remote-transaction", &[], query_path, query)
-            }
-            PublicOplogEntry::AbortedRemoteTransaction(_params) => {
-                Self::string_match("abortremotetransaction", &[], query_path, query)
-                    || Self::string_match("abort-remote-transaction", &[], query_path, query)
             }
         }
     }

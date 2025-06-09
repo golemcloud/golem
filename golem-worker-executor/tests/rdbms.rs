@@ -36,7 +36,6 @@ use golem_wasm_rpc::{Value, ValueAndType};
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::RdbmsType;
-use rand::RngCore;
 use serde_json::json;
 use tokio::task::JoinSet;
 use try_match::try_match;
@@ -176,6 +175,48 @@ impl RdbmsTest {
             }
         }
         false
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+enum TransactionFailOn {
+    OplogAdd(String, u8),
+    OplogAddAndTx(String, u8, String, u8),
+}
+
+impl TransactionFailOn {
+    fn oplog_add(entry: &str, fail_count: u8) -> Self {
+        Self::OplogAdd(entry.to_string(), fail_count)
+    }
+
+    fn oplog_add_and_tx(
+        oplog_add_entry: &str,
+        oplog_add_fail_count: u8,
+        tx_entry: &str,
+        tx_fail_count: u8,
+    ) -> Self {
+        Self::OplogAddAndTx(
+            oplog_add_entry.to_string(),
+            oplog_add_fail_count,
+            tx_entry.to_string(),
+            tx_fail_count,
+        )
+    }
+
+    fn name(&self) -> String {
+        match self {
+            TransactionFailOn::OplogAdd(e, c) => format!("FailOplogAdd{}On{}", c, e),
+            TransactionFailOn::OplogAddAndTx(oe, oc, te, tc) => {
+                format!("FailOplogAdd{}On{}-FailRdbmsTx{}On{}", oc, oe, tc, te)
+            }
+        }
+    }
+
+    fn fail_count(&self) -> u8 {
+        match self {
+            TransactionFailOn::OplogAdd(_, ec) => *ec,
+            TransactionFailOn::OplogAddAndTx(_, ec, _, _) => *ec,
+        }
     }
 }
 
@@ -444,8 +485,7 @@ async fn postgres_transaction_recovery_test(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
-    fail_on_oplog_entry: &str,
-    fail_count: u8,
+    fail_on: TransactionFailOn,
     transaction_end: TransactionEnd,
     expected_restart: bool,
 ) {
@@ -458,7 +498,7 @@ async fn postgres_transaction_recovery_test(
         &executor,
         &component_id,
         &db_address,
-        format!("-Fail{}On{}", fail_count, fail_on_oplog_entry).as_str(),
+        format!("-{}", fail_on.name()).as_str(),
         1,
     )
     .await;
@@ -466,9 +506,8 @@ async fn postgres_transaction_recovery_test(
     let worker_id = worker_ids[0].clone();
 
     let table_name = format!(
-        "test_users_{}_{}",
-        fail_on_oplog_entry.to_lowercase(),
-        rand::rng().next_u64()
+        "test_users_{}",
+        Uuid::new_v4().to_string().replace("-", "_")
     );
 
     let create_test = RdbmsTest::new(
@@ -576,7 +615,7 @@ async fn postgres_transaction_recovery_test(
         oplog,
         Some(1),
         if expected_restart {
-            Some(fail_count as usize)
+            Some(fail_on.fail_count() as usize)
         } else {
             None
         },
@@ -598,8 +637,7 @@ async fn rdbms_postgres_commit_recovery(
             last_unique_id,
             deps,
             postgres,
-            "CommitedRemoteTransaction",
-            fail_count,
+            TransactionFailOn::oplog_add("CommitedRemoteTransaction", fail_count),
             TransactionEnd::Commit,
             false,
         )
@@ -620,8 +658,7 @@ async fn rdbms_postgres_pre_commit_recovery(
             last_unique_id,
             deps,
             postgres,
-            "PreCommitRemoteTransaction",
-            fail_count,
+            TransactionFailOn::oplog_add("PreCommitRemoteTransaction", fail_count),
             TransactionEnd::Commit,
             true,
         )
@@ -642,8 +679,7 @@ async fn rdbms_postgres_rollback_recovery(
             last_unique_id,
             deps,
             postgres,
-            "RolledBackRemoteTransaction",
-            fail_count,
+            TransactionFailOn::oplog_add("RolledBackRemoteTransaction", fail_count),
             TransactionEnd::Rollback,
             false,
         )
@@ -664,13 +700,36 @@ async fn rdbms_postgres_pre_rollback_recovery(
             last_unique_id,
             deps,
             postgres,
-            "PreRollbackRemoteTransaction",
-            fail_count,
+            TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", fail_count),
             TransactionEnd::Rollback,
             true,
         )
         .await;
     }
+}
+
+#[test]
+#[tracing::instrument]
+async fn rdbms_postgres_rollback_and_tx_status_not_found_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    postgres: &DockerPostgresRdb,
+    _tracing: &Tracing,
+) {
+    postgres_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        postgres,
+        TransactionFailOn::oplog_add_and_tx(
+            "RolledBackRemoteTransaction",
+            1,
+            "GetTransactionStatusNotFound",
+            1,
+        ),
+        TransactionEnd::Rollback,
+        true,
+    )
+    .await;
 }
 
 fn postgres_create_table_statement(table_name: &str) -> String {
@@ -1113,8 +1172,7 @@ async fn mysql_transaction_recovery_test(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
-    fail_on_oplog_entry: &str,
-    fail_count: u8,
+    fail_on: TransactionFailOn,
     transaction_end: TransactionEnd,
     expected_restart: bool,
 ) {
@@ -1127,7 +1185,7 @@ async fn mysql_transaction_recovery_test(
         &executor,
         &component_id,
         &db_address,
-        format!("-Fail{}On{}", fail_count, fail_on_oplog_entry).as_str(),
+        format!("-{}", fail_on.name()).as_str(),
         1,
     )
     .await;
@@ -1135,9 +1193,8 @@ async fn mysql_transaction_recovery_test(
     let worker_id = worker_ids[0].clone();
 
     let table_name = format!(
-        "test_users_{}_{}",
-        fail_on_oplog_entry.to_lowercase(),
-        rand::rng().next_u64()
+        "test_users_{}",
+        Uuid::new_v4().to_string().replace("-", "_")
     );
 
     let create_test = RdbmsTest::new(
@@ -1237,7 +1294,7 @@ async fn mysql_transaction_recovery_test(
         oplog,
         Some(1),
         if expected_restart {
-            Some(fail_count as usize)
+            Some(fail_on.fail_count() as usize)
         } else {
             None
         },
@@ -1259,8 +1316,7 @@ async fn rdbms_mysql_commit_recovery(
             last_unique_id,
             deps,
             mysql,
-            "CommitedRemoteTransaction",
-            fail_count,
+            TransactionFailOn::oplog_add("CommitedRemoteTransaction", fail_count),
             TransactionEnd::Commit,
             false,
         )
@@ -1281,8 +1337,7 @@ async fn rdbms_mysql_pre_commit_recovery(
             last_unique_id,
             deps,
             mysql,
-            "PreCommitRemoteTransaction",
-            fail_count,
+            TransactionFailOn::oplog_add("PreCommitRemoteTransaction", fail_count),
             TransactionEnd::Commit,
             true,
         )
@@ -1303,8 +1358,7 @@ async fn rdbms_mysql_rollback_recovery(
             last_unique_id,
             deps,
             mysql,
-            "RolledBackRemoteTransaction",
-            fail_count,
+            TransactionFailOn::oplog_add("RolledBackRemoteTransaction", fail_count),
             TransactionEnd::Rollback,
             false,
         )
@@ -1325,13 +1379,36 @@ async fn rdbms_mysql_pre_rollback_recovery(
             last_unique_id,
             deps,
             mysql,
-            "PreRollbackRemoteTransaction",
-            fail_count,
+            TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", fail_count),
             TransactionEnd::Rollback,
             true,
         )
         .await;
     }
+}
+
+#[test]
+#[tracing::instrument]
+async fn rdbms_mysql_rollback_and_tx_status_not_found_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    mysql: &DockerMysqlRdb,
+    _tracing: &Tracing,
+) {
+    mysql_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        mysql,
+        TransactionFailOn::oplog_add_and_tx(
+            "RolledBackRemoteTransaction",
+            1,
+            "GetTransactionStatusNotFound",
+            1,
+        ),
+        TransactionEnd::Rollback,
+        true,
+    )
+    .await;
 }
 
 fn mysql_create_table_statement(table_name: &str) -> String {
@@ -1799,10 +1876,6 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
                                     e.clone(),
                                     PublicOplogEntry::RolledBackRemoteTransaction(v)
                                 ))
-                                .or(try_match!(
-                                    e.clone(),
-                                    PublicOplogEntry::AbortedRemoteTransaction(v)
-                                ))
                                 .ok()
                                 .map(|v| (i, v));
                     }
@@ -1878,7 +1951,6 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
             e,
             PublicOplogEntry::CommitedRemoteTransaction(_)
                 | PublicOplogEntry::RolledBackRemoteTransaction(_)
-                | PublicOplogEntry::AbortedRemoteTransaction(_)
                 | PublicOplogEntry::Jump(_)
         );
 

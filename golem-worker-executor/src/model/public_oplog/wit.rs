@@ -314,7 +314,6 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             PublicOplogEntry::PreRollbackRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
             PublicOplogEntry::CommitedRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
             PublicOplogEntry::RolledBackRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
-            PublicOplogEntry::AbortedRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
         }
     }
 }

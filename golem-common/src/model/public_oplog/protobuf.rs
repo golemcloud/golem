@@ -510,12 +510,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     begin_index: OplogIndex::from_u64(value.begin_index),
                 }),
             ),
-            oplog_entry::Entry::AbortedRemoteTransaction(value) => Ok(
-                PublicOplogEntry::AbortedRemoteTransaction(RemoteTransactionParameters {
-                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
-                    begin_index: OplogIndex::from_u64(value.begin_index),
-                }),
-            ),
         }
     }
 }
@@ -958,16 +952,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
             PublicOplogEntry::RolledBackRemoteTransaction(end_remote_write) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::RolledBackRemoteTransaction(
-                        golem_api_grpc::proto::golem::worker::RemoteTransactionParameters {
-                            timestamp: Some(end_remote_write.timestamp.into()),
-                            begin_index: end_remote_write.begin_index.into(),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::AbortedRemoteTransaction(end_remote_write) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::AbortedRemoteTransaction(
                         golem_api_grpc::proto::golem::worker::RemoteTransactionParameters {
                             timestamp: Some(end_remote_write.timestamp.into()),
                             begin_index: end_remote_write.begin_index.into(),

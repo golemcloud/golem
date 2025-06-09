@@ -4,15 +4,6 @@ use golem_test_framework::components::cloud_service::CloudService;
 use golem_worker_executor::cloud::CloudGolemTypes;
 use std::collections::HashSet;
 
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
-use golem_service_base::storage::blob::BlobStorage;
-use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
-use golem_worker_executor::services::file_loader::FileLoader;
-use prometheus::Registry;
-use std::fmt::{Debug, Formatter};
-
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -23,6 +14,11 @@ use golem_common::model::{
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
+use golem_service_base::storage::blob::BlobStorage;
+use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -34,6 +30,7 @@ use golem_worker_executor::model::{
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::{ComponentMetadata, ComponentService};
+use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
     ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
@@ -59,6 +56,9 @@ use golem_worker_executor::workerctx::{
     UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails};
+use prometheus::Registry;
+use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
@@ -95,6 +95,12 @@ use golem_worker_executor::preview2::golem_api_1_x;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
+use golem_worker_executor::services::rdbms::mysql::MysqlType;
+use golem_worker_executor::services::rdbms::postgres::PostgresType;
+use golem_worker_executor::services::rdbms::{
+    DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsTransactionId,
+    RdbmsTransactionStatus, RdbmsType,
+};
 use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
 use golem_worker_executor::services::worker_enumeration::{
@@ -1045,6 +1051,10 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(&golem_config.resource_limits);
         let extra_deps = AdditionalTestDeps::new();
+        let rdbms_service: Arc<dyn rdbms::RdbmsService> = Arc::new(TestRdmsService::new(
+            rdbms_service.clone(),
+            extra_deps.clone(),
+        ));
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
@@ -1178,21 +1188,20 @@ impl TestOplog {
         }
     }
 
-    fn check_oplog(&self, entry: &OplogEntry) -> Result<(), String> {
+    fn check_oplog_add(&self, entry: &OplogEntry) -> Result<(), String> {
         let entry_name = match entry {
             OplogEntry::BeginRemoteTransaction { .. } => "BeginRemoteTransaction",
             OplogEntry::PreRollbackRemoteTransaction { .. } => "PreRollbackRemoteTransaction",
             OplogEntry::PreCommitRemoteTransaction { .. } => "PreCommitRemoteTransaction",
             OplogEntry::CommitedRemoteTransaction { .. } => "CommitedRemoteTransaction",
             OplogEntry::RolledBackRemoteTransaction { .. } => "RolledBackRemoteTransaction",
-            OplogEntry::AbortedRemoteTransaction { .. } => "AbortedRemoteTransaction",
             OplogEntry::BeginRemoteWrite { .. } => "BeginRemoteWrite",
             OplogEntry::EndRemoteWrite { .. } => "EndRemoteWrite",
             _ => "Other",
         };
 
-        // Fail{times}On{entry}
-        let re = Regex::new(r"Fail(\d+)On([A-Za-z]+)").unwrap();
+        // FailOplogAdd{times}On{entry}
+        let re = Regex::new(r"FailOplogAdd(\d+)On([A-Za-z]+)").unwrap();
 
         let worker_name = self.owned_worker_id.worker_id.worker_name.as_str();
         if let Some(captures) = re.captures(worker_name) {
@@ -1201,9 +1210,10 @@ impl TestOplog {
             if entry == entry_name {
                 println!("worker {} entry {}", worker_name, entry_name);
 
-                let failed_before = self
-                    .additional_test_deps
-                    .get_oplog_failures_count(self.owned_worker_id.clone(), entry_name.to_string());
+                let failed_before = self.additional_test_deps.get_oplog_failures_count(
+                    self.owned_worker_id.worker_id.clone(),
+                    entry_name.to_string(),
+                );
 
                 if failed_before >= *times {
                     println!(
@@ -1212,8 +1222,10 @@ impl TestOplog {
                     );
                     Ok(())
                 } else {
-                    self.additional_test_deps
-                        .add_oplog_failure(self.owned_worker_id.clone(), entry_name.to_string());
+                    self.additional_test_deps.add_oplog_failure(
+                        self.owned_worker_id.worker_id.clone(),
+                        entry_name.to_string(),
+                    );
                     println!(
                         "worker {} failed on {} {} times",
                         worker_name,
@@ -1239,7 +1251,7 @@ impl TestOplog {
 #[async_trait]
 impl Oplog for TestOplog {
     async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
-        self.check_oplog(&entry)?;
+        self.check_oplog_add(&entry)?;
         self.oplog.add_safe(entry).await
     }
 
@@ -1287,28 +1299,252 @@ impl Debug for TestOplog {
 }
 
 #[derive(Clone)]
+struct TestRdmsService {
+    mysql: Arc<dyn Rdbms<MysqlType> + Send + Sync>,
+    postgres: Arc<dyn Rdbms<PostgresType> + Send + Sync>,
+}
+
+impl TestRdmsService {
+    fn new(rdbms: Arc<dyn rdbms::RdbmsService>, additional_test_deps: AdditionalTestDeps) -> Self {
+        let mysql: Arc<dyn Rdbms<MysqlType> + Send + Sync> =
+            Arc::new(TestRdms::new(rdbms.mysql(), additional_test_deps.clone()));
+        let postgres: Arc<dyn Rdbms<PostgresType> + Send + Sync> = Arc::new(TestRdms::new(
+            rdbms.postgres(),
+            additional_test_deps.clone(),
+        ));
+        Self { mysql, postgres }
+    }
+}
+
+impl rdbms::RdbmsService for TestRdmsService {
+    fn mysql(&self) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
+        self.mysql.clone()
+    }
+
+    fn postgres(&self) -> Arc<dyn Rdbms<PostgresType> + Send + Sync> {
+        self.postgres.clone()
+    }
+}
+
+#[derive(Clone)]
+struct TestRdms<T: rdbms::RdbmsType> {
+    rdbms: Arc<dyn rdbms::Rdbms<T> + Send + Sync>,
+    additional_test_deps: AdditionalTestDeps,
+}
+
+impl<T: rdbms::RdbmsType> TestRdms<T> {
+    fn new(
+        rdbms: Arc<dyn rdbms::Rdbms<T> + Send + Sync>,
+        additional_test_deps: AdditionalTestDeps,
+    ) -> Self {
+        Self {
+            rdbms,
+            additional_test_deps,
+        }
+    }
+
+    fn check_rdbms_tx(&self, worker_id: &WorkerId, entry_name: &str) -> Result<(), rdbms::Error> {
+        // FailRdbmsTx{times}On{entry}
+        let re = Regex::new(r"FailRdbmsTx(\d+)On([A-Za-z]+)").unwrap();
+
+        let worker_name = worker_id.worker_name.as_str();
+        if let Some(captures) = re.captures(worker_name) {
+            let times = &captures[1].parse::<usize>().unwrap_or_default();
+            let entry = &captures[2];
+            if entry == entry_name {
+                println!("worker {} entry {}", worker_name, entry_name);
+
+                let failed_before = self
+                    .additional_test_deps
+                    .get_rdbms_tx_failures_count(worker_id.clone(), entry_name.to_string());
+
+                if failed_before >= *times {
+                    println!(
+                        "worker {} failed on {} before {} times",
+                        worker_name, entry_name, failed_before
+                    );
+                    Ok(())
+                } else {
+                    self.additional_test_deps
+                        .add_rdbms_tx_failure(worker_id.clone(), entry_name.to_string());
+                    println!(
+                        "worker {} failed on {} {} times",
+                        worker_name,
+                        entry_name,
+                        failed_before + 1
+                    );
+                    Err(rdbms::Error::Other(format!(
+                        "worker {} failed on {} {} times",
+                        worker_name,
+                        entry_name,
+                        failed_before + 1
+                    )))
+                }
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[async_trait]
+impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
+    async fn create(
+        &self,
+        address: &str,
+        worker_id: &WorkerId,
+    ) -> Result<RdbmsPoolKey, rdbms::Error> {
+        self.rdbms.deref().create(address, worker_id).await
+    }
+
+    fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
+        self.rdbms.deref().exists(key, worker_id)
+    }
+
+    fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
+        self.rdbms.deref().remove(key, worker_id)
+    }
+
+    async fn execute(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+        statement: &str,
+        params: Vec<T::DbValue>,
+    ) -> Result<u64, rdbms::Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait,
+    {
+        self.rdbms
+            .deref()
+            .execute(key, worker_id, statement, params)
+            .await
+    }
+
+    async fn query_stream(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+        statement: &str,
+        params: Vec<T::DbValue>,
+    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, rdbms::Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait,
+    {
+        self.rdbms
+            .deref()
+            .query_stream(key, worker_id, statement, params)
+            .await
+    }
+
+    async fn query(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+        statement: &str,
+        params: Vec<T::DbValue>,
+    ) -> Result<DbResult<T>, rdbms::Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait,
+    {
+        self.rdbms
+            .deref()
+            .query(key, worker_id, statement, params)
+            .await
+    }
+
+    async fn begin_transaction(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+    ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, rdbms::Error> {
+        self.check_rdbms_tx(worker_id, "BeginTransaction")?;
+        self.rdbms.deref().begin_transaction(key, worker_id).await
+    }
+
+    async fn get_transaction_status(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+        transaction_id: &RdbmsTransactionId,
+    ) -> Result<RdbmsTransactionStatus, rdbms::Error> {
+        let r = self.check_rdbms_tx(worker_id, "GetTransactionStatusNotFound");
+        if r.is_err() {
+            Ok(RdbmsTransactionStatus::NotFound)
+        } else {
+            self.rdbms
+                .deref()
+                .get_transaction_status(key, worker_id, transaction_id)
+                .await
+        }
+    }
+
+    async fn cleanup_transaction(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+        transaction_id: &RdbmsTransactionId,
+    ) -> Result<(), rdbms::Error> {
+        self.check_rdbms_tx(worker_id, "CleanupTransaction")?;
+        self.rdbms
+            .deref()
+            .cleanup_transaction(key, worker_id, transaction_id)
+            .await
+    }
+
+    fn status(&self) -> RdbmsStatus {
+        self.rdbms.deref().status()
+    }
+}
+
+#[derive(Clone)]
 pub struct AdditionalTestDeps {
-    oplog_failures: Arc<DashMap<OwnedWorkerId, DashMap<String, usize>>>,
+    oplog_failures: Arc<DashMap<WorkerId, DashMap<String, usize>>>,
+    rdbms_tx_failures: Arc<DashMap<WorkerId, DashMap<String, usize>>>,
 }
 
 impl AdditionalTestDeps {
     pub fn new() -> Self {
         let oplog_failures = Arc::new(DashMap::new());
-        Self { oplog_failures }
+        let rdbms_tx_failures = Arc::new(DashMap::new());
+        Self {
+            oplog_failures,
+            rdbms_tx_failures,
+        }
     }
 
-    pub fn get_oplog_failures_count(&self, owned_worker_id: OwnedWorkerId, entry: String) -> usize {
+    pub fn get_oplog_failures_count(&self, worker_id: WorkerId, entry: String) -> usize {
         let v = self
             .oplog_failures
-            .get(&owned_worker_id)
+            .get(&worker_id)
             .and_then(|v| v.get(&entry).map(|v| *v.value()));
         v.unwrap_or_default()
     }
 
-    pub fn add_oplog_failure(&self, owned_worker_id: OwnedWorkerId, entry: String) {
+    pub fn add_oplog_failure(&self, worker_id: WorkerId, entry: String) {
         *self
             .oplog_failures
-            .entry(owned_worker_id)
+            .entry(worker_id)
+            .or_default()
+            .entry(entry)
+            .or_default()
+            .value_mut() += 1;
+    }
+
+    pub fn get_rdbms_tx_failures_count(&self, worker_id: WorkerId, entry: String) -> usize {
+        let v = self
+            .rdbms_tx_failures
+            .get(&worker_id)
+            .and_then(|v| v.get(&entry).map(|v| *v.value()));
+        v.unwrap_or_default()
+    }
+
+    pub fn add_rdbms_tx_failure(&self, worker_id: WorkerId, entry: String) {
+        *self
+            .rdbms_tx_failures
+            .entry(worker_id)
             .or_default()
             .entry(entry)
             .or_default()

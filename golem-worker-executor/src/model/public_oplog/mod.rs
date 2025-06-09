@@ -905,15 +905,6 @@ impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
                     begin_index,
                 },
             )),
-            OplogEntry::AbortedRemoteTransaction {
-                timestamp,
-                begin_index,
-            } => Ok(PublicOplogEntry::AbortedRemoteTransaction(
-                RemoteTransactionParameters {
-                    timestamp,
-                    begin_index,
-                },
-            )),
         }
     }
 }

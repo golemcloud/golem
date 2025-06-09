@@ -51,7 +51,6 @@ message OplogEntry {
     RemoteTransactionParameters PreRollbackRemoteTransaction = 36;
     RemoteTransactionParameters CommitedRemoteTransaction = 37;
     RemoteTransactionParameters RolledBackRemoteTransaction = 38;
-    RemoteTransactionParameters AbortedRemoteTransaction = 39;
   }
 }
 

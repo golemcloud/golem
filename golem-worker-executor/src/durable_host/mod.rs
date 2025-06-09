@@ -2334,43 +2334,25 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                     //     end_entry.clone().map(|(i, _)| i.to_string()).unwrap_or("None".to_string())
                     // );
                     if end_entry.is_none() {
-                        let mut aborted = false;
                         if pre_entry.is_pre_commit_remote_transaction(begin_index) {
                             let commited = handler.is_committed(&tx_id).await?;
                             // println!(
                             //     "begin_transaction_function tx_id {tx_id}, pre commit - commited: {commited}",
                             // );
-                            aborted = !commited;
+                            restart = !commited;
                         } else if pre_entry.is_pre_rollback_remote_transaction(begin_index) {
                             let rolled_back = handler.is_rolled_back(&tx_id).await?;
                             // println!(
                             //     "begin_transaction_function tx_id {tx_id}, pre rollback - rolled_back: {rolled_back}",
                             // );
-                            aborted = !rolled_back;
-                        }
-
-                        if aborted {
-                            self.replay_state.switch_to_live();
-                            self.oplog
-                                .add_and_commit(OplogEntry::aborted_remote_transaction(begin_index))
-                                .await;
-                            let deleted_region = OplogRegion {
-                                start: begin_index.next(), // need to keep the BeginAtomicRegion entry
-                                end: self.replay_state.replay_target().next(), // skipping the Jump entry too
-                            };
-                            self.replay_state
-                                .add_skipped_region(deleted_region.clone())
-                                .await;
-                            self.oplog
-                                .add_and_commit(OplogEntry::jump(deleted_region))
-                                .await;
-                            // println!(
-                            //     "begin_transaction_function tx_id {tx_id}, aborted - restarting"
-                            // );
-                            restart = true;
+                            restart = !rolled_back;
                         }
                     }
                 } else {
+                    restart = true;
+                }
+
+                if restart {
                     // We need to jump to the end of the oplog
                     self.replay_state.switch_to_live();
 
@@ -2388,18 +2370,12 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
                         .add_and_commit(OplogEntry::jump(deleted_region))
                         .await;
 
-                    // println!(
-                    //     "begin_transaction_function tx_id {tx_id}, pre not found - restarting"
-                    // );
-                    restart = true;
-                }
-
-                if restart {
                     let (tx_id, tx) = handler.create_new().await?;
                     self.oplog
                         .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
                         .await
                         .map_err(GolemError::runtime)?;
+
                     Ok((begin_index, tx))
                 } else {
                     Ok((begin_index, tx))
@@ -2515,33 +2491,6 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
             Ok(())
         }
     }
-
-    // pub async fn aborted_transaction_function(
-    //     &mut self,
-    //     function_type: &DurableFunctionType,
-    //     begin_index: OplogIndex,
-    // ) -> Result<(), GolemError> {
-    //     if matches!(
-    //         *function_type,
-    //         DurableFunctionType::WriteRemoteTransaction(None)
-    //     ) {
-    //         if self.is_live() {
-    //             self.oplog
-    //                 .add_and_commit_safe(OplogEntry::aborted_remote_transaction(begin_index))
-    //                 .await
-    //                 .map_err(GolemError::runtime)?;
-    //             Ok(())
-    //         } else {
-    //             let (_, _) = crate::get_oplog_entry!(
-    //                 self.replay_state,
-    //                 OplogEntry::AbortedRemoteTransaction
-    //             )?;
-    //             Ok(())
-    //         }
-    //     } else {
-    //         Ok(())
-    //     }
-    // }
 
     /// In live mode it returns the last oplog index (index of the entry last added).
     /// In replay mode it returns the current replay index (index of the entry last read).

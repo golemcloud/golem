@@ -513,10 +513,6 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         begin_index: OplogIndex,
     },
-    AbortedRemoteTransaction {
-        timestamp: Timestamp,
-        begin_index: OplogIndex,
-    },
 }
 
 impl OplogEntry {
@@ -800,13 +796,6 @@ impl OplogEntry {
         }
     }
 
-    pub fn aborted_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
-        OplogEntry::AbortedRemoteTransaction {
-            timestamp: Timestamp::now_utc(),
-            begin_index,
-        }
-    }
-
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -835,14 +824,8 @@ impl OplogEntry {
         matches!(self, OplogEntry::RolledBackRemoteTransaction { begin_index, .. } if *begin_index == idx)
     }
 
-    pub fn is_aborted_remote_transaction(&self, idx: OplogIndex) -> bool {
-        matches!(self, OplogEntry::AbortedRemoteTransaction { begin_index, .. } if *begin_index == idx)
-    }
-
     pub fn is_end_remote_transaction(&self, idx: OplogIndex) -> bool {
-        self.is_aborted_remote_transaction(idx)
-            || self.is_committed_remote_transaction(idx)
-            || self.is_rolled_back_remote_transaction(idx)
+        self.is_committed_remote_transaction(idx) || self.is_rolled_back_remote_transaction(idx)
     }
 
     /// Checks that an "intermediate oplog entry" between a `BeginRemoteWrite` and an `EndRemoteWrite`
@@ -942,8 +925,7 @@ impl OplogEntry {
             | OplogEntry::PreCommitRemoteTransaction { timestamp, .. }
             | OplogEntry::PreRollbackRemoteTransaction { timestamp, .. }
             | OplogEntry::CommitedRemoteTransaction { timestamp, .. }
-            | OplogEntry::RolledBackRemoteTransaction { timestamp, .. }
-            | OplogEntry::AbortedRemoteTransaction { timestamp, .. } => *timestamp,
+            | OplogEntry::RolledBackRemoteTransaction { timestamp, .. } => *timestamp,
         }
     }
 

@@ -414,9 +414,6 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::RolledBackRemoteTransaction(_) => {
             Err("Cannot override an oplog with a rolled back remote transaction".to_string())?
         }
-        PublicOplogEntry::AbortedRemoteTransaction(_) => {
-            Err("Cannot override an oplog with a aborted remote transaction".to_string())?
-        }
         PublicOplogEntry::SuccessfulUpdate(successful_update_params) => {
             let plugin_installation_ids: HashSet<PluginInstallationId> = successful_update_params
                 .new_active_plugins

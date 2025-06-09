@@ -10310,7 +10310,6 @@ components:
           PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
           CommitedRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
           RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-          AbortedRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
@@ -10347,7 +10346,6 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_BeginRemoteTransactionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
@@ -10798,10 +10796,10 @@ components:
       - type: object
         properties:
           type:
-            example: AbortedRemoteTransaction
+            example: RolledBackRemoteTransaction
             type: string
             enum:
-            - AbortedRemoteTransaction
+            - RolledBackRemoteTransaction
         required:
         - type
       - $ref: '#/components/schemas/RemoteTransactionParameters'

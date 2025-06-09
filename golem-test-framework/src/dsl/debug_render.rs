@@ -389,11 +389,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
         }
-        PublicOplogEntry::AbortedRemoteTransaction(params) => {
-            let _ = writeln!(result, "ABORTED REMOTE TRANSACTION");
-            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
-        }
     }
 
     result

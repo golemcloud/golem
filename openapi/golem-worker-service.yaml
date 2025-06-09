@@ -5071,7 +5071,6 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
       discriminator:
         propertyName: type
         mapping:
@@ -5113,7 +5112,6 @@ components:
           PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
           CommitedRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
           RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-          AbortedRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
     PublicOplogEntryWithIndex:
       type: object
       title: PublicOplogEntryWithIndex
@@ -5564,8 +5562,8 @@ components:
           type:
             type: string
             enum:
-            - AbortedRemoteTransaction
-            example: AbortedRemoteTransaction
+            - RolledBackRemoteTransaction
+            example: RolledBackRemoteTransaction
       - $ref: '#/components/schemas/RemoteTransactionParameters'
     PublicOplogEntry_ResourceParameters:
       description: |-

@@ -405,13 +405,6 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
             timestamp: rounded_ts(timestamp),
             begin_index,
         },
-        OplogEntry::AbortedRemoteTransaction {
-            timestamp,
-            begin_index,
-        } => OplogEntry::AbortedRemoteTransaction {
-            timestamp: rounded_ts(timestamp),
-            begin_index,
-        },
     }
 }
 
