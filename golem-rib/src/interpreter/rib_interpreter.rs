@@ -4786,8 +4786,8 @@ mod tests {
             };
 
             vec![ComponentDependency {
-                component_info,
-                exports: vec![AnalysedExport::Function(AnalysedFunction {
+                component_dependency_key: component_info,
+                component_exports: vec![AnalysedExport::Function(AnalysedFunction {
                     name: function_name.to_string(),
                     parameters: analysed_function_parameters,
                     result,
@@ -4893,8 +4893,8 @@ mod tests {
             };
 
             vec![ComponentDependency {
-                component_info,
-                exports: vec![analysed_export1, analysed_export2, analysed_export3],
+                component_dependency_key: component_info,
+                component_exports: vec![analysed_export1, analysed_export2, analysed_export3],
             }]
         }
 
@@ -5023,8 +5023,8 @@ mod tests {
             };
 
             vec![ComponentDependency {
-                component_info,
-                exports: vec![instance],
+                component_dependency_key: component_info,
+                component_exports: vec![instance],
             }]
         }
 
@@ -5227,8 +5227,8 @@ mod tests {
             };
 
             vec![ComponentDependency {
-                component_info,
-                exports,
+                component_dependency_key: component_info,
+                component_exports: exports,
             }]
         }
 

@@ -836,8 +836,8 @@ mod component_metadata {
         };
 
         vec![ComponentDependency {
-            component_info,
-            exports,
+            component_dependency_key: component_info,
+            component_exports: exports,
         }]
     }
 }

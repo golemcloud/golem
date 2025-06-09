@@ -56,8 +56,8 @@ pub struct RibCompilerConfig {
 
 #[derive(Debug, Clone)]
 pub struct ComponentDependency {
-    pub component_info: ComponentDependencyKey,
-    pub exports: Vec<AnalysedExport>,
+    pub component_dependency_key: ComponentDependencyKey,
+    pub component_exports: Vec<AnalysedExport>,
 }
 
 impl RibCompilerConfig {
@@ -84,7 +84,7 @@ impl RibCompiler {
             config
                 .component_dependencies
                 .iter()
-                .map(|dep| (dep.component_info.clone(), &dep.exports))
+                .map(|dep| (dep.component_dependency_key.clone(), &dep.component_exports))
                 .collect::<Vec<_>>(),
         )
         .unwrap();
@@ -1078,13 +1078,13 @@ mod compiler_error_tests {
             });
 
             let component_dependency = ComponentDependency {
-                component_info: ComponentDependencyKey {
+                component_dependency_key: ComponentDependencyKey {
                     component_name: "some_name".to_string(),
                     component_id: Uuid::new_v4(),
                     root_package_name: None,
                     root_package_version: None,
                 },
-                exports: vec![function_export, resource_export],
+                component_exports: vec![function_export, resource_export],
             };
 
             vec![component_dependency]

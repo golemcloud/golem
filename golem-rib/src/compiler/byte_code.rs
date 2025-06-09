@@ -2203,8 +2203,8 @@ mod compiler_tests {
             };
 
             vec![ComponentDependency {
-                component_info,
-                exports: vec![instance],
+                component_dependency_key: component_info,
+                component_exports: vec![instance],
             }]
         }
 
@@ -2258,8 +2258,8 @@ mod compiler_tests {
             };
 
             vec![ComponentDependency {
-                component_info,
-                exports: vec![instance],
+                component_dependency_key: component_info,
+                component_exports: vec![instance],
             }]
         }
         pub(crate) fn get_component_metadata(
@@ -2284,8 +2284,8 @@ mod compiler_tests {
             };
 
             vec![ComponentDependency {
-                component_info,
-                exports: vec![AnalysedExport::Function(AnalysedFunction {
+                component_dependency_key: component_info,
+                component_exports: vec![AnalysedExport::Function(AnalysedFunction {
                     name: function_name.to_string(),
                     parameters: analysed_function_parameters,
                     result: Some(AnalysedFunctionResult { typ: output }),

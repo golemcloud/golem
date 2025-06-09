@@ -22,7 +22,7 @@ use crate::rib_context::ReplContext;
 use crate::rib_edit::RibEdit;
 use crate::{CommandRegistry, ReplBootstrapError, RibExecutionError, UntypedCommand};
 use colored::Colorize;
-use rib::{ComponentDependency, ComponentDependencyKey, RibCompiler, RibCompilerConfig, RibResult};
+use rib::{ComponentDependency, RibCompiler, RibCompilerConfig, RibResult};
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
@@ -91,26 +91,39 @@ impl RibRepl {
             }
         }
 
-        let component_dependency = match config.component_source {
-            Some(ref details) => config
-                .dependency_manager
-                .add_component(&details.source_path, details.component_name.clone())
-                .await
-                .map_err(|err| ReplBootstrapError::ComponentLoadError(err.to_string())),
+        let component_dependencies = match config.component_source {
+            Some(ref details) => {
+                let result = config
+                    .dependency_manager
+                    .add_component(&details.source_path, details.component_name.clone())
+                    .await
+                    .map_err(|err| ReplBootstrapError::ComponentLoadError(err.to_string()))?;
+
+                Ok(vec![ComponentDependency {
+                    component_dependency_key: result.component_key,
+                    component_exports: result.component_metadata,
+                }])
+            }
             None => {
                 let dependencies = config.dependency_manager.get_dependencies().await;
 
                 match dependencies {
                     Ok(dependencies) => {
-                        let mut component_dependencies = dependencies.component_dependencies;
+                        let component_dependencies = dependencies.component_dependencies;
 
-                        match &component_dependencies.len() {
-                            0 => Err(ReplBootstrapError::NoComponentsFound),
-                            1 => Ok(component_dependencies.pop().unwrap()),
-                            _ => Err(ReplBootstrapError::MultipleComponentsFound(
-                                "multiple components detected. rib repl currently support only a single component".to_string(),
-                            )),
+                        if component_dependencies.is_empty() {
+                            return Err(ReplBootstrapError::NoComponentsFound);
                         }
+
+                        let dependencies = component_dependencies
+                            .iter()
+                            .map(|x| ComponentDependency {
+                                component_dependency_key: x.component_key.clone(),
+                                component_exports: x.component_metadata.clone(),
+                            })
+                            .collect::<Vec<ComponentDependency>>();
+
+                        Ok(dependencies)
                     }
                     Err(err) => Err(ReplBootstrapError::ComponentLoadError(format!(
                         "failed to register components: {}",
@@ -118,27 +131,13 @@ impl RibRepl {
                     ))),
                 }
             }
-        }?;
-
-        let compiler_info = ComponentDependencyKey {
-            component_name: component_dependency.component_name.clone(),
-            component_id: component_dependency.component_id,
-            root_package_name: None,
-            root_package_version: None,
         };
 
         // Once https://github.com/golemcloud/golem/issues/1608 is resolved,
         // component dependency will not be required in the REPL state
         let repl_state = ReplState::new(
-            component_dependency.clone(),
             config.worker_function_invoke,
-            RibCompiler::new(RibCompilerConfig::new(
-                vec![ComponentDependency {
-                    exports: component_dependency.metadata,
-                    component_info: compiler_info,
-                }],
-                vec![],
-            )),
+            RibCompiler::new(RibCompilerConfig::new(component_dependencies?, vec![])),
             history_file_path.clone(),
         );
 

@@ -162,7 +162,7 @@ impl ComponentDependencies {
             return Err(format!("interface `{}` not found", interface_name));
         }
 
-        Ok(crate::ComponentDependencies { dependencies: tree })
+        Ok(ComponentDependencies { dependencies: tree })
     }
 
     pub fn filter_by_package_name(
@@ -242,7 +242,7 @@ impl ComponentDependencies {
             return Err(format!("`{}` not found", fqi));
         }
 
-        Ok(crate::ComponentDependencies { dependencies: tree })
+        Ok(ComponentDependencies { dependencies: tree })
     }
 
     // type-parameter can be None.
@@ -298,7 +298,7 @@ impl ComponentDependencies {
     }
 
     pub fn from_raw(
-        component_and_exports: Vec<(crate::ComponentDependencyKey, &Vec<AnalysedExport>)>,
+        component_and_exports: Vec<(ComponentDependencyKey, &Vec<AnalysedExport>)>,
     ) -> Result<Self, String> {
         let mut dependencies = BTreeMap::new();
 

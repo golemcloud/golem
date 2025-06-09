@@ -811,8 +811,8 @@ impl CompiledRoute {
                     ))?;
 
                 let component_dependency = vec![ComponentDependency {
-                    component_info: component_details.component_info.clone(),
-                    exports: component_details.metadata.clone(),
+                    component_dependency_key: component_details.component_info.clone(),
+                    component_exports: component_details.metadata.clone(),
                 }];
 
                 let binding = WorkerBindingCompiled::from_raw_worker_binding(
@@ -847,8 +847,8 @@ impl CompiledRoute {
                     ))?;
 
                 let component_dependency = vec![ComponentDependency {
-                    component_info: component_details.component_info.clone(),
-                    exports: component_details.metadata.clone(),
+                    component_dependency_key: component_details.component_info.clone(),
+                    component_exports: component_details.metadata.clone(),
                 }];
 
                 let binding = FileServerBindingCompiled::from_raw_file_server_worker_binding(

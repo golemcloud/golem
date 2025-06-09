@@ -17,14 +17,14 @@ use crate::Tracing;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, TargetWorkerId};
-use golem_rib_repl::{ComponentSource, RibRepl};
-use golem_rib_repl::{ReplDependencies, RibComponentMetadata, RibDependencyManager};
+use golem_rib_repl::{ComponentSource, ReplComponentDependency, RibRepl};
+use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
 use golem_wasm_rpc::{Value, ValueAndType};
-use rib::RibResult;
+use rib::{ComponentDependencyKey, RibResult};
 use std::path::Path;
 use std::sync::Arc;
 use test_r::inherit_test_dep;
@@ -262,7 +262,7 @@ impl TestRibReplDependencyManager {
 
 #[async_trait]
 impl RibDependencyManager for TestRibReplDependencyManager {
-    async fn get_dependencies(&self) -> anyhow::Result<ReplDependencies> {
+    async fn get_dependencies(&self) -> anyhow::Result<ReplComponentDependencies> {
         Err(anyhow!(
             "test will need to run with a single component".to_string()
         ))
@@ -272,7 +272,7 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         &self,
         _source_path: &Path,
         component_name: String,
-    ) -> anyhow::Result<RibComponentMetadata> {
+    ) -> anyhow::Result<ReplComponentDependency> {
         let component_id = self
             .dependencies
             .component(component_name.as_str())
@@ -284,10 +284,16 @@ impl RibDependencyManager for TestRibReplDependencyManager {
             .get_latest_component_metadata(&component_id)
             .await;
 
-        Ok(RibComponentMetadata {
+        let component_key = ComponentDependencyKey {
             component_name,
             component_id: component_id.0,
-            metadata: metadata.exports,
+            root_package_name: metadata.root_package_name,
+            root_package_version: metadata.root_package_version,
+        };
+
+        Ok(ReplComponentDependency {
+            component_key,
+            component_metadata: metadata.exports,
         })
     }
 }
