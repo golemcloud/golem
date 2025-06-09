@@ -11,20 +11,21 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 use test_r::test;
 
 use crate::Tracing;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, TargetWorkerId};
-use golem_rib_repl::{ComponentSource, ReplComponentDependency, RibRepl};
+use golem_rib_repl::{ComponentSource, RibRepl};
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
 use golem_wasm_rpc::{Value, ValueAndType};
-use rib::{ComponentDependencyKey, RibResult};
+use rib::{ComponentDependency, ComponentDependencyKey, RibResult};
 use std::path::Path;
 use std::sync::Arc;
 use test_r::inherit_test_dep;
@@ -272,7 +273,7 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         &self,
         _source_path: &Path,
         component_name: String,
-    ) -> anyhow::Result<ReplComponentDependency> {
+    ) -> anyhow::Result<ComponentDependency> {
         let component_id = self
             .dependencies
             .component(component_name.as_str())
@@ -284,16 +285,16 @@ impl RibDependencyManager for TestRibReplDependencyManager {
             .get_latest_component_metadata(&component_id)
             .await;
 
-        let component_key = ComponentDependencyKey {
+        let component_dependency_key = ComponentDependencyKey {
             component_name,
             component_id: component_id.0,
             root_package_name: metadata.root_package_name,
             root_package_version: metadata.root_package_version,
         };
 
-        Ok(ReplComponentDependency {
-            component_key,
-            component_metadata: metadata.exports,
+        Ok(ComponentDependency {
+            component_dependency_key,
+            component_exports: metadata.exports,
         })
     }
 }

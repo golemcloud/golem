@@ -25,7 +25,7 @@ use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
 
 // Global Function Dictionary is a user friendly projection of FunctionTypeRegistry for functions and arguments.
-// In fact, type inference phases make use of FunctionDictionary for each component
+// In fact, type inference phases make use of FunctionDictionary.
 // Unlike FunctionTypeRegistry, the function names in `FunctionDictionary` is closer to Rib grammar
 // of invoking functions. Example: A RegistryKey of `[constructor]cart` in FunctionTypeRegistry becomes
 // FunctionName::ResourceConstructor(cart) in FunctionDictionary
