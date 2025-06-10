@@ -16,9 +16,9 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::oplog::{OplogEntry, OplogPayload, UpdateDescription};
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OplogIndex, OwnedWorkerId,
-    PluginInstallationId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OplogIndex,
+    OwnedWorkerId, PluginInstallationId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
