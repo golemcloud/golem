@@ -49,10 +49,10 @@ impl RibDependencyManager for TestRibReplDependencyManager {
             root_package_version: metadata.root_package_version,
         };
 
-        Ok(ComponentDependency {
+        Ok(ComponentDependency::new(
             component_dependency_key,
-            component_exports: metadata.exports,
-        })
+            metadata.exports,
+        ))
     }
 }
 
