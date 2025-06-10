@@ -332,7 +332,9 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, GolemError> {
-        self.state.begin_function(function_type).await
+        self.process_pending_replay_events().await?;
+        let oplog_index = self.state.begin_function(function_type).await?;
+        Ok(oplog_index)
     }
 
     async fn end_durable_function(

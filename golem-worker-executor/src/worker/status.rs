@@ -10,7 +10,7 @@ use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogR
 use golem_common::model::{
     FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, RetryConfig, SuccessfulUpdateRecord,
     TimestampedWorkerInvocation, WorkerInvocation, WorkerMetadata, WorkerResourceDescription,
-    WorkerStatus, WorkerStatusRecord, WorkerStatusRecordExtensions,
+    WorkerStatus, WorkerStatusRecord,
 };
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
@@ -44,7 +44,7 @@ where
             .await;
 
         let deleted_regions =
-            calculate_deleted_regions(last_known.deleted_regions().clone(), &new_entries);
+            calculate_deleted_regions(last_known.deleted_regions.clone(), &new_entries);
         let skipped_regions = calculate_skipped_regions(
             last_known.skipped_regions.clone(),
             &deleted_regions,
@@ -59,7 +59,7 @@ where
         if skipped_regions.is_in_deleted_region(last_known.oplog_idx) {
             calculate_last_known_status(this, owned_worker_id, &None).await
         } else {
-            let active_plugins = last_known.active_plugins().clone();
+            let active_plugins = last_known.active_plugins.clone();
 
             let overridden_retry_config = calculate_overridden_retry_policy(
                 last_known.overridden_retry_config.clone(),
@@ -85,12 +85,14 @@ where
                 successful_updates,
                 component_version,
                 component_size,
+                component_version_for_replay,
             ) = calculate_update_fields(
                 last_known.pending_updates,
                 last_known.failed_updates,
                 last_known.successful_updates,
                 last_known.component_version,
                 last_known.component_size,
+                last_known.component_version_for_replay,
                 &deleted_regions,
                 &new_entries,
             );
@@ -132,10 +134,9 @@ where
                 component_size,
                 owned_resources,
                 total_linear_memory_size,
-                extensions: WorkerStatusRecordExtensions::Extension2 {
-                    active_plugins,
-                    deleted_regions,
-                },
+                active_plugins,
+                deleted_regions,
+                component_version_for_replay,
             };
             Ok(result)
         }
@@ -464,6 +465,7 @@ fn calculate_update_fields(
     initial_successful_updates: Vec<SuccessfulUpdateRecord>,
     initial_version: u64,
     initial_component_size: u64,
+    initial_component_version_for_replay: u64,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
@@ -472,12 +474,15 @@ fn calculate_update_fields(
     Vec<SuccessfulUpdateRecord>,
     u64,
     u64,
+    u64,
 ) {
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;
     let mut successful_updates = initial_successful_updates;
     let mut version = initial_version;
     let mut size = initial_component_size;
+    let mut component_version_for_replay = initial_component_version_for_replay;
+
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
         if deleted_regions.is_in_deleted_region(*oplog_idx) {
@@ -491,6 +496,7 @@ fn calculate_update_fields(
                 ..
             } => {
                 version = *component_version;
+                component_version_for_replay = *component_version;
                 size = *component_size;
             }
             OplogEntry::CreateV1 {
@@ -499,6 +505,7 @@ fn calculate_update_fields(
                 ..
             } => {
                 version = *component_version;
+                component_version_for_replay = *component_version;
                 size = *component_size;
             }
             OplogEntry::PendingUpdate {
@@ -535,7 +542,17 @@ fn calculate_update_fields(
                 });
                 version = *target_version;
                 size = *new_component_size;
-                pending_updates.pop_front();
+
+                let applied_update = pending_updates.pop_front();
+                if matches!(
+                    applied_update,
+                    Some(TimestampedUpdateDescription {
+                        description: UpdateDescription::SnapshotBased { .. },
+                        ..
+                    })
+                ) {
+                    component_version_for_replay = *target_version
+                }
             }
             OplogEntry::SuccessfulUpdate {
                 timestamp,
@@ -549,7 +566,17 @@ fn calculate_update_fields(
                 });
                 version = *target_version;
                 size = *new_component_size;
-                pending_updates.pop_front();
+
+                let applied_update = pending_updates.pop_front();
+                if matches!(
+                    applied_update,
+                    Some(TimestampedUpdateDescription {
+                        description: UpdateDescription::SnapshotBased { .. },
+                        ..
+                    })
+                ) {
+                    component_version_for_replay = *target_version
+                }
             }
             _ => {}
         }
@@ -560,6 +587,7 @@ fn calculate_update_fields(
         successful_updates,
         version,
         size,
+        component_version_for_replay,
     )
 }
 
@@ -1040,6 +1068,7 @@ mod test {
         pub fn new(owned_worker_id: OwnedWorkerId, component_version: ComponentVersion) -> Self {
             let status = WorkerStatusRecord {
                 component_version,
+                component_version_for_replay: component_version,
                 component_size: 100,
                 total_linear_memory_size: 200,
                 oplog_idx: OplogIndex::INITIAL,
@@ -1192,11 +1221,11 @@ mod test {
                 .expected_status
                 .clone();
             self.add(OplogEntry::revert(region.clone()), move |mut status| {
-                *status.active_plugins_mut() = old_status.active_plugins().clone();
+                status.active_plugins = old_status.active_plugins;
 
                 status.skipped_regions = old_status.skipped_regions;
                 status.skipped_regions.add(region.clone());
-                status.deleted_regions_mut().add(region);
+                status.deleted_regions.add(region);
 
                 status.status = old_status.status;
                 status.component_version = old_status.component_version;
@@ -1209,6 +1238,7 @@ mod test {
                 status.successful_updates = old_status.successful_updates;
                 status.failed_updates = old_status.failed_updates;
                 status.invocation_results = old_status.invocation_results;
+                status.component_version_for_replay = old_status.component_version_for_replay;
 
                 status
             })
@@ -1298,13 +1328,19 @@ mod test {
                     });
                     status.component_size = new_component_size;
                     status.component_version = *update_description.target_version();
-                    *status.active_plugins_mut() = new_active_plugins.clone();
+                    status.active_plugins = new_active_plugins.clone();
 
                     if status.skipped_regions.is_overridden() {
                         status.skipped_regions.merge_override();
                         status.total_linear_memory_size = old_status.total_linear_memory_size;
                         status.owned_resources = HashMap::new();
                     }
+
+                    if let UpdateDescription::SnapshotBased { target_version, .. } =
+                        update_description
+                    {
+                        status.component_version_for_replay = target_version;
+                    };
 
                     status
                 },

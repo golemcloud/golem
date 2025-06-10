@@ -19,7 +19,7 @@ use golem_common::model::oplog::{
     AtomicOplogIndex, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{IdempotencyKey, OwnedWorkerId};
+use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId};
 use golem_wasm_rpc::{Value, ValueAndType};
 use metrohash::MetroHash128;
 use std::collections::HashSet;
@@ -28,6 +28,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
+
+#[derive(Debug, Clone)]
+pub enum ReplayEvent {
+    ReplayFinished,
+    UpdateReplayed { new_version: ComponentVersion },
+}
+
+#[derive(Debug, Clone)]
+pub struct ExportedFunctionInvoked {
+    pub function_name: String,
+    pub function_input: Vec<Value>,
+    pub idempotency_key: IdempotencyKey,
+    pub invocation_context: InvocationContextStack,
+}
 
 #[derive(Clone)]
 pub struct ReplayState {
@@ -47,6 +61,8 @@ struct InternalReplayState {
     pub next_skipped_region: Option<OplogRegion>,
     /// Hashes of log entries persisted since the last read non-hint oplog entry
     pub log_hashes: HashSet<(u64, u64)>,
+    /// Updates that were encountered while reading the oplog
+    pub pending_replay_events: Vec<ReplayEvent>,
 }
 
 impl ReplayState {
@@ -68,6 +84,7 @@ impl ReplayState {
                 skipped_regions,
                 next_skipped_region,
                 log_hashes: HashSet::new(),
+                pending_replay_events: Vec::new(),
             })),
             has_seen_logs: Arc::new(AtomicBool::new(false)),
         };
@@ -76,7 +93,10 @@ impl ReplayState {
         result
     }
 
-    pub fn switch_to_live(&mut self) {
+    pub async fn switch_to_live(&mut self) {
+        if !self.is_live() {
+            self.record_replay_event(ReplayEvent::ReplayFinished).await;
+        }
         self.last_replayed_index.set(self.replay_target.get());
     }
 
@@ -111,6 +131,18 @@ impl ReplayState {
     /// Returns whether we are in replay mode where we are replaying old calls.
     pub fn is_replay(&self) -> bool {
         !self.is_live()
+    }
+
+    async fn record_replay_event(&mut self, event: ReplayEvent) {
+        self.internal
+            .write()
+            .await
+            .pending_replay_events
+            .push(event)
+    }
+
+    pub async fn take_new_replay_events(&mut self) -> Vec<ReplayEvent> {
+        std::mem::take(&mut self.internal.write().await.pending_replay_events)
     }
 
     /// Reads the next oplog entry, and skips every hint entry following it.
@@ -283,6 +315,28 @@ impl ReplayState {
 
         let oplog_entries = self.read_oplog(read_idx, 1).await;
         let oplog_entry = oplog_entries.into_iter().next().unwrap();
+
+        // record side effects that need to be applied at the next opportunity
+        match oplog_entry {
+            OplogEntry::SuccessfulUpdate { target_version, .. } => {
+                self.record_replay_event(ReplayEvent::UpdateReplayed {
+                    new_version: target_version,
+                })
+                .await
+            }
+            OplogEntry::SuccessfulUpdateV1 { target_version, .. } => {
+                self.record_replay_event(ReplayEvent::UpdateReplayed {
+                    new_version: target_version,
+                })
+                .await
+            }
+            _ => {}
+        }
+
+        if read_idx == self.replay_target.get() {
+            self.record_replay_event(ReplayEvent::ReplayFinished).await
+        }
+
         self.move_replay_idx(read_idx).await;
 
         oplog_entry
@@ -358,8 +412,7 @@ impl ReplayState {
     // TODO: can we rewrite this on top of get_oplog_entry?
     pub async fn get_oplog_entry_exported_function_invoked(
         &mut self,
-    ) -> Result<Option<(String, Vec<Value>, IdempotencyKey, InvocationContextStack)>, GolemError>
-    {
+    ) -> Result<Option<ExportedFunctionInvoked>, GolemError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
@@ -382,12 +435,12 @@ impl ReplayState {
                                     .expect("failed to decode serialized protobuf value")
                             })
                             .collect::<Vec<Value>>();
-                        break Ok(Some((
-                            function_name.to_string(),
-                            request,
-                            idempotency_key.clone(),
-                            InvocationContextStack::fresh(),
-                        )));
+                        break Ok(Some(ExportedFunctionInvoked {
+                            function_name: function_name.to_string(),
+                            function_input: request,
+                            idempotency_key: idempotency_key.clone(),
+                            invocation_context: InvocationContextStack::fresh(),
+                        }));
                     }
                     OplogEntry::ExportedFunctionInvoked {
                         function_name,
@@ -414,12 +467,12 @@ impl ReplayState {
                         let invocation_context =
                             InvocationContextStack::from_oplog_data(trace_id, trace_state, spans);
 
-                        break Ok(Some((
-                            function_name.to_string(),
-                            request,
-                            idempotency_key.clone(),
+                        break Ok(Some(ExportedFunctionInvoked {
+                            function_name: function_name.to_string(),
+                            function_input: request,
+                            idempotency_key: idempotency_key.clone(),
                             invocation_context,
-                        )));
+                        }));
                     }
                     entry if entry.is_hint() => {}
                     _ => {
