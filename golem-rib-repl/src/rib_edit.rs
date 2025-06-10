@@ -127,9 +127,9 @@ impl RibEdit {
                 if name_with_paren == method_prefix {
                     let args = tpe
                         .parameter_types()
-                        .iter()
+                        .into_iter()
                         .map(|analysed_type| {
-                            ValueAndType::new(generate_value(analysed_type), analysed_type.clone())
+                            ValueAndType::new(generate_value(&analysed_type), analysed_type)
                         })
                         .collect::<Vec<_>>();
 
@@ -159,10 +159,10 @@ impl RibEdit {
                 if resource_method_with_paren == method_prefix {
                     let args = tpe
                         .parameter_types()
-                        .iter()
+                        .into_iter()
                         .skip(1) // Skip the first argument, which is the instance itself
                         .map(|analysed_type| {
-                            ValueAndType::new(generate_value(analysed_type), analysed_type.clone())
+                            ValueAndType::new(generate_value(&analysed_type), analysed_type)
                         })
                         .collect::<Vec<_>>();
 
