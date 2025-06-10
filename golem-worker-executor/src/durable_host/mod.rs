@@ -751,7 +751,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             debug!("Finalizing automatic update to version {target_version}");
                         }
                         _ => {
-                            panic!("Expected snapshot-based update description")
+                            panic!("Expected automatic update description")
                         }
                     }
                 }
@@ -797,13 +797,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         Ok(())
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum ProcessReplayEventsResult {
-    Ok,
-    RetryReplay,
-    FailReplay(GolemError),
 }
 
 #[async_trait]
