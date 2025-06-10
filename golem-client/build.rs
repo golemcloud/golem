@@ -38,10 +38,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         &[
             ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
             ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
-            (
-                "CloudPluginScope",
-                "golem_common::model::plugin::CloudPluginScope",
-            ),
+            ("PluginScope", "golem_common::model::plugin::PluginScope"),
             (
                 "ComponentMetadata",
                 "golem_common::model::component_metadata::ComponentMetadata",
@@ -51,10 +48,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::ComponentFilePathWithPermissionsList",
             ),
             ("ComponentType", "golem_common::model::ComponentType"),
-            (
-                "DefaultPluginScope",
-                "golem_common::model::plugin::DefaultPluginScope",
-            ),
             ("Empty", "golem_common::model::Empty"),
             (
                 "InitialComponentFile",

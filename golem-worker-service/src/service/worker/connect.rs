@@ -14,7 +14,7 @@
 
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_common::model::auth::CloudNamespace;
+use golem_common::model::auth::Namespace;
 use golem_common::model::WorkerId;
 use golem_service_base::clients::limit::LimitService;
 use golem_worker_service_base::service::worker::WorkerStream;
@@ -24,7 +24,7 @@ use tonic::Status;
 pub struct ConnectWorkerStream {
     stream: WorkerStream<LogEvent>,
     worker_id: WorkerId,
-    namespace: CloudNamespace,
+    namespace: Namespace,
     limit_service: Arc<dyn LimitService + Sync + Send>,
 }
 
@@ -32,7 +32,7 @@ impl ConnectWorkerStream {
     pub fn new(
         stream: WorkerStream<LogEvent>,
         worker_id: WorkerId,
-        namespace: CloudNamespace,
+        namespace: Namespace,
         limit_service: Arc<dyn LimitService + Sync + Send>,
     ) -> Self {
         Self {

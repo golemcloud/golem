@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use derive_more::FromStr;
-use golem_common::model::auth::CloudNamespace;
+use golem_common::model::auth::Namespace;
 use golem_common::model::{AccountId, PluginInstallationId, ScanCursor, WorkerId};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
 use golem_service_base::model::{ResourceMetadata, UpdateRecord};
@@ -147,13 +147,11 @@ pub struct ApiDefinitionInfo {
     pub version: ApiVersion,
 }
 
-impl From<golem_worker_service_base::gateway_api_deployment::ApiDeployment<CloudNamespace>>
+impl From<golem_worker_service_base::gateway_api_deployment::ApiDeployment<Namespace>>
     for ApiDeployment
 {
     fn from(
-        api_deployment: golem_worker_service_base::gateway_api_deployment::ApiDeployment<
-            CloudNamespace,
-        >,
+        api_deployment: golem_worker_service_base::gateway_api_deployment::ApiDeployment<Namespace>,
     ) -> Self {
         Self {
             api_definitions: api_deployment

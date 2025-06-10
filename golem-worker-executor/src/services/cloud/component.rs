@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::CloudGolemTypes;
 use crate::error::GolemError;
 use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
 use crate::metrics::component::record_compilation_time;
@@ -38,7 +37,7 @@ use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::Clo
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
-use golem_common::model::component::CloudComponentOwner;
+use golem_common::model::component::ComponentOwner;
 use golem_common::model::{AccountId, ComponentId, ComponentVersion};
 use golem_common::model::{ProjectId, RetryConfig};
 use golem_common::retries::with_retries;
@@ -63,9 +62,9 @@ pub fn configured(
     project_service_config: &ProjectServiceConfig,
     cache_config: &ComponentCacheConfig,
     compiled_config: &CompiledComponentServiceConfig,
-    blob_storage: Arc<dyn BlobStorage + Send + Sync>,
-    plugin_observations: Arc<dyn PluginsObservations + Send + Sync>,
-) -> Arc<dyn ComponentService<CloudGolemTypes> + Send + Sync> {
+    blob_storage: Arc<dyn BlobStorage>,
+    plugin_observations: Arc<dyn PluginsObservations>,
+) -> Arc<dyn ComponentService> {
     let compiled_component_service = compiled_component::configured(compiled_config, blob_storage);
     match (config, project_service_config) {
         (ComponentServiceConfig::Grpc(config), ProjectServiceConfig::Grpc(project_config)) => {
@@ -110,8 +109,7 @@ struct ComponentKey {
 
 pub struct ComponentServiceCloudGrpc {
     component_cache: Cache<ComponentKey, (), Component, GolemError>,
-    component_metadata_cache:
-        Cache<ComponentKey, (), ComponentMetadata<CloudGolemTypes>, GolemError>,
+    component_metadata_cache: Cache<ComponentKey, (), ComponentMetadata, GolemError>,
     resolved_component_cache: Cache<(ProjectId, String), (), Option<ComponentId>, GolemError>,
     access_token: Uuid,
     retry_config: RetryConfig,
@@ -338,14 +336,14 @@ impl ComponentServiceCloudGrpc {
 }
 
 #[async_trait]
-impl ComponentService<CloudGolemTypes> for ComponentServiceCloudGrpc {
+impl ComponentService for ComponentServiceCloudGrpc {
     async fn get(
         &self,
         engine: &Engine,
         account_id: &AccountId,
         component_id: &ComponentId,
         component_version: ComponentVersion,
-    ) -> Result<(Component, ComponentMetadata<CloudGolemTypes>), GolemError> {
+    ) -> Result<(Component, ComponentMetadata), GolemError> {
         let key = ComponentKey {
             component_id: component_id.clone(),
             component_version,
@@ -435,7 +433,7 @@ impl ComponentService<CloudGolemTypes> for ComponentServiceCloudGrpc {
         account_id: &AccountId,
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
-    ) -> Result<ComponentMetadata<CloudGolemTypes>, GolemError> {
+    ) -> Result<ComponentMetadata, GolemError> {
         match forced_version {
             Some(version) => {
                 let client = self.component_client.clone();
@@ -505,7 +503,7 @@ impl ComponentService<CloudGolemTypes> for ComponentServiceCloudGrpc {
     async fn resolve_component(
         &self,
         component_reference: String,
-        resolving_component: CloudComponentOwner,
+        resolving_component: ComponentOwner,
     ) -> Result<Option<ComponentId>, GolemError> {
         let component_slug = ComponentSlug::parse(&component_reference).map_err(|e| {
             GolemError::invalid_request(format!("Invalid component reference: {e}"))
@@ -603,7 +601,7 @@ async fn get_metadata_via_grpc(
     retry_config: &RetryConfig,
     component_id: &ComponentId,
     component_version: Option<ComponentVersion>,
-) -> Result<ComponentMetadata<CloudGolemTypes>, GolemError> {
+) -> Result<ComponentMetadata, GolemError> {
     let desc = format!("Getting component metadata of {component_id}");
     debug!("{}", &desc);
     with_retries(
@@ -658,7 +656,7 @@ async fn get_metadata_via_grpc(
                     }
                 }?;
 
-                let result = ComponentMetadata::<CloudGolemTypes> {
+                let result = ComponentMetadata {
                     version: component
                         .versioned_component_id
                         .as_ref()
@@ -724,7 +722,7 @@ async fn get_metadata_via_grpc(
                                 ))
                             })?,
                     ),
-                    component_owner: CloudComponentOwner {
+                    component_owner: ComponentOwner {
                         account_id: component
                             .account_id
                             .ok_or(GrpcError::Unexpected(
@@ -795,7 +793,7 @@ fn create_component_cache(
 fn create_component_metadata_cache(
     max_capacity: usize,
     time_to_idle: Duration,
-) -> Cache<ComponentKey, (), ComponentMetadata<CloudGolemTypes>, GolemError> {
+) -> Cache<ComponentKey, (), ComponentMetadata, GolemError> {
     Cache::new(
         Some(max_capacity),
         FullCacheEvictionMode::LeastRecentlyUsed(1),

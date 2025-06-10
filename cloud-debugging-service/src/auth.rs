@@ -20,7 +20,7 @@ use golem_api_grpc::proto::golem::component::v1::{
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_common::retries::with_retries;
 use golem_service_base::clients::auth::{AuthServiceError, BaseAuthService, CloudAuthService};
@@ -37,8 +37,8 @@ pub trait AuthService: BaseAuthService {
         &self,
         component_id: &ComponentId,
         permission: ProjectAction,
-        ctx: &CloudAuthCtx,
-    ) -> Result<CloudNamespace, AuthServiceError>;
+        ctx: &AuthCtx,
+    ) -> Result<Namespace, AuthServiceError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -138,7 +138,7 @@ impl AuthServiceDefault {
     async fn get_project(
         &self,
         component_id: &ComponentId,
-        metadata: &CloudAuthCtx,
+        metadata: &AuthCtx,
     ) -> Result<ProjectId, AuthServiceError> {
         let id = component_id.clone();
         let metadata = metadata.clone();
@@ -207,7 +207,7 @@ impl AuthServiceDefault {
 
 #[async_trait]
 impl BaseAuthService for AuthServiceDefault {
-    async fn get_account(&self, ctx: &CloudAuthCtx) -> Result<AccountId, AuthServiceError> {
+    async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError> {
         self.common_auth.get_account(ctx).await
     }
 
@@ -215,8 +215,8 @@ impl BaseAuthService for AuthServiceDefault {
         &self,
         project_id: &ProjectId,
         permission: ProjectAction,
-        ctx: &CloudAuthCtx,
-    ) -> Result<CloudNamespace, AuthServiceError> {
+        ctx: &AuthCtx,
+    ) -> Result<Namespace, AuthServiceError> {
         self.common_auth
             .authorize_project_action(project_id, permission, ctx)
             .await
@@ -229,8 +229,8 @@ impl AuthService for AuthServiceDefault {
         &self,
         component_id: &ComponentId,
         permission: ProjectAction,
-        ctx: &CloudAuthCtx,
-    ) -> Result<CloudNamespace, AuthServiceError> {
+        ctx: &AuthCtx,
+    ) -> Result<Namespace, AuthServiceError> {
         let project_id = self.get_project(component_id, ctx).await?;
 
         self.authorize_project_action(&project_id, permission, ctx)

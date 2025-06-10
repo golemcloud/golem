@@ -28,7 +28,6 @@ use golem_api_grpc::proto::golem::component::v1::{
     ListPluginsRequest, ListPluginsResponse, ListPluginsSuccessResponse,
 };
 use golem_api_grpc::proto::golem::component::PluginDefinition;
-use golem_common::model::plugin::CloudPluginScope;
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::model::plugin::PluginDefinitionCreation;
@@ -330,7 +329,7 @@ impl PluginService for PluginGrpcApi {
 
 pub fn grpc_to_plugin_creation(
     value: golem_api_grpc::proto::golem::component::v1::CreatePluginRequest,
-) -> Result<PluginDefinitionCreation<CloudPluginScope>, String> {
+) -> Result<PluginDefinitionCreation, String> {
     let plugin = value.plugin.ok_or("missing plugin definition")?;
 
     let converted = PluginDefinitionCreation {

@@ -18,39 +18,36 @@ use crate::api::dto;
 use crate::model as domain;
 use crate::service::plugin::{PluginError, PluginService};
 use futures::{stream, StreamExt, TryStreamExt};
-use golem_common::model::component::ComponentOwner;
-use golem_common::model::plugin::{PluginInstallation, PluginScope};
+use golem_common::model::plugin::{PluginInstallation, PluginOwner};
 
 #[async_trait::async_trait]
-pub trait ApiMapper<Owner: ComponentOwner>: Send + Sync {
+pub trait ApiMapper: Send + Sync {
     async fn convert_plugin_installation(
         &self,
-        owner: &Owner::PluginOwner,
+        owner: &PluginOwner,
         plugin_installation: PluginInstallation,
     ) -> Result<dto::PluginInstallation, PluginError>;
     async fn convert_component(
         &self,
-        component: domain::Component<Owner>,
+        component: domain::Component,
     ) -> Result<dto::Component, PluginError>;
 }
 
-pub struct DefaultApiMapper<Owner: ComponentOwner, Scope: PluginScope> {
-    plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope>>,
+pub struct DefaultApiMapper {
+    plugin_service: Arc<dyn PluginService>,
 }
 
-impl<Owner: ComponentOwner, Scope: PluginScope> DefaultApiMapper<Owner, Scope> {
-    pub fn new(plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope>>) -> Self {
+impl DefaultApiMapper {
+    pub fn new(plugin_service: Arc<dyn PluginService>) -> Self {
         Self { plugin_service }
     }
 }
 
 #[async_trait::async_trait]
-impl<Owner: ComponentOwner, Scope: PluginScope> ApiMapper<Owner>
-    for DefaultApiMapper<Owner, Scope>
-{
+impl ApiMapper for DefaultApiMapper {
     async fn convert_plugin_installation(
         &self,
-        owner: &Owner::PluginOwner,
+        owner: &PluginOwner,
         plugin_installation: PluginInstallation,
     ) -> Result<dto::PluginInstallation, PluginError> {
         let definition = self
@@ -66,7 +63,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ApiMapper<Owner>
 
     async fn convert_component(
         &self,
-        component: domain::Component<Owner>,
+        component: domain::Component,
     ) -> Result<dto::Component, PluginError> {
         let installed_plugins = stream::iter(component.installed_plugins)
             .then(async |p| {

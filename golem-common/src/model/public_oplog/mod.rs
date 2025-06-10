@@ -18,7 +18,7 @@ mod protobuf;
 #[cfg(test)]
 mod tests;
 
-use super::plugin::{PluginDefinition, PluginOwner, PluginScope};
+use super::plugin::PluginDefinition;
 use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{
@@ -225,8 +225,8 @@ pub struct PluginInstallationDescription {
 }
 
 impl PluginInstallationDescription {
-    pub fn from_definition_and_installation<Owner: PluginOwner, Scope: PluginScope>(
-        definition: PluginDefinition<Owner, Scope>,
+    pub fn from_definition_and_installation(
+        definition: PluginDefinition,
         installation: PluginInstallation,
     ) -> Self {
         Self {

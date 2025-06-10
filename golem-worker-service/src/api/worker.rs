@@ -21,7 +21,7 @@ use crate::service::worker::{
 use futures::StreamExt;
 use futures_util::TryStreamExt;
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::auth::{ProjectAction, TokenSecret};
 use golem_common::model::error::{
     ErrorBody, ErrorsBody, GolemError, GolemErrorBody, GolemErrorUnknown,
@@ -254,7 +254,7 @@ impl From<AuthServiceError> for WorkerError {
 }
 
 pub struct WorkerApi {
-    component_service: Arc<dyn ComponentService<CloudNamespace, CloudAuthCtx>>,
+    component_service: Arc<dyn ComponentService<Namespace, AuthCtx>>,
     worker_service: Arc<dyn WorkerService + Send + Sync>,
     worker_auth_service: Arc<dyn AuthService + Send + Sync>,
 }
@@ -262,7 +262,7 @@ pub struct WorkerApi {
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
 impl WorkerApi {
     pub fn new(
-        component_service: Arc<dyn ComponentService<CloudNamespace, CloudAuthCtx>>,
+        component_service: Arc<dyn ComponentService<Namespace, AuthCtx>>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         auth_service: Arc<dyn AuthService + Send + Sync>,
     ) -> Self {
@@ -312,7 +312,7 @@ impl WorkerApi {
         request: WorkerCreationRequest,
         token: GolemSecurityScheme,
     ) -> Result<Json<WorkerCreationResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let latest_component = self
             .component_service
             .get_latest(&component_id, &auth)
@@ -385,7 +385,7 @@ impl WorkerApi {
         worker_id: WorkerId,
         token: GolemSecurityScheme,
     ) -> Result<Json<DeleteWorkerResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::DeleteWorker, &auth)
@@ -442,7 +442,7 @@ impl WorkerApi {
         params: InvokeParameters,
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResult>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
         let namespace = self
             .worker_auth_service
@@ -573,7 +573,7 @@ impl WorkerApi {
         params: InvokeParameters,
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(
@@ -686,7 +686,7 @@ impl WorkerApi {
         params: CompleteParameters,
         token: GolemSecurityScheme,
     ) -> Result<Json<bool>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let CompleteParameters { oplog_idx, data } = params;
 
         let namespace = self
@@ -740,7 +740,7 @@ impl WorkerApi {
         recover_immediately: Option<bool>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InterruptResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
@@ -798,7 +798,7 @@ impl WorkerApi {
         worker_id: WorkerId,
         token: GolemSecurityScheme,
     ) -> Result<Json<model::WorkerMetadata>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
@@ -879,7 +879,7 @@ impl WorkerApi {
         precise: Option<bool>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&component_id, ProjectAction::ViewWorker, &auth)
@@ -970,7 +970,7 @@ impl WorkerApi {
         params: WorkersMetadataRequest,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&component_id, ProjectAction::ViewWorker, &auth)
@@ -1022,7 +1022,7 @@ impl WorkerApi {
         worker_id: WorkerId,
         token: GolemSecurityScheme,
     ) -> Result<Json<ResumeResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
@@ -1065,7 +1065,7 @@ impl WorkerApi {
         params: UpdateWorkerRequest,
         token: GolemSecurityScheme,
     ) -> Result<Json<UpdateWorkerResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
@@ -1119,7 +1119,7 @@ impl WorkerApi {
         query: Option<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetOplogResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
@@ -1194,7 +1194,7 @@ impl WorkerApi {
         file_name: String,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetFilesResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let path = make_component_file_path(file_name)?;
 
         let namespace = self
@@ -1242,7 +1242,7 @@ impl WorkerApi {
         file_name: String,
         token: GolemSecurityScheme,
     ) -> Result<Binary<Body>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let path = make_component_file_path(file_name)?;
 
         let namespace = self
@@ -1297,7 +1297,7 @@ impl WorkerApi {
         plugin_installation_id: PluginInstallationId,
         token: GolemSecurityScheme,
     ) -> Result<Json<ActivatePluginResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
@@ -1347,7 +1347,7 @@ impl WorkerApi {
         plugin_installation_id: PluginInstallationId,
         token: GolemSecurityScheme,
     ) -> Result<Json<DeactivatePluginResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
@@ -1394,7 +1394,7 @@ impl WorkerApi {
         target: RevertWorkerTarget,
         token: GolemSecurityScheme,
     ) -> Result<Json<RevertWorkerResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
@@ -1444,7 +1444,7 @@ impl WorkerApi {
         idempotency_key: IdempotencyKey,
         token: GolemSecurityScheme,
     ) -> Result<Json<CancelInvocationResponse>> {
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
@@ -1518,7 +1518,7 @@ impl WorkerApi {
         worker_id: WorkerId,
         token: TokenSecret,
     ) -> Result<ConnectWorkerStream> {
-        let auth = CloudAuthCtx::new(token);
+        let auth = AuthCtx::new(token);
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)

@@ -48,7 +48,7 @@ use golem_common::grpc::{
     proto_target_worker_id_string, proto_worker_id_string,
 };
 use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
@@ -70,7 +70,7 @@ use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
 pub struct WorkerGrpcApi {
-    component_service: Arc<dyn ComponentService<CloudNamespace, CloudAuthCtx>>,
+    component_service: Arc<dyn ComponentService<Namespace, AuthCtx>>,
     worker_service: Arc<dyn WorkerService + Send + Sync>,
     auth_service: Arc<dyn AuthService + Send + Sync>,
 }
@@ -728,7 +728,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
 
 impl WorkerGrpcApi {
     pub fn new(
-        component_service: Arc<dyn ComponentService<CloudNamespace, CloudAuthCtx>>,
+        component_service: Arc<dyn ComponentService<Namespace, AuthCtx>>,
         worker_service: Arc<dyn WorkerService + Send + Sync>,
         auth_service: Arc<dyn AuthService + Send + Sync>,
     ) -> Self {
@@ -739,9 +739,9 @@ impl WorkerGrpcApi {
         }
     }
 
-    fn auth(&self, metadata: MetadataMap) -> Result<CloudAuthCtx, GrpcWorkerError> {
+    fn auth(&self, metadata: MetadataMap) -> Result<AuthCtx, GrpcWorkerError> {
         match get_authorisation_token(metadata) {
-            Some(t) => Ok(CloudAuthCtx::new(t)),
+            Some(t) => Ok(AuthCtx::new(t)),
             None => Err(GrpcWorkerError {
                 error: Some(worker_error::Error::Unauthorized(ErrorBody {
                     error: "Missing token".into(),

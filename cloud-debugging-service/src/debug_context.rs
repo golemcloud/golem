@@ -63,7 +63,6 @@ use golem_worker_executor::workerctx::{
     InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
-use golem_worker_executor::GolemTypes;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
@@ -71,22 +70,22 @@ use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
-pub struct DebugContext<T: GolemTypes> {
+pub struct DebugContext {
     pub durable_ctx: DurableWorkerCtx<Self>,
 }
 
-impl<T: GolemTypes> DurableWorkerCtxView<DebugContext<T>> for DebugContext<T> {
-    fn durable_ctx(&self) -> &DurableWorkerCtx<DebugContext<T>> {
+impl DurableWorkerCtxView<DebugContext> for DebugContext {
+    fn durable_ctx(&self) -> &DurableWorkerCtx<DebugContext> {
         &self.durable_ctx
     }
 
-    fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<DebugContext<T>> {
+    fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<DebugContext> {
         &mut self.durable_ctx
     }
 }
 
 #[async_trait]
-impl<T: GolemTypes> FuelManagement for DebugContext<T> {
+impl FuelManagement for DebugContext {
     fn is_out_of_fuel(&self, _current_level: i64) -> bool {
         false
     }
@@ -103,7 +102,7 @@ impl<T: GolemTypes> FuelManagement for DebugContext<T> {
 }
 
 #[async_trait]
-impl<T: GolemTypes> ExternalOperations<Self> for DebugContext<T> {
+impl ExternalOperations<Self> for DebugContext {
     type ExtraDeps = AdditionalDeps;
 
     async fn get_last_error_and_retry_count<This: HasAll<Self> + Send + Sync>(
@@ -166,7 +165,7 @@ impl<T: GolemTypes> ExternalOperations<Self> for DebugContext<T> {
 }
 
 #[async_trait]
-impl<T: GolemTypes> InvocationManagement for DebugContext<T> {
+impl InvocationManagement for DebugContext {
     async fn set_current_idempotency_key(&mut self, idempotency_key: IdempotencyKey) {
         self.durable_ctx
             .set_current_idempotency_key(idempotency_key)
@@ -198,7 +197,7 @@ impl<T: GolemTypes> InvocationManagement for DebugContext<T> {
 }
 
 #[async_trait]
-impl<T: GolemTypes> StatusManagement for DebugContext<T> {
+impl StatusManagement for DebugContext {
     fn check_interrupt(&self) -> Option<InterruptKind> {
         if self.is_live() {
             Some(InterruptKind::Suspend)
@@ -233,7 +232,7 @@ impl<T: GolemTypes> StatusManagement for DebugContext<T> {
 }
 
 #[async_trait]
-impl<T: GolemTypes> InvocationHooks for DebugContext<T> {
+impl InvocationHooks for DebugContext {
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
@@ -262,7 +261,7 @@ impl<T: GolemTypes> InvocationHooks for DebugContext<T> {
 }
 
 #[async_trait]
-impl<T: GolemTypes> UpdateManagement for DebugContext<T> {
+impl UpdateManagement for DebugContext {
     fn begin_call_snapshotting_function(&mut self) {
         self.durable_ctx.begin_call_snapshotting_function()
     }
@@ -294,7 +293,7 @@ impl<T: GolemTypes> UpdateManagement for DebugContext<T> {
 }
 
 #[async_trait]
-impl<T: GolemTypes> IndexedResourceStore for DebugContext<T> {
+impl IndexedResourceStore for DebugContext {
     fn get_indexed_resource(
         &self,
         resource_name: &str,
@@ -322,7 +321,7 @@ impl<T: GolemTypes> IndexedResourceStore for DebugContext<T> {
 }
 
 #[async_trait]
-impl<T: GolemTypes> ResourceStore for DebugContext<T> {
+impl ResourceStore for DebugContext {
     fn self_uri(&self) -> Uri {
         self.durable_ctx.self_uri()
     }
@@ -341,7 +340,7 @@ impl<T: GolemTypes> ResourceStore for DebugContext<T> {
 }
 
 #[async_trait]
-impl<T: GolemTypes> FileSystemReading for DebugContext<T> {
+impl FileSystemReading for DebugContext {
     async fn list_directory(
         &self,
         path: &ComponentFilePath,
@@ -355,7 +354,7 @@ impl<T: GolemTypes> FileSystemReading for DebugContext<T> {
 }
 
 #[async_trait]
-impl<T: GolemTypes> ResourceLimiterAsync for DebugContext<T> {
+impl ResourceLimiterAsync for DebugContext {
     async fn memory_growing(
         &mut self,
         _current: usize,
@@ -381,7 +380,7 @@ impl<T: GolemTypes> ResourceLimiterAsync for DebugContext<T> {
     }
 }
 
-impl<T: GolemTypes> HostWasmRpc for DebugContext<T> {
+impl HostWasmRpc for DebugContext {
     async fn new(
         &mut self,
         worker_id: golem_wasm_rpc::golem_rpc_0_2_x::types::WorkerId,
@@ -455,7 +454,7 @@ impl<T: GolemTypes> HostWasmRpc for DebugContext<T> {
     }
 }
 
-impl<T: GolemTypes> HostFutureInvokeResult for DebugContext<T> {
+impl HostFutureInvokeResult for DebugContext {
     async fn subscribe(
         &mut self,
         self_: Resource<FutureInvokeResult>,
@@ -476,13 +475,13 @@ impl<T: GolemTypes> HostFutureInvokeResult for DebugContext<T> {
 }
 
 #[async_trait]
-impl<T: GolemTypes> DynamicLinking<Self> for DebugContext<T> {
+impl DynamicLinking<Self> for DebugContext {
     fn link(
         &mut self,
         engine: &Engine,
         linker: &mut Linker<Self>,
         component: &Component,
-        component_metadata: &ComponentMetadata<T>,
+        component_metadata: &ComponentMetadata,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -490,7 +489,7 @@ impl<T: GolemTypes> DynamicLinking<Self> for DebugContext<T> {
 }
 
 #[async_trait]
-impl<T: GolemTypes> InvocationContextManagement for DebugContext<T> {
+impl InvocationContextManagement for DebugContext {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, invocation_context::AttributeValue)],
@@ -532,9 +531,8 @@ impl<T: GolemTypes> InvocationContextManagement for DebugContext<T> {
 }
 
 #[async_trait]
-impl<T: GolemTypes> WorkerCtx for DebugContext<T> {
+impl WorkerCtx for DebugContext {
     type PublicState = PublicDurableWorkerState<Self>;
-    type Types = T;
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
@@ -544,7 +542,7 @@ impl<T: GolemTypes> WorkerCtx for DebugContext<T> {
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
-        event_service: Arc<dyn WorkerEventService + Send + Sync>,
+        event_service: Arc<dyn WorkerEventService>,
         _active_workers: Arc<ActiveWorkers<Self>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
@@ -552,13 +550,13 @@ impl<T: GolemTypes> WorkerCtx for DebugContext<T> {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
-        component_service: Arc<dyn ComponentService<T>>,
+        component_service: Arc<dyn ComponentService>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<T>>,
+        plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
     ) -> Result<Self, GolemError> {
@@ -615,7 +613,7 @@ impl<T: GolemTypes> WorkerCtx for DebugContext<T> {
         self.durable_ctx.owned_worker_id()
     }
 
-    fn component_metadata(&self) -> &ComponentMetadata<T> {
+    fn component_metadata(&self) -> &ComponentMetadata {
         self.durable_ctx.component_metadata()
     }
 
@@ -644,7 +642,7 @@ impl<T: GolemTypes> WorkerCtx for DebugContext<T> {
             .await
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types>> {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
         self.durable_ctx().component_service()
     }
 }

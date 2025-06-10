@@ -20,7 +20,7 @@ use crate::from_value::{
 use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
 use bincode::Encode;
-use golem_common::model::auth::CloudNamespace;
+use golem_common::model::auth::Namespace;
 use golem_common::model::oplog::{
     DurableFunctionType, IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
@@ -214,12 +214,12 @@ impl Display for DebugSessionId {
 
 #[derive(Clone)]
 pub struct ActiveSessionData {
-    pub cloud_namespace: CloudNamespace,
+    pub cloud_namespace: Namespace,
     pub worker_id: WorkerId,
 }
 
 impl ActiveSessionData {
-    pub fn new(cloud_namespace: CloudNamespace, worker_id: WorkerId) -> Self {
+    pub fn new(cloud_namespace: Namespace, worker_id: WorkerId) -> Self {
         Self {
             cloud_namespace,
             worker_id,
@@ -233,7 +233,7 @@ pub struct ActiveSession {
 }
 
 impl ActiveSession {
-    pub async fn set_active_session(&self, worker_id: WorkerId, cloud_namespace: CloudNamespace) {
+    pub async fn set_active_session(&self, worker_id: WorkerId, cloud_namespace: Namespace) {
         let mut active_session = self.active_session.write().unwrap();
         *active_session = Some(ActiveSessionData::new(cloud_namespace, worker_id));
     }

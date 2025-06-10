@@ -19,7 +19,6 @@ use golem_api_grpc::proto::golem::component::v1::component_error::Error;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plugin::PluginDefinition;
-use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
 use golem_common::model::{PluginId, RetryConfig};
 use golem_common::retries::with_retries;
 use golem_common::SafeDisplay;
@@ -35,13 +34,13 @@ pub trait PluginServiceClient {
         name: &str,
         version: &str,
         token: &TokenSecret,
-    ) -> Result<Option<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, PluginError>;
+    ) -> Result<Option<PluginDefinition>, PluginError>;
 
     async fn get_by_id(
         &self,
         id: &PluginId,
         token: &TokenSecret,
-    ) -> Result<Option<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, PluginError>;
+    ) -> Result<Option<PluginDefinition>, PluginError>;
 }
 
 #[derive(Clone)]
@@ -84,7 +83,7 @@ impl PluginServiceClient for PluginServiceClientDefault {
         name: &str,
         version: &str,
         token: &TokenSecret,
-    ) -> Result<Option<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, PluginError> {
+    ) -> Result<Option<PluginDefinition>, PluginError> {
         with_retries(
             "plugin",
             "get",
@@ -130,7 +129,7 @@ impl PluginServiceClient for PluginServiceClientDefault {
         &self,
         id: &PluginId,
         token: &TokenSecret,
-    ) -> Result<Option<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, PluginError> {
+    ) -> Result<Option<PluginDefinition>, PluginError> {
         with_retries(
             "plugin",
             "get",

@@ -15,7 +15,7 @@
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::model::{ApiDomain, DomainRequest};
 use crate::service::api_domain::ApiDomainService;
-use golem_common::model::auth::CloudAuthCtx;
+use golem_common::model::auth::AuthCtx;
 use golem_common::model::ProjectId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -50,7 +50,7 @@ impl ApiDomainApi {
         );
         let response = self
             .domain_service
-            .create_or_update(&payload.0, &CloudAuthCtx::new(token))
+            .create_or_update(&payload.0, &AuthCtx::new(token))
             .instrument(record.span.clone())
             .await
             .map(Json)
@@ -73,7 +73,7 @@ impl ApiDomainApi {
             recorded_http_api_request!("get_domains", project_id = project_id_query.0.to_string());
         let response = self
             .domain_service
-            .get(&project_id_query.0, &CloudAuthCtx::new(token))
+            .get(&project_id_query.0, &AuthCtx::new(token))
             .instrument(record.span.clone())
             .await
             .map(Json)
@@ -98,11 +98,7 @@ impl ApiDomainApi {
         );
         let response = self
             .domain_service
-            .delete(
-                &project_id_query.0,
-                &domain_query.0,
-                &CloudAuthCtx::new(token),
-            )
+            .delete(&project_id_query.0, &domain_query.0, &AuthCtx::new(token))
             .instrument(record.span.clone())
             .await
             .map(|_| Json("API domain deleted".to_string()))
