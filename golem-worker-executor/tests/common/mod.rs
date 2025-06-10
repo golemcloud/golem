@@ -1,34 +1,9 @@
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
 use anyhow::Error;
 use async_trait::async_trait;
+use bytes::Bytes;
+use dashmap::DashMap;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
-};
-use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
-use golem_service_base::storage::blob::BlobStorage;
-use golem_test_framework::components::cloud_service::CloudService;
-use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
-use golem_worker_executor::cloud::CloudGolemTypes;
-use golem_worker_executor::error::GolemError;
-use golem_worker_executor::services::file_loader::FileLoader;
-use golem_worker_executor::services::golem_config::{
-    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
-    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, ProjectServiceConfig,
-    ProjectServiceDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
-};
-use prometheus::Registry;
-use std::collections::HashSet;
-use std::path::Path;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, RwLock, Weak};
-
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     get_running_workers_metadata_response, get_workers_metadata_response,
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
@@ -38,8 +13,18 @@ use golem_common::config::RedisConfig;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::WorkerResourceId;
+use golem_common::model::oplog::{OplogEntry, OplogPayload, UpdateDescription};
+use golem_common::model::{
+    AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OplogIndex,
+    OwnedWorkerId, PluginInstallationId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+};
+use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
+use golem_service_base::storage::blob::BlobStorage;
+use golem_test_framework::components::cloud_service::CloudService;
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::rdb::Rdb;
 use golem_test_framework::components::redis::Redis;
@@ -50,9 +35,13 @@ use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{FutureInvokeResult, WasmRpc};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{HostFutureInvokeResult, Pollable};
+use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
+use golem_worker_executor::cloud::CloudGolemTypes;
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
+use golem_worker_executor::error::GolemError;
 use golem_worker_executor::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
     ReadFileResult, TrapType, WorkerConfig,
@@ -63,11 +52,24 @@ use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::{ComponentMetadata, ComponentService};
 use golem_worker_executor::services::events::Events;
+use golem_worker_executor::services::file_loader::FileLoader;
+use golem_worker_executor::services::golem_config::{
+    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
+    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
+    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, ProjectServiceConfig,
+    ProjectServiceDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+};
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
-use golem_worker_executor::services::oplog::{Oplog, OplogService};
+use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
 use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
 use golem_worker_executor::services::promise::PromiseService;
+use golem_worker_executor::services::rdbms::mysql::MysqlType;
+use golem_worker_executor::services::rdbms::postgres::PostgresType;
+use golem_worker_executor::services::rdbms::{
+    DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsTransactionId,
+    RdbmsTransactionStatus, RdbmsType,
+};
 use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
 use golem_worker_executor::services::scheduler::SchedulerService;
@@ -84,12 +86,6 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{
     rdbms, resource_limits, All, HasAll, HasConfig, HasOplogService,
 };
-use golem_worker_executor::services::rdbms::mysql::MysqlType;
-use golem_worker_executor::services::rdbms::postgres::PostgresType;
-use golem_worker_executor::services::rdbms::{
-    DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsTransactionId,
-    RdbmsTransactionStatus, RdbmsType,
-};
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
@@ -98,6 +94,15 @@ use golem_worker_executor::workerctx::{
     UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails};
+use prometheus::Registry;
+use regex::Regex;
+use std::collections::HashSet;
+use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
+use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, RwLock, Weak};
+use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
@@ -107,8 +112,6 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
-use regex::Regex;
-use dashmap::DashMap;
 
 pub struct TestWorkerExecutor {
     _join_set: Option<JoinSet<anyhow::Result<()>>>,

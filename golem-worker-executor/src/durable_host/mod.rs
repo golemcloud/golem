@@ -2531,7 +2531,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 
                 if restart {
                     // We need to jump to the end of the oplog
-                    self.replay_state.switch_to_live();
+                    self.replay_state.switch_to_live().await;
 
                     // But this is not enough, because if the retried batched write operation succeeds,
                     // and later we replay it, we need to skip the first attempt and only replay the second.
