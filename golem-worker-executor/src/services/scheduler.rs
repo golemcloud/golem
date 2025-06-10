@@ -429,6 +429,7 @@ mod tests {
     use chrono::DateTime;
 
     use crate::error::GolemError;
+    use crate::services::golem_config::GolemConfig;
     use crate::services::oplog::{Oplog, OplogService, PrimaryOplogService};
     use crate::services::promise::PromiseServiceMock;
     use crate::services::scheduler::{
@@ -507,8 +508,14 @@ mod tests {
         kvs: Arc<InMemoryKeyValueStorage>,
         shard_service: Arc<dyn ShardService>,
         oplog_service: Arc<dyn OplogService>,
+        config: Arc<GolemConfig>,
     ) -> Arc<dyn WorkerService> {
-        Arc::new(DefaultWorkerService::new(kvs, shard_service, oplog_service))
+        Arc::new(DefaultWorkerService::new(
+            kvs,
+            shard_service,
+            oplog_service,
+            config,
+        ))
     }
 
     #[test]
@@ -547,8 +554,13 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service =
-            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
+        let golem_config = Arc::new(GolemConfig::default());
+        let worker_service = create_worker_service_mock(
+            kvs.clone(),
+            shard_service.clone(),
+            oplog_service.clone(),
+            golem_config,
+        );
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -664,8 +676,14 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service =
-            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
+        let golem_config = Arc::new(GolemConfig::default());
+
+        let worker_service = create_worker_service_mock(
+            kvs.clone(),
+            shard_service.clone(),
+            oplog_service.clone(),
+            golem_config,
+        );
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -766,8 +784,13 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service =
-            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
+        let golem_config = Arc::new(GolemConfig::default());
+        let worker_service = create_worker_service_mock(
+            kvs.clone(),
+            shard_service.clone(),
+            oplog_service.clone(),
+            golem_config,
+        );
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -873,8 +896,13 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service =
-            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
+        let golem_config = Arc::new(GolemConfig::default());
+        let worker_service = create_worker_service_mock(
+            kvs.clone(),
+            shard_service.clone(),
+            oplog_service.clone(),
+            golem_config,
+        );
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -978,8 +1006,13 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service =
-            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
+        let golem_config = Arc::new(GolemConfig::default());
+        let worker_service = create_worker_service_mock(
+            kvs.clone(),
+            shard_service.clone(),
+            oplog_service.clone(),
+            golem_config,
+        );
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -1089,8 +1122,13 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let worker_service =
-            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
+        let golem_config = Arc::new(GolemConfig::default());
+        let worker_service = create_worker_service_mock(
+            kvs.clone(),
+            shard_service.clone(),
+            oplog_service.clone(),
+            golem_config,
+        );
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
