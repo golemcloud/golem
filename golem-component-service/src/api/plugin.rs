@@ -14,10 +14,10 @@
 
 use crate::api::{ApiTags, ComponentError, Result};
 use crate::service::plugin::CloudPluginService;
-use golem_common::model::auth::CloudAuthCtx;
+use golem_common::model::auth::AuthCtx;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::PluginDefinition;
-use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
+use golem_common::model::plugin::PluginScope;
 use golem_common::model::Empty;
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::api::dto;
@@ -42,11 +42,11 @@ impl PluginApi {
     #[oai(path = "/", method = "get", operation_id = "list_plugins")]
     pub async fn list_plugins(
         &self,
-        scope: Query<Option<CloudPluginScope>>,
+        scope: Query<Option<PluginScope>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>>> {
+    ) -> Result<Json<Vec<PluginDefinition>>> {
         let record = recorded_http_api_request!("list_plugins",);
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
         let response = if let Some(scope) = scope.0 {
             self.plugin_service
@@ -73,9 +73,9 @@ impl PluginApi {
         &self,
         name: Path<String>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>>> {
+    ) -> Result<Json<Vec<PluginDefinition>>> {
         let record = recorded_http_api_request!("list_plugin_versions", plugin_name = name.0);
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
         let response = self
             .plugin_service
@@ -92,7 +92,7 @@ impl PluginApi {
     #[oai(path = "/", method = "post", operation_id = "create_plugin")]
     pub async fn create_plugin(
         &self,
-        plugin: Json<dto::PluginDefinitionCreation<CloudPluginScope>>,
+        plugin: Json<dto::PluginDefinitionCreation>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Empty>> {
         let record = recorded_http_api_request!(
@@ -100,7 +100,7 @@ impl PluginApi {
             plugin_name = plugin.name,
             plugin_version = plugin.version
         );
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
         let response = self
             .plugin_service
@@ -121,7 +121,7 @@ impl PluginApi {
     )]
     pub async fn create_library_plugin(
         &self,
-        plugin: dto::LibraryPluginDefinitionCreation<CloudPluginScope>,
+        plugin: dto::LibraryPluginDefinitionCreation,
         token: GolemSecurityScheme,
     ) -> Result<Json<Empty>> {
         let record = recorded_http_api_request!(
@@ -129,7 +129,7 @@ impl PluginApi {
             plugin_name = plugin.name,
             plugin_version = plugin.version
         );
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
         let response = self
             .plugin_service
@@ -150,7 +150,7 @@ impl PluginApi {
     )]
     pub async fn create_app_plugin(
         &self,
-        plugin: dto::AppPluginDefinitionCreation<CloudPluginScope>,
+        plugin: dto::AppPluginDefinitionCreation,
         token: GolemSecurityScheme,
     ) -> Result<Json<Empty>> {
         let record = recorded_http_api_request!(
@@ -158,7 +158,7 @@ impl PluginApi {
             plugin_name = plugin.name,
             plugin_version = plugin.version
         );
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
         let response = self
             .plugin_service
@@ -178,13 +178,13 @@ impl PluginApi {
         name: Path<String>,
         version: Path<String>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<PluginDefinition<CloudPluginOwner, CloudPluginScope>>> {
+    ) -> Result<Json<PluginDefinition>> {
         let record = recorded_http_api_request!(
             "get_plugin",
             plugin_name = name.0,
             plugin_version = version.0
         );
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
         let response = self
             .plugin_service
@@ -219,7 +219,7 @@ impl PluginApi {
             plugin_name = name.0,
             plugin_version = version.0
         );
-        let auth = CloudAuthCtx::new(token.secret());
+        let auth = AuthCtx::new(token.secret());
 
         let response = self
             .plugin_service

@@ -14,9 +14,8 @@
 
 use crate::api::dto;
 use futures::{stream, StreamExt, TryStreamExt};
-use golem_common::model::component::CloudComponentOwner;
 use golem_common::model::plugin::PluginInstallation;
-use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
+use golem_common::model::plugin::PluginOwner;
 use golem_component_service_base::model as domain;
 use golem_component_service_base::service::plugin::{PluginError, PluginService};
 use std::sync::Arc;
@@ -25,22 +24,22 @@ use std::sync::Arc;
 pub trait CloudApiMapper: Send + Sync {
     async fn convert_plugin_installation(
         &self,
-        owner: &CloudPluginOwner,
+        owner: &PluginOwner,
         plugin_installation: PluginInstallation,
     ) -> Result<dto::PluginInstallation, PluginError>;
 
     async fn convert_component(
         &self,
-        component: domain::Component<CloudComponentOwner>,
+        component: domain::Component,
     ) -> Result<dto::Component, PluginError>;
 }
 
 pub struct DefaultCloudApiMapper {
-    plugin_service: Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>,
+    plugin_service: Arc<dyn PluginService>,
 }
 
 impl DefaultCloudApiMapper {
-    pub fn new(plugin_service: Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>) -> Self {
+    pub fn new(plugin_service: Arc<dyn PluginService>) -> Self {
         Self { plugin_service }
     }
 }
@@ -49,7 +48,7 @@ impl DefaultCloudApiMapper {
 impl CloudApiMapper for DefaultCloudApiMapper {
     async fn convert_plugin_installation(
         &self,
-        owner: &CloudPluginOwner,
+        owner: &PluginOwner,
         plugin_installation: PluginInstallation,
     ) -> Result<dto::PluginInstallation, PluginError> {
         let definition = self
@@ -65,7 +64,7 @@ impl CloudApiMapper for DefaultCloudApiMapper {
 
     async fn convert_component(
         &self,
-        component: domain::Component<CloudComponentOwner>,
+        component: domain::Component,
     ) -> Result<dto::Component, PluginError> {
         let installed_plugins = stream::iter(component.installed_plugins)
             .then(async |p| {

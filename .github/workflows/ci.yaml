@@ -35,7 +35,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: v2-rust
+          prefix-key: v3-rust
           shared-key: debug
           cache-all-crates: true
           save-if: true
@@ -66,7 +66,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: v2-rust
+          prefix-key: v3-rust
           shared-key: debug
           cache-all-crates: true
           save-if: false
@@ -121,7 +121,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: v2-rust
+          prefix-key: v3-rust
           shared-key: debug
           cache-all-crates: true
           save-if: false
@@ -178,7 +178,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: v2-rust
+          prefix-key: v3-rust
           shared-key: debug
           cache-all-crates: true
           save-if: false
@@ -223,7 +223,7 @@ jobs:
         run: cargo install --force --locked cargo-component@0.21.1
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: v2-rust
+          prefix-key: v3-rust
           shared-key: debug
           cache-all-crates: true
           save-if: false
@@ -273,7 +273,7 @@ jobs:
         run: rustup target add ${{ matrix.platform.target }}
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: v2-rust
+          prefix-key: v3-rust
           shared-key: debug
           cache-all-crates: true
           save-if: false
@@ -457,7 +457,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
         with:
-          prefix-key: v2-rust
+          prefix-key: v3-rust
           shared-key: release
           cache-all-crates: true
           save-if: true

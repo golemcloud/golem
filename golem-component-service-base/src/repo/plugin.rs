@@ -16,21 +16,19 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::plugin::{
     AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
-    OplogProcessorDefinition, PluginDefinition, PluginOwner, PluginScope,
-    PluginTypeSpecificDefinition, PluginWasmFileKey,
+    OplogProcessorDefinition, PluginDefinition, PluginTypeSpecificDefinition, PluginWasmFileKey,
 };
 use golem_common::model::{ComponentId, PluginId};
-use golem_common::repo::RowMeta;
+use golem_common::repo::{PluginOwnerRow, PluginScopeRow, RowMeta};
 use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
 use sqlx::QueryBuilder;
 use std::fmt::{Debug, Formatter};
-use std::marker::PhantomData;
 use tracing::{debug, info_span, Instrument, Span};
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
-pub struct PluginRecord<Owner: PluginOwner, Scope: PluginScope> {
+pub struct PluginRecord {
     id: Uuid,
     name: String,
     version: String,
@@ -39,9 +37,9 @@ pub struct PluginRecord<Owner: PluginOwner, Scope: PluginScope> {
     homepage: String,
     plugin_type: i16,
     #[sqlx(flatten)]
-    scope: Scope::Row,
+    scope: PluginScopeRow,
     #[sqlx(flatten)]
-    owner: Owner::Row,
+    owner: PluginOwnerRow,
 
     // for ComponentTransformer plugin type
     provided_wit_package: Option<String>,
@@ -60,10 +58,8 @@ pub struct PluginRecord<Owner: PluginOwner, Scope: PluginScope> {
     deleted: bool,
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope> From<PluginDefinition<Owner, Scope>>
-    for PluginRecord<Owner, Scope>
-{
-    fn from(value: PluginDefinition<Owner, Scope>) -> Self {
+impl From<PluginDefinition> for PluginRecord {
+    fn from(value: PluginDefinition) -> Self {
         Self {
             id: value.id.0,
             name: value.name,
@@ -120,12 +116,10 @@ impl<Owner: PluginOwner, Scope: PluginScope> From<PluginDefinition<Owner, Scope>
     }
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope> TryFrom<PluginRecord<Owner, Scope>>
-    for PluginDefinition<Owner, Scope>
-{
+impl TryFrom<PluginRecord> for PluginDefinition {
     type Error = String;
 
-    fn try_from(value: PluginRecord<Owner, Scope>) -> Result<Self, Self::Error> {
+    fn try_from(value: PluginRecord) -> Result<Self, Self::Error> {
         let specs = match value.plugin_type {
             0 => {
                 PluginTypeSpecificDefinition::ComponentTransformer(ComponentTransformerDefinition {
@@ -183,58 +177,51 @@ impl<Owner: PluginOwner, Scope: PluginScope> TryFrom<PluginRecord<Owner, Scope>>
 }
 
 #[async_trait]
-pub trait PluginRepo<Owner: PluginOwner, Scope: PluginScope>: Debug + Send + Sync {
-    async fn get_all(
-        &self,
-        owner: &Owner::Row,
-    ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError>;
+pub trait PluginRepo: Debug + Send + Sync {
+    async fn get_all(&self, owner: &PluginOwnerRow) -> Result<Vec<PluginRecord>, RepoError>;
 
     async fn get_for_scope(
         &self,
-        owner: &Owner::Row,
-        scope: &[Scope::Row],
-    ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError>;
+        owner: &PluginOwnerRow,
+        scope: &[PluginScopeRow],
+    ) -> Result<Vec<PluginRecord>, RepoError>;
 
     async fn get_all_with_name(
         &self,
-        owner: &Owner::Row,
+        owner: &PluginOwnerRow,
         name: &str,
-    ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError>;
+    ) -> Result<Vec<PluginRecord>, RepoError>;
 
-    async fn create(&self, record: &PluginRecord<Owner, Scope>) -> Result<(), RepoError>;
+    async fn create(&self, record: &PluginRecord) -> Result<(), RepoError>;
 
     async fn get(
         &self,
-        owner: &Owner::Row,
+        owner: &PluginOwnerRow,
         name: &str,
         version: &str,
-    ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError>;
+    ) -> Result<Option<PluginRecord>, RepoError>;
 
     async fn get_by_id(
         &self,
-        owner: &Owner::Row,
+        owner: &PluginOwnerRow,
         id: &Uuid,
-    ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError>;
+    ) -> Result<Option<PluginRecord>, RepoError>;
 
-    async fn delete(&self, owner: &Owner::Row, name: &str, version: &str) -> Result<(), RepoError>;
+    async fn delete(
+        &self,
+        owner: &PluginOwnerRow,
+        name: &str,
+        version: &str,
+    ) -> Result<(), RepoError>;
 }
 
-pub struct LoggedPluginRepo<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>>
-{
+pub struct LoggedPluginRepo<Repo> {
     repo: Repo,
-    _owner: PhantomData<Owner>,
-    _scope: PhantomData<Scope>,
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>>
-    LoggedPluginRepo<Owner, Scope, Repo>
-{
+impl<Repo> LoggedPluginRepo<Repo> {
     pub fn new(repo: Repo) -> Self {
-        Self {
-            repo,
-            _owner: PhantomData,
-            _scope: PhantomData,
-        }
+        Self { repo }
     }
 
     fn span(plugin_name: &str, plugin_version: &str) -> Span {
@@ -246,45 +233,38 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>>
     }
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>> Debug
-    for LoggedPluginRepo<Owner, Scope, Repo>
-{
+impl<Repo: PluginRepo> Debug for LoggedPluginRepo<Repo> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.repo.fmt(f)
     }
 }
 
 #[async_trait]
-impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope> + Sync>
-    PluginRepo<Owner, Scope> for LoggedPluginRepo<Owner, Scope, Repo>
-{
-    async fn get_all(
-        &self,
-        owner: &Owner::Row,
-    ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError> {
+impl<Repo: PluginRepo> PluginRepo for LoggedPluginRepo<Repo> {
+    async fn get_all(&self, owner: &PluginOwnerRow) -> Result<Vec<PluginRecord>, RepoError> {
         self.repo.get_all(owner).await
     }
 
     async fn get_for_scope(
         &self,
-        owner: &Owner::Row,
-        scope: &[Scope::Row],
-    ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError> {
+        owner: &PluginOwnerRow,
+        scope: &[PluginScopeRow],
+    ) -> Result<Vec<PluginRecord>, RepoError> {
         self.repo.get_for_scope(owner, scope).await
     }
 
     async fn get_all_with_name(
         &self,
-        owner: &Owner::Row,
+        owner: &PluginOwnerRow,
         name: &str,
-    ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError> {
+    ) -> Result<Vec<PluginRecord>, RepoError> {
         self.repo
             .get_all_with_name(owner, name)
             .instrument(Self::span(name, "*"))
             .await
     }
 
-    async fn create(&self, record: &PluginRecord<Owner, Scope>) -> Result<(), RepoError> {
+    async fn create(&self, record: &PluginRecord) -> Result<(), RepoError> {
         self.repo
             .create(record)
             .instrument(Self::span(&record.name, &record.version))
@@ -293,10 +273,10 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope> + Sy
 
     async fn get(
         &self,
-        owner: &Owner::Row,
+        owner: &PluginOwnerRow,
         name: &str,
         version: &str,
-    ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError> {
+    ) -> Result<Option<PluginRecord>, RepoError> {
         self.repo
             .get(owner, name, version)
             .instrument(Self::span(name, version))
@@ -305,16 +285,21 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope> + Sy
 
     async fn get_by_id(
         &self,
-        owner: &Owner::Row,
+        owner: &PluginOwnerRow,
         id: &Uuid,
-    ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError> {
+    ) -> Result<Option<PluginRecord>, RepoError> {
         self.repo
             .get_by_id(owner, id)
             .instrument(info_span!("plugin repository", plugin_id = id.to_string()))
             .await
     }
 
-    async fn delete(&self, owner: &Owner::Row, name: &str, version: &str) -> Result<(), RepoError> {
+    async fn delete(
+        &self,
+        owner: &PluginOwnerRow,
+        name: &str,
+        version: &str,
+    ) -> Result<(), RepoError> {
         self.repo
             .delete(owner, name, version)
             .instrument(Self::span(name, version))
@@ -343,13 +328,8 @@ impl<DB: Pool> Debug for DbPluginRepo<DB> {
 #[trait_gen(golem_service_base::db::postgres::PostgresPool -> golem_service_base::db::postgres::PostgresPool, golem_service_base::db::sqlite::SqlitePool
     )]
 #[async_trait]
-impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
-    for DbPluginRepo<golem_service_base::db::postgres::PostgresPool>
-{
-    async fn get_all(
-        &self,
-        owner: &Owner::Row,
-    ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError> {
+impl PluginRepo for DbPluginRepo<golem_service_base::db::postgres::PostgresPool> {
+    async fn get_all(&self, owner: &PluginOwnerRow) -> Result<Vec<PluginRecord>, RepoError> {
         let mut query = QueryBuilder::new("SELECT ");
 
         let mut column_list = query.separated(", ");
@@ -362,8 +342,8 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("homepage");
         column_list.push("plugin_type");
 
-        Scope::Row::add_column_list(&mut column_list);
-        Owner::Row::add_column_list(&mut column_list);
+        PluginScopeRow::add_column_list(&mut column_list);
+        PluginOwnerRow::add_column_list(&mut column_list);
 
         column_list.push("provided_wit_package");
         column_list.push("json_schema");
@@ -380,15 +360,15 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         self.db_pool
             .with_ro("plugin", "get_all")
-            .fetch_all(query.build_query_as::<PluginRecord<Owner, Scope>>())
+            .fetch_all(query.build_query_as::<PluginRecord>())
             .await
     }
 
     async fn get_for_scope(
         &self,
-        owner: &Owner::Row,
-        scopes: &[Scope::Row],
-    ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError> {
+        owner: &PluginOwnerRow,
+        scopes: &[PluginScopeRow],
+    ) -> Result<Vec<PluginRecord>, RepoError> {
         let mut query = QueryBuilder::new("SELECT ");
 
         let mut column_list = query.separated(", ");
@@ -401,8 +381,8 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("homepage");
         column_list.push("plugin_type");
 
-        Scope::Row::add_column_list(&mut column_list);
-        Owner::Row::add_column_list(&mut column_list);
+        PluginScopeRow::add_column_list(&mut column_list);
+        PluginOwnerRow::add_column_list(&mut column_list);
 
         column_list.push("provided_wit_package");
         column_list.push("json_schema");
@@ -430,15 +410,15 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         self.db_pool
             .with_ro("plugin", "get_for_scope")
-            .fetch_all(query.build_query_as::<PluginRecord<Owner, Scope>>())
+            .fetch_all(query.build_query_as::<PluginRecord>())
             .await
     }
 
     async fn get_all_with_name(
         &self,
-        owner: &Owner::Row,
+        owner: &PluginOwnerRow,
         name: &str,
-    ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError> {
+    ) -> Result<Vec<PluginRecord>, RepoError> {
         let mut query = QueryBuilder::new("SELECT ");
 
         let mut column_list = query.separated(", ");
@@ -451,8 +431,8 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("homepage");
         column_list.push("plugin_type");
 
-        Scope::Row::add_column_list(&mut column_list);
-        Owner::Row::add_column_list(&mut column_list);
+        PluginScopeRow::add_column_list(&mut column_list);
+        PluginOwnerRow::add_column_list(&mut column_list);
 
         column_list.push("provided_wit_package");
         column_list.push("json_schema");
@@ -474,11 +454,11 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         self.db_pool
             .with_ro("plugin", "get_all_with_name")
-            .fetch_all(query.build_query_as::<PluginRecord<Owner, Scope>>())
+            .fetch_all(query.build_query_as::<PluginRecord>())
             .await
     }
 
-    async fn create(&self, record: &PluginRecord<Owner, Scope>) -> Result<(), RepoError> {
+    async fn create(&self, record: &PluginRecord) -> Result<(), RepoError> {
         let mut query = QueryBuilder::new("INSERT INTO plugins (");
 
         let mut column_list = query.separated(", ");
@@ -491,8 +471,8 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("homepage");
         column_list.push("plugin_type");
 
-        Scope::Row::add_column_list(&mut column_list);
-        Owner::Row::add_column_list(&mut column_list);
+        PluginScopeRow::add_column_list(&mut column_list);
+        PluginOwnerRow::add_column_list(&mut column_list);
 
         column_list.push("provided_wit_package");
         column_list.push("json_schema");
@@ -540,10 +520,10 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
     async fn get(
         &self,
-        owner: &Owner::Row,
+        owner: &PluginOwnerRow,
         name: &str,
         version: &str,
-    ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError> {
+    ) -> Result<Option<PluginRecord>, RepoError> {
         let mut query = QueryBuilder::new("SELECT ");
 
         let mut column_list = query.separated(", ");
@@ -556,8 +536,8 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("homepage");
         column_list.push("plugin_type");
 
-        Scope::Row::add_column_list(&mut column_list);
-        Owner::Row::add_column_list(&mut column_list);
+        PluginScopeRow::add_column_list(&mut column_list);
+        PluginOwnerRow::add_column_list(&mut column_list);
 
         column_list.push("provided_wit_package");
         column_list.push("json_schema");
@@ -578,15 +558,15 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         self.db_pool
             .with_ro("plugin", "get")
-            .fetch_optional_as(query.build_query_as::<PluginRecord<Owner, Scope>>())
+            .fetch_optional_as(query.build_query_as::<PluginRecord>())
             .await
     }
 
     async fn get_by_id(
         &self,
-        owner: &Owner::Row,
+        owner: &PluginOwnerRow,
         id: &Uuid,
-    ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError> {
+    ) -> Result<Option<PluginRecord>, RepoError> {
         let mut query = QueryBuilder::new("SELECT ");
 
         let mut column_list = query.separated(", ");
@@ -599,8 +579,8 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("homepage");
         column_list.push("plugin_type");
 
-        Scope::Row::add_column_list(&mut column_list);
-        Owner::Row::add_column_list(&mut column_list);
+        PluginScopeRow::add_column_list(&mut column_list);
+        PluginOwnerRow::add_column_list(&mut column_list);
 
         column_list.push("provided_wit_package");
         column_list.push("json_schema");
@@ -620,11 +600,16 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         self.db_pool
             .with_ro("plugin", "get_by_id")
-            .fetch_optional_as(query.build_query_as::<PluginRecord<Owner, Scope>>())
+            .fetch_optional_as(query.build_query_as::<PluginRecord>())
             .await
     }
 
-    async fn delete(&self, owner: &Owner::Row, name: &str, version: &str) -> Result<(), RepoError> {
+    async fn delete(
+        &self,
+        owner: &PluginOwnerRow,
+        name: &str,
+        version: &str,
+    ) -> Result<(), RepoError> {
         let mut query = QueryBuilder::new("UPDATE plugins SET deleted = TRUE WHERE name = ");
 
         query.push_bind(name);

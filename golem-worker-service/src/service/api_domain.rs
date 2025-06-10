@@ -29,7 +29,7 @@ use crate::service::auth::AuthService;
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_common::SafeDisplay;
@@ -138,20 +138,20 @@ pub trait ApiDomainService {
     async fn create_or_update(
         &self,
         payload: &DomainRequest,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<ApiDomain, ApiDomainServiceError>;
 
     async fn get(
         &self,
         project_id: &ProjectId,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<Vec<ApiDomain>, ApiDomainServiceError>;
 
     async fn delete(
         &self,
         project_id: &ProjectId,
         domain_name: &str,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<(), ApiDomainServiceError>;
 }
 
@@ -178,8 +178,8 @@ impl ApiDomainServiceDefault {
         &self,
         project_id: &ProjectId,
         permission: ProjectAction,
-        auth: &CloudAuthCtx,
-    ) -> Result<CloudNamespace, ApiDomainServiceError> {
+        auth: &AuthCtx,
+    ) -> Result<Namespace, ApiDomainServiceError> {
         self.auth_service
             .authorize_project_action(project_id, permission, auth)
             .await
@@ -192,7 +192,7 @@ impl ApiDomainService for ApiDomainServiceDefault {
     async fn create_or_update(
         &self,
         payload: &DomainRequest,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<ApiDomain, ApiDomainServiceError> {
         let project_id = &payload.project_id;
 
@@ -290,7 +290,7 @@ impl ApiDomainService for ApiDomainServiceDefault {
     async fn get(
         &self,
         project_id: &ProjectId,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<Vec<ApiDomain>, ApiDomainServiceError> {
         let namespace = self
             .is_authorized(project_id, ProjectAction::ViewApiDomain, auth)
@@ -319,7 +319,7 @@ impl ApiDomainService for ApiDomainServiceDefault {
         &self,
         project_id: &ProjectId,
         domain_name: &str,
-        auth: &CloudAuthCtx,
+        auth: &AuthCtx,
     ) -> Result<(), ApiDomainServiceError> {
         let namespace = self
             .is_authorized(project_id, ProjectAction::DeleteApiDomain, auth)

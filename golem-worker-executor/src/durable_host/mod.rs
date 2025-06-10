@@ -131,7 +131,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     wasi_http: WasiHttpCtx,
     pub owned_worker_id: OwnedWorkerId,
     pub public_state: PublicDurableWorkerState<Ctx>,
-    state: PrivateDurableWorkerState<Ctx>,
+    state: PrivateDurableWorkerState,
     temp_dir: Arc<TempDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
 }
@@ -153,12 +153,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
-        component_service: Arc<dyn ComponentService<Ctx::Types>>,
+        component_service: Arc<dyn ComponentService>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<Ctx::Types>>,
+        plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
     ) -> Result<Self, GolemError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
@@ -309,7 +309,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.owned_worker_id
     }
 
-    pub fn component_metadata(&self) -> &ComponentMetadata<Ctx::Types> {
+    pub fn component_metadata(&self) -> &ComponentMetadata {
         &self.state.component_metadata
     }
 
@@ -368,7 +368,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.worker_proxy.clone()
     }
 
-    pub fn component_service(&self) -> Arc<dyn ComponentService<Ctx::Types>> {
+    pub fn component_service(&self) -> Arc<dyn ComponentService> {
         self.state.component_service.clone()
     }
 
@@ -2209,7 +2209,7 @@ struct HttpRequestState {
     pub span_id: SpanId,
 }
 
-struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
+struct PrivateDurableWorkerState {
     oplog_service: Arc<dyn OplogService>,
     oplog: Arc<dyn Oplog>,
     promise_service: Arc<dyn PromiseService>,
@@ -2219,8 +2219,8 @@ struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     key_value_service: Arc<dyn KeyValueService>,
     blob_store_service: Arc<dyn BlobStoreService>,
     rdbms_service: Arc<dyn RdbmsService>,
-    component_service: Arc<dyn ComponentService<Ctx::Types>>,
-    plugins: Arc<dyn Plugins<Ctx::Types>>,
+    component_service: Arc<dyn ComponentService>,
+    plugins: Arc<dyn Plugins>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     current_idempotency_key: Option<IdempotencyKey>,
@@ -2240,7 +2240,7 @@ struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     snapshotting_mode: Option<PersistenceLevel>,
 
     indexed_resources: HashMap<IndexedResourceKey, WorkerResourceId>,
-    component_metadata: ComponentMetadata<Ctx::Types>,
+    component_metadata: ComponentMetadata,
 
     total_linear_memory_size: u64,
 
@@ -2256,7 +2256,7 @@ struct PrivateDurableWorkerState<Ctx: WorkerCtx> {
     file_loader: Arc<FileLoader>,
 }
 
-impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
+impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         oplog_service: Arc<dyn OplogService>,
@@ -2268,15 +2268,15 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
-        component_service: Arc<dyn ComponentService<Ctx::Types>>,
-        plugins: Arc<dyn Plugins<Ctx::Types>>,
+        component_service: Arc<dyn ComponentService>,
+        plugins: Arc<dyn Plugins>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
-        component_metadata: ComponentMetadata<Ctx::Types>,
+        component_metadata: ComponentMetadata,
         total_linear_memory_size: u64,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
@@ -2512,7 +2512,7 @@ impl<Ctx: WorkerCtx> PrivateDurableWorkerState<Ctx> {
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx> ResourceStore for PrivateDurableWorkerState<Ctx> {
+impl ResourceStore for PrivateDurableWorkerState {
     fn self_uri(&self) -> Uri {
         Uri {
             value: self.owned_worker_id.worker_id.to_worker_urn(),
@@ -2536,26 +2536,26 @@ impl<Ctx: WorkerCtx> ResourceStore for PrivateDurableWorkerState<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasOplogService for PrivateDurableWorkerState<Ctx> {
+impl HasOplogService for PrivateDurableWorkerState {
     fn oplog_service(&self) -> Arc<dyn OplogService> {
         self.oplog_service.clone()
     }
 }
 
-impl<Ctx: WorkerCtx> HasOplog for PrivateDurableWorkerState<Ctx> {
+impl HasOplog for PrivateDurableWorkerState {
     fn oplog(&self) -> Arc<dyn Oplog> {
         self.oplog.clone()
     }
 }
 
-impl<Ctx: WorkerCtx> HasConfig for PrivateDurableWorkerState<Ctx> {
+impl HasConfig for PrivateDurableWorkerState {
     fn config(&self) -> Arc<GolemConfig> {
         self.config.clone()
     }
 }
 
-impl<Ctx: WorkerCtx> HasPlugins<Ctx::Types> for PrivateDurableWorkerState<Ctx> {
-    fn plugins(&self) -> Arc<dyn Plugins<Ctx::Types>> {
+impl HasPlugins for PrivateDurableWorkerState {
+    fn plugins(&self) -> Arc<dyn Plugins> {
         self.plugins.clone()
     }
 }

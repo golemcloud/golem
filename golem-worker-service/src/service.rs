@@ -41,7 +41,7 @@ use file_server_binding_handler::CloudWorkerServiceAdapter;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::config::DbConfig;
-use golem_common::model::auth::{CloudAuthCtx, CloudNamespace, TokenSecret};
+use golem_common::model::auth::{AuthCtx, Namespace, TokenSecret};
 use golem_common::model::RetryConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::limit::{LimitService, LimitServiceDefault};
@@ -92,23 +92,19 @@ pub struct ApiServices {
     pub worker_auth_service: Arc<dyn AuthService + Send + Sync>,
     pub project_service: Arc<dyn ProjectService + Send + Sync>,
     pub limit_service: Arc<dyn LimitService + Send + Sync>,
-    pub definition_service:
-        Arc<dyn ApiDefinitionService<CloudAuthCtx, CloudNamespace> + Send + Sync>,
-    pub deployment_service:
-        Arc<dyn ApiDeploymentService<CloudAuthCtx, CloudNamespace> + Send + Sync>,
+    pub definition_service: Arc<dyn ApiDefinitionService<AuthCtx, Namespace> + Send + Sync>,
+    pub deployment_service: Arc<dyn ApiDeploymentService<AuthCtx, Namespace> + Send + Sync>,
     pub domain_route: Arc<dyn RegisterDomainRoute + Send + Sync>,
     pub domain_service: Arc<dyn ApiDomainService + Send + Sync>,
     pub certificate_service: Arc<dyn CertificateService + Send + Sync>,
-    pub component_service: Arc<dyn ComponentService<CloudNamespace, CloudAuthCtx>>,
+    pub component_service: Arc<dyn ComponentService<Namespace, AuthCtx>>,
     pub worker_service: Arc<dyn WorkerService + Send + Sync>,
     pub worker_request_to_http_service:
-        Arc<dyn GatewayWorkerRequestExecutor<CloudNamespace> + Send + Sync>,
+        Arc<dyn GatewayWorkerRequestExecutor<Namespace> + Send + Sync>,
     pub http_request_api_definition_lookup_service:
-        Arc<dyn HttpApiDefinitionsLookup<CloudNamespace> + Sync + Send>,
-    pub file_server_binding_handler:
-        Arc<dyn FileServerBindingHandler<CloudNamespace> + Send + Sync>,
-    pub http_handler_binding_handler:
-        Arc<dyn HttpHandlerBindingHandler<CloudNamespace> + Sync + Send>,
+        Arc<dyn HttpApiDefinitionsLookup<Namespace> + Sync + Send>,
+    pub file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Send + Sync>,
+    pub http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler<Namespace> + Sync + Send>,
     pub security_scheme_service: Arc<dyn SecuritySchemeService + Send + Sync>,
     pub gateway_session_store: Arc<dyn GatewaySession + Send + Sync>,
 }
@@ -241,7 +237,7 @@ impl ApiServices {
             dyn ApiDefinitionValidatorService<HttpApiDefinition> + Send + Sync,
         > = Arc::new(HttpApiDefinitionValidator {});
 
-        let component_service: Arc<dyn ComponentService<CloudNamespace, CloudAuthCtx>> =
+        let component_service: Arc<dyn ComponentService<Namespace, AuthCtx>> =
             Arc::new(RemoteComponentService::new(
                 config.base_config.component_service.uri(),
                 config.base_config.component_service.retries.clone(),
@@ -260,24 +256,22 @@ impl ApiServices {
             base_security_scheme_service.clone(),
         ));
 
-        let definition_service: Arc<
-            dyn ApiDefinitionService<CloudAuthCtx, CloudNamespace> + Sync + Send,
-        > = Arc::new(ApiDefinitionServiceDefault::new(
-            component_service.clone(),
-            api_definition_repo.clone(),
-            api_deployment_repo.clone(),
-            base_security_scheme_service.clone(),
-            api_definition_validator,
-            ApiDefinitionServiceConfig::default(),
-        ));
+        let definition_service: Arc<dyn ApiDefinitionService<AuthCtx, Namespace> + Sync + Send> =
+            Arc::new(ApiDefinitionServiceDefault::new(
+                component_service.clone(),
+                api_definition_repo.clone(),
+                api_deployment_repo.clone(),
+                base_security_scheme_service.clone(),
+                api_definition_validator,
+                ApiDefinitionServiceConfig::default(),
+            ));
 
-        let deployment_service: Arc<
-            dyn ApiDeploymentService<CloudAuthCtx, CloudNamespace> + Send + Sync,
-        > = Arc::new(ApiDeploymentServiceDefault::new(
-            api_deployment_repo.clone(),
-            api_definition_repo.clone(),
-            component_service.clone(),
-        ));
+        let deployment_service: Arc<dyn ApiDeploymentService<AuthCtx, Namespace> + Send + Sync> =
+            Arc::new(ApiDeploymentServiceDefault::new(
+                api_deployment_repo.clone(),
+                api_definition_repo.clone(),
+                component_service.clone(),
+            ));
 
         let (domain_route, domain_register_service, certificate_manager) = if config.is_local_env()
         {
@@ -416,7 +410,7 @@ impl ApiServices {
             ));
 
         let worker_request_to_http_service: Arc<
-            dyn GatewayWorkerRequestExecutor<CloudNamespace> + Send + Sync,
+            dyn GatewayWorkerRequestExecutor<Namespace> + Send + Sync,
         > = Arc::new(CloudGatewayWorkerRequestExecutor::new(
             worker_service.clone(),
         ));
@@ -426,18 +420,18 @@ impl ApiServices {
         );
 
         let file_server_binding_handler: Arc<
-            dyn FileServerBindingHandler<CloudNamespace> + Send + Sync,
+            dyn FileServerBindingHandler<Namespace> + Send + Sync,
         > = Arc::new(DefaultFileServerBindingHandler::new(
             component_service.clone(),
             initial_component_files_service.clone(),
             Arc::new(CloudWorkerServiceAdapter::new(worker_service.clone())),
-            CloudAuthCtx::new(TokenSecret::new(
+            AuthCtx::new(TokenSecret::new(
                 config.base_config.component_service.access_token,
             )),
         ));
 
         let http_handler_binding_handler: Arc<
-            dyn HttpHandlerBindingHandler<CloudNamespace> + Send + Sync,
+            dyn HttpHandlerBindingHandler<Namespace> + Send + Sync,
         > = Arc::new(DefaultHttpHandlerBindingHandler::new(
             worker_request_to_http_service.clone(),
         ));

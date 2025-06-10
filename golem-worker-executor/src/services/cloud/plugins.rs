@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::CloudGolemTypes;
 use crate::error::GolemError;
 use crate::grpc::authorised_grpc_request;
 use crate::services::golem_config::PluginServiceConfig;
@@ -28,7 +27,7 @@ use golem_api_grpc::proto::golem::component::v1::{
     get_plugin_by_id_response, GetPluginByIdRequest,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
+use golem_common::model::plugin::PluginOwner;
 use golem_common::model::plugin::{PluginDefinition, PluginInstallation};
 use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
@@ -39,7 +38,7 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use uuid::Uuid;
 
-pub fn cloud_configured(config: &PluginServiceConfig) -> Arc<dyn Plugins<CloudGolemTypes>> {
+pub fn cloud_configured(config: &PluginServiceConfig) -> Arc<dyn Plugins> {
     match config {
         PluginServiceConfig::Grpc(config) => {
             let client = CachedPlugins::new(
@@ -120,7 +119,7 @@ impl PluginsObservations for CloudGrpcPlugins {
 }
 
 #[async_trait]
-impl Plugins<CloudGolemTypes> for CloudGrpcPlugins {
+impl Plugins for CloudGrpcPlugins {
     async fn get_plugin_installation(
         &self,
         account_id: &AccountId,
@@ -182,7 +181,7 @@ impl Plugins<CloudGolemTypes> for CloudGrpcPlugins {
         _component_id: &ComponentId,
         _component_version: ComponentVersion,
         plugin_installation: &PluginInstallation,
-    ) -> Result<PluginDefinition<CloudPluginOwner, CloudPluginScope>, GolemError> {
+    ) -> Result<PluginDefinition, GolemError> {
         let response = self
             .plugins_client
             .call("get_plugin_by_id", move |client| {
@@ -217,7 +216,7 @@ impl Plugins<CloudGolemTypes> for CloudGrpcPlugins {
 
 fn convert_grpc_plugin_definition(
     value: golem_api_grpc::proto::golem::component::PluginDefinition,
-) -> Result<PluginDefinition<CloudPluginOwner, CloudPluginScope>, String> {
+) -> Result<PluginDefinition, String> {
     let account_id: AccountId = value.account_id.ok_or("Missing account id")?.into();
 
     Ok(PluginDefinition {
@@ -229,7 +228,7 @@ fn convert_grpc_plugin_definition(
         homepage: value.homepage,
         specs: value.specs.ok_or("Missing plugin specs")?.try_into()?,
         scope: value.scope.ok_or("Missing plugin scope")?.try_into()?,
-        owner: CloudPluginOwner { account_id },
+        owner: PluginOwner { account_id },
         deleted: value.deleted,
     })
 }

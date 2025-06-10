@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::transformer_plugin_caller::{TransformationFailedReason, TransformerPluginCaller};
 use crate::model::{Component, ComponentConstraints};
 use crate::model::{ComponentSearchParameters, InitialComponentFilesArchiveAndPermissions};
 use crate::repo::component::{
@@ -34,11 +35,12 @@ use golem_common::model::component_constraint::{FunctionConstraints, FunctionSig
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
+use golem_common::model::plugin::PluginOwner;
 use golem_common::model::plugin::{
     AppPluginDefinition, ComponentPluginInstallationTarget, LibraryPluginDefinition,
     PluginInstallation, PluginInstallationAction, PluginInstallationCreation,
-    PluginInstallationUpdate, PluginInstallationUpdateWithId, PluginScope,
-    PluginTypeSpecificDefinition, PluginUninstallation,
+    PluginInstallationUpdate, PluginInstallationUpdateWithId, PluginTypeSpecificDefinition,
+    PluginUninstallation,
 };
 use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{
@@ -46,6 +48,8 @@ use golem_common::model::{
     InitialComponentFileKey,
 };
 use golem_common::model::{ComponentVersion, PluginId};
+use golem_common::repo::ComponentOwnerRow;
+use golem_common::repo::PluginOwnerRow;
 use golem_common::SafeDisplay;
 use golem_service_base::model::ComponentName;
 use golem_service_base::replayable_stream::ReplayableStream;
@@ -71,8 +75,6 @@ use tracing::{debug, error, info, info_span};
 use tracing_futures::Instrument;
 use wac_graph::types::Package;
 use wac_graph::{CompositionGraph, EncodeOptions, PlugError};
-
-use super::transformer_plugin_caller::{TransformationFailedReason, TransformerPluginCaller};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -304,7 +306,7 @@ pub fn create_new_versioned_component_id(component_id: &ComponentId) -> Versione
 }
 
 #[async_trait]
-pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
+pub trait ComponentService: Debug + Send + Sync {
     async fn create(
         &self,
         component_id: &ComponentId,
@@ -314,9 +316,9 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError>;
+    ) -> Result<Component, ComponentError>;
 
     // Files must have been uploaded to the blob store before calling this method
     async fn create_internal(
@@ -328,9 +330,9 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         files: Vec<InitialComponentFile>,
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError>;
+    ) -> Result<Component, ComponentError>;
 
     async fn update(
         &self,
@@ -339,9 +341,9 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         component_type: Option<ComponentType>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError>;
+    ) -> Result<Component, ComponentError>;
 
     // Files must have been uploaded to the blob store before calling this method
     async fn update_internal(
@@ -352,22 +354,22 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         // None signals that files should be reused from the previous version
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError>;
+    ) -> Result<Component, ComponentError>;
 
     async fn download(
         &self,
         component_id: &ComponentId,
         version: Option<ComponentVersion>,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<Vec<u8>, ComponentError>;
 
     async fn download_stream(
         &self,
         component_id: &ComponentId,
         version: Option<ComponentVersion>,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError>;
 
     async fn get_file_contents(
@@ -375,86 +377,92 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
         component_id: &ComponentId,
         version: ComponentVersion,
         path: &str,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<BoxStream<'static, Result<Bytes, ComponentError>>, ComponentError>;
 
     async fn find_by_name(
         &self,
         component_name: Option<ComponentName>,
-        owner: &Owner,
-    ) -> Result<Vec<Component<Owner>>, ComponentError>;
+        owner: &ComponentOwner,
+    ) -> Result<Vec<Component>, ComponentError>;
 
     async fn find_by_names(
         &self,
         component: Vec<ComponentByNameAndVersion>,
-        owner: &Owner,
-    ) -> Result<Vec<Component<Owner>>, ComponentError>;
+        owner: &ComponentOwner,
+    ) -> Result<Vec<Component>, ComponentError>;
 
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<Option<ComponentId>, ComponentError>;
 
     async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
-        owner: &Owner,
-    ) -> Result<Option<Component<Owner>>, ComponentError>;
+        owner: &ComponentOwner,
+    ) -> Result<Option<Component>, ComponentError>;
 
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
-        owner: &Owner,
-    ) -> Result<Option<Component<Owner>>, ComponentError>;
+        owner: &ComponentOwner,
+    ) -> Result<Option<Component>, ComponentError>;
 
     async fn get(
         &self,
         component_id: &ComponentId,
-        owner: &Owner,
-    ) -> Result<Vec<Component<Owner>>, ComponentError>;
+        owner: &ComponentOwner,
+    ) -> Result<Vec<Component>, ComponentError>;
 
-    async fn get_owner(&self, component_id: &ComponentId) -> Result<Option<Owner>, ComponentError>;
+    async fn get_owner(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Option<ComponentOwner>, ComponentError>;
 
-    async fn delete(&self, component_id: &ComponentId, owner: &Owner)
-        -> Result<(), ComponentError>;
+    async fn delete(
+        &self,
+        component_id: &ComponentId,
+        owner: &ComponentOwner,
+    ) -> Result<(), ComponentError>;
 
     async fn create_or_update_constraint(
         &self,
-        component_constraint: &ComponentConstraints<Owner>,
-    ) -> Result<ComponentConstraints<Owner>, ComponentError>;
+        component_constraint: &ComponentConstraints,
+    ) -> Result<ComponentConstraints, ComponentError>;
 
     async fn delete_constraints(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         component_id: &ComponentId,
         constraints_to_remove: &[FunctionSignature],
-    ) -> Result<ComponentConstraints<Owner>, ComponentError>;
+    ) -> Result<ComponentConstraints, ComponentError>;
 
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<Option<FunctionConstraints>, ComponentError>;
 
     /// Gets the list of installed plugins for a given component version belonging to `owner`
     async fn get_plugin_installations_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> Result<Vec<PluginInstallation>, PluginError>;
 
     async fn create_plugin_installation_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         component_id: &ComponentId,
         installation: PluginInstallationCreation,
     ) -> Result<PluginInstallation, PluginError>;
 
     async fn update_plugin_installation_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
         update: PluginInstallationUpdate,
@@ -462,14 +470,14 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug + Send + Sync {
 
     async fn delete_plugin_installation_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
     ) -> Result<(), PluginError>;
 
     async fn batch_update_plugin_installations_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         component_id: &ComponentId,
         actions: &[PluginInstallationAction],
     ) -> Result<Vec<Option<PluginInstallation>>, PluginError>;
@@ -497,31 +505,31 @@ pub enum VersionType {
     Exact(ComponentVersion),
 }
 
-pub struct ComponentServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
-    component_repo: Arc<dyn ComponentRepo<Owner>>,
+pub struct ComponentServiceDefault {
+    component_repo: Arc<dyn ComponentRepo>,
     object_store: Arc<dyn ComponentObjectStore>,
     component_compilation: Arc<dyn ComponentCompilationService>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
-    plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope>>,
+    plugin_service: Arc<dyn PluginService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-    transformer_plugin_caller: Arc<dyn TransformerPluginCaller<Owner>>,
+    transformer_plugin_caller: Arc<dyn TransformerPluginCaller>,
 }
 
-impl<Owner: ComponentOwner, Scope: PluginScope> Debug for ComponentServiceDefault<Owner, Scope> {
+impl Debug for ComponentServiceDefault {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ComponentServiceDefault").finish()
     }
 }
 
-impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, Scope> {
+impl ComponentServiceDefault {
     pub fn new(
-        component_repo: Arc<dyn ComponentRepo<Owner>>,
+        component_repo: Arc<dyn ComponentRepo>,
         object_store: Arc<dyn ComponentObjectStore>,
         component_compilation: Arc<dyn ComponentCompilationService>,
         initial_component_files_service: Arc<InitialComponentFilesService>,
-        plugin_service: Arc<dyn PluginService<Owner::PluginOwner, Scope>>,
+        plugin_service: Arc<dyn PluginService>,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-        transformer_plugin_caller: Arc<dyn TransformerPluginCaller<Owner>>,
+        transformer_plugin_caller: Arc<dyn TransformerPluginCaller>,
     ) -> Self {
         ComponentServiceDefault {
             component_repo,
@@ -727,9 +735,9 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         uploaded_files: Vec<InitialComponentFile>,
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError> {
+    ) -> Result<Component, ComponentError> {
         let component = Component::new(
             component_id.clone(),
             component_name.clone(),
@@ -793,9 +801,9 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
         component_type: Option<ComponentType>,
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError> {
+    ) -> Result<Component, ComponentError> {
         let mut metadata = ComponentMetadata::analyse_component(&data)
             .map_err(ComponentError::ComponentProcessingError)?;
         metadata.dynamic_linking = dynamic_linking;
@@ -831,7 +839,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                 .collect()
         });
 
-        let owner_record: Owner::Row = owner.clone().into();
+        let owner_record: ComponentOwnerRow = owner.clone().into();
         let component_record = self
             .component_repo
             .update(
@@ -848,7 +856,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                 Json(env),
             )
             .await?;
-        let mut component: Component<Owner> = component_record
+        let mut component: Component = component_record
             .clone()
             .try_into()
             .map_err(|e| ComponentError::conversion_error("record", e))?;
@@ -890,7 +898,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
 
     async fn upload_user_component(
         &self,
-        component: &Component<Owner>,
+        component: &Component,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
         self.object_store
@@ -903,7 +911,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
 
     async fn upload_protected_component(
         &self,
-        component: &Component<Owner>,
+        component: &Component,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
         self.object_store
@@ -916,7 +924,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
 
     async fn apply_transformations(
         &self,
-        component: &Component<Owner>,
+        component: &Component,
         mut data: Vec<u8>,
     ) -> Result<Vec<u8>, ComponentError> {
         if !component.installed_plugins.is_empty() {
@@ -986,7 +994,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
 
     async fn apply_component_transformer_plugin(
         &self,
-        component: &Component<Owner>,
+        component: &Component,
         data: &[u8],
         url: String,
         parameters: &HashMap<String, String>,
@@ -1001,7 +1009,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
 
     async fn apply_library_plugin(
         &self,
-        component: &Component<Owner>,
+        component: &Component,
         data: &[u8],
         plugin_spec: LibraryPluginDefinition,
     ) -> Result<Vec<u8>, ComponentError> {
@@ -1009,7 +1017,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
 
         let plug_bytes = self
             .plugin_wasm_files_service
-            .get(&component.owner.account_id(), &plugin_spec.blob_storage_key)
+            .get(&component.owner.account_id, &plugin_spec.blob_storage_key)
             .await
             .map_err(|e| {
                 ComponentError::PluginApplicationFailed(format!("Failed to fetch plugin wasm: {e}"))
@@ -1029,7 +1037,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
 
     async fn apply_app_plugin(
         &self,
-        component: &Component<Owner>,
+        component: &Component,
         data: &[u8],
         plugin_spec: AppPluginDefinition,
     ) -> Result<Vec<u8>, ComponentError> {
@@ -1037,7 +1045,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
 
         let socket_bytes = self
             .plugin_wasm_files_service
-            .get(&component.owner.account_id(), &plugin_spec.blob_storage_key)
+            .get(&component.owner.account_id, &plugin_spec.blob_storage_key)
             .await
             .map_err(|e| {
                 ComponentError::PluginApplicationFailed(format!("Failed to fetch plugin wasm: {e}"))
@@ -1058,7 +1066,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
     async fn retransform(
         &self,
         namespace: &str,
-        new_component: Component<Owner>,
+        new_component: Component,
     ) -> Result<(), PluginError> {
         let data = self
             .object_store
@@ -1102,9 +1110,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
 }
 
 #[async_trait]
-impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
-    for ComponentServiceDefault<Owner, Scope>
-{
+impl ComponentService for ComponentServiceDefault {
     async fn create(
         &self,
         component_id: &ComponentId,
@@ -1114,9 +1120,9 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError> {
+    ) -> Result<Component, ComponentError> {
         info!(owner = %owner, "Create component");
 
         self.find_id_by_name(component_name, owner)
@@ -1125,7 +1131,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
         let uploaded_files = match files {
             Some(files) => {
-                self.upload_component_files(&owner.account_id(), files)
+                self.upload_component_files(&owner.account_id, files)
                     .await?
             }
             None => vec![],
@@ -1154,9 +1160,9 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         files: Vec<InitialComponentFile>,
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError> {
+    ) -> Result<Component, ComponentError> {
         info!(owner = %owner, "Create component");
 
         self.find_id_by_name(component_name, owner)
@@ -1166,7 +1172,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         for file in &files {
             let exists = self
                 .initial_component_files_service
-                .exists(&owner.account_id(), &file.key)
+                .exists(&owner.account_id, &file.key)
                 .await
                 .map_err(|e| {
                     ComponentError::initial_component_file_upload_error(
@@ -1203,14 +1209,14 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         component_type: Option<ComponentType>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError> {
+    ) -> Result<Component, ComponentError> {
         info!(owner = %owner, "Update component");
 
         let uploaded_files = match files {
             Some(files) => Some(
-                self.upload_component_files(&owner.account_id(), files)
+                self.upload_component_files(&owner.account_id, files)
                     .await?,
             ),
             None => None,
@@ -1235,15 +1241,15 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         component_type: Option<ComponentType>,
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError> {
+    ) -> Result<Component, ComponentError> {
         info!(owner = %owner, "Update component");
 
         for file in files.iter().flatten() {
             let exists = self
                 .initial_component_files_service
-                .exists(&owner.account_id(), &file.key)
+                .exists(&owner.account_id, &file.key)
                 .await
                 .map_err(|e| {
                     ComponentError::initial_component_file_upload_error(
@@ -1275,7 +1281,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         &self,
         component_id: &ComponentId,
         version: Option<ComponentVersion>,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<Vec<u8>, ComponentError> {
         let component = match version {
             None => self.get_latest_version(component_id, owner).await?,
@@ -1310,7 +1316,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         &self,
         component_id: &ComponentId,
         version: Option<ComponentVersion>,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
         let component = match version {
             None => self.get_latest_version(component_id, owner).await?,
@@ -1352,7 +1358,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         component_id: &ComponentId,
         version: ComponentVersion,
         path: &str,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<BoxStream<'static, Result<Bytes, ComponentError>>, ComponentError> {
         let component = self
             .get_by_version(
@@ -1374,7 +1380,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
             let stream = self
                 .initial_component_files_service
-                .get(&owner.account_id(), &file.key)
+                .get(&owner.account_id, &file.key)
                 .await
                 .map_err(|e| {
                     ComponentError::initial_component_file_upload_error(
@@ -1399,8 +1405,8 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
     async fn find_by_name(
         &self,
         component_name: Option<ComponentName>,
-        owner: &Owner,
-    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        owner: &ComponentOwner,
+    ) -> Result<Vec<Component>, ComponentError> {
         info!(owner = %owner, "Find component by name");
 
         let records = match component_name {
@@ -1412,10 +1418,10 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             None => self.component_repo.get_all(&owner.to_string()).await?,
         };
 
-        let values: Vec<Component<Owner>> = records
+        let values: Vec<Component> = records
             .iter()
             .map(|c| c.clone().try_into())
-            .collect::<Result<Vec<Component<Owner>>, _>>()
+            .collect::<Result<Vec<Component>, _>>()
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         Ok(values)
@@ -1424,8 +1430,8 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
     async fn find_by_names(
         &self,
         component_names: Vec<ComponentByNameAndVersion>,
-        owner: &Owner,
-    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        owner: &ComponentOwner,
+    ) -> Result<Vec<Component>, ComponentError> {
         info!("Find components by names");
 
         let component_records = self
@@ -1433,10 +1439,10 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
             .get_by_names(&owner.to_string(), &component_names)
             .await?;
 
-        let values: Vec<Component<Owner>> = component_records
+        let values: Vec<Component> = component_records
             .iter()
             .map(|c| c.clone().try_into())
-            .collect::<Result<Vec<Component<Owner>>, _>>()
+            .collect::<Result<Vec<Component>, _>>()
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         Ok(values)
@@ -1445,7 +1451,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<Option<ComponentId>, ComponentError> {
         info!(owner = %owner, "Find component id by name");
         let records = self
@@ -1458,8 +1464,8 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
     async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
-        owner: &Owner,
-    ) -> Result<Option<Component<Owner>>, ComponentError> {
+        owner: &ComponentOwner,
+    ) -> Result<Option<Component>, ComponentError> {
         info!(owner = %owner, "Get component by version");
 
         let result = self
@@ -1485,8 +1491,8 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
-        owner: &Owner,
-    ) -> Result<Option<Component<Owner>>, ComponentError> {
+        owner: &ComponentOwner,
+    ) -> Result<Option<Component>, ComponentError> {
         info!(owner = %owner, "Get latest component");
         let result = self
             .component_repo
@@ -1507,24 +1513,27 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
     async fn get(
         &self,
         component_id: &ComponentId,
-        owner: &Owner,
-    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        owner: &ComponentOwner,
+    ) -> Result<Vec<Component>, ComponentError> {
         info!(owner = %owner, component_id = %component_id ,"Get component");
         let records = self
             .component_repo
             .get(&owner.to_string(), component_id.0)
             .await?;
 
-        let values: Vec<Component<Owner>> = records
+        let values: Vec<Component> = records
             .iter()
             .map(|c| c.clone().try_into())
-            .collect::<Result<Vec<Component<Owner>>, _>>()
+            .collect::<Result<Vec<Component>, _>>()
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         Ok(values)
     }
 
-    async fn get_owner(&self, component_id: &ComponentId) -> Result<Option<Owner>, ComponentError> {
+    async fn get_owner(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Option<ComponentOwner>, ComponentError> {
         info!(component_id = %component_id, "Get component owner");
         let result = self.component_repo.get_namespace(component_id.0).await?;
         if let Some(result) = result {
@@ -1540,7 +1549,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
     async fn delete(
         &self,
         component_id: &ComponentId,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<(), ComponentError> {
         info!(owner = %owner, component_id = %component_id, "Delete component");
 
@@ -1551,7 +1560,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
         let components = records
             .iter()
             .map(|c| c.clone().try_into())
-            .collect::<Result<Vec<Component<Owner>>, _>>()
+            .collect::<Result<Vec<Component>, _>>()
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         let mut object_store_keys = Vec::new();
@@ -1580,8 +1589,8 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
     async fn create_or_update_constraint(
         &self,
-        component_constraint: &ComponentConstraints<Owner>,
-    ) -> Result<ComponentConstraints<Owner>, ComponentError> {
+        component_constraint: &ComponentConstraints,
+    ) -> Result<ComponentConstraints, ComponentError> {
         info!(owner = %component_constraint.owner, component_id = %component_constraint.component_id, "Create or update component constraint");
         let component_id = &component_constraint.component_id;
         let record = ComponentConstraintsRecord::try_from(component_constraint.clone())
@@ -1613,10 +1622,10 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
     async fn delete_constraints(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         component_id: &ComponentId,
         constraints_to_remove: &[FunctionSignature],
-    ) -> Result<ComponentConstraints<Owner>, ComponentError> {
+    ) -> Result<ComponentConstraints, ComponentError> {
         info!(owner = %owner, component_id = %component_id, "Delete constraint");
 
         self.component_repo
@@ -1644,7 +1653,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<Option<FunctionConstraints>, ComponentError> {
         info!(component_id = %component_id, "Get component constraint");
 
@@ -1657,11 +1666,11 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
     async fn get_plugin_installations_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> Result<Vec<PluginInstallation>, PluginError> {
-        let owner_record: Owner::Row = owner.clone().into();
+        let owner_record: ComponentOwnerRow = owner.clone().into();
         let plugin_owner_record = owner_record.into();
         let records = self
             .component_repo
@@ -1677,7 +1686,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
     async fn create_plugin_installation_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         component_id: &ComponentId,
         installation: PluginInstallationCreation,
     ) -> Result<PluginInstallation, PluginError> {
@@ -1693,7 +1702,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
     async fn update_plugin_installation_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
         update: PluginInstallationUpdate,
@@ -1716,7 +1725,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
     async fn delete_plugin_installation_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
     ) -> Result<(), PluginError> {
@@ -1734,13 +1743,13 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 
     async fn batch_update_plugin_installations_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         component_id: &ComponentId,
         actions: &[PluginInstallationAction],
     ) -> Result<Vec<Option<PluginInstallation>>, PluginError> {
         let namespace: String = owner.to_string();
-        let owner_record: Owner::Row = owner.clone().into();
-        let plugin_owner_record = owner_record.into();
+        let owner_record: ComponentOwnerRow = owner.clone().into();
+        let plugin_owner_record: PluginOwnerRow = owner_record.into();
 
         let latest = self
             .component_repo
@@ -1757,7 +1766,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
                         let plugin_definition = self
                             .plugin_service
                             .get(
-                                &Owner::PluginOwner::from(owner.clone()),
+                                &PluginOwner::from(owner.clone()),
                                 &installation.name,
                                 &installation.version,
                             )
@@ -1829,7 +1838,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
                 component_id: component_id.clone(),
                 version: new_component_version,
             };
-            let mut new_component: Component<Owner> = latest
+            let mut new_component: Component = latest
                 .try_into()
                 .map_err(|err| ComponentError::conversion_error("component", err))?;
             new_component.versioned_component_id = new_versioned_component_id;
@@ -1869,26 +1878,26 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentService<Owner>
 }
 
 #[derive(Debug)]
-pub struct LazyComponentService<Owner>(RwLock<Option<Box<dyn ComponentService<Owner> + 'static>>>);
+pub struct LazyComponentService(RwLock<Option<Box<dyn ComponentService>>>);
 
-impl<Owner: ComponentOwner> Default for LazyComponentService<Owner> {
+impl Default for LazyComponentService {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<Owner: ComponentOwner> LazyComponentService<Owner> {
+impl LazyComponentService {
     pub fn new() -> Self {
         Self(RwLock::new(None))
     }
 
-    pub async fn set_implementation(&self, value: impl ComponentService<Owner> + 'static) {
+    pub async fn set_implementation(&self, value: impl ComponentService + 'static) {
         let _ = self.0.write().await.insert(Box::new(value));
     }
 }
 
 #[async_trait]
-impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Owner> {
+impl ComponentService for LazyComponentService {
     async fn create(
         &self,
         component_id: &ComponentId,
@@ -1898,9 +1907,9 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError> {
+    ) -> Result<Component, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()
@@ -1928,9 +1937,9 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         files: Vec<InitialComponentFile>,
         installed_plugins: Vec<PluginInstallation>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError> {
+    ) -> Result<Component, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()
@@ -1955,9 +1964,9 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         component_type: Option<ComponentType>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError> {
+    ) -> Result<Component, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()
@@ -1982,9 +1991,9 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         // None signals that files should be reused from the previous version
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        owner: &Owner,
+        owner: &ComponentOwner,
         env: HashMap<String, String>,
-    ) -> Result<Component<Owner>, ComponentError> {
+    ) -> Result<Component, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()
@@ -2004,7 +2013,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         &self,
         component_id: &ComponentId,
         version: Option<ComponentVersion>,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<Vec<u8>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -2017,7 +2026,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         &self,
         component_id: &ComponentId,
         version: Option<ComponentVersion>,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -2031,7 +2040,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
         component_id: &ComponentId,
         version: ComponentVersion,
         path: &str,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<BoxStream<'static, Result<Bytes, ComponentError>>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -2043,8 +2052,8 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
     async fn find_by_name(
         &self,
         component_name: Option<ComponentName>,
-        owner: &Owner,
-    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        owner: &ComponentOwner,
+    ) -> Result<Vec<Component>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()
@@ -2055,8 +2064,8 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
     async fn find_by_names(
         &self,
         component_names: Vec<ComponentByNameAndVersion>,
-        owner: &Owner,
-    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        owner: &ComponentOwner,
+    ) -> Result<Vec<Component>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()
@@ -2067,7 +2076,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<Option<ComponentId>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -2079,8 +2088,8 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
     async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
-        owner: &Owner,
-    ) -> Result<Option<Component<Owner>>, ComponentError> {
+        owner: &ComponentOwner,
+    ) -> Result<Option<Component>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()
@@ -2091,8 +2100,8 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
-        owner: &Owner,
-    ) -> Result<Option<Component<Owner>>, ComponentError> {
+        owner: &ComponentOwner,
+    ) -> Result<Option<Component>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()
@@ -2103,13 +2112,16 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
     async fn get(
         &self,
         component_id: &ComponentId,
-        owner: &Owner,
-    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        owner: &ComponentOwner,
+    ) -> Result<Vec<Component>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref().unwrap().get(component_id, owner).await
     }
 
-    async fn get_owner(&self, component_id: &ComponentId) -> Result<Option<Owner>, ComponentError> {
+    async fn get_owner(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Option<ComponentOwner>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref().unwrap().get_owner(component_id).await
     }
@@ -2117,7 +2129,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
     async fn delete(
         &self,
         component_id: &ComponentId,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<(), ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref().unwrap().delete(component_id, owner).await
@@ -2125,8 +2137,8 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
 
     async fn create_or_update_constraint(
         &self,
-        component_constraint: &ComponentConstraints<Owner>,
-    ) -> Result<ComponentConstraints<Owner>, ComponentError> {
+        component_constraint: &ComponentConstraints,
+    ) -> Result<ComponentConstraints, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()
@@ -2136,10 +2148,10 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
 
     async fn delete_constraints(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         component_id: &ComponentId,
         constraints_to_remove: &[FunctionSignature],
-    ) -> Result<ComponentConstraints<Owner>, ComponentError> {
+    ) -> Result<ComponentConstraints, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
             .unwrap()
@@ -2150,7 +2162,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
-        owner: &Owner,
+        owner: &ComponentOwner,
     ) -> Result<Option<FunctionConstraints>, ComponentError> {
         let lock = self.0.read().await;
         lock.as_ref()
@@ -2162,7 +2174,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
     /// Gets the list of installed plugins for a given component version belonging to `owner`
     async fn get_plugin_installations_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> Result<Vec<PluginInstallation>, PluginError> {
@@ -2175,7 +2187,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
 
     async fn create_plugin_installation_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         component_id: &ComponentId,
         installation: PluginInstallationCreation,
     ) -> Result<PluginInstallation, PluginError> {
@@ -2188,7 +2200,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
 
     async fn update_plugin_installation_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
         update: PluginInstallationUpdate,
@@ -2202,7 +2214,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
 
     async fn delete_plugin_installation_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
     ) -> Result<(), PluginError> {
@@ -2215,7 +2227,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for LazyComponentService<Own
 
     async fn batch_update_plugin_installations_for_component(
         &self,
-        owner: &Owner,
+        owner: &ComponentOwner,
         component_id: &ComponentId,
         actions: &[PluginInstallationAction],
     ) -> Result<Vec<Option<PluginInstallation>>, PluginError> {

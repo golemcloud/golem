@@ -43,7 +43,6 @@ use crate::services::{
     worker_enumeration, HasAll, HasConfig, HasOplog, HasOplogService, HasWorker,
 };
 use crate::worker::{RetryDecision, Worker};
-use crate::GolemTypes;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
@@ -83,12 +82,6 @@ pub trait WorkerCtx:
     + Sized
     + 'static
 {
-    /// Types that this particular WorkerCtx can work with
-    ///
-    /// Note: Both Types and Self are used below when defining types. The rule here is that Types should be used where possible.
-    /// Only use Self in nested types when it really needs to refer to the whole, wired WorkerCtx instance.
-    type Types: GolemTypes;
-
     /// PublicState is a subset of the worker context which is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
@@ -125,7 +118,7 @@ pub trait WorkerCtx:
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
-        event_service: Arc<dyn WorkerEventService + Send + Sync>,
+        event_service: Arc<dyn WorkerEventService>,
         active_workers: Arc<ActiveWorkers<Self>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
@@ -133,13 +126,13 @@ pub trait WorkerCtx:
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
-        component_service: Arc<dyn ComponentService<Self::Types>>,
+        component_service: Arc<dyn ComponentService>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<Self::Types>>,
+        plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
     ) -> Result<Self, GolemError>;
@@ -162,7 +155,7 @@ pub trait WorkerCtx:
     /// Get the owned worker ID associated with this worker context
     fn owned_worker_id(&self) -> &OwnedWorkerId;
 
-    fn component_metadata(&self) -> &ComponentMetadata<Self::Types>;
+    fn component_metadata(&self) -> &ComponentMetadata;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to
@@ -176,7 +169,7 @@ pub trait WorkerCtx:
     /// in the cluster
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy>;
 
-    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types>>;
+    fn component_service(&self) -> Arc<dyn ComponentService>;
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService>;
 
@@ -480,6 +473,6 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         engine: &Engine,
         linker: &mut Linker<Ctx>,
         component: &Component,
-        component_metadata: &ComponentMetadata<Ctx::Types>,
+        component_metadata: &ComponentMetadata,
     ) -> anyhow::Result<()>;
 }

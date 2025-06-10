@@ -15,7 +15,7 @@
 use crate::service::auth::AuthService;
 use async_trait::async_trait;
 use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{CloudAuthCtx, CloudNamespace};
+use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::ProjectId;
 use golem_service_base::clients::auth::AuthServiceError;
 use golem_worker_service_base::gateway_security::{
@@ -27,7 +27,7 @@ use golem_worker_service_base::service::gateway::security_scheme::{
 };
 use std::sync::Arc;
 
-type BaseService = Arc<dyn BaseSecuritySchemeService<CloudNamespace> + Sync + Send>;
+type BaseService = Arc<dyn BaseSecuritySchemeService<Namespace> + Sync + Send>;
 
 #[async_trait]
 pub trait SecuritySchemeService {
@@ -35,14 +35,14 @@ pub trait SecuritySchemeService {
         &self,
         security_scheme_name: &SecuritySchemeIdentifier,
         project_id: &ProjectId,
-        ctx: &CloudAuthCtx,
+        ctx: &AuthCtx,
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
 
     async fn create(
         &self,
         security_scheme: &SecurityScheme,
         project_id: &ProjectId,
-        ctx: &CloudAuthCtx,
+        ctx: &AuthCtx,
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
 }
 
@@ -76,7 +76,7 @@ impl SecuritySchemeService for SecuritySchemeServiceDefault {
         &self,
         security_scheme_name: &SecuritySchemeIdentifier,
         project_id: &ProjectId,
-        ctx: &CloudAuthCtx,
+        ctx: &AuthCtx,
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
         let namespace = self
             .auth_service
@@ -94,7 +94,7 @@ impl SecuritySchemeService for SecuritySchemeServiceDefault {
         &self,
         security_scheme: &SecurityScheme,
         project_id: &ProjectId,
-        ctx: &CloudAuthCtx,
+        ctx: &AuthCtx,
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
         let namespace = self
             .auth_service

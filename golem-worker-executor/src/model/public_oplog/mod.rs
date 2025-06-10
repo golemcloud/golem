@@ -36,7 +36,6 @@ use crate::services::rdbms::postgres::types as postgres_types;
 use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::RdbmsIntoValueAndType;
 use crate::services::rpc::RpcError;
-use crate::GolemTypes;
 use async_trait::async_trait;
 use bincode::Decode;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
@@ -83,10 +82,10 @@ pub struct PublicOplogChunk {
     pub last_index: OplogIndex,
 }
 
-pub async fn get_public_oplog_chunk<T: GolemTypes>(
-    component_service: Arc<dyn ComponentService<T>>,
+pub async fn get_public_oplog_chunk(
+    component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
-    plugins: Arc<dyn Plugins<T>>,
+    plugins: Arc<dyn Plugins>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentVersion,
     initial_oplog_index: OplogIndex,
@@ -136,10 +135,10 @@ pub struct PublicOplogSearchResult {
     pub last_index: OplogIndex,
 }
 
-pub async fn search_public_oplog<T: GolemTypes>(
-    component_service: Arc<dyn ComponentService<T>>,
+pub async fn search_public_oplog(
+    component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
-    plugin_service: Arc<dyn Plugins<T>>,
+    plugin_service: Arc<dyn Plugins>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentVersion,
     initial_oplog_index: OplogIndex,
@@ -219,24 +218,24 @@ pub async fn find_component_version_at(
 }
 
 #[async_trait]
-pub trait PublicOplogEntryOps<T: GolemTypes>: Sized {
+pub trait PublicOplogEntryOps: Sized {
     async fn from_oplog_entry(
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService>,
-        components: Arc<dyn ComponentService<T>>,
-        plugins: Arc<dyn Plugins<T>>,
+        components: Arc<dyn ComponentService>,
+        plugins: Arc<dyn Plugins>,
         owned_worker_id: &OwnedWorkerId,
         component_version: ComponentVersion,
     ) -> Result<Self, String>;
 }
 
 #[async_trait]
-impl<T: GolemTypes> PublicOplogEntryOps<T> for PublicOplogEntry {
+impl PublicOplogEntryOps for PublicOplogEntry {
     async fn from_oplog_entry(
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService>,
-        components: Arc<dyn ComponentService<T>>,
-        plugins: Arc<dyn Plugins<T>>,
+        components: Arc<dyn ComponentService>,
+        plugins: Arc<dyn Plugins>,
         owned_worker_id: &OwnedWorkerId,
         component_version: ComponentVersion,
     ) -> Result<Self, String> {

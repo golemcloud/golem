@@ -66,8 +66,8 @@ pub trait HasActiveWorkers<Ctx: WorkerCtx> {
     fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>>;
 }
 
-pub trait HasComponentService<T> {
-    fn component_service(&self) -> Arc<dyn component::ComponentService<T>>;
+pub trait HasComponentService {
+    fn component_service(&self) -> Arc<dyn component::ComponentService>;
 }
 
 pub trait HasShardManagerService {
@@ -158,8 +158,8 @@ pub trait HasFileLoader {
     fn file_loader(&self) -> Arc<FileLoader>;
 }
 
-pub trait HasPlugins<T> {
-    fn plugins(&self) -> Arc<dyn Plugins<T>>;
+pub trait HasPlugins {
+    fn plugins(&self) -> Arc<dyn Plugins>;
 }
 
 pub trait HasOplogProcessorPlugin {
@@ -177,7 +177,7 @@ pub trait HasResourceLimits {
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
-    + HasComponentService<Ctx::Types>
+    + HasComponentService
     + HasConfig
     + HasWorkerForkService
     + HasWorkerService
@@ -197,7 +197,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasShardManagerService
     + HasShardService
     + HasFileLoader
-    + HasPlugins<Ctx::Types>
+    + HasPlugins
     + HasOplogProcessorPlugin
     + HasResourceLimits
     + HasExtraDeps<Ctx>
@@ -209,7 +209,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
 impl<
         Ctx: WorkerCtx,
         T: HasActiveWorkers<Ctx>
-            + HasComponentService<Ctx::Types>
+            + HasComponentService
             + HasConfig
             + HasWorkerForkService
             + HasWorkerService
@@ -229,7 +229,7 @@ impl<
             + HasShardManagerService
             + HasShardService
             + HasFileLoader
-            + HasPlugins<Ctx::Types>
+            + HasPlugins
             + HasOplogProcessorPlugin
             + HasResourceLimits
             + HasExtraDeps<Ctx>
@@ -246,7 +246,7 @@ pub struct All<Ctx: WorkerCtx> {
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
-    component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
+    component_service: Arc<dyn component::ComponentService>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
     worker_fork: Arc<dyn worker_fork::WorkerForkService>,
     worker_service: Arc<dyn worker::WorkerService>,
@@ -266,7 +266,7 @@ pub struct All<Ctx: WorkerCtx> {
     worker_proxy: Arc<dyn worker_proxy::WorkerProxy>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
-    plugins: Arc<dyn Plugins<Ctx::Types>>,
+    plugins: Arc<dyn Plugins>,
     oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
     resource_limits: Arc<dyn resource_limits::ResourceLimits>,
     extra_deps: Ctx::ExtraDeps,
@@ -313,7 +313,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
-        component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
+        component_service: Arc<dyn component::ComponentService>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
         worker_fork: Arc<dyn worker_fork::WorkerForkService>,
         worker_service: Arc<dyn worker::WorkerService>,
@@ -334,7 +334,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         worker_proxy: Arc<dyn worker_proxy::WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<Ctx::Types>>,
+        plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
         resource_limits: Arc<dyn resource_limits::ResourceLimits>,
         extra_deps: Ctx::ExtraDeps,
@@ -423,8 +423,8 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasActiveWorkers<Ctx> for T {
     }
 }
 
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasComponentService<Ctx::Types> for T {
-    fn component_service(&self) -> Arc<dyn component::ComponentService<Ctx::Types>> {
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasComponentService for T {
+    fn component_service(&self) -> Arc<dyn component::ComponentService> {
         self.all().component_service.clone()
     }
 }
@@ -553,8 +553,8 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasFileLoader for T {
     }
 }
 
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasPlugins<Ctx::Types> for T {
-    fn plugins(&self) -> Arc<dyn Plugins<Ctx::Types>> {
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasPlugins for T {
+    fn plugins(&self) -> Arc<dyn Plugins> {
         self.all().plugins.clone()
     }
 }

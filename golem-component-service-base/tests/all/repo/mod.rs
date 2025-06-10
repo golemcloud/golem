@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::model::component::CloudComponentOwner;
 use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::FunctionConstraints;
-use golem_common::model::plugin::{CloudPluginOwner, CloudPluginScope};
+use golem_common::model::plugin::PluginScope;
 use golem_common::model::plugin::{
     ComponentPluginInstallationTarget, ComponentPluginScope, ComponentTransformerDefinition,
     OplogProcessorDefinition, PluginDefinition, PluginInstallation, PluginOwner,
@@ -25,11 +24,8 @@ use golem_common::model::plugin::{
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, Empty, PluginId, PluginInstallationId, ProjectId,
 };
-use golem_common::repo::CloudComponentOwnerRow;
-use golem_common::repo::CloudPluginOwnerRow;
-use golem_common::repo::CloudPluginScopeRow;
 use golem_common::repo::ComponentPluginInstallationRow;
-use golem_common::repo::RowMeta;
+use golem_common::repo::{ComponentOwnerRow, PluginOwnerRow, PluginScopeRow};
 use golem_component_service_base::model::Component;
 use golem_component_service_base::repo::component::{
     record_metadata_serde, ComponentRecord, ComponentRepo, PluginInstallationRepoAction,
@@ -39,15 +35,9 @@ use golem_component_service_base::service::component::{ComponentByNameAndVersion
 use golem_service_base::model::ComponentName;
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
-use poem_openapi::NewType;
 use poem_openapi::__private::serde_json;
-use serde::{Deserialize, Serialize};
-use sqlx::query_builder::Separated;
 use sqlx::types::Json;
-use sqlx::{Database, Encode, QueryBuilder};
 use std::collections::HashMap;
-use std::fmt::Display;
-use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};
 use tracing::info;
@@ -62,82 +52,12 @@ inherit_test_dep!(Tracing);
 sequential_suite!(postgres);
 sequential_suite!(sqlite);
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, NewType)]
-struct UuidOwner(Uuid);
-
-impl Display for UuidOwner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl FromStr for UuidOwner {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(UuidOwner(Uuid::parse_str(s).map_err(|e| e.to_string())?))
-    }
-}
-
-impl ComponentOwner for UuidOwner {
-    type Row = UuidOwnerRow;
-    type PluginOwner = UuidOwner;
-    fn account_id(&self) -> AccountId {
-        AccountId {
-            value: self.0.to_string(),
-        }
-    }
-}
-
-impl PluginOwner for UuidOwner {
-    type Row = UuidOwnerRow;
-    fn account_id(&self) -> AccountId {
-        AccountId {
-            value: self.0.to_string(),
-        }
-    }
-}
-
-#[derive(sqlx::FromRow, Debug, Clone)]
-struct UuidOwnerRow {
-    id: Uuid,
-}
-
-impl Display for UuidOwnerRow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.id)
-    }
-}
-
-impl TryFrom<UuidOwnerRow> for UuidOwner {
-    type Error = String;
-
-    fn try_from(value: UuidOwnerRow) -> Result<Self, Self::Error> {
-        Ok(UuidOwner(value.id))
-    }
-}
-
-impl From<UuidOwner> for UuidOwnerRow {
-    fn from(value: UuidOwner) -> Self {
-        UuidOwnerRow { id: value.0 }
-    }
-}
-
-impl<DB: Database> RowMeta<DB> for UuidOwnerRow
-where
-    Uuid: for<'q> Encode<'q, DB> + sqlx::Type<DB>,
-{
-    fn add_column_list<Sep: Display>(builder: &mut Separated<DB, Sep>) {
-        builder.push("owner_id");
-    }
-
-    fn add_where_clause<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) {
-        builder.push("owner_id = ");
-        builder.push_bind(self.id);
-    }
-
-    fn push_bind<'a, Sep: Display>(&'a self, builder: &mut Separated<'_, 'a, DB, Sep>) {
-        builder.push_bind(self.id);
+fn random_component_owner() -> ComponentOwner {
+    ComponentOwner {
+        account_id: AccountId {
+            value: Uuid::new_v4().to_string(),
+        },
+        project_id: ProjectId(Uuid::new_v4()),
     }
 }
 
@@ -146,8 +66,8 @@ pub(crate) fn get_component_data(name: &str) -> Vec<u8> {
     std::fs::read(path).unwrap()
 }
 
-pub(crate) fn test_component_owner() -> CloudComponentOwner {
-    CloudComponentOwner {
+pub(crate) fn test_component_owner() -> ComponentOwner {
+    ComponentOwner {
         project_id: ProjectId(uuid!("981d4914-6992-4237-a2b3-06d7b53ed6d4")),
         account_id: AccountId {
             value: "7857d4f5-a7e1-4a26-9ff9-7755898f6dce".to_string(),
@@ -155,11 +75,9 @@ pub(crate) fn test_component_owner() -> CloudComponentOwner {
     }
 }
 
-async fn test_repo_component_id_unique(
-    component_repo: Arc<dyn ComponentRepo<UuidOwner> + Sync + Send>,
-) {
-    let owner1 = UuidOwner(Uuid::new_v4());
-    let owner2 = UuidOwner(Uuid::new_v4());
+async fn test_repo_component_id_unique(component_repo: Arc<dyn ComponentRepo>) {
+    let owner1 = random_component_owner();
+    let owner2 = random_component_owner();
 
     let component_name1 = ComponentName("shopping-cart-component-id-unique".to_string());
     let data = get_component_data("shopping-cart");
@@ -204,11 +122,9 @@ async fn test_repo_component_id_unique(
     assert!(result3.is_err());
 }
 
-async fn test_repo_component_name_unique_in_namespace(
-    component_repo: Arc<dyn ComponentRepo<UuidOwner> + Sync + Send>,
-) {
-    let owner1 = UuidOwner(Uuid::new_v4());
-    let owner2 = UuidOwner(Uuid::new_v4());
+async fn test_repo_component_name_unique_in_namespace(component_repo: Arc<dyn ComponentRepo>) {
+    let owner1 = random_component_owner();
+    let owner2 = random_component_owner();
 
     let component_name1 =
         ComponentName("shopping-cart-component-name-unique-in-namespace".to_string());
@@ -275,9 +191,7 @@ async fn test_repo_component_name_unique_in_namespace(
     assert!(result3.is_ok());
 }
 
-async fn test_repo_component_find_by_names(
-    component_repo: Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
-) {
+async fn test_repo_component_find_by_names(component_repo: Arc<dyn ComponentRepo>) {
     let component_name1 = ComponentName("shopping-cart".to_string());
     let data = get_component_data("shopping-cart");
 
@@ -550,9 +464,7 @@ async fn test_repo_component_find_by_names(
     assert!(invalid_search.is_empty())
 }
 
-async fn test_repo_component_delete(
-    component_repo: Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
-) {
+async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo>) {
     let component_name1 = ComponentName("shopping-cart1-component-delete".to_string());
     let data = get_component_data("shopping-cart");
 
@@ -607,10 +519,8 @@ async fn test_repo_component_delete(
     assert!(result4.unwrap().is_empty());
 }
 
-async fn test_repo_component_constraints(
-    component_repo: Arc<dyn ComponentRepo<UuidOwner> + Sync + Send>,
-) {
-    let owner1 = UuidOwner(Uuid::new_v4());
+async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo>) {
+    let owner1 = random_component_owner();
 
     let component_name1 = ComponentName("shopping-cart-component-constraints".to_string());
 
@@ -698,17 +608,17 @@ async fn test_repo_component_constraints(
 }
 
 async fn test_default_plugin_repo(
-    component_repo: Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
-    plugin_repo: Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync>,
+    component_repo: Arc<dyn ComponentRepo>,
+    plugin_repo: Arc<dyn PluginRepo>,
 ) -> Result<(), RepoError> {
-    let owner: CloudComponentOwner = test_component_owner();
-    let plugin_owner_row: CloudPluginOwnerRow = CloudPluginOwnerRow {
+    let owner: ComponentOwner = test_component_owner();
+    let plugin_owner_row: PluginOwnerRow = PluginOwnerRow {
         account_id: owner.account_id.value.clone(),
     };
 
     let component_id = ComponentId::new_v4();
     let component_id2 = ComponentId::new_v4();
-    let scope1: CloudPluginScopeRow = CloudPluginScope::Component(ComponentPluginScope {
+    let scope1: PluginScopeRow = PluginScope::Component(ComponentPluginScope {
         component_id: component_id.clone(),
     })
     .into();
@@ -766,7 +676,7 @@ async fn test_default_plugin_repo(
             validate_url: "https://plugin1.com/validate".to_string(),
             transform_url: "https://plugin1.com/transform".to_string(),
         }),
-        scope: CloudPluginScope::Global(Empty {}),
+        scope: PluginScope::Global(Empty {}),
         owner: test_component_owner().into(),
         deleted: false,
     };
@@ -783,7 +693,7 @@ async fn test_default_plugin_repo(
             component_id: component_id2.clone(),
             component_version: 0,
         }),
-        scope: CloudPluginScope::Component(ComponentPluginScope {
+        scope: PluginScope::Component(ComponentPluginScope {
             component_id: component_id.clone(),
         }),
         owner: test_component_owner().into(),
@@ -811,26 +721,26 @@ async fn test_default_plugin_repo(
     let mut defs = all2
         .into_iter()
         .map(|p| p.try_into())
-        .collect::<Result<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, String>>()
+        .collect::<Result<Vec<PluginDefinition>, String>>()
         .unwrap();
     defs.sort_by_key(|def| def.name.clone());
 
     let scoped = scoped2
         .into_iter()
         .map(|p| p.try_into())
-        .collect::<Result<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, String>>()
+        .collect::<Result<Vec<PluginDefinition>, String>>()
         .unwrap();
 
     let named = named2
         .into_iter()
         .map(|p| p.try_into())
-        .collect::<Result<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, String>>()
+        .collect::<Result<Vec<PluginDefinition>, String>>()
         .unwrap();
 
     let after_delete = all3
         .into_iter()
         .map(|p| p.try_into())
-        .collect::<Result<Vec<PluginDefinition<CloudPluginOwner, CloudPluginScope>>, String>>()
+        .collect::<Result<Vec<PluginDefinition>, String>>()
         .unwrap();
 
     assert!(scoped1.is_empty());
@@ -853,14 +763,14 @@ async fn test_default_plugin_repo(
 }
 
 async fn test_default_component_plugin_installation(
-    component_repo: Arc<dyn ComponentRepo<CloudComponentOwner> + Sync + Send>,
-    plugin_repo: Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope> + Send + Sync>,
+    component_repo: Arc<dyn ComponentRepo>,
+    plugin_repo: Arc<dyn PluginRepo>,
 ) -> Result<(), RepoError> {
-    let component_owner: CloudComponentOwner = test_component_owner();
-    let component_owner_row: CloudComponentOwnerRow = component_owner.clone().into();
-    let plugin_owner_row: CloudPluginOwnerRow = component_owner_row.into();
+    let component_owner: ComponentOwner = test_component_owner();
+    let component_owner_row: ComponentOwnerRow = component_owner.clone().into();
+    let plugin_owner_row: PluginOwnerRow = component_owner_row.into();
 
-    let plugin_owner: CloudPluginOwner = test_component_owner().into();
+    let plugin_owner: PluginOwner = test_component_owner().into();
 
     let component_id = ComponentId::new_v4();
 
@@ -890,7 +800,7 @@ async fn test_default_component_plugin_installation(
             validate_url: "https://plugin2.com/validate".to_string(),
             transform_url: "https://plugin2.com/transform".to_string(),
         }),
-        scope: CloudPluginScope::Global(Empty {}),
+        scope: PluginScope::Global(Empty {}),
         owner: plugin_owner.clone(),
         deleted: false,
     };
