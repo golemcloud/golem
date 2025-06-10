@@ -34,44 +34,6 @@ mod ir;
 mod type_with_unit;
 mod worker_functions_in_rib;
 
-/// Compiler configuration options for Rib.
-///
-/// # Fields
-/// - `component_metadata`: Component metadata that describes the worker functions available.
-/// - `global_input_spec`: Defines constraints and types for global input variables.
-///   By default, Rib allows any identifier (e.g., `foo`) to be treated as a global variable.
-///   A global variable is a variable that is not defined in the Rib script but is expected to be provided
-///   by the environment in which the Rib script is executed (e.g., `request`, `env`). Hence it is called `global_input`.
-///   This field can restrict global variables to a predefined set. If the field is empty, any identifier
-///   can be used as a global variable.
-///
-///   You can also associate specific types with known global variables using
-///   `GlobalVariableTypeSpec`. For example, the path `request.path.*` can be enforced to always
-///   be of type `string`. Note that not all global variables require a type specification.
-#[derive(Default)]
-pub struct RibCompilerConfig {
-    component_dependencies: Vec<ComponentDependency>,
-    input_spec: Vec<GlobalVariableTypeSpec>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ComponentDependency {
-    pub component_dependency_key: ComponentDependencyKey,
-    pub component_exports: Vec<AnalysedExport>,
-}
-
-impl RibCompilerConfig {
-    pub fn new(
-        component_dependencies: Vec<ComponentDependency>,
-        input_spec: Vec<GlobalVariableTypeSpec>,
-    ) -> RibCompilerConfig {
-        RibCompilerConfig {
-            component_dependencies,
-            input_spec,
-        }
-    }
-}
-
 #[derive(Default)]
 pub struct RibCompiler {
     component_dependency: ComponentDependencies,
@@ -157,6 +119,56 @@ impl RibCompiler {
 
     pub fn get_enums(&self) -> Vec<TypeEnum> {
         self.component_dependency.get_enums()
+    }
+}
+
+/// Compiler configuration options for Rib.
+///
+/// # Fields
+/// - `component_metadata`: Component metadata that describes the worker functions available.
+/// - `global_input_spec`: Defines constraints and types for global input variables.
+///   By default, Rib allows any identifier (e.g., `foo`) to be treated as a global variable.
+///   A global variable is a variable that is not defined in the Rib script but is expected to be provided
+///   by the environment in which the Rib script is executed (e.g., `request`, `env`). Hence it is called `global_input`.
+///   This field can restrict global variables to a predefined set. If the field is empty, any identifier
+///   can be used as a global variable.
+///
+///   You can also associate specific types with known global variables using
+///   `GlobalVariableTypeSpec`. For example, the path `request.path.*` can be enforced to always
+///   be of type `string`. Note that not all global variables require a type specification.
+#[derive(Default)]
+pub struct RibCompilerConfig {
+    component_dependencies: Vec<ComponentDependency>,
+    input_spec: Vec<GlobalVariableTypeSpec>,
+}
+
+impl RibCompilerConfig {
+    pub fn new(
+        component_dependencies: Vec<ComponentDependency>,
+        input_spec: Vec<GlobalVariableTypeSpec>,
+    ) -> RibCompilerConfig {
+        RibCompilerConfig {
+            component_dependencies,
+            input_spec,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ComponentDependency {
+    component_dependency_key: ComponentDependencyKey,
+    component_exports: Vec<AnalysedExport>,
+}
+
+impl ComponentDependency {
+    pub fn new(
+        component_dependency_key: ComponentDependencyKey,
+        component_exports: Vec<AnalysedExport>,
+    ) -> Self {
+        Self {
+            component_dependency_key,
+            component_exports,
+        }
     }
 }
 

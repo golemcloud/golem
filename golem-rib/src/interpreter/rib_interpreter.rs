@@ -4785,14 +4785,14 @@ mod tests {
                 root_package_version: None,
             };
 
-            vec![ComponentDependency {
-                component_dependency_key: component_info,
-                component_exports: vec![AnalysedExport::Function(AnalysedFunction {
+            vec![ComponentDependency::new(
+                component_info,
+                vec![AnalysedExport::Function(AnalysedFunction {
                     name: function_name.to_string(),
                     parameters: analysed_function_parameters,
                     result,
                 })],
-            }]
+            )]
         }
 
         pub(crate) fn get_metadata_with_resource_with_params() -> Vec<ComponentDependency> {
@@ -4892,10 +4892,10 @@ mod tests {
                 root_package_version: None,
             };
 
-            vec![ComponentDependency {
-                component_dependency_key: component_info,
-                component_exports: vec![analysed_export1, analysed_export2, analysed_export3],
-            }]
+            vec![ComponentDependency::new(
+                component_info,
+                vec![analysed_export1, analysed_export2, analysed_export3],
+            )]
         }
 
         fn get_metadata_with_resource(
@@ -5022,10 +5022,7 @@ mod tests {
                 root_package_version: None,
             };
 
-            vec![ComponentDependency {
-                component_dependency_key: component_info,
-                component_exports: vec![instance],
-            }]
+            vec![ComponentDependency::new(component_info, vec![instance])]
         }
 
         pub(crate) fn get_value_and_type(
@@ -5226,10 +5223,7 @@ mod tests {
                 root_package_version: None,
             };
 
-            vec![ComponentDependency {
-                component_dependency_key: component_info,
-                component_exports: exports,
-            }]
+            vec![ComponentDependency::new(component_info, exports)]
         }
 
         struct TestInvoke3;

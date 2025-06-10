@@ -810,10 +810,8 @@ impl CompiledRoute {
                         worker_binding.component_id.clone(),
                     ))?;
 
-                let component_dependency = vec![ComponentDependency {
-                    component_dependency_key: component_details.component_info.clone(),
-                    component_exports: component_details.metadata.clone(),
-                }];
+                let component_dependency =
+                    vec![ComponentDependency::new( component_details.component_info.clone(), component_details.metadata.clone())];
 
                 let binding = WorkerBindingCompiled::from_raw_worker_binding(
                     worker_binding,

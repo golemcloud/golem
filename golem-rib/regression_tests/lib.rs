@@ -835,10 +835,7 @@ mod component_metadata {
             root_package_version: None,
         };
 
-        vec![ComponentDependency {
-            component_dependency_key: component_info,
-            component_exports: exports,
-        }]
+        vec![ComponentDependency::new(component_info, exports)]
     }
 }
 
