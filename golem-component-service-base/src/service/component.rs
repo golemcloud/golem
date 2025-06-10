@@ -560,7 +560,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> ComponentServiceDefault<Owner, S
                 let parameter_conflict = if parameter_conflict {
                     Some(ParameterTypeConflict {
                         existing: existing_function_call.parameter_types().clone(),
-                        new: function_type.clone().parameter_types().clone(),
+                        new: function_type.parameter_types().clone(),
                     })
                 } else {
                     None
