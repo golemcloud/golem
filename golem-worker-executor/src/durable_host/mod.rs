@@ -2257,6 +2257,7 @@ struct PrivateDurableWorkerState {
 }
 
 impl PrivateDurableWorkerState {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
