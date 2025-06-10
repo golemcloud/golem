@@ -5,6 +5,7 @@ use golem_rib_repl::WorkerFunctionInvoke;
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};
 use std::path::Path;
@@ -78,6 +79,7 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
         worker_name: Option<String>,
         function_name: &str,
         args: Vec<ValueAndType>,
+        _return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>> {
         let target_worker_id = worker_name
             .map(|w| TargetWorkerId {

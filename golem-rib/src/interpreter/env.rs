@@ -17,6 +17,7 @@ use crate::{
     ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId,
     RibFunctionInvoke, RibInput, VariableId,
 };
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -52,6 +53,7 @@ impl InterpreterEnv {
         worker_name: Option<String>,
         function_name: String,
         args: Vec<ValueAndType>,
+        return_type: Option<AnalysedType>,
     ) -> Result<Option<ValueAndType>, Box<dyn std::error::Error + Send + Sync>> {
         self.call_worker_function_async
             .invoke(
@@ -60,6 +62,7 @@ impl InterpreterEnv {
                 worker_name.map(EvaluatedWorkerName),
                 EvaluatedFqFn(function_name),
                 EvaluatedFnArgs(args),
+                return_type,
             )
             .await
     }
@@ -125,6 +128,7 @@ mod internal {
         RibFunctionInvokeResult,
     };
     use async_trait::async_trait;
+    use golem_wasm_ast::analysis::AnalysedType;
 
     pub(crate) struct NoopRibFunctionInvoke;
 
@@ -137,6 +141,7 @@ mod internal {
             _worker_name: Option<EvaluatedWorkerName>,
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
+            _return_type: Option<AnalysedType>,
         ) -> RibFunctionInvokeResult {
             Ok(None)
         }

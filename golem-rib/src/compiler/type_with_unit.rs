@@ -23,6 +23,9 @@ use golem_wasm_ast::analysis::{
 };
 use serde::{Deserialize, Serialize};
 
+// An absence of analysed type is really `Unit`, however, we avoid
+// Option<AnalysedType> in favor of `AnalysedTypeWithUnit` for clarity.
+// and conversions such as what to print if its `unit` becomes more precise
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub enum AnalysedTypeWithUnit {
     Unit,

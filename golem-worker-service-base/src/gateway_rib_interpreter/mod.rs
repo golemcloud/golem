@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::ValueAndType;
 use rib::{
@@ -133,6 +134,7 @@ impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         parameters: EvaluatedFnArgs,
+        _return_type: Option<AnalysedType>,
     ) -> RibFunctionInvokeResult {
         let worker_name: Option<String> = worker_name.map(|x| x.0);
         let idempotency_key = self.idempotency_key.clone();

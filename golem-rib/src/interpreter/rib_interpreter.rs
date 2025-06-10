@@ -201,7 +201,12 @@ impl Interpreter {
                     )?;
                 }
 
-                RibIR::InvokeFunction(component_info, worker_type, arg_size, _) => {
+                RibIR::InvokeFunction(
+                    component_info,
+                    worker_type,
+                    arg_size,
+                    expected_result_type,
+                ) => {
                     internal::run_call_instruction(
                         component_info,
                         &byte_code_cursor.position(),
@@ -209,6 +214,7 @@ impl Interpreter {
                         worker_type,
                         &mut stack,
                         &mut interpreter_env,
+                        expected_result_type,
                     )
                     .await?;
                 }
@@ -322,7 +328,7 @@ mod internal {
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::stack::InterpreterStack;
     use crate::{
-        bail_corrupted_state, internal_corrupted_state, CoercedNumericValue,
+        bail_corrupted_state, internal_corrupted_state, AnalysedTypeWithUnit, CoercedNumericValue,
         ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName,
         FunctionReferenceType, InstructionId, ParsedFunctionName, ParsedFunctionReference,
         ParsedFunctionSite, RibFunctionInvoke, RibFunctionInvokeResult, RibInterpreterResult,
@@ -355,6 +361,7 @@ mod internal {
             _worker_name: Option<EvaluatedWorkerName>,
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
+            _return_type: Option<AnalysedType>,
         ) -> RibFunctionInvokeResult {
             Ok(None)
         }
@@ -1224,12 +1231,13 @@ mod internal {
     }
 
     pub(crate) async fn run_call_instruction(
-        component_info: crate::ComponentDependencyKey,
+        component_info: ComponentDependencyKey,
         instruction_id: &InstructionId,
         arg_size: usize,
         worker_type: WorkerNamePresence,
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
+        expected_result_type: AnalysedTypeWithUnit,
     ) -> RibInterpreterResult<()> {
         let function_name = interpreter_stack
             .pop_str()
@@ -1261,6 +1269,11 @@ mod internal {
             })
             .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
+        let expected_result_type = match expected_result_type {
+            AnalysedTypeWithUnit::Type(analysed_type) => Some(analysed_type),
+            AnalysedTypeWithUnit::Unit => None,
+        };
+
         let value_and_type_opt = interpreter_env
             .invoke_worker_function_async(
                 component_info,
@@ -1268,6 +1281,7 @@ mod internal {
                 worker_name,
                 function_name_cloned,
                 parameter_values,
+                expected_result_type,
             )
             .await
             .map_err(|err| function_invoke_fail(function_name.as_str(), err))?;
@@ -5097,6 +5111,7 @@ mod tests {
                 _worker_name: Option<EvaluatedWorkerName>,
                 _fqn: EvaluatedFqFn,
                 _args: EvaluatedFnArgs,
+                _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
                 let value = self.value.clone();
                 Ok(Some(value))
@@ -5114,6 +5129,7 @@ mod tests {
                 worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
+                _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
                 let worker_name = worker_name.map(|x| x.0);
 
@@ -5237,6 +5253,7 @@ mod tests {
                 _worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
+                _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
                 match function_name.0.as_str() {
                     "add-u32" => {

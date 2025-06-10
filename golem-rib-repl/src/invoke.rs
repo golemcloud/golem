@@ -14,6 +14,7 @@
 
 use crate::repl_state::ReplState;
 use async_trait::async_trait;
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 use rib::{
     ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId,
@@ -31,6 +32,7 @@ pub trait WorkerFunctionInvoke {
         worker_name: Option<String>,
         function_name: &str,
         args: Vec<ValueAndType>,
+        return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>>;
 }
 
@@ -69,6 +71,7 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
+        return_type: Option<AnalysedType>,
     ) -> RibFunctionInvokeResult {
         match self.get_cached_result(instruction_id) {
             Some(result) => Ok(result),
@@ -82,6 +85,7 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
                         worker_name.map(|x| x.0),
                         function_name.0.as_str(),
                         args.0,
+                        return_type
                     )
                     .await;
 

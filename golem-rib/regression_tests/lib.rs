@@ -2248,6 +2248,7 @@ mod mock_interpreter {
             _worker_name: Option<EvaluatedWorkerName>,
             function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
+            _return_type: Option<AnalysedType>,
         ) -> RibFunctionInvokeResult {
             let function_name = FunctionName(function_name.0);
 
