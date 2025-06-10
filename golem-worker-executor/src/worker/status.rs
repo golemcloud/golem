@@ -275,7 +275,7 @@ fn calculate_latest_worker_status(
             OplogEntry::PreRollbackRemoteTransaction { .. } => {
                 result = WorkerStatus::Running;
             }
-            OplogEntry::CommitedRemoteTransaction { .. } => {
+            OplogEntry::CommittedRemoteTransaction { .. } => {
                 result = WorkerStatus::Running;
             }
             OplogEntry::RolledBackRemoteTransaction { .. } => {

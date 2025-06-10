@@ -886,10 +886,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     begin_index,
                 },
             )),
-            OplogEntry::CommitedRemoteTransaction {
+            OplogEntry::CommittedRemoteTransaction {
                 timestamp,
                 begin_index,
-            } => Ok(PublicOplogEntry::CommitedRemoteTransaction(
+            } => Ok(PublicOplogEntry::CommittedRemoteTransaction(
                 RemoteTransactionParameters {
                     timestamp,
                     begin_index,

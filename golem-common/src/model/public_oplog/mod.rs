@@ -716,7 +716,7 @@ pub enum PublicOplogEntry {
     /// Pre-Rollback of the transaction, indicating that the transaction will be rolled back
     PreRollbackRemoteTransaction(RemoteTransactionParameters),
     /// Committed transaction operation, indicating that the transaction was committed
-    CommitedRemoteTransaction(RemoteTransactionParameters),
+    CommittedRemoteTransaction(RemoteTransactionParameters),
     /// Rolled back transaction operation, indicating that the transaction was rolled back
     RolledBackRemoteTransaction(RemoteTransactionParameters),
 }
@@ -1034,9 +1034,9 @@ impl PublicOplogEntry {
                 Self::string_match("prerollbackremotetransaction", &[], query_path, query)
                     || Self::string_match("pre-rollback-remote-transaction", &[], query_path, query)
             }
-            PublicOplogEntry::CommitedRemoteTransaction(_params) => {
-                Self::string_match("commitedremotetransaction", &[], query_path, query)
-                    || Self::string_match("commited-remote-transaction", &[], query_path, query)
+            PublicOplogEntry::CommittedRemoteTransaction(_params) => {
+                Self::string_match("committedremotetransaction", &[], query_path, query)
+                    || Self::string_match("committed-remote-transaction", &[], query_path, query)
             }
             PublicOplogEntry::RolledBackRemoteTransaction(_params) => {
                 Self::string_match("rolledbackremotetransaction", &[], query_path, query)

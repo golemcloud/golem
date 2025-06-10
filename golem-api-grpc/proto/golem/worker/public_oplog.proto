@@ -49,7 +49,7 @@ message OplogEntry {
     BeginRemoteTransactionParameters BeginRemoteTransaction = 34;
     RemoteTransactionParameters PreCommitRemoteTransaction = 35;
     RemoteTransactionParameters PreRollbackRemoteTransaction = 36;
-    RemoteTransactionParameters CommitedRemoteTransaction = 37;
+    RemoteTransactionParameters CommittedRemoteTransaction = 37;
     RemoteTransactionParameters RolledBackRemoteTransaction = 38;
   }
 }

@@ -505,7 +505,7 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         begin_index: OplogIndex,
     },
-    CommitedRemoteTransaction {
+    CommittedRemoteTransaction {
         timestamp: Timestamp,
         begin_index: OplogIndex,
     },
@@ -782,8 +782,8 @@ impl OplogEntry {
         }
     }
 
-    pub fn commited_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
-        OplogEntry::CommitedRemoteTransaction {
+    pub fn committed_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::CommittedRemoteTransaction {
             timestamp: Timestamp::now_utc(),
             begin_index,
         }
@@ -817,7 +817,7 @@ impl OplogEntry {
     }
 
     pub fn is_committed_remote_transaction(&self, idx: OplogIndex) -> bool {
-        matches!(self, OplogEntry::CommitedRemoteTransaction { begin_index, .. } if *begin_index == idx)
+        matches!(self, OplogEntry::CommittedRemoteTransaction { begin_index, .. } if *begin_index == idx)
     }
 
     pub fn is_rolled_back_remote_transaction(&self, idx: OplogIndex) -> bool {
@@ -924,7 +924,7 @@ impl OplogEntry {
             | OplogEntry::BeginRemoteTransaction { timestamp, .. }
             | OplogEntry::PreCommitRemoteTransaction { timestamp, .. }
             | OplogEntry::PreRollbackRemoteTransaction { timestamp, .. }
-            | OplogEntry::CommitedRemoteTransaction { timestamp, .. }
+            | OplogEntry::CommittedRemoteTransaction { timestamp, .. }
             | OplogEntry::RolledBackRemoteTransaction { timestamp, .. } => *timestamp,
         }
     }

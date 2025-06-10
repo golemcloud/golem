@@ -1181,7 +1181,7 @@ impl TestOplog {
             OplogEntry::BeginRemoteTransaction { .. } => "BeginRemoteTransaction",
             OplogEntry::PreRollbackRemoteTransaction { .. } => "PreRollbackRemoteTransaction",
             OplogEntry::PreCommitRemoteTransaction { .. } => "PreCommitRemoteTransaction",
-            OplogEntry::CommitedRemoteTransaction { .. } => "CommitedRemoteTransaction",
+            OplogEntry::CommittedRemoteTransaction { .. } => "CommittedRemoteTransaction",
             OplogEntry::RolledBackRemoteTransaction { .. } => "RolledBackRemoteTransaction",
             OplogEntry::BeginRemoteWrite { .. } => "BeginRemoteWrite",
             OplogEntry::EndRemoteWrite { .. } => "EndRemoteWrite",

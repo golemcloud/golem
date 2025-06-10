@@ -645,7 +645,7 @@ where
 
             if result.is_ok() {
                 ctx.state
-                    .commited_transaction_function(
+                    .committed_transaction_function(
                         &DurableFunctionType::WriteRemoteTransaction(None),
                         begin_oplog_idx,
                     )

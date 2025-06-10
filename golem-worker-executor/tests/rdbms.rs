@@ -637,7 +637,7 @@ async fn rdbms_postgres_commit_recovery(
             last_unique_id,
             deps,
             postgres,
-            TransactionFailOn::oplog_add("CommitedRemoteTransaction", fail_count),
+            TransactionFailOn::oplog_add("CommittedRemoteTransaction", fail_count),
             TransactionEnd::Commit,
             false,
         )
@@ -1316,7 +1316,7 @@ async fn rdbms_mysql_commit_recovery(
             last_unique_id,
             deps,
             mysql,
-            TransactionFailOn::oplog_add("CommitedRemoteTransaction", fail_count),
+            TransactionFailOn::oplog_add("CommittedRemoteTransaction", fail_count),
             TransactionEnd::Commit,
             false,
         )
@@ -1871,7 +1871,7 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
                         }
 
                         end_entry =
-                            try_match!(e.clone(), PublicOplogEntry::CommitedRemoteTransaction(v))
+                            try_match!(e.clone(), PublicOplogEntry::CommittedRemoteTransaction(v))
                                 .or(try_match!(
                                     e.clone(),
                                     PublicOplogEntry::RolledBackRemoteTransaction(v)
@@ -1949,7 +1949,7 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
     for e in entries {
         let end = matches!(
             e,
-            PublicOplogEntry::CommitedRemoteTransaction(_)
+            PublicOplogEntry::CommittedRemoteTransaction(_)
                 | PublicOplogEntry::RolledBackRemoteTransaction(_)
                 | PublicOplogEntry::Jump(_)
         );

@@ -312,7 +312,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             PublicOplogEntry::BeginRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
             PublicOplogEntry::PreCommitRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
             PublicOplogEntry::PreRollbackRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
-            PublicOplogEntry::CommitedRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
+            PublicOplogEntry::CommittedRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
             PublicOplogEntry::RolledBackRemoteTransaction(_) => todo!(), // FIXME needs golem-wit update
         }
     }

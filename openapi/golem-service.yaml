@@ -10308,7 +10308,7 @@ components:
           BeginRemoteTransaction: '#/components/schemas/PublicOplogEntry_BeginRemoteTransactionParameters'
           PreCommitRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
           PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-          CommitedRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+          CommittedRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
           RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
       type: object
       oneOf:

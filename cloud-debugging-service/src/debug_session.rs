@@ -405,7 +405,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::PreCommitRemoteTransaction(_) => {
             Err("Cannot override an oplog with a pre commit remote transaction".to_string())?
         }
-        PublicOplogEntry::CommitedRemoteTransaction(_) => {
+        PublicOplogEntry::CommittedRemoteTransaction(_) => {
             Err("Cannot override an oplog with a committed remote transaction".to_string())?
         }
         PublicOplogEntry::PreRollbackRemoteTransaction(_) => {

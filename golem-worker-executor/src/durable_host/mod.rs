@@ -2512,11 +2512,11 @@ impl PrivateDurableWorkerState {
                     // );
                     if end_entry.is_none() {
                         if pre_entry.is_pre_commit_remote_transaction(begin_index) {
-                            let commited = handler.is_committed(&tx_id).await?;
+                            let committed = handler.is_committed(&tx_id).await?;
                             // println!(
-                            //     "begin_transaction_function tx_id {tx_id}, pre commit - commited: {commited}",
+                            //     "begin_transaction_function tx_id {tx_id}, pre commit - committed: {committed}",
                             // );
-                            restart = !commited;
+                            restart = !committed;
                         } else if pre_entry.is_pre_rollback_remote_transaction(begin_index) {
                             let rolled_back = handler.is_rolled_back(&tx_id).await?;
                             // println!(
@@ -2615,7 +2615,7 @@ impl PrivateDurableWorkerState {
         }
     }
 
-    pub async fn commited_transaction_function(
+    pub async fn committed_transaction_function(
         &mut self,
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
@@ -2626,14 +2626,14 @@ impl PrivateDurableWorkerState {
         ) {
             if self.is_live() {
                 self.oplog
-                    .add_and_commit_safe(OplogEntry::commited_remote_transaction(begin_index))
+                    .add_and_commit_safe(OplogEntry::committed_remote_transaction(begin_index))
                     .await
                     .map_err(GolemError::runtime)?;
                 Ok(())
             } else {
                 let (_, _) = crate::get_oplog_entry!(
                     self.replay_state,
-                    OplogEntry::CommitedRemoteTransaction
+                    OplogEntry::CommittedRemoteTransaction
                 )?;
                 Ok(())
             }
