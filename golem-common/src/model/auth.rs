@@ -102,17 +102,17 @@ impl Display for Role {
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub struct CloudAuthCtx {
+pub struct AuthCtx {
     pub token_secret: TokenSecret,
 }
 
-impl CloudAuthCtx {
+impl AuthCtx {
     pub fn new(token_secret: TokenSecret) -> Self {
         Self { token_secret }
     }
 }
 
-impl IntoIterator for CloudAuthCtx {
+impl IntoIterator for AuthCtx {
     type Item = (String, String);
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
@@ -126,13 +126,13 @@ impl IntoIterator for CloudAuthCtx {
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Encode, Decode, Deserialize)]
-pub struct CloudNamespace {
+pub struct Namespace {
     pub project_id: ProjectId,
     // project owner account
     pub account_id: AccountId,
 }
 
-impl CloudNamespace {
+impl Namespace {
     pub fn new(project_id: ProjectId, account_id: AccountId) -> Self {
         Self {
             project_id,
@@ -141,13 +141,13 @@ impl CloudNamespace {
     }
 }
 
-impl Display for CloudNamespace {
+impl Display for Namespace {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.account_id, self.project_id)
     }
 }
 
-impl TryFrom<String> for CloudNamespace {
+impl TryFrom<String> for Namespace {
     type Error = String;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {

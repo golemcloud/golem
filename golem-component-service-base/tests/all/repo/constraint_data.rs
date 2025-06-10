@@ -136,10 +136,10 @@ pub(crate) fn get_random_worker_functions_constraint() -> FunctionConstraints {
     }
 }
 
-pub(crate) fn get_shopping_cart_component_constraint1<Owner: ComponentOwner>(
-    owner: &Owner,
+pub(crate) fn get_shopping_cart_component_constraint1(
+    owner: &ComponentOwner,
     component_id: &ComponentId,
-) -> ComponentConstraints<Owner> {
+) -> ComponentConstraints {
     ComponentConstraints {
         owner: owner.clone(),
         component_id: component_id.clone(),
@@ -147,10 +147,10 @@ pub(crate) fn get_shopping_cart_component_constraint1<Owner: ComponentOwner>(
     }
 }
 
-pub(crate) fn get_shopping_cart_component_constraint2<Owner: ComponentOwner>(
-    owner: &Owner,
+pub(crate) fn get_shopping_cart_component_constraint2(
+    owner: &ComponentOwner,
     component_id: &ComponentId,
-) -> ComponentConstraints<Owner> {
+) -> ComponentConstraints {
     ComponentConstraints {
         owner: owner.clone(),
         component_id: component_id.clone(),
@@ -158,10 +158,10 @@ pub(crate) fn get_shopping_cart_component_constraint2<Owner: ComponentOwner>(
     }
 }
 
-pub(crate) fn get_random_constraint<Owner: ComponentOwner>(
-    owner: &Owner,
+pub(crate) fn get_random_constraint(
+    owner: &ComponentOwner,
     component_id: &ComponentId,
-) -> ComponentConstraints<Owner> {
+) -> ComponentConstraints {
     ComponentConstraints {
         owner: owner.clone(),
         component_id: component_id.clone(),
@@ -169,10 +169,10 @@ pub(crate) fn get_random_constraint<Owner: ComponentOwner>(
     }
 }
 
-pub(crate) fn get_incompatible_constraint<Owner: ComponentOwner>(
-    owner: &Owner,
+pub(crate) fn get_incompatible_constraint(
+    owner: &ComponentOwner,
     component_id: &ComponentId,
-) -> ComponentConstraints<Owner> {
+) -> ComponentConstraints {
     ComponentConstraints {
         owner: owner.clone(),
         component_id: component_id.clone(),

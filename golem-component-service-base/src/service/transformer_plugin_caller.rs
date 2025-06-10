@@ -15,7 +15,7 @@
 use crate::config::PluginTransformationsConfig;
 use crate::model::Component;
 use async_trait::async_trait;
-use golem_common::model::component::{ComponentOwner, VersionedComponentId};
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{ComponentType, InitialComponentFile};
 use golem_common::retries::with_retries;
@@ -28,10 +28,10 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 
 #[async_trait]
-pub trait TransformerPluginCaller<Owner: ComponentOwner>: Debug + Send + Sync {
+pub trait TransformerPluginCaller: Send + Sync {
     async fn call_remote_transformer_plugin(
         &self,
-        component: &Component<Owner>,
+        component: &Component,
         data: &[u8],
         url: String,
         parameters: &HashMap<String, String>,
@@ -77,10 +77,10 @@ impl TransformerPluginCallerDefault {
 }
 
 #[async_trait]
-impl<Owner: ComponentOwner> TransformerPluginCaller<Owner> for TransformerPluginCallerDefault {
+impl TransformerPluginCaller for TransformerPluginCallerDefault {
     async fn call_remote_transformer_plugin(
         &self,
-        component: &Component<Owner>,
+        component: &Component,
         data: &[u8],
         url: String,
         parameters: &HashMap<String, String>,
@@ -179,8 +179,8 @@ pub struct SerializableComponent {
     pub files: Vec<InitialComponentFile>,
 }
 
-impl<Owner: ComponentOwner> From<crate::model::Component<Owner>> for SerializableComponent {
-    fn from(value: crate::model::Component<Owner>) -> Self {
+impl From<crate::model::Component> for SerializableComponent {
+    fn from(value: crate::model::Component) -> Self {
         Self {
             versioned_component_id: value.versioned_component_id,
             component_name: value.component_name,

@@ -28,7 +28,7 @@ use golem_common::model::plugin::{
 };
 use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{PluginId, ProjectId};
-use golem_common::repo::CloudPluginOwnerRow;
+use golem_common::repo::PluginOwnerRow;
 use golem_common::SafeDisplay;
 use golem_service_base::clients::plugin::{PluginError, PluginServiceClient};
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
@@ -204,7 +204,7 @@ impl ProjectServiceDefault {
         auth: &AccountAuthorisation,
         token: &TokenSecret,
     ) -> Result<Vec<Option<PluginInstallation>>, ProjectError> {
-        let owner_record: CloudPluginOwnerRow = auth.as_plugin_owner().into();
+        let owner_record: PluginOwnerRow = auth.as_plugin_owner().into();
 
         let mut result = Vec::new();
         for action in actions {

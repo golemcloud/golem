@@ -71,7 +71,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub engine: Arc<wasmtime::Engine>,
     pub linker: Arc<wasmtime::component::Linker<Ctx>>,
     pub runtime: Handle,
-    pub component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
+    pub component_service: Arc<dyn component::ComponentService>,
     pub shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
     pub worker_service: Arc<dyn worker::WorkerService>,
     pub worker_proxy: Arc<dyn WorkerProxy>,
@@ -89,7 +89,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
     pub events: Arc<Events>,
     pub file_loader: Arc<FileLoader>,
-    pub plugins: Arc<dyn Plugins<Ctx::Types>>,
+    pub plugins: Arc<dyn Plugins>,
     pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     pub resource_limits: Arc<dyn ResourceLimits>,
     pub extra_deps: Ctx::ExtraDeps,
@@ -107,8 +107,8 @@ impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DefaultWorkerFork<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasComponentService<Ctx::Types> for DefaultWorkerFork<Ctx> {
-    fn component_service(&self) -> Arc<dyn component::ComponentService<Ctx::Types>> {
+impl<Ctx: WorkerCtx> HasComponentService for DefaultWorkerFork<Ctx> {
+    fn component_service(&self) -> Arc<dyn component::ComponentService> {
         self.component_service.clone()
     }
 }
@@ -237,8 +237,8 @@ impl<Ctx: WorkerCtx> HasFileLoader for DefaultWorkerFork<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasPlugins<Ctx::Types> for DefaultWorkerFork<Ctx> {
-    fn plugins(&self) -> Arc<dyn Plugins<Ctx::Types>> {
+impl<Ctx: WorkerCtx> HasPlugins for DefaultWorkerFork<Ctx> {
+    fn plugins(&self) -> Arc<dyn Plugins> {
         self.plugins.clone()
     }
 }
@@ -296,7 +296,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
-        component_service: Arc<dyn component::ComponentService<Ctx::Types>>,
+        component_service: Arc<dyn component::ComponentService>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
         worker_service: Arc<dyn worker::WorkerService>,
         worker_proxy: Arc<dyn WorkerProxy>,
@@ -315,7 +315,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<Ctx::Types>>,
+        plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         extra_deps: Ctx::ExtraDeps,

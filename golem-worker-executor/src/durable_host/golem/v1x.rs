@@ -341,7 +341,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     debug!("Worker's atomic operation starting at {} is not committed, ignoring persisted entries",  begin_index);
 
                     // We need to jump to the end of the oplog
-                    self.state.replay_state.switch_to_live();
+                    self.state.replay_state.switch_to_live().await;
 
                     // But this is not enough, because if the retried transactional block succeeds,
                     // and later we replay it, we need to skip the first attempt and only replay the second.

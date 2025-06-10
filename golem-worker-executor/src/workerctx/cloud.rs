@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::CloudGolemTypes;
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::error::GolemError;
 use crate::metrics::wasm::record_allocated_memory;
@@ -49,6 +48,7 @@ use async_trait::async_trait;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
+use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
@@ -390,12 +390,12 @@ impl UpdateManagement for Context {
 
     async fn on_worker_update_succeeded(
         &self,
-        target_version: ComponentVersion,
+        update: &UpdateDescription,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(target_version, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(update, new_component_size, new_active_plugins)
             .await
     }
 }
@@ -543,7 +543,7 @@ impl DynamicLinking<Context> for Context {
         engine: &Engine,
         linker: &mut Linker<Context>,
         component: &Component,
-        component_metadata: &ComponentMetadata<CloudGolemTypes>,
+        component_metadata: &ComponentMetadata,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -594,20 +594,17 @@ impl InvocationContextManagement for Context {
 
 #[async_trait]
 impl WorkerCtx for Context {
-    type Types = CloudGolemTypes;
-
     type PublicState = PublicDurableWorkerState<Context>;
 
     async fn create(
         owned_worker_id: OwnedWorkerId,
-        component_metadata: ComponentMetadata<CloudGolemTypes>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
-        event_service: Arc<dyn WorkerEventService + Send + Sync>,
+        event_service: Arc<dyn WorkerEventService>,
         _active_workers: Arc<ActiveWorkers<Self>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
@@ -615,19 +612,18 @@ impl WorkerCtx for Context {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
-        component_service: Arc<dyn ComponentService<CloudGolemTypes>>,
+        component_service: Arc<dyn ComponentService>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins<CloudGolemTypes>>,
+        plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id.clone(),
-            component_metadata,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -682,7 +678,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.owned_worker_id()
     }
 
-    fn component_metadata(&self) -> &ComponentMetadata<CloudGolemTypes> {
+    fn component_metadata(&self) -> &ComponentMetadata {
         self.durable_ctx.component_metadata()
     }
 
@@ -698,7 +694,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.worker_proxy()
     }
 
-    fn component_service(&self) -> Arc<dyn ComponentService<Self::Types>> {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
         self.durable_ctx.component_service()
     }
 

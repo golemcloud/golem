@@ -17,10 +17,7 @@ use crate::all::repo::{constraint_data, get_component_data, test_component_owner
 use crate::Tracing;
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::component::CloudComponentOwner;
-use golem_common::model::component::ComponentOwner;
-use golem_common::model::plugin::CloudPluginOwner;
-use golem_common::model::plugin::CloudPluginScope;
+use golem_common::model::plugin::PluginScope;
 use golem_common::model::plugin::{
     ComponentTransformerDefinition, OplogProcessorDefinition, PluginInstallation,
     PluginInstallationCreation,
@@ -79,14 +76,14 @@ async fn db_pool() -> SqliteDb {
 }
 
 #[test_dep]
-fn sqlite_component_repo(db: &SqliteDb) -> Arc<dyn ComponentRepo<CloudComponentOwner>> {
+fn sqlite_component_repo(db: &SqliteDb) -> Arc<dyn ComponentRepo> {
     Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
         db.pool.clone(),
     )))
 }
 
 #[test_dep]
-fn sqlite_plugin_repo(db: &SqliteDb) -> Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope>> {
+fn sqlite_plugin_repo(db: &SqliteDb) -> Arc<dyn PluginRepo> {
     Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db.pool.clone())))
 }
 
@@ -129,10 +126,10 @@ fn plugin_wasm_files_service(
 struct FailingTransformerPluginCaller;
 
 #[async_trait]
-impl<Owner: ComponentOwner> TransformerPluginCaller<Owner> for FailingTransformerPluginCaller {
+impl TransformerPluginCaller for FailingTransformerPluginCaller {
     async fn call_remote_transformer_plugin(
         &self,
-        _component: &Component<Owner>,
+        _component: &Component,
         _data: &[u8],
         _url: String,
         _parameters: &HashMap<String, String>,
@@ -144,21 +141,21 @@ impl<Owner: ComponentOwner> TransformerPluginCaller<Owner> for FailingTransforme
 }
 
 #[test_dep]
-fn transformer_plugin_caller() -> Arc<dyn TransformerPluginCaller<CloudComponentOwner>> {
+fn transformer_plugin_caller() -> Arc<dyn TransformerPluginCaller> {
     Arc::new(FailingTransformerPluginCaller)
 }
 
 #[test_dep]
-fn lazy_component_service(_tracing: &Tracing) -> Arc<LazyComponentService<CloudComponentOwner>> {
+fn lazy_component_service(_tracing: &Tracing) -> Arc<LazyComponentService> {
     Arc::new(LazyComponentService::new())
 }
 
 #[test_dep]
 fn plugin_service(
-    plugin_repo: &Arc<dyn PluginRepo<CloudPluginOwner, CloudPluginScope>>,
+    plugin_repo: &Arc<dyn PluginRepo>,
     library_plugin_files_service: &Arc<PluginWasmFilesService>,
-    component_service: &Arc<LazyComponentService<CloudComponentOwner>>,
-) -> Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>> {
+    component_service: &Arc<LazyComponentService>,
+) -> Arc<dyn PluginService> {
     Arc::new(PluginServiceDefault::new(
         plugin_repo.clone(),
         library_plugin_files_service.clone(),
@@ -168,16 +165,16 @@ fn plugin_service(
 
 #[test_dep]
 async fn component_service(
-    lazy_component_service: &Arc<LazyComponentService<CloudComponentOwner>>,
-    component_repo: &Arc<dyn ComponentRepo<CloudComponentOwner>>,
+    lazy_component_service: &Arc<LazyComponentService>,
+    component_repo: &Arc<dyn ComponentRepo>,
     object_store: &Arc<dyn ComponentObjectStore>,
     component_compilation_service: &Arc<dyn ComponentCompilationService>,
     initial_component_files_service: &Arc<InitialComponentFilesService>,
-    plugin_service: &Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>,
+    plugin_service: &Arc<dyn PluginService>,
     plugin_wasm_files_service: &Arc<PluginWasmFilesService>,
-    transformer_plugin_caller: &Arc<dyn TransformerPluginCaller<CloudComponentOwner>>,
+    transformer_plugin_caller: &Arc<dyn TransformerPluginCaller>,
     _tracing: &Tracing,
-) -> Arc<dyn ComponentService<CloudComponentOwner>> {
+) -> Arc<dyn ComponentService> {
     lazy_component_service
         .set_implementation(ComponentServiceDefault::new(
             component_repo.clone(),
@@ -196,7 +193,7 @@ const COMPONENT_ARCHIVE: &str = "../test-components/cli-project-yaml/data.zip";
 
 #[test]
 #[tracing::instrument]
-async fn test_services(component_service: &Arc<dyn ComponentService<CloudComponentOwner>>) {
+async fn test_services(component_service: &Arc<dyn ComponentService>) {
     let component_name1 = ComponentName("shopping-cart-services".to_string());
     let component_name2 = ComponentName("rust-echo-services".to_string());
 
@@ -543,9 +540,7 @@ async fn test_services(component_service: &Arc<dyn ComponentService<CloudCompone
 
 #[test]
 #[tracing::instrument]
-async fn test_initial_component_file_upload(
-    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
-) {
+async fn test_initial_component_file_upload(component_service: &Arc<dyn ComponentService>) {
     let data = get_component_data("shopping-cart");
 
     let component_name = ComponentName("shopping-cart-initial-component-file-upload".to_string());
@@ -601,9 +596,7 @@ async fn test_initial_component_file_upload(
 
 #[test]
 #[tracing::instrument]
-async fn test_initial_component_file_data_sharing(
-    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
-) {
+async fn test_initial_component_file_data_sharing(component_service: &Arc<dyn ComponentService>) {
     let data = get_component_data("shopping-cart");
 
     let component_name = ComponentName("test_initial_component_file_data_sharing".to_string());
@@ -672,7 +665,7 @@ async fn test_initial_component_file_data_sharing(
 #[test]
 #[tracing::instrument]
 async fn test_component_constraint_incompatible_updates(
-    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
+    component_service: &Arc<dyn ComponentService>,
 ) {
     let component_name = ComponentName("shopping-cart-constraint-incompatible-updates".to_string());
 
@@ -765,8 +758,8 @@ async fn test_component_constraint_incompatible_updates(
 #[test]
 #[tracing::instrument]
 async fn test_component_oplog_process_plugin_creation(
-    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
-    plugin_service: &Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>,
+    component_service: &Arc<dyn ComponentService>,
+    plugin_service: &Arc<dyn PluginService>,
 ) {
     let plugin_component_name =
         ComponentName("oplog-processor-oplog-processor-plugin-creation".to_string());
@@ -806,7 +799,7 @@ async fn test_component_oplog_process_plugin_creation(
                     component_id: created_plugin_component.versioned_component_id.component_id,
                     component_version: created_plugin_component.versioned_component_id.version,
                 }),
-                scope: CloudPluginScope::Global(Empty {}),
+                scope: PluginScope::Global(Empty {}),
             },
         )
         .await
@@ -863,8 +856,8 @@ async fn test_component_oplog_process_plugin_creation(
 #[test]
 #[tracing::instrument]
 async fn test_component_oplog_process_plugin_creation_invalid_plugin(
-    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
-    plugin_service: &Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>,
+    component_service: &Arc<dyn ComponentService>,
+    plugin_service: &Arc<dyn PluginService>,
 ) {
     let plugin_component_name =
         ComponentName("oplog-processor-oplog-processor-plugin-creation-invalid-plugin".to_string());
@@ -902,7 +895,7 @@ async fn test_component_oplog_process_plugin_creation_invalid_plugin(
                     component_id: created_plugin_component.versioned_component_id.component_id,
                     component_version: created_plugin_component.versioned_component_id.version,
                 }),
-                scope: CloudPluginScope::Global(Empty {}),
+                scope: PluginScope::Global(Empty {}),
             },
         )
         .await;
@@ -917,8 +910,8 @@ async fn test_component_oplog_process_plugin_creation_invalid_plugin(
 #[tracing::instrument]
 // happy path is tested in integration tests using a real web server.
 async fn test_failing_component_transformer_plugin(
-    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
-    plugin_service: &Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>,
+    component_service: &Arc<dyn ComponentService>,
+    plugin_service: &Arc<dyn PluginService>,
 ) {
     let plugin_component_name =
         ComponentName("failing-component-transformer-component".to_string());
@@ -960,7 +953,7 @@ async fn test_failing_component_transformer_plugin(
                         transform_url: "http://localhost:9000/transform".to_string(),
                     },
                 ),
-                scope: CloudPluginScope::Global(Empty {}),
+                scope: PluginScope::Global(Empty {}),
             },
         )
         .await
@@ -990,8 +983,8 @@ async fn test_failing_component_transformer_plugin(
 #[test]
 #[tracing::instrument]
 async fn test_library_plugin_creation(
-    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
-    plugin_service: &Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>,
+    component_service: &Arc<dyn ComponentService>,
+    plugin_service: &Arc<dyn PluginService>,
 ) {
     let plugin_component_name = ComponentName("library-plugin-creation-app".to_string());
 
@@ -1032,7 +1025,7 @@ async fn test_library_plugin_creation(
                 specs: PluginTypeSpecificCreation::Library(LibraryPluginCreation {
                     data: PluginWasmFileReference::Data(Box::new(library_plugin_stream)),
                 }),
-                scope: CloudPluginScope::Global(Empty {}),
+                scope: PluginScope::Global(Empty {}),
             },
         )
         .await
@@ -1077,8 +1070,8 @@ async fn test_library_plugin_creation(
 #[test]
 #[tracing::instrument]
 async fn test_app_plugin_creation(
-    component_service: &Arc<dyn ComponentService<CloudComponentOwner>>,
-    plugin_service: &Arc<dyn PluginService<CloudPluginOwner, CloudPluginScope>>,
+    component_service: &Arc<dyn ComponentService>,
+    plugin_service: &Arc<dyn PluginService>,
 ) {
     let plugin_component_name = ComponentName("app-plugin-creation-library".to_string());
 
@@ -1119,7 +1112,7 @@ async fn test_app_plugin_creation(
                 specs: PluginTypeSpecificCreation::App(AppPluginCreation {
                     data: PluginWasmFileReference::Data(Box::new(app_plugin_stream)),
                 }),
-                scope: CloudPluginScope::Global(Empty {}),
+                scope: PluginScope::Global(Empty {}),
             },
         )
         .await

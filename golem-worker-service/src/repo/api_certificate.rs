@@ -15,7 +15,7 @@
 use crate::model::{Certificate, CertificateId, CertificateRequest};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
-use golem_common::model::auth::CloudNamespace;
+use golem_common::model::auth::Namespace;
 use golem_common::model::AccountId;
 use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
@@ -38,7 +38,7 @@ impl CertificateRecord {
         created_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
         Self {
-            namespace: CloudNamespace {
+            namespace: Namespace {
                 account_id,
                 project_id: certificate.project_id,
             }
@@ -55,7 +55,7 @@ impl TryFrom<CertificateRecord> for Certificate {
     type Error = String;
 
     fn try_from(value: CertificateRecord) -> Result<Self, Self::Error> {
-        let namespace: CloudNamespace = value.namespace.try_into()?;
+        let namespace: Namespace = value.namespace.try_into()?;
 
         Ok(Certificate {
             id: CertificateId(value.id),

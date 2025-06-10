@@ -18,7 +18,7 @@ use futures::Stream;
 use golem_api_grpc::proto::golem::worker::{
     InvocationContext, InvokeResult as ProtoInvokeResult, UpdateMode,
 };
-use golem_common::model::auth::CloudNamespace;
+use golem_common::model::auth::Namespace;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
@@ -100,20 +100,16 @@ pub trait WorkerService {
         component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<WorkerId, WorkerError>;
 
     async fn connect(
         &self,
         worker_id: &WorkerId,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<ConnectWorkerStream, WorkerError>;
 
-    async fn delete(
-        &self,
-        worker_id: &WorkerId,
-        namespace: CloudNamespace,
-    ) -> Result<(), WorkerError>;
+    async fn delete(&self, worker_id: &WorkerId, namespace: Namespace) -> Result<(), WorkerError>;
 
     #[allow(clippy::result_large_err)]
     fn validate_typed_parameters(
@@ -130,7 +126,7 @@ pub trait WorkerService {
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<Option<TypeAnnotatedValue>, WorkerError> {
         let params = self.validate_typed_parameters(params)?;
         self.invoke_and_await_typed(
@@ -153,7 +149,7 @@ pub trait WorkerService {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<Option<TypeAnnotatedValue>, WorkerError>;
 
     /// Invokes a worker using raw `Val` parameter values and awaits its results returning
@@ -165,7 +161,7 @@ pub trait WorkerService {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<ProtoInvokeResult, WorkerError>;
 
     /// Invokes a worker using JSON value encoding represented by raw strings and awaits its results
@@ -178,7 +174,7 @@ pub trait WorkerService {
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<Option<TypeAnnotatedValue>, WorkerError>;
 
     /// Validates the provided list of `TypeAnnotatedValue` parameters, and then enqueues
@@ -190,7 +186,7 @@ pub trait WorkerService {
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError> {
         let params = self.validate_typed_parameters(params)?;
         self.invoke(
@@ -213,7 +209,7 @@ pub trait WorkerService {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError>;
 
     /// Enqueues an invocation for the worker without awaiting its results, using JSON value
@@ -226,7 +222,7 @@ pub trait WorkerService {
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
-        metadata: CloudNamespace,
+        metadata: Namespace,
     ) -> Result<(), WorkerError>;
 
     async fn complete_promise(
@@ -234,20 +230,20 @@ pub trait WorkerService {
         worker_id: &WorkerId,
         oplog_id: u64,
         data: Vec<u8>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<bool, WorkerError>;
 
     async fn interrupt(
         &self,
         worker_id: &WorkerId,
         recover_immediately: bool,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError>;
 
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<crate::model::WorkerMetadata, WorkerError>;
 
     async fn find_metadata(
@@ -257,13 +253,13 @@ pub trait WorkerService {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(Option<ScanCursor>, Vec<crate::model::WorkerMetadata>), WorkerError>;
 
     async fn resume(
         &self,
         worker_id: &WorkerId,
-        namespace: CloudNamespace,
+        namespace: Namespace,
         force: bool,
     ) -> Result<(), WorkerError>;
 
@@ -272,7 +268,7 @@ pub trait WorkerService {
         worker_id: &WorkerId,
         update_mode: UpdateMode,
         target_version: ComponentVersion,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError>;
 
     async fn get_oplog(
@@ -281,7 +277,7 @@ pub trait WorkerService {
         from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<GetOplogResponse, WorkerError>;
 
     async fn search_oplog(
@@ -290,35 +286,35 @@ pub trait WorkerService {
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<GetOplogResponse, WorkerError>;
 
     async fn list_directory(
         &self,
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<Vec<ComponentFileSystemNode>, WorkerError>;
 
     async fn get_file_contents(
         &self,
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>, WorkerError>;
 
     async fn activate_plugin(
         &self,
         worker_id: &WorkerId,
         plugin_installation_id: &PluginInstallationId,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError>;
 
     async fn deactivate_plugin(
         &self,
         worker_id: &WorkerId,
         plugin_installation_id: &PluginInstallationId,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError>;
 
     async fn fork_worker(
@@ -326,21 +322,21 @@ pub trait WorkerService {
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError>;
 
     async fn revert_worker(
         &self,
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError>;
 
     async fn cancel_invocation(
         &self,
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<bool, WorkerError>;
 }
 
@@ -361,7 +357,7 @@ impl WorkerServiceDefault {
         }
     }
 
-    async fn authorize(&self, namespace: CloudNamespace) -> Result<WorkerNamespace, WorkerError> {
+    async fn authorize(&self, namespace: Namespace) -> Result<WorkerNamespace, WorkerError> {
         let resource_limits = self
             .limit_service
             .get_resource_limits(&namespace.account_id)
@@ -382,7 +378,7 @@ impl WorkerService for WorkerServiceDefault {
         component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<WorkerId, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
         let account_id = worker_namespace.namespace.account_id.clone();
@@ -408,7 +404,7 @@ impl WorkerService for WorkerServiceDefault {
     async fn connect(
         &self,
         worker_id: &WorkerId,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<ConnectWorkerStream, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -432,11 +428,7 @@ impl WorkerService for WorkerServiceDefault {
         ))
     }
 
-    async fn delete(
-        &self,
-        worker_id: &WorkerId,
-        namespace: CloudNamespace,
-    ) -> Result<(), WorkerError> {
+    async fn delete(&self, worker_id: &WorkerId, namespace: Namespace) -> Result<(), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
         let account_id = worker_namespace.namespace.account_id.clone();
 
@@ -466,7 +458,7 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<Option<TypeAnnotatedValue>, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -492,7 +484,7 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<ProtoInvokeResult, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -518,7 +510,7 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<Option<TypeAnnotatedValue>, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -544,7 +536,7 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -569,7 +561,7 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -592,7 +584,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         oplog_id: u64,
         data: Vec<u8>,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<bool, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -613,7 +605,7 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &WorkerId,
         recover_immediately: bool,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -631,7 +623,7 @@ impl WorkerService for WorkerServiceDefault {
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<crate::model::WorkerMetadata, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
         let account_id = worker_namespace.namespace.account_id.clone();
@@ -653,7 +645,7 @@ impl WorkerService for WorkerServiceDefault {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(Option<ScanCursor>, Vec<crate::model::WorkerMetadata>), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
         let account_id = worker_namespace.namespace.account_id.clone();
@@ -681,7 +673,7 @@ impl WorkerService for WorkerServiceDefault {
     async fn resume(
         &self,
         worker_id: &WorkerId,
-        namespace: CloudNamespace,
+        namespace: Namespace,
         force: bool,
     ) -> Result<(), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
@@ -702,7 +694,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         update_mode: UpdateMode,
         target_version: ComponentVersion,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -725,7 +717,7 @@ impl WorkerService for WorkerServiceDefault {
         from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<GetOplogResponse, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -749,7 +741,7 @@ impl WorkerService for WorkerServiceDefault {
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<GetOplogResponse, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -771,7 +763,7 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<Vec<ComponentFileSystemNode>, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -791,7 +783,7 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>, WorkerError>
     {
         let worker_namespace = self.authorize(namespace).await?;
@@ -812,7 +804,7 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &WorkerId,
         plugin_installation_id: &PluginInstallationId,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -831,7 +823,7 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &WorkerId,
         plugin_installation_id: &PluginInstallationId,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -851,7 +843,7 @@ impl WorkerService for WorkerServiceDefault {
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -871,7 +863,7 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<(), WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -890,7 +882,7 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
-        namespace: CloudNamespace,
+        namespace: Namespace,
     ) -> Result<bool, WorkerError> {
         let worker_namespace = self.authorize(namespace).await?;
 
@@ -932,7 +924,7 @@ fn convert_metadata(
 
 #[derive(Clone)]
 pub struct WorkerNamespace {
-    pub namespace: CloudNamespace,
+    pub namespace: Namespace,
     pub resource_limits: ResourceLimits,
 }
 
