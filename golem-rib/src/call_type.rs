@@ -70,7 +70,7 @@ impl CallType {
             _ => None,
         }
     }
-    pub fn function_without_worker(
+    pub fn function_call(
         function: DynamicParsedFunctionName,
         component_info: Option<ComponentDependencyKey>,
     ) -> CallType {
@@ -81,7 +81,7 @@ impl CallType {
         }
     }
 
-    pub fn function_with_worker(
+    pub fn function_call_with_worker(
         worker: Expr,
         function: DynamicParsedFunctionName,
         component_info: Option<ComponentDependencyKey>,

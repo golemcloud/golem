@@ -799,7 +799,7 @@ mod type_pull_up_tests {
                 None,
             ),
             Expr::call(
-                CallType::function_without_worker(
+                CallType::function_call(
                     DynamicParsedFunctionName {
                         site: PackagedInterface {
                             namespace: "golem".to_string(),

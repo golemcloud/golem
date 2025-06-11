@@ -19,11 +19,11 @@ use uuid::Uuid;
 pub fn ensure_stateful_instance(expr: &mut Expr) {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
-    while let Some(expr) = visitor.pop_back()
-    {
+    while let Some(expr) = visitor.pop_back() {
         match expr {
             Expr::Call {
-                call_type: CallType::InstanceCreation(InstanceCreationType::Worker { worker_name, .. }),
+                call_type:
+                    CallType::InstanceCreation(InstanceCreationType::Worker { worker_name, .. }),
                 ..
             } => {
                 if worker_name.is_none() {
@@ -33,6 +33,5 @@ pub fn ensure_stateful_instance(expr: &mut Expr) {
 
             _ => {}
         }
-
     }
 }

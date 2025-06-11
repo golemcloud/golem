@@ -388,7 +388,7 @@ mod tests {
     fn test_inference_simple_let_binding_type_inference() {
         let rib_expr = r#"
           let x = 1;
-          let worker = instance();
+          let worker = instance("foo");
           worker.foo(x)
         "#;
 
@@ -422,19 +422,20 @@ mod tests {
             Expr::call(
                 CallType::InstanceCreation(InstanceCreationType::Worker {
                     component_info: None,
-                    worker_name: None,
+                    worker_name: Some(Box::new(Expr::literal("foo".to_string()))),
                 }),
                 None,
-                vec![],
+                vec![Expr::literal("foo".to_string())],
             )
             .with_inferred_type(InferredType::instance(InstanceType::Global {
-                worker_name: None,
+                worker_name: Some(Box::new(Expr::literal("foo".to_string()))),
                 component_dependency: component_dependencies.clone(),
             })),
         );
 
         let call_expr = call(
-            CallType::function_without_worker(
+            CallType::function_call_with_worker(
+                Expr::literal("foo".to_string()),
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -509,7 +510,7 @@ mod tests {
                     worker_name: Some(Box::new(Expr::literal("foo".to_string()))),
                 }),
                 None,
-                vec![],
+                vec![Expr::literal("foo".to_string())],
             )
             .with_inferred_type(InferredType::instance(InstanceType::Global {
                 worker_name: Some(Box::new(Expr::literal("foo".to_string()))),
@@ -524,8 +525,8 @@ mod tests {
             .0;
 
         let call_expr1 = call(
-            CallType::function_with_worker(
-                 Expr::literal("foo".to_string()),
+            CallType::function_call_with_worker(
+                Expr::literal("foo".to_string()),
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -544,7 +545,7 @@ mod tests {
         );
 
         let call_expr2 = call(
-            CallType::function_with_worker(
+            CallType::function_call_with_worker(
                 Expr::literal("foo".to_string()),
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -727,7 +728,7 @@ mod tests {
               let query1 = foo;
               let query2 = bar;
               let query3 = foo-bar;
-              let worker = instance();
+              let worker = instance("foo");
               let result = worker.process(query1, query2, query3, user);
 
               let x = match result {
@@ -1315,7 +1316,7 @@ mod tests {
         let rib_expr = r#"
                 let x = 1;
                 let y = 2;
-                let worker = instance();
+                let worker = instance("foo");
 
                 match x {
                   1 => worker.foo(x),
@@ -1356,13 +1357,13 @@ mod tests {
             Expr::call(
                 CallType::InstanceCreation(InstanceCreationType::Worker {
                     component_info: None,
-                    worker_name: None,
+                    worker_name: Some(Box::new(Expr::literal("foo".to_string()))),
                 }),
                 None,
-                vec![],
+                vec![Expr::literal("foo".to_string())],
             )
             .with_inferred_type(InferredType::instance(InstanceType::Global {
-                worker_name: None,
+                worker_name: Some(Box::new(Expr::literal("foo".to_string()))),
                 component_dependency: component_dependencies.clone(),
             })),
         );
@@ -1385,7 +1386,8 @@ mod tests {
                         InferredType::u64(),
                     ))),
                     call(
-                        CallType::function_without_worker(
+                        CallType::function_call_with_worker(
+                            Expr::literal("foo".to_string()),
                             DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
@@ -1412,7 +1414,8 @@ mod tests {
                         InferredType::u64(), // because predicate is u64
                     ))),
                     call(
-                        CallType::function_without_worker(
+                        CallType::function_call_with_worker(
+                            Expr::literal("foo".to_string()),
                             DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
@@ -2149,7 +2152,7 @@ mod tests {
 
         let expr_str = r#"
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
-              let worker = instance();
+              let worker = instance("foo");
               let result = worker.foo(x);
               match result {  some(value) => "personal-id", none =>  x.body.titles[1] }
             "#;
@@ -2863,14 +2866,14 @@ mod tests {
                         Expr::call(
                             CallType::InstanceCreation(InstanceCreationType::Worker {
                                 component_info: None,
-                                worker_name: None,
+                                worker_name: Some(Box::new(Expr::literal("foo"))),
                             }),
                             None,
-                            vec![],
+                            vec![Expr::literal("foo")],
                         )
                         .with_inferred_type(InferredType::instance(
                             InstanceType::Global {
-                                worker_name: None,
+                                worker_name: Some(Box::new(Expr::literal("foo"))),
                                 component_dependency: component_dependencies.clone(),
                             },
                         )),
@@ -2879,7 +2882,8 @@ mod tests {
                         VariableId::local("result", 0),
                         None,
                         call(
-                            CallType::function_without_worker(
+                            CallType::function_call_with_worker(
+                                Expr::literal("foo".to_string()),
                                 DynamicParsedFunctionName {
                                     site: ParsedFunctionSite::Global,
                                     function: DynamicParsedFunctionReference::Function {
@@ -3392,14 +3396,14 @@ mod tests {
                         Expr::call(
                             CallType::InstanceCreation(InstanceCreationType::Worker {
                                 component_info: None,
-                                worker_name: None,
+                                worker_name: Some(Box::new(Expr::literal("foo".to_string()))),
                             }),
                             None,
-                            vec![],
+                            vec![Expr::literal("foo".to_string())],
                         )
                         .with_inferred_type(InferredType::instance(
                             InstanceType::Global {
-                                worker_name: None,
+                                worker_name: Some(Box::new(Expr::literal("foo".to_string()))),
                                 component_dependency: component_dependencies.clone(),
                             },
                         )),
@@ -3408,7 +3412,8 @@ mod tests {
                         VariableId::local("result", 0),
                         None,
                         call(
-                            CallType::function_without_worker(
+                            CallType::function_call_with_worker(
+                                Expr::literal("foo".to_string()),
                                 DynamicParsedFunctionName {
                                     site: ParsedFunctionSite::Global,
                                     function: DynamicParsedFunctionReference::Function {
