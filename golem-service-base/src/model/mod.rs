@@ -604,33 +604,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
     }
 }
 
-impl From<Component> for golem_api_grpc::proto::golem::component::Component {
-    fn from(value: Component) -> Self {
-        Self {
-            versioned_component_id: Some(value.versioned_component_id.into()),
-            component_name: value.component_name.0,
-            component_size: value.component_size,
-            metadata: Some(value.metadata.into()),
-            account_id: None,
-            project_id: None,
-            created_at: Some(prost_types::Timestamp::from(SystemTime::from(
-                value.created_at,
-            ))),
-            component_type: Some(
-                golem_api_grpc::proto::golem::component::ComponentType::from(value.component_type)
-                    .into(),
-            ),
-            files: value.files.into_iter().map(|f| f.into()).collect(),
-            installed_plugins: value
-                .installed_plugins
-                .into_iter()
-                .map(|p| p.into())
-                .collect(),
-            env: value.env,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
