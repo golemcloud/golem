@@ -14,7 +14,6 @@
 
 use crate::error::ComponentError;
 use crate::model::plugin::PluginDefinitionCreation;
-use crate::repo::plugin::PluginRepo;
 use crate::service::component::ComponentService;
 use crate::service::plugin::PluginService;
 use golem_common::model::auth::{AuthCtx, ProjectAction};

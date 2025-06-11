@@ -21,7 +21,6 @@ use crate::model::{
     InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use crate::model::{ComponentQuery, ComponentSearch};
-use crate::service::component::ComponentService;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::component::VersionedComponentId;

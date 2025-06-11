@@ -15,9 +15,7 @@
 use crate::error::ComponentError;
 use crate::model::InitialComponentFilesArchiveAndPermissions;
 use crate::model::{Component, ComponentByNameAndVersion, ComponentConstraints};
-use crate::repo::component::ComponentRepo;
 use crate::service::component::ComponentService;
-use crate::service::component_object_store::ComponentObjectStore;
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
 use golem_common::model::auth::AuthCtx;

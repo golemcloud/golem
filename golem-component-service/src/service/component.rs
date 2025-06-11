@@ -55,7 +55,6 @@ use golem_common::model::{ComponentId, ComponentType, ComponentVersion, PluginIn
 use golem_common::repo::ComponentOwnerRow;
 use golem_common::repo::PluginOwnerRow;
 use golem_service_base::clients::limit::LimitService;
-use golem_service_base::clients::project::ProjectService;
 use golem_service_base::model::ComponentName;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;

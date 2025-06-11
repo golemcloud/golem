@@ -15,7 +15,6 @@
 use crate::api::common::ComponentTraceErrorKind;
 use crate::authed::component::AuthedComponentService;
 use crate::grpcapi::{auth, bad_request_error, internal_error, require_component_id};
-use crate::service::component::ComponentService;
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
