@@ -25,7 +25,6 @@ pub fn ensure_stateful_instance(expr: &mut Expr) {
         ..
     }) = visitor.pop_back()
     {
-        dbg!("here??");
         let function_name = function_name.to_parsed_function_name().function;
 
         match function_name {
