@@ -349,7 +349,7 @@ description = "Runs component service integration tests only"
 dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
-cargo test --package golem-component-service-base --test tests -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-component-service --test tests -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group3]
