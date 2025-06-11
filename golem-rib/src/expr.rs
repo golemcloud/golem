@@ -1099,8 +1099,8 @@ impl Expr {
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibTypeError> {
         self.set_origin();
-        self.ensure_stateful_instance();
         self.identify_instance_creation(component_dependency)?;
+        self.ensure_stateful_instance();
         self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
         self.bind_default_types_to_index_expressions();

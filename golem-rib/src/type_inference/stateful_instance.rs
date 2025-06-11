@@ -12,32 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{CallType, Expr, ExprVisitor, ParsedFunctionReference};
+use crate::{CallType, Expr, ExprVisitor, InstanceCreationType};
 use uuid::Uuid;
 
 //
 pub fn ensure_stateful_instance(expr: &mut Expr) {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
-    while let Some(Expr::Call {
-        call_type: CallType::Function { function_name, .. } ,
-        args,
-        ..
-    }) = visitor.pop_back()
+    while let Some(expr) = visitor.pop_back()
     {
-        let function_name = function_name.to_parsed_function_name().function;
-
-        match function_name {
-            ParsedFunctionReference::Function { function } if function == "instance" => {
-                if args.is_empty() {
-                    let generated_worker = Uuid::new_v4().to_string();
-                    *args = vec![Expr::literal(
-                        generated_worker,
-                    )];
+        match expr {
+            Expr::Call {
+                call_type: CallType::InstanceCreation(InstanceCreationType::Worker { worker_name, .. }),
+                ..
+            } => {
+                if worker_name.is_none() {
+                    *worker_name = Some(Box::new(Expr::literal(Uuid::new_v4().to_string())));
                 }
             }
 
             _ => {}
         }
+
     }
 }

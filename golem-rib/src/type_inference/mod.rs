@@ -465,7 +465,7 @@ mod tests {
         let rib_expr = r#"
           let x = 1;
           let y = 2;
-          let worker = instance();
+          let worker = instance("foo");
           worker.foo(x);
           worker.baz(y)
         "#;
@@ -506,13 +506,13 @@ mod tests {
             Expr::call(
                 CallType::InstanceCreation(InstanceCreationType::Worker {
                     component_info: None,
-                    worker_name: None,
+                    worker_name: Some(Box::new(Expr::literal("foo".to_string()))),
                 }),
                 None,
                 vec![],
             )
             .with_inferred_type(InferredType::instance(InstanceType::Global {
-                worker_name: None,
+                worker_name: Some(Box::new(Expr::literal("foo".to_string()))),
                 component_dependency: component_dependencies.clone(),
             })),
         );
@@ -524,7 +524,8 @@ mod tests {
             .0;
 
         let call_expr1 = call(
-            CallType::function_without_worker(
+            CallType::function_with_worker(
+                 Expr::literal("foo".to_string()),
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -543,7 +544,8 @@ mod tests {
         );
 
         let call_expr2 = call(
-            CallType::function_without_worker(
+            CallType::function_with_worker(
+                Expr::literal("foo".to_string()),
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
