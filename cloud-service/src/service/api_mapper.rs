@@ -15,9 +15,9 @@
 use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plugin::PluginInstallation;
-use golem_component_service::api::dto;
-use golem_component_service::model::Component;
 use golem_service_base::clients::plugin::{PluginError, PluginServiceClient};
+use golem_service_base::dto;
+use golem_service_base::model::Component;
 use std::sync::Arc;
 
 pub struct RemoteCloudApiMapper {

@@ -16,21 +16,15 @@ mod mapper;
 
 use crate::model::plugin as local_plugin_model;
 use crate::model::plugin::PluginWasmFileReference;
-use golem_common::model::component::VersionedComponentId;
-use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::plugin as common_plugin_model;
 use golem_common::model::plugin::{PluginOwner, PluginScope};
-use golem_common::model::{
-    plugin as common_plugin_model, AccountId, ComponentType, InitialComponentFile,
-    PluginInstallationId, ProjectId,
-};
-use golem_service_base::model::ComponentName;
+pub use golem_service_base::dto::{Component, PluginInstallation};
 use golem_service_base::poem::TempFileUpload;
 use golem_service_base::replayable_stream::ReplayableStream;
 pub use mapper::*;
 use poem_openapi::types::Binary;
-use poem_openapi::{Multipart, Object};
+use poem_openapi::Multipart;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
@@ -219,50 +213,4 @@ impl From<common_plugin_model::PluginDefinition> for PluginDefinition {
             owner: value.owner,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct PluginInstallation {
-    pub id: PluginInstallationId,
-    pub plugin_name: String,
-    pub plugin_version: String,
-    /// Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
-    pub plugin_registered: bool,
-    pub priority: i32,
-    pub parameters: HashMap<String, String>,
-}
-
-impl PluginInstallation {
-    pub fn from_model(
-        model: common_plugin_model::PluginInstallation,
-        plugin_definition: common_plugin_model::PluginDefinition,
-    ) -> Self {
-        Self {
-            id: model.id,
-            plugin_name: plugin_definition.name,
-            plugin_version: plugin_definition.version,
-            plugin_registered: !plugin_definition.deleted,
-            priority: model.priority,
-            parameters: model.parameters,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct Component {
-    pub versioned_component_id: VersionedComponentId,
-    pub component_name: ComponentName,
-    pub component_size: u64,
-    pub metadata: ComponentMetadata,
-    pub account_id: AccountId,
-    pub project_id: ProjectId,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub component_type: ComponentType,
-    pub files: Vec<InitialComponentFile>,
-    pub installed_plugins: Vec<PluginInstallation>,
-    pub env: HashMap<String, String>,
 }

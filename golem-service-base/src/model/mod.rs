@@ -14,12 +14,13 @@
 
 pub mod auth;
 
+use applying::Apply;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
-use golem_common::model::component::VersionedComponentId;
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::plugin::PluginInstallation;
+use golem_common::model::plugin::{PluginInstallation, PluginInstallationAction};
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{
@@ -527,12 +528,13 @@ pub struct InvokeResult {
 
 #[derive(Debug, Clone)]
 pub struct Component {
+    pub owner: ComponentOwner,
     pub versioned_component_id: VersionedComponentId,
     pub component_name: ComponentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
-    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub component_type: Option<ComponentType>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
     pub installed_plugins: Vec<PluginInstallation>,
     pub env: HashMap<String, String>,
@@ -544,19 +546,26 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
     fn try_from(
         value: golem_api_grpc::proto::golem::component::Component,
     ) -> Result<Self, Self::Error> {
-        let created_at = match &value.created_at {
-            Some(t) => {
-                let t = SystemTime::try_from(*t).map_err(|_| "Failed to convert timestamp")?;
-                Some(t.into())
-            }
-            None => None,
-        };
+        let account_id = value.account_id.ok_or("missing account_id")?.into();
 
-        let component_type = if value.component_type.is_some() {
-            Some(value.component_type().into())
-        } else {
-            None
-        };
+        let project_id = value
+            .project_id
+            .ok_or("missing project_id")?
+            .try_into()
+            .map_err(|_| "Failed to convert project_id".to_string())?;
+
+        let created_at = value
+            .created_at
+            .ok_or("missing created_at")?
+            .apply(SystemTime::try_from)
+            .map_err(|_| "Failed to convert timestamp".to_string())?
+            .into();
+
+        let component_type = value
+            .component_type
+            .ok_or("missing component_type")?
+            .try_into()
+            .map_err(|_| "Failed to convert component_type".to_string())?;
 
         let files = value
             .files
@@ -571,6 +580,10 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
+            owner: ComponentOwner {
+                account_id,
+                project_id,
+            },
             versioned_component_id: value
                 .versioned_component_id
                 .ok_or("Missing versioned_component_id")?
@@ -600,13 +613,13 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             metadata: Some(value.metadata.into()),
             account_id: None,
             project_id: None,
-            created_at: value
-                .created_at
-                .map(|t| prost_types::Timestamp::from(SystemTime::from(t))),
-            component_type: value.component_type.map(|c| {
-                let c: golem_api_grpc::proto::golem::component::ComponentType = c.into();
-                c.into()
-            }),
+            created_at: Some(prost_types::Timestamp::from(SystemTime::from(
+                value.created_at,
+            ))),
+            component_type: Some(
+                golem_api_grpc::proto::golem::component::ComponentType::from(value.component_type)
+                    .into(),
+            ),
             files: value.files.into_iter().map(|f| f.into()).collect(),
             installed_plugins: value
                 .installed_plugins
@@ -755,4 +768,9 @@ impl From<RevertLastInvocations> for golem_api_grpc::proto::golem::common::Rever
             number_of_invocations: value.number_of_invocations as i64,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+pub struct BatchPluginInstallationUpdates {
+    pub actions: Vec<PluginInstallationAction>,
 }

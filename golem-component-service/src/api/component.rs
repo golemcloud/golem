@@ -17,8 +17,7 @@ use super::dto::ApiMapper;
 use crate::api::{ApiTags, ComponentError, Result};
 use crate::authed::component::AuthedComponentService;
 use crate::model::{
-    BatchPluginInstallationUpdates, ComponentEnv, DynamicLinking,
-    InitialComponentFilesArchiveAndPermissions, UpdatePayload,
+    ComponentEnv, DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use crate::model::{ComponentQuery, ComponentSearch};
 use futures_util::{stream, StreamExt, TryStreamExt};
@@ -32,7 +31,7 @@ use golem_common::model::{
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_http_api_request;
 use golem_service_base::model::auth::GolemSecurityScheme;
-use golem_service_base::model::ComponentName;
+use golem_service_base::model::{BatchPluginInstallationUpdates, ComponentName};
 use golem_service_base::poem::TempFileUpload;
 use poem::Body;
 use poem_openapi::param::{Path, Query};

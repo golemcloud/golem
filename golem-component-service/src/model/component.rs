@@ -21,13 +21,11 @@ use golem_common::model::component_constraint::{
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
-use golem_common::model::plugin::{PluginInstallation, PluginInstallationAction};
+use golem_common::model::plugin::PluginInstallation;
 use golem_common::model::{ComponentFilePathWithPermissions, ComponentId, ComponentType};
 use golem_common::model::{ComponentVersion, InitialComponentFile};
 use golem_service_base::model::ComponentName;
-use poem_openapi_derive::Object;
 use rib::WorkerFunctionsInRib;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::SystemTime;
@@ -111,12 +109,13 @@ impl Component {
 impl From<Component> for golem_service_base::model::Component {
     fn from(value: Component) -> Self {
         Self {
+            owner: value.owner,
             versioned_component_id: value.versioned_component_id,
             component_name: value.component_name,
             component_size: value.component_size,
             metadata: value.metadata,
-            created_at: Some(value.created_at),
-            component_type: Some(value.component_type),
+            created_at: value.created_at,
+            component_type: value.component_type,
             files: value.files,
             installed_plugins: value.installed_plugins,
             env: value.env,
@@ -194,11 +193,6 @@ impl ComponentConstraints {
 pub struct InitialComponentFilesArchiveAndPermissions {
     pub archive: NamedTempFile,
     pub files: Vec<ComponentFilePathWithPermissions>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-pub struct BatchPluginInstallationUpdates {
-    pub actions: Vec<PluginInstallationAction>,
 }
 
 pub struct ComponentByNameAndVersion {
