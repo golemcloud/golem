@@ -15,8 +15,8 @@
 use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plugin::PluginInstallation;
-use golem_component_service_base::api::dto;
-use golem_component_service_base::model::Component;
+use golem_component_service::api::dto;
+use golem_component_service::model::Component;
 use golem_service_base::clients::plugin::{PluginError, PluginServiceClient};
 use std::sync::Arc;
 
@@ -58,6 +58,8 @@ impl RemoteCloudApiMapper {
             .await?;
 
         Ok(dto::Component {
+            account_id: component.owner.account_id,
+            project_id: component.owner.project_id,
             versioned_component_id: component.versioned_component_id,
             component_name: component.component_name,
             component_size: component.component_size,

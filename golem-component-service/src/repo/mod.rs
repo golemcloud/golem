@@ -12,6 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod common;
-pub mod dto;
-pub mod mapper;
+pub mod component;
+pub mod plugin;

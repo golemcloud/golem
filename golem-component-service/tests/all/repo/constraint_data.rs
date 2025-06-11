@@ -16,7 +16,7 @@ use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::FunctionUsageConstraint;
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::model::ComponentId;
-use golem_component_service_base::model::ComponentConstraints;
+use golem_component_service::model::ComponentConstraints;
 use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32, u64};
 use golem_wasm_ast::analysis::NameTypePair;
 use rib::RegistryKey;

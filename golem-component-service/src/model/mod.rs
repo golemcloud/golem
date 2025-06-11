@@ -13,13 +13,15 @@
 // limitations under the License.
 
 mod component;
+mod conflict;
 pub mod plugin;
 
+pub use self::component::*;
+pub use self::conflict::*;
 use bincode::{Decode, Encode};
-pub use component::*;
 use golem_common::base_model::ComponentVersion;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
-use golem_common::model::{ComponentFilePathWithPermissionsList, ComponentType};
+use golem_common::model::{ComponentFilePathWithPermissionsList, ComponentType, ProjectId};
 use golem_service_base::model::ComponentName;
 use golem_service_base::poem::TempFileUpload;
 use poem_openapi::types::multipart::{JsonField, Upload};
@@ -56,7 +58,9 @@ pub struct DynamicLinking {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub struct ComponentSearch {
+    pub project_id: Option<ProjectId>,
     pub components: Vec<ComponentSearchParameters>,
 }
 
@@ -66,4 +70,12 @@ pub struct ComponentSearch {
 pub struct ComponentSearchParameters {
     pub name: ComponentName,
     pub version: Option<ComponentVersion>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ComponentQuery {
+    pub project_id: Option<ProjectId>,
+    pub component_name: ComponentName,
 }

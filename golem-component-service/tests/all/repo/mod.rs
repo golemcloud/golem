@@ -26,12 +26,11 @@ use golem_common::model::{
 };
 use golem_common::repo::ComponentPluginInstallationRow;
 use golem_common::repo::{ComponentOwnerRow, PluginOwnerRow, PluginScopeRow};
-use golem_component_service_base::model::Component;
-use golem_component_service_base::repo::component::{
+use golem_component_service::model::{Component, ComponentByNameAndVersion, VersionType};
+use golem_component_service::repo::component::{
     record_metadata_serde, ComponentRecord, ComponentRepo, PluginInstallationRepoAction,
 };
-use golem_component_service_base::repo::plugin::PluginRepo;
-use golem_component_service_base::service::component::{ComponentByNameAndVersion, VersionType};
+use golem_component_service::repo::plugin::PluginRepo;
 use golem_service_base::model::ComponentName;
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;

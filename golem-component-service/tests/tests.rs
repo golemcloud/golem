@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod all;
+pub mod stubs;
+
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+use golem_service_base::clients::limit::LimitService;
+use std::sync::Arc;
 use test_r::{sequential_suite, test_dep};
 
 test_r::enable!();
-
-pub mod all;
 
 sequential_suite!(all);
 
@@ -37,4 +40,9 @@ impl Tracing {
 #[test_dep]
 fn tracing() -> Tracing {
     Tracing::init()
+}
+
+#[test_dep]
+fn stub_limit_service() -> Arc<dyn LimitService> {
+    Arc::new(self::stubs::StubLimitService)
 }

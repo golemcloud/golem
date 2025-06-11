@@ -27,31 +27,32 @@ use golem_common::model::{
     ComponentType, Empty,
 };
 use golem_common::{widen_infallible, SafeDisplay};
-use golem_component_service_base::model::plugin::{
+use golem_component_service::error::ComponentError;
+use golem_component_service::model::plugin::{
     AppPluginCreation, LibraryPluginCreation, PluginDefinitionCreation, PluginTypeSpecificCreation,
     PluginWasmFileReference,
 };
-use golem_component_service_base::model::{Component, InitialComponentFilesArchiveAndPermissions};
-use golem_component_service_base::repo::component::{
+use golem_component_service::model::{
+    Component, ComponentByNameAndVersion, ConflictReport, ConflictingFunction,
+    InitialComponentFilesArchiveAndPermissions, ParameterTypeConflict, ReturnTypeConflict,
+    VersionType,
+};
+use golem_component_service::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };
-use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
-use golem_component_service_base::service::component::{
-    ComponentByNameAndVersion, ComponentError, ComponentService, ComponentServiceDefault,
-    ConflictReport, ConflictingFunction, LazyComponentService, ParameterTypeConflict,
-    ReturnTypeConflict, VersionType,
-};
-use golem_component_service_base::service::component_compilation::{
+use golem_component_service::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
+use golem_component_service::service::component::ComponentService;
+use golem_component_service::service::component::{ComponentServiceDefault, LazyComponentService};
+use golem_component_service::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDisabled,
 };
-use golem_component_service_base::service::component_object_store;
-use golem_component_service_base::service::component_object_store::ComponentObjectStore;
-use golem_component_service_base::service::plugin::{
-    PluginError, PluginService, PluginServiceDefault,
-};
-use golem_component_service_base::service::transformer_plugin_caller::{
+use golem_component_service::service::component_object_store;
+use golem_component_service::service::component_object_store::ComponentObjectStore;
+use golem_component_service::service::plugin::PluginService;
+use golem_component_service::service::transformer_plugin_caller::{
     TransformationFailedReason, TransformerPluginCaller,
 };
+use golem_service_base::clients::limit::LimitService;
 use golem_service_base::model::ComponentName;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -69,6 +70,7 @@ use test_r::{inherit_test_dep, test, test_dep};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
+inherit_test_dep!(Arc<dyn LimitService>);
 
 #[test_dep]
 async fn db_pool() -> SqliteDb {
@@ -155,8 +157,8 @@ fn plugin_service(
     plugin_repo: &Arc<dyn PluginRepo>,
     library_plugin_files_service: &Arc<PluginWasmFilesService>,
     component_service: &Arc<LazyComponentService>,
-) -> Arc<dyn PluginService> {
-    Arc::new(PluginServiceDefault::new(
+) -> Arc<PluginService> {
+    Arc::new(PluginService::new(
         plugin_repo.clone(),
         library_plugin_files_service.clone(),
         component_service.clone(),
@@ -170,9 +172,10 @@ async fn component_service(
     object_store: &Arc<dyn ComponentObjectStore>,
     component_compilation_service: &Arc<dyn ComponentCompilationService>,
     initial_component_files_service: &Arc<InitialComponentFilesService>,
-    plugin_service: &Arc<dyn PluginService>,
+    plugin_service: &Arc<PluginService>,
     plugin_wasm_files_service: &Arc<PluginWasmFilesService>,
     transformer_plugin_caller: &Arc<dyn TransformerPluginCaller>,
+    limit_service: &Arc<dyn LimitService>,
     _tracing: &Tracing,
 ) -> Arc<dyn ComponentService> {
     lazy_component_service
@@ -184,6 +187,7 @@ async fn component_service(
             plugin_service.clone(),
             plugin_wasm_files_service.clone(),
             transformer_plugin_caller.clone(),
+            limit_service.clone(),
         ))
         .await;
     lazy_component_service.clone()
@@ -746,7 +750,7 @@ async fn test_component_constraint_incompatible_updates(
 #[tracing::instrument]
 async fn test_component_oplog_process_plugin_creation(
     component_service: &Arc<dyn ComponentService>,
-    plugin_service: &Arc<dyn PluginService>,
+    plugin_service: &Arc<PluginService>,
 ) {
     let plugin_component_name =
         ComponentName("oplog-processor-oplog-processor-plugin-creation".to_string());
@@ -844,7 +848,7 @@ async fn test_component_oplog_process_plugin_creation(
 #[tracing::instrument]
 async fn test_component_oplog_process_plugin_creation_invalid_plugin(
     component_service: &Arc<dyn ComponentService>,
-    plugin_service: &Arc<dyn PluginService>,
+    plugin_service: &Arc<PluginService>,
 ) {
     let plugin_component_name =
         ComponentName("oplog-processor-oplog-processor-plugin-creation-invalid-plugin".to_string());
@@ -889,7 +893,7 @@ async fn test_component_oplog_process_plugin_creation_invalid_plugin(
 
     assert!(matches!(
         result,
-        Err(PluginError::InvalidOplogProcessorPlugin)
+        Err(ComponentError::InvalidOplogProcessorPlugin)
     ));
 }
 
@@ -898,7 +902,7 @@ async fn test_component_oplog_process_plugin_creation_invalid_plugin(
 // happy path is tested in integration tests using a real web server.
 async fn test_failing_component_transformer_plugin(
     component_service: &Arc<dyn ComponentService>,
-    plugin_service: &Arc<dyn PluginService>,
+    plugin_service: &Arc<PluginService>,
 ) {
     let plugin_component_name =
         ComponentName("failing-component-transformer-component".to_string());
@@ -961,9 +965,7 @@ async fn test_failing_component_transformer_plugin(
 
     assert!(matches!(
         result,
-        Err(PluginError::InternalComponentError(
-            ComponentError::TransformationFailed(_)
-        ))
+        Err(ComponentError::TransformationFailed(_))
     ));
 }
 
@@ -971,7 +973,7 @@ async fn test_failing_component_transformer_plugin(
 #[tracing::instrument]
 async fn test_library_plugin_creation(
     component_service: &Arc<dyn ComponentService>,
-    plugin_service: &Arc<dyn PluginService>,
+    plugin_service: &Arc<PluginService>,
 ) {
     let plugin_component_name = ComponentName("library-plugin-creation-app".to_string());
 
@@ -1058,7 +1060,7 @@ async fn test_library_plugin_creation(
 #[tracing::instrument]
 async fn test_app_plugin_creation(
     component_service: &Arc<dyn ComponentService>,
-    plugin_service: &Arc<dyn PluginService>,
+    plugin_service: &Arc<PluginService>,
 ) {
     let plugin_component_name = ComponentName("app-plugin-creation-library".to_string());
 

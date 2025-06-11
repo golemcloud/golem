@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ComponentSearchParameters;
 use chrono::Utc;
 use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{
@@ -21,14 +22,15 @@ use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
 use golem_common::model::plugin::{PluginInstallation, PluginInstallationAction};
-use golem_common::model::InitialComponentFile;
 use golem_common::model::{ComponentFilePathWithPermissions, ComponentId, ComponentType};
+use golem_common::model::{ComponentVersion, InitialComponentFile};
 use golem_service_base::model::ComponentName;
 use poem_openapi_derive::Object;
 use rib::WorkerFunctionsInRib;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::time::SystemTime;
 use tempfile::NamedTempFile;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,6 +124,33 @@ impl From<Component> for golem_service_base::model::Component {
     }
 }
 
+impl From<Component> for golem_api_grpc::proto::golem::component::Component {
+    fn from(value: Component) -> Self {
+        let component_type: golem_api_grpc::proto::golem::component::ComponentType =
+            value.component_type.into();
+
+        Self {
+            versioned_component_id: Some(value.versioned_component_id.into()),
+            component_name: value.component_name.0,
+            component_size: value.component_size,
+            metadata: Some(value.metadata.into()),
+            account_id: Some(value.owner.account_id.into()),
+            project_id: Some(value.owner.project_id.into()),
+            created_at: Some(prost_types::Timestamp::from(SystemTime::from(
+                value.created_at,
+            ))),
+            component_type: Some(component_type.into()),
+            files: value.files.into_iter().map(|file| file.into()).collect(),
+            installed_plugins: value
+                .installed_plugins
+                .into_iter()
+                .map(|plugin| plugin.into())
+                .collect(),
+            env: value.env,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComponentConstraints {
     pub owner: ComponentOwner,
@@ -170,4 +199,26 @@ pub struct InitialComponentFilesArchiveAndPermissions {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct BatchPluginInstallationUpdates {
     pub actions: Vec<PluginInstallationAction>,
+}
+
+pub struct ComponentByNameAndVersion {
+    pub component_name: ComponentName,
+    pub version_type: VersionType,
+}
+
+impl From<ComponentSearchParameters> for ComponentByNameAndVersion {
+    fn from(value: ComponentSearchParameters) -> Self {
+        Self {
+            component_name: value.name,
+            version_type: match value.version {
+                Some(version) => VersionType::Exact(version),
+                None => VersionType::Latest,
+            },
+        }
+    }
+}
+
+pub enum VersionType {
+    Latest,
+    Exact(ComponentVersion),
 }

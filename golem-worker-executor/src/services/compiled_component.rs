@@ -29,7 +29,7 @@ use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 
 /// Service for storing compiled native binaries of WebAssembly components
 #[async_trait]
-pub trait CompiledComponentService {
+pub trait CompiledComponentService: Send + Sync {
     async fn get(
         &self,
         component_id: &ComponentId,
@@ -137,8 +137,8 @@ impl CompiledComponentService for DefaultCompiledComponentService {
 
 pub fn configured(
     config: &CompiledComponentServiceConfig,
-    blob_storage: Arc<dyn BlobStorage + Send + Sync>,
-) -> Arc<dyn CompiledComponentService + Send + Sync> {
+    blob_storage: Arc<dyn BlobStorage>,
+) -> Arc<dyn CompiledComponentService> {
     match config {
         CompiledComponentServiceConfig::Enabled(_) => {
             Arc::new(DefaultCompiledComponentService::new(blob_storage))

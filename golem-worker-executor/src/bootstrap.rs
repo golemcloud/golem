@@ -65,8 +65,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         &self,
         golem_config: &GolemConfig,
     ) -> (Arc<dyn Plugins>, Arc<dyn PluginsObservations>) {
-        let plugins =
-            crate::services::cloud::plugins::cloud_configured(&golem_config.plugin_service);
+        let plugins = crate::services::plugins::configured(&golem_config.plugin_service);
         (plugins.clone(), plugins)
     }
 
@@ -76,7 +75,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
     ) -> Arc<dyn ComponentService> {
-        crate::services::cloud::component::configured(
+        crate::services::component::configured(
             &golem_config.component_service,
             &golem_config.project_service,
             &golem_config.component_cache,

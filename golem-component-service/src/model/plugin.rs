@@ -74,6 +74,30 @@ impl PluginDefinitionCreation {
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::component::v1::CreatePluginRequest>
+    for PluginDefinitionCreation
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::v1::CreatePluginRequest,
+    ) -> Result<Self, Self::Error> {
+        let plugin = value.plugin.ok_or("missing plugin definition")?;
+
+        let converted = PluginDefinitionCreation {
+            name: plugin.name,
+            version: plugin.version,
+            description: plugin.description,
+            icon: plugin.icon,
+            homepage: plugin.homepage,
+            specs: plugin.specs.ok_or("missing specs")?.try_into()?,
+            scope: plugin.scope.ok_or("missing scope")?.try_into()?,
+        };
+
+        Ok(converted)
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition>
     for PluginTypeSpecificCreation
 {

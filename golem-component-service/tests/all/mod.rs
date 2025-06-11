@@ -12,7 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Golem Cloud specific services (to be merged with the `oss` module once everything else is merged).
+use crate::Tracing;
+use golem_service_base::clients::limit::LimitService;
+use std::sync::Arc;
+use test_r::{inherit_test_dep, sequential_suite};
 
-pub mod component;
-pub mod plugins;
+pub mod repo;
+pub mod service;
+
+inherit_test_dep!(Tracing);
+inherit_test_dep!(Arc<dyn LimitService>);
+
+sequential_suite!(repo);
+sequential_suite!(service);

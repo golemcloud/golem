@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{Component, ComponentConstraints};
-use crate::service::component::{ComponentByNameAndVersion, VersionType};
+use crate::model::{Component, ComponentByNameAndVersion, ComponentConstraints, VersionType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use conditional_trait_gen::{trait_gen, when};

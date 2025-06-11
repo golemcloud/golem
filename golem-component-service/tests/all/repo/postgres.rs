@@ -29,11 +29,10 @@ inherit_test_dep!(Tracing);
 mod tests {
     use super::PostgresDb;
     use crate::Tracing;
-
-    use golem_component_service_base::repo::component::{
+    use golem_component_service::repo::component::{
         ComponentRepo, DbComponentRepo, LoggedComponentRepo,
     };
-    use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
+    use golem_component_service::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
     use golem_service_base::repo::RepoError;
     use std::sync::Arc;
     use test_r::{inherit_test_dep, test, test_dep};
