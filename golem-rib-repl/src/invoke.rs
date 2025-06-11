@@ -85,7 +85,7 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
                         worker_name.map(|x| x.0),
                         function_name.0.as_str(),
                         args.0,
-                        return_type
+                        return_type,
                     )
                     .await;
 

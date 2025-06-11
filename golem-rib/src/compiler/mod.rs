@@ -65,7 +65,7 @@ impl RibCompiler {
     }
 
     // Currently supports only 1 component and hence really only one InstanceType
-    pub fn get_exports(&self) -> ComponentDependencies {
+    pub fn get_component_dependencies(&self) -> ComponentDependencies {
         self.component_dependency.clone()
     }
 

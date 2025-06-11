@@ -17,6 +17,7 @@ use colored::Colorize;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::*;
 use std::collections::BTreeMap;
+use std::fmt::Display;
 
 pub trait ReplPrinter {
     fn print_bootstrap_error(&self, error: &ReplBootstrapError) {
@@ -35,8 +36,45 @@ pub trait ReplPrinter {
         println!("{} {}", "[message]".yellow(), message.cyan());
     }
 
-    fn print_exports(&self, exports: &FunctionDictionary) {
-        print_function_dictionary(exports)
+    fn print_components_and_exports(&self, exports: &ComponentDependencies) {
+        for (component_dependency_key, component) in &exports.dependencies {
+            let mut indent = Indent::new();
+
+            println!(
+                "{} {}",
+                "📦 Component:".bold().bright_yellow(),
+                component_dependency_key
+                    .component_name
+                    .bold()
+                    .truecolor(180, 180, 180)
+            );
+
+            indent.add();
+
+            if let Some(root_package) = &component_dependency_key.root_package_name {
+                println!(
+                    "{} {} {}",
+                    indent,
+                    "Root Package:".bold().bright_cyan(),
+                    root_package.bold().truecolor(180, 180, 180)
+                );
+
+                indent.add();
+            }
+
+            if let Some(root_interface) = &component_dependency_key.root_package_version {
+                println!(
+                    "{} {} {}",
+                    indent,
+                    "Root Package Version:".bold().bright_cyan(),
+                    root_interface.bold().truecolor(180, 180, 180)
+                );
+
+                indent.add();
+            }
+
+            print_function_dictionary(&mut indent, component)
+        }
     }
 
     fn print_rib_compilation_error(&self, error: &RibCompilationError) {
@@ -66,10 +104,9 @@ pub struct DefaultReplResultPrinter;
 
 impl ReplPrinter for DefaultReplResultPrinter {}
 
-pub fn print_function_dictionary(dict: &FunctionDictionary) {
+pub fn print_function_dictionary(indent: &mut Indent, dict: &FunctionDictionary) {
     let mut output = String::new();
 
-    // Group entries by package and interface
     let mut hierarchy: BTreeMap<
         Option<PackageName>,
         BTreeMap<Option<InterfaceName>, HierarchyNode>,
@@ -123,63 +160,91 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
         match pkg {
             Some(pkg) => {
                 output.push_str(&format!(
-                    "{} {}\n",
+                    "{} {} {}\n",
+                    indent,
                     "📦 Package:".bold().bright_yellow(),
-                    format!("{}::{}", pkg.namespace, pkg.package_name)
+                    format!("{}:{}", pkg.namespace, pkg.package_name)
                         .bold()
                         .truecolor(180, 180, 180)
                 ));
+
+                indent.add();
             }
             None => {
                 output.push_str(&format!("{}\n", "📦 Global Scope".bold().bright_yellow()));
+                indent.add();
             }
         }
 
         for (iface, node) in interfaces {
             if let Some(iface) = iface {
                 output.push_str(&format!(
-                    "  {} {}\n",
+                    "{} {} {}\n",
+                    indent,
                     "📄 Interface:".bold().bright_cyan(),
                     iface.name.bold().truecolor(180, 180, 180)
                 ));
+                indent.add();
             }
 
             if !node.functions.is_empty() {
-                output.push_str(&format!("    {}\n", "🔧 Functions:".bold().bright_green(),));
+                output.push_str(&format!(
+                    "{} {}\n",
+                    indent,
+                    "🔧 Functions:".bold().bright_green(),
+                ));
+                indent.add();
             }
 
             for (fname, ftype) in &node.functions {
-                output.push_str(&format!("         {}\n", fname.bright_magenta()));
+                output.push_str(&format!("{} {}\n", indent, fname.bright_magenta()));
+                indent.add();
                 output.push_str(&format!(
-                    "           ↳ {}: {}\n",
+                    "{} ↳ {}: {}\n",
+                    indent,
                     "Args".blue(),
                     format_type_list(&ftype.parameter_types).truecolor(180, 180, 180)
                 ));
                 output.push_str(&format!(
-                    "           ↳ {}: {}\n",
+                    "{} ↳ {}: {}\n",
+                    indent,
                     "Returns".blue(),
                     format_return_type(&ftype.return_type).truecolor(180, 180, 180)
                 ));
+                indent.remove();
             }
 
             for (res_name, res) in &node.resources {
                 output.push_str(&format!(
-                    "    {} {}\n",
+                    "{} {} {}\n",
+                    indent,
                     "🧩️ Resource:".bold().bright_yellow(),
                     res_name.truecolor(180, 180, 180)
                 ));
 
+                indent.add();
+
                 if let Some(ftype) = res.constructor {
                     output.push_str(&format!(
-                        "      ↳ {}: {}\n",
+                        "{} ↳ {}: {}\n",
+                        indent,
                         "Args".blue(),
                         format_type_list(&ftype.parameter_types).truecolor(180, 180, 180)
                     ));
 
-                    output.push_str(&format!("      {} \n", "🔧 Methods:".bold().bright_green(),));
+                    indent.add();
+
+                    output.push_str(&format!(
+                        "{} {} \n",
+                        indent,
+                        "🔧 Methods:".bold().bright_green(),
+                    ));
+
+                    indent.add();
 
                     for (mname, mtype) in &res.methods {
-                        output.push_str(&format!("           {}\n", mname.bright_magenta()));
+                        output.push_str(&format!("{} {}\n", indent, mname.bright_magenta()));
+                        indent.add();
 
                         let parameter_types = &mtype.parameter_types;
 
@@ -190,16 +255,20 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
                         };
 
                         output.push_str(&format!(
-                            "             ↳ {}: {}\n",
+                            "{} ↳ {}: {}\n",
+                            indent,
                             "Args".blue(),
                             formatted
                         ));
 
                         output.push_str(&format!(
-                            "             ↳ {}: {}\n",
+                            "{} ↳ {}: {}\n",
+                            indent,
                             "Returns".blue(),
                             format_return_type(&mtype.return_type).truecolor(180, 180, 180)
                         ));
+
+                        indent.remove();
                     }
                 }
             }
@@ -321,5 +390,38 @@ fn print_bootstrap_error(error: &ReplBootstrapError) {
                 "[warn]".yellow()
             );
         }
+    }
+}
+
+pub struct Indent {
+    level: usize,
+}
+
+impl Default for Indent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Indent {
+    pub fn new() -> Self {
+        Self { level: 0 }
+    }
+
+    pub fn add(&mut self) {
+        self.level += 2;
+    }
+
+    pub fn remove(&mut self) {
+        if self.level >= 2 {
+            self.level -= 2;
+        }
+    }
+}
+
+impl Display for Indent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", " ".repeat(self.level))?;
+        Ok(())
     }
 }

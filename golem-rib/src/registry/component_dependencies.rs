@@ -122,7 +122,7 @@ impl ComponentDependencies {
                     Ok(function_type)
                 } else {
                     Err(format!(
-                        "function `{}` not found in component sassas`{}`",
+                        "function `{}` not found in component `{}`",
                         function_name, component_info.component_name
                     ))
                 }
