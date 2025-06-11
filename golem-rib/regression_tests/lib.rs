@@ -9,7 +9,7 @@ use golem_wasm_ast::analysis::{
 use golem_wasm_rpc::ValueAndType;
 use rib::{
     EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, Expr, Interpreter, RibCompiler,
-    RibCompilerConfig, RibFunctionInvoke, RibFunctionInvokeResult, RibInput,
+    RibCompilerConfig, RibComponentFunctionInvoke, RibFunctionInvokeResult, RibInput,
 };
 
 #[test]
@@ -2031,7 +2031,7 @@ mod mock_data {
 mod mock_interpreter {
     use crate::{mock_data, test_utils, Interpreter};
     use crate::{
-        EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke,
+        EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibComponentFunctionInvoke,
         RibFunctionInvokeResult, RibInput,
     };
     use async_trait::async_trait;
@@ -2240,7 +2240,7 @@ mod mock_interpreter {
     }
 
     #[async_trait]
-    impl RibFunctionInvoke for DynamicRibFunctionInvoke {
+    impl RibComponentFunctionInvoke for DynamicRibFunctionInvoke {
         async fn invoke(
             &self,
             _component_info: ComponentDependencyKey,

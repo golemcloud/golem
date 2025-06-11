@@ -19,12 +19,14 @@ use crate::interpreter::rib_runtime_error::{
     arithmetic_error, no_result, throw_error, RibRuntimeError,
 };
 use crate::interpreter::stack::InterpreterStack;
-use crate::{internal_corrupted_state, RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
+use crate::{
+    internal_corrupted_state, RibByteCode, RibComponentFunctionInvoke, RibIR, RibInput, RibResult,
+};
 use std::sync::Arc;
 
 pub struct Interpreter {
     pub input: RibInput,
-    pub invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
+    pub invoke: Arc<dyn RibComponentFunctionInvoke + Sync + Send>,
 }
 
 impl Default for Interpreter {
@@ -39,7 +41,7 @@ impl Default for Interpreter {
 pub type RibInterpreterResult<T> = Result<T, RibRuntimeError>;
 
 impl Interpreter {
-    pub fn new(input: RibInput, invoke: Arc<dyn RibFunctionInvoke + Sync + Send>) -> Self {
+    pub fn new(input: RibInput, invoke: Arc<dyn RibComponentFunctionInvoke + Sync + Send>) -> Self {
         Interpreter {
             input: input.clone(),
             invoke,
@@ -331,8 +333,8 @@ mod internal {
         bail_corrupted_state, internal_corrupted_state, AnalysedTypeWithUnit, CoercedNumericValue,
         ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName,
         FunctionReferenceType, InstructionId, ParsedFunctionName, ParsedFunctionReference,
-        ParsedFunctionSite, RibFunctionInvoke, RibFunctionInvokeResult, RibInterpreterResult,
-        TypeHint, VariableId, WorkerNamePresence,
+        ParsedFunctionSite, RibComponentFunctionInvoke, RibFunctionInvokeResult,
+        RibInterpreterResult, TypeHint, VariableId, WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
@@ -353,7 +355,7 @@ mod internal {
     pub(crate) struct NoopRibFunctionInvoke;
 
     #[async_trait]
-    impl RibFunctionInvoke for NoopRibFunctionInvoke {
+    impl RibComponentFunctionInvoke for NoopRibFunctionInvoke {
         async fn invoke(
             &self,
             _component_dependency_key: ComponentDependencyKey,
@@ -4688,7 +4690,7 @@ mod tests {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{
             ComponentDependency, ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn,
-            EvaluatedWorkerName, GetLiteralValue, InstructionId, RibFunctionInvoke,
+            EvaluatedWorkerName, GetLiteralValue, InstructionId, RibComponentFunctionInvoke,
             RibFunctionInvokeResult, RibInput,
         };
         use async_trait::async_trait;
@@ -5070,7 +5072,7 @@ mod tests {
         pub(crate) fn interpreter_worker_details_response(
             rib_input: Option<RibInput>,
         ) -> Interpreter {
-            let invoke: Arc<dyn RibFunctionInvoke + Send + Sync> = Arc::new(TestInvoke2);
+            let invoke: Arc<dyn RibComponentFunctionInvoke + Send + Sync> = Arc::new(TestInvoke2);
 
             Interpreter {
                 input: rib_input.unwrap_or_default(),
@@ -5103,7 +5105,7 @@ mod tests {
         }
 
         #[async_trait]
-        impl RibFunctionInvoke for TestInvoke1 {
+        impl RibComponentFunctionInvoke for TestInvoke1 {
             async fn invoke(
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
@@ -5121,7 +5123,7 @@ mod tests {
         struct TestInvoke2;
 
         #[async_trait]
-        impl RibFunctionInvoke for TestInvoke2 {
+        impl RibComponentFunctionInvoke for TestInvoke2 {
             async fn invoke(
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
@@ -5245,7 +5247,7 @@ mod tests {
         struct TestInvoke3;
 
         #[async_trait]
-        impl RibFunctionInvoke for TestInvoke3 {
+        impl RibComponentFunctionInvoke for TestInvoke3 {
             async fn invoke(
                 &self,
                 _component_dependency: ComponentDependencyKey,

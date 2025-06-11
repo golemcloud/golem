@@ -18,7 +18,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 use rib::{
     ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId,
-    RibFunctionInvoke, RibFunctionInvokeResult,
+    RibComponentFunctionInvoke, RibFunctionInvokeResult,
 };
 use std::sync::Arc;
 use uuid::Uuid;
@@ -63,7 +63,7 @@ impl ReplRibFunctionInvoke {
 }
 
 #[async_trait]
-impl RibFunctionInvoke for ReplRibFunctionInvoke {
+impl RibComponentFunctionInvoke for ReplRibFunctionInvoke {
     async fn invoke(
         &self,
         component_dependency: ComponentDependencyKey,

@@ -18,7 +18,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 
 #[async_trait]
-pub trait RibFunctionInvoke {
+pub trait RibComponentFunctionInvoke {
     async fn invoke(
         &self,
         component_dependency_key: ComponentDependencyKey,

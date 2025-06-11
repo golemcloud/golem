@@ -22,7 +22,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::ValueAndType;
 use rib::{
     ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId,
-    RibByteCode, RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult,
+    RibByteCode, RibComponentFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -84,7 +84,7 @@ impl<Namespace: Clone + Send + Sync + 'static> DefaultRibInterpreter<Namespace> 
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
         namespace: Namespace,
-    ) -> Arc<dyn RibFunctionInvoke + Sync + Send> {
+    ) -> Arc<dyn RibComponentFunctionInvoke + Sync + Send> {
         Arc::new(WorkerServiceRibInvoke {
             idempotency_key,
             invocation_context,
@@ -124,7 +124,7 @@ struct WorkerServiceRibInvoke<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: Clone + Send + Sync + 'static> RibFunctionInvoke
+impl<Namespace: Clone + Send + Sync + 'static> RibComponentFunctionInvoke
     for WorkerServiceRibInvoke<Namespace>
 {
     async fn invoke(
