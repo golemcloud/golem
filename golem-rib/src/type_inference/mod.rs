@@ -62,7 +62,6 @@ mod variable_binding;
 mod variant_inference;
 mod worker_function_invocation;
 
-
 #[cfg(test)]
 mod tests {
     use crate::call_type::CallType;

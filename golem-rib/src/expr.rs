@@ -1180,9 +1180,7 @@ impl Expr {
         type_inference::identify_instance_creation(self, component_dependency)
     }
 
-    pub fn ensure_stateful_instance(
-        &mut self,
-    )  {
+    pub fn ensure_stateful_instance(&mut self) {
         type_inference::ensure_stateful_instance(self)
     }
 

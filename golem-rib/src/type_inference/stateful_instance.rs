@@ -19,13 +19,12 @@ pub fn ensure_stateful_instance(expr: &mut Expr) {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(Expr::Call {
-                       call_type: CallType::InstanceCreation(InstanceCreationType::Worker { worker_name, .. }),
-                       ..
-                   }) = visitor.pop_back()
+        call_type: CallType::InstanceCreation(InstanceCreationType::Worker { worker_name, .. }),
+        ..
+    }) = visitor.pop_back()
     {
         if worker_name.is_none() {
             *worker_name = Some(Box::new(Expr::literal(Uuid::new_v4().to_string())));
         }
-       
     }
 }
