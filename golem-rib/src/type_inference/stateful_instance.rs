@@ -23,6 +23,9 @@ pub fn ensure_stateful_instance(expr: &mut Expr) {
                        ..
                    }) = visitor.pop_back()
     {
-        *worker_name = Some(Box::new(Expr::literal(Uuid::new_v4().to_string())));
+        if worker_name.is_none() {
+            *worker_name = Some(Box::new(Expr::literal(Uuid::new_v4().to_string())));
+        }
+       
     }
 }
