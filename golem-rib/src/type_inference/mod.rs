@@ -26,6 +26,7 @@ pub use inferred_expr::*;
 pub use instance_type_binding::*;
 pub use rib_input_type::*;
 pub use rib_output_type::*;
+pub use stateful_instance::*;
 pub use type_annotation_binding::*;
 pub use type_hint::*;
 pub use type_pull_up::*;
@@ -50,6 +51,7 @@ mod inferred_expr;
 mod instance_type_binding;
 mod rib_input_type;
 mod rib_output_type;
+mod stateful_instance;
 mod type_annotation_binding;
 mod type_hint;
 mod type_pull_up;
@@ -59,6 +61,7 @@ mod type_unification;
 mod variable_binding;
 mod variant_inference;
 mod worker_function_invocation;
+
 
 #[cfg(test)]
 mod tests {

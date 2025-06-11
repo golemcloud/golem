@@ -1100,6 +1100,7 @@ impl Expr {
     ) -> Result<(), RibTypeError> {
         self.set_origin();
         self.identify_instance_creation(component_dependency)?;
+        self.ensure_stateful_instance();
         self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
         self.bind_default_types_to_index_expressions();
@@ -1177,6 +1178,12 @@ impl Expr {
         component_dependency: &ComponentDependencies,
     ) -> Result<(), RibTypeError> {
         type_inference::identify_instance_creation(self, component_dependency)
+    }
+
+    pub fn ensure_stateful_instance(
+        &mut self,
+    )  {
+        type_inference::ensure_stateful_instance(self)
     }
 
     pub fn infer_function_call_types(
