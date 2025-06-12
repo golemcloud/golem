@@ -38,7 +38,7 @@ mod worker_functions_in_rib;
 pub struct RibCompiler {
     component_dependency: ComponentDependencies,
     input_spec: Vec<GlobalVariableTypeSpec>,
-    worker_name_gen: Arc<dyn WorkerNameGen>,
+    worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static>,
 }
 
 impl RibCompiler {
@@ -61,12 +61,34 @@ impl RibCompiler {
         }
     }
 
+    pub fn update_worker_name_gen(
+        &mut self,
+        worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+    ) {
+        self.worker_name_gen = worker_name_gen;
+    }
+
     pub fn infer_types(&self, expr: Expr) -> Result<InferredExpr, RibCompilationError> {
         InferredExpr::from_expr(
             expr,
             &self.component_dependency,
             &self.input_spec,
-            self.worker_name_gen.clone(),
+            &self.worker_name_gen,
+        )
+        .map_err(RibCompilationError::RibTypeError)
+    }
+
+    // To support more advanced operations such as from REPL
+    pub fn infer_types_with_worker_gen(
+        &self,
+        expr: Expr,
+        worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+    ) -> Result<InferredExpr, RibCompilationError> {
+        InferredExpr::from_expr(
+            expr,
+            &self.component_dependency,
+            &self.input_spec,
+            &worker_name_gen,
         )
         .map_err(RibCompilationError::RibTypeError)
     }
@@ -156,7 +178,7 @@ impl Default for RibCompiler {
 pub struct RibCompilerConfig {
     component_dependencies: Vec<ComponentDependency>,
     input_spec: Vec<GlobalVariableTypeSpec>,
-    worker_name_gen: Arc<dyn WorkerNameGen>,
+    worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static>,
 }
 
 impl RibCompilerConfig {
@@ -173,7 +195,7 @@ impl RibCompilerConfig {
 
     pub fn with_worker_name_gen(
         mut self,
-        worker_name_gen: Arc<dyn WorkerNameGen>,
+        worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static>,
     ) -> RibCompilerConfig {
         self.worker_name_gen = worker_name_gen;
         self

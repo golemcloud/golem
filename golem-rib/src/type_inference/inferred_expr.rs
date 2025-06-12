@@ -33,7 +33,7 @@ impl InferredExpr {
         expr: Expr,
         component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-        worker_name_gen: Arc<dyn WorkerNameGen>,
+        worker_name_gen: &Arc<dyn WorkerNameGen + Send + Sync + 'static>,
     ) -> Result<InferredExpr, RibTypeError> {
         let mut mutable_expr = expr;
 

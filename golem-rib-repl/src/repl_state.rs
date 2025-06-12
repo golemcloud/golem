@@ -18,6 +18,7 @@ use rib::{InstructionId, RibCompiler};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
+use crate::worker_name_gen::{DynamicWorkerGen, ReplWorkerNameGen};
 
 pub struct ReplState {
     rib_script: RwLock<RawRibScript>,
@@ -26,6 +27,7 @@ pub struct ReplState {
     last_executed_instruction: RwLock<Option<InstructionId>>,
     rib_compiler: RwLock<RibCompiler>,
     history_file_path: PathBuf,
+    worker_name_gen: RwLock<ReplWorkerNameGen>,
 }
 
 impl ReplState {
@@ -57,6 +59,17 @@ impl ReplState {
         &self.history_file_path
     }
 
+    pub fn reset_worker_name_generation(&self) {
+        self.worker_name_gen.write().unwrap().reset();
+    }
+
+    pub fn generate_worker_name(&self) -> String {
+        self.worker_name_gen
+            .write()
+            .unwrap()
+            .generate_worker_name()
+    }
+
     pub fn update_last_executed_instruction(&self, instruction_id: InstructionId) {
         *self.last_executed_instruction.write().unwrap() = Some(instruction_id);
     }
@@ -83,6 +96,7 @@ impl ReplState {
         self.rib_script.write().unwrap().push(rib);
     }
 
+
     pub fn remove_last_rib_expression(&self) {
         self.rib_script.write().unwrap().pop();
     }
@@ -101,6 +115,7 @@ impl ReplState {
             last_executed_instruction: RwLock::new(None),
             rib_compiler: RwLock::new(rib_compiler),
             history_file_path: history_file,
+            worker_name_gen: RwLock::new(ReplWorkerNameGen::new()),
         }
     }
 }

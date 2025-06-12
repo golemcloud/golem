@@ -28,6 +28,8 @@ use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
+use crate::worker_name_gen::DynamicWorkerGen;
 
 /// Config options:
 ///
@@ -187,7 +189,7 @@ impl RibRepl {
                         .editor
                         .save_history(self.repl_state.history_file_path());
 
-                    match compile_rib_script(&self.current_rib_program(), &self.repl_state) {
+                    match compile_rib_script(&self.current_rib_program(), self.repl_state.clone()) {
                         Ok(compiler_output) => {
                             let rib_edit = self.editor.helper_mut().unwrap();
 

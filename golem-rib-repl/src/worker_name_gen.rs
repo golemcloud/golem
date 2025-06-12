@@ -13,48 +13,63 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock, RwLockWriteGuard};
+use rib::WorkerNameGen;
+use crate::repl_state::ReplState;
 
 // When it comes to REPL, unlike the regular Rib execution,
 // it recompiles from the start anytime to figure out the types
 // however it shouldn't result in a variable having a different instance of worker,
 // meaning different worker name. Rib internally generates a worker name at compile time
 // for instances without worker-name, i.e, `instance()` compared to `instance("my-worker")`.
-struct ReplWorkerNameGen {
-    pub instance_count: RwLock<u64>,
-    pub worker_name_cache: RwLock<HashMap<u64, String>>,
+pub struct ReplWorkerNameGen {
+    pub instance_count: u64,
+    pub worker_name_cache: HashMap<u64, String>,
 }
 
 impl ReplWorkerNameGen {
     pub fn new() -> Self {
         ReplWorkerNameGen {
-            instance_count: RwLock::new(0),
-            worker_name_cache: RwLock::new(HashMap::new()),
+            instance_count: 0,
+            worker_name_cache: HashMap::new(),
         }
     }
 
     // A reset prior to any compilation will only reset the instance count,
-    // keeping the cache. There  is no way to reset the cache as far as the REPL session is active
-    pub fn reset(&self) {
-        let mut instance_count = self.instance_count.write().unwrap();
-        *instance_count = 0;
+    // holding on to the cache.
+    // The cache is active throughout a REPL session.
+    pub fn reset(&mut self) {
+        self.instance_count = 0;
     }
 
-}
+    pub fn generate_worker_name(&mut self) -> String {
+        self.instance_count += 1;
 
-impl WorkerNameGen for ReplWorkerNameGen {
-    fn generate_worker_name(&self) -> String {
-        let mut instance_count = self.instance_count.write().unwrap();
-        *instance_count += 1;
-
-        let mut cache = self.worker_name_cache.write().unwrap();
-
-        if let Some(name) = cache.get(&instance_count) {
+        if let Some(name) = self.worker_name_cache.get(&self.instance_count) {
             return name.clone();
         }
         let uuid = uuid::Uuid::new_v4();
-        let name = format!("worker-{}-{}", instance_count, uuid);
-        cache.insert(*instance_count, name.clone());
+        let name = format!("worker-{}-{}", self.instance_count, uuid);
+        self.worker_name_cache.insert(self.instance_count, name.clone());
         name
     }
+}
+
+
+pub struct DynamicWorkerGen {
+    repl_state: Arc<ReplState>
+}
+
+impl DynamicWorkerGen {
+
+    pub fn new(repl_state: Arc<ReplState>) -> Self {
+        DynamicWorkerGen { repl_state }
+    }
+}
+
+impl WorkerNameGen for DynamicWorkerGen {
+    fn generate_worker_name(&self) -> String {
+        self.repl_state.generate_worker_name()
+    }
+
 }

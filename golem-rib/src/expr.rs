@@ -1080,7 +1080,7 @@ impl Expr {
         &mut self,
         component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-        worker_name_gen: Arc<dyn WorkerNameGen>,
+        worker_name_gen: &Arc<dyn WorkerNameGen + Send + Sync + 'static>,
     ) -> Result<(), RibTypeError> {
         self.infer_types_initial_phase(component_dependency, type_spec, worker_name_gen)?;
         self.bind_instance_types();
@@ -1100,7 +1100,7 @@ impl Expr {
         &mut self,
         component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-        worker_name_gen: Arc<dyn WorkerNameGen>,
+        worker_name_gen: &Arc<dyn WorkerNameGen + Send + Sync + 'static>,
     ) -> Result<(), RibTypeError> {
         self.set_origin();
         self.identify_instance_creation(component_dependency)?;
@@ -1184,7 +1184,8 @@ impl Expr {
         type_inference::identify_instance_creation(self, component_dependency)
     }
 
-    pub fn ensure_stateful_instance(&mut self, worker_name_gen: Arc<dyn WorkerNameGen>) {
+    pub fn ensure_stateful_instance(&mut self, worker_name_gen: &Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+    ) {
         type_inference::ensure_stateful_instance(self, worker_name_gen)
     }
 
