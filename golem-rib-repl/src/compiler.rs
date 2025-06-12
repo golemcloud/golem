@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use crate::repl_state::ReplState;
+use crate::worker_name_gen::DynamicWorkerGen;
 use golem_wasm_ast::analysis::{TypeEnum, TypeVariant};
 use rib::*;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
-use crate::worker_name_gen::DynamicWorkerGen;
 
 pub fn compile_rib_script(
     rib_script: &str,
@@ -27,19 +27,12 @@ pub fn compile_rib_script(
     let expr = Expr::from_text(rib_script)
         .map_err(|e| RibCompilationError::InvalidSyntax(e.to_string()))?;
 
-    let compiler =
-        repl_state.rib_compiler();
+    let compiler = repl_state.rib_compiler();
 
-    // This is a trick to ensure the rib compiler can reuse the previous
-    // compilations worker names generated.  Example:
-    // `let x = instance(); let y = instance()` in the previous compilation
-    // and `let x = instance(); let y = instance(); x.add-item("item")` in the next compilation
-    // will result in a new rib script, but the `x` and `y` instances will have the same worker name
-    // as before, disallowing any corruption in state.
-    repl_state.reset_worker_name_generation();
+    repl_state.reset_instance_count();
 
-    let inferred_expr =
-        compiler.infer_types_with_worker_gen(expr, Arc::new(DynamicWorkerGen::new(repl_state.clone())))?;
+    let inferred_expr = compiler
+        .infer_types_with_worker_gen(expr, Arc::new(DynamicWorkerGen::new(repl_state.clone())))?;
 
     let instance_variables = fetch_instance_variables(&inferred_expr);
 

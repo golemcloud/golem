@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock, RwLockWriteGuard};
-use rib::WorkerNameGen;
 use crate::repl_state::ReplState;
+use rib::WorkerNameGen;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 // When it comes to REPL, unlike the regular Rib execution,
 // it recompiles from the start anytime to figure out the types
@@ -38,7 +38,7 @@ impl ReplWorkerNameGen {
     // A reset prior to any compilation will only reset the instance count,
     // holding on to the cache.
     // The cache is active throughout a REPL session.
-    pub fn reset(&mut self) {
+    pub fn reset_instance_count(&mut self) {
         self.instance_count = 0;
     }
 
@@ -50,18 +50,17 @@ impl ReplWorkerNameGen {
         }
         let uuid = uuid::Uuid::new_v4();
         let name = format!("worker-{}-{}", self.instance_count, uuid);
-        self.worker_name_cache.insert(self.instance_count, name.clone());
+        self.worker_name_cache
+            .insert(self.instance_count, name.clone());
         name
     }
 }
 
-
 pub struct DynamicWorkerGen {
-    repl_state: Arc<ReplState>
+    repl_state: Arc<ReplState>,
 }
 
 impl DynamicWorkerGen {
-
     pub fn new(repl_state: Arc<ReplState>) -> Self {
         DynamicWorkerGen { repl_state }
     }
@@ -71,5 +70,4 @@ impl WorkerNameGen for DynamicWorkerGen {
     fn generate_worker_name(&self) -> String {
         self.repl_state.generate_worker_name()
     }
-
 }

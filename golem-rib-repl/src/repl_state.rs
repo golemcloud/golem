@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::worker_name_gen::ReplWorkerNameGen;
 use crate::{RawRibScript, WorkerFunctionInvoke};
 use golem_wasm_rpc::ValueAndType;
 use rib::{InstructionId, RibCompiler};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
-use crate::worker_name_gen::{DynamicWorkerGen, ReplWorkerNameGen};
 
 pub struct ReplState {
     rib_script: RwLock<RawRibScript>,
@@ -59,15 +59,15 @@ impl ReplState {
         &self.history_file_path
     }
 
-    pub fn reset_worker_name_generation(&self) {
-        self.worker_name_gen.write().unwrap().reset();
+    // This reset is to ensure the rib compiler the REPL can reuse the previous
+    // compilations (within the same session) worker names generated. i.e, before every compilation we reset the instance count,
+    // and there by, for the new script, the instance creation will end up reusing already generated worker names.
+    pub fn reset_instance_count(&self) {
+        self.worker_name_gen.write().unwrap().reset_instance_count();
     }
 
     pub fn generate_worker_name(&self) -> String {
-        self.worker_name_gen
-            .write()
-            .unwrap()
-            .generate_worker_name()
+        self.worker_name_gen.write().unwrap().generate_worker_name()
     }
 
     pub fn update_last_executed_instruction(&self, instruction_id: InstructionId) {
@@ -95,7 +95,6 @@ impl ReplState {
     pub fn update_rib(&self, rib: &str) {
         self.rib_script.write().unwrap().push(rib);
     }
-
 
     pub fn remove_last_rib_expression(&self) {
         self.rib_script.write().unwrap().pop();

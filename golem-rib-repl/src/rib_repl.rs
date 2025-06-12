@@ -28,8 +28,6 @@ use rustyline::history::DefaultHistory;
 use rustyline::{Config, Editor};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use crate::worker_name_gen::DynamicWorkerGen;
 
 /// Config options:
 ///

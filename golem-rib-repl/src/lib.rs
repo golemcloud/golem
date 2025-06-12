@@ -24,8 +24,6 @@ pub use rib_context::*;
 pub use rib_execution_error::*;
 pub use rib_repl::*;
 
-pub(crate) use worker_name_gen::*;
-
 mod command;
 mod compiler;
 mod dependency_manager;

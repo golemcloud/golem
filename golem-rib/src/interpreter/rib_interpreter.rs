@@ -3450,10 +3450,7 @@ mod tests {
 
         let key_values = result.get_record().unwrap();
 
-        assert!(key_values
-            .iter()
-            .find(|(k, _)| k == "worker-name")
-            .is_some());
+        assert!(key_values.iter().any(|(k, _)| k == "worker-name"));
 
         assert_eq!(
             key_values
@@ -3548,10 +3545,7 @@ mod tests {
             .map(|(_, v)| &v.value)
             .unwrap();
 
-        assert!(match worker_name {
-            Value::Option(Some(_)) => true,
-            _ => false,
-        });
+        assert!(matches!(worker_name, Value::Option(Some(_))))
     }
 
     #[test]
