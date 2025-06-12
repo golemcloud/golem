@@ -75,10 +75,10 @@ mod tests {
         sequence, tuple,
     };
     use crate::{
-        ArmPattern, ComponentDependencies, DefaultWorkerNameGen, DynamicParsedFunctionName,
+        ArmPattern, ComponentDependencies, DefaultWorkerNameGenerator, DynamicParsedFunctionName,
         DynamicParsedFunctionReference, Expr, InferredType, InstanceCreationType, InstanceType,
         MatchArm, Number, ParsedFunctionSite, RibCompiler, RibCompilerConfig, TypeName, VariableId,
-        WorkerNameGen,
+        WorkerNameGenerator,
     };
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
@@ -97,8 +97,8 @@ mod tests {
         let type_spec =
             GlobalVariableTypeSpec::new("foo", Path::from_elems(vec![]), InferredType::string());
 
-        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGen);
+        let worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGenerator);
 
         let with_type_spec = expr.infer_types(
             &ComponentDependencies::default(),
@@ -110,8 +110,8 @@ mod tests {
 
         let mut new_expr = Expr::from_text(rib_expr).unwrap();
 
-        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGen);
+        let worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGenerator);
 
         let without_type_spec =
             new_expr.infer_types(&ComponentDependencies::default(), &vec![], &worker_name_gen);
@@ -134,8 +134,8 @@ mod tests {
             InferredType::string(),
         );
 
-        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGen);
+        let worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGenerator);
 
         assert!(expr
             .infer_types(
@@ -169,8 +169,8 @@ mod tests {
             ),
         ];
 
-        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGen);
+        let worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGenerator);
 
         assert!(expr
             .infer_types(
@@ -196,8 +196,8 @@ mod tests {
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
-        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGen);
+        let worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGenerator);
 
         assert!(expr
             .infer_types(&ComponentDependencies::default(), &vec![], &worker_name_gen)
@@ -1308,8 +1308,8 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGen);
+        let worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGenerator);
 
         expr.infer_types(&ComponentDependencies::default(), &vec![], &worker_name_gen)
             .unwrap();

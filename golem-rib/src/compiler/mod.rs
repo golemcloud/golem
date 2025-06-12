@@ -38,7 +38,7 @@ mod worker_functions_in_rib;
 pub struct RibCompiler {
     component_dependency: ComponentDependencies,
     input_spec: Vec<GlobalVariableTypeSpec>,
-    worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+    worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
 }
 
 impl RibCompiler {
@@ -63,7 +63,7 @@ impl RibCompiler {
 
     pub fn update_worker_name_gen(
         &mut self,
-        worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+        worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
     ) {
         self.worker_name_gen = worker_name_gen;
     }
@@ -82,7 +82,7 @@ impl RibCompiler {
     pub fn infer_types_with_worker_gen(
         &self,
         expr: Expr,
-        worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+        worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
     ) -> Result<InferredExpr, RibCompilationError> {
         InferredExpr::from_expr(
             expr,
@@ -156,7 +156,7 @@ impl Default for RibCompiler {
         RibCompiler {
             component_dependency: ComponentDependencies::default(),
             input_spec: vec![],
-            worker_name_gen: Arc::new(DefaultWorkerNameGen),
+            worker_name_gen: Arc::new(DefaultWorkerNameGenerator),
         }
     }
 }
@@ -178,7 +178,7 @@ impl Default for RibCompiler {
 pub struct RibCompilerConfig {
     component_dependencies: Vec<ComponentDependency>,
     input_spec: Vec<GlobalVariableTypeSpec>,
-    worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+    worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
 }
 
 impl RibCompilerConfig {
@@ -189,13 +189,13 @@ impl RibCompilerConfig {
         RibCompilerConfig {
             component_dependencies,
             input_spec,
-            worker_name_gen: Arc::new(DefaultWorkerNameGen),
+            worker_name_gen: Arc::new(DefaultWorkerNameGenerator),
         }
     }
 
     pub fn with_worker_name_gen(
         mut self,
-        worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+        worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
     ) -> RibCompilerConfig {
         self.worker_name_gen = worker_name_gen;
         self
@@ -207,7 +207,7 @@ impl Default for RibCompilerConfig {
         RibCompilerConfig {
             component_dependencies: vec![],
             input_spec: vec![],
-            worker_name_gen: Arc::new(DefaultWorkerNameGen),
+            worker_name_gen: Arc::new(DefaultWorkerNameGenerator),
         }
     }
 }
@@ -230,13 +230,13 @@ impl ComponentDependency {
     }
 }
 
-pub trait WorkerNameGen {
+pub trait WorkerNameGenerator {
     fn generate_worker_name(&self) -> String;
 }
 
-pub struct DefaultWorkerNameGen;
+pub struct DefaultWorkerNameGenerator;
 
-impl WorkerNameGen for DefaultWorkerNameGen {
+impl WorkerNameGenerator for DefaultWorkerNameGenerator {
     fn generate_worker_name(&self) -> String {
         let uuid = uuid::Uuid::new_v4();
         format!("worker-{}", uuid)

@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::compiler::WorkerNameGen;
+use crate::compiler::WorkerNameGenerator;
 use crate::{CallType, Expr, ExprVisitor, InstanceCreationType, TypeInternal};
 use std::sync::Arc;
 
 pub fn ensure_stateful_instance(
     expr: &mut Expr,
-    worker_name_gen: &Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+    worker_name_gen: &Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
 ) {
     let mut visitor = ExprVisitor::bottom_up(expr);
 

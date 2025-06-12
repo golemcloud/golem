@@ -19,7 +19,7 @@ use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
-use crate::WorkerNameGen;
+use crate::WorkerNameGenerator;
 use crate::{
     from_string, text, type_checker, type_inference, ComponentDependencies, ComponentDependencyKey,
     DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType,
@@ -1080,7 +1080,7 @@ impl Expr {
         &mut self,
         component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-        worker_name_gen: &Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+        worker_name_gen: &Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
     ) -> Result<(), RibTypeError> {
         self.infer_types_initial_phase(component_dependency, type_spec, worker_name_gen)?;
         self.bind_instance_types();
@@ -1100,7 +1100,7 @@ impl Expr {
         &mut self,
         component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-        worker_name_gen: &Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+        worker_name_gen: &Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
     ) -> Result<(), RibTypeError> {
         self.set_origin();
         self.identify_instance_creation(component_dependency)?;
@@ -1186,7 +1186,7 @@ impl Expr {
 
     pub fn ensure_stateful_instance(
         &mut self,
-        worker_name_gen: &Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+        worker_name_gen: &Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
     ) {
         type_inference::ensure_stateful_instance(self, worker_name_gen)
     }

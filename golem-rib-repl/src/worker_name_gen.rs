@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::repl_state::ReplState;
-use rib::WorkerNameGen;
+use rib::WorkerNameGenerator;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -66,7 +66,7 @@ impl DynamicWorkerGen {
     }
 }
 
-impl WorkerNameGen for DynamicWorkerGen {
+impl WorkerNameGenerator for DynamicWorkerGen {
     fn generate_worker_name(&self) -> String {
         self.repl_state.generate_worker_name()
     }

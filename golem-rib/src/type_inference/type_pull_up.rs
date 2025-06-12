@@ -468,8 +468,8 @@ mod type_pull_up_tests {
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
     use crate::{
-        ArmPattern, ComponentDependencies, DefaultWorkerNameGen, Expr, InferredType, MatchArm,
-        VariableId, WorkerNameGen,
+        ArmPattern, ComponentDependencies, DefaultWorkerNameGenerator, Expr, InferredType,
+        MatchArm, VariableId, WorkerNameGenerator,
     };
 
     #[test]
@@ -778,8 +778,8 @@ mod type_pull_up_tests {
 
         let mut expr = Expr::from_text(rib).unwrap();
         let component_dependencies = ComponentDependencies::default();
-        let default_worker_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGen);
+        let default_worker_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGenerator);
 
         expr.infer_types_initial_phase(&component_dependencies, &vec![], &default_worker_gen)
             .unwrap();
