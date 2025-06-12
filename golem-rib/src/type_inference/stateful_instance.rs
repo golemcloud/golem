@@ -37,7 +37,7 @@ pub fn ensure_stateful_instance(expr: &mut Expr) {
                 let type_internal = &mut *inferred_type.inner;
 
                 match type_internal {
-                    TypeInternal::Instance {instance_type} => {
+                    TypeInternal::Instance { instance_type } => {
                         instance_type.set_worker_name(new_worker_name)
                     }
                     _ => {}
