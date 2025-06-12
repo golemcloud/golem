@@ -3448,17 +3448,30 @@ mod tests {
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: none,
-                 function-name: "amazon:shopping-cart/api1.{foo}",
-                 args0: "bar"
-              }
-            "#,
+        let key_values = result.get_record().unwrap();
+
+        assert!(key_values
+            .iter()
+            .find(|(k, _)| k == "worker-name")
+            .is_some());
+
+        assert_eq!(
+            key_values
+                .iter()
+                .find(|(k, _)| k == "function-name")
+                .map(|(_, y)| &y.value),
+            Some(&Value::String(
+                "amazon:shopping-cart/api1.{foo}".to_string()
+            ))
         );
 
-        assert_eq!(result.get_val().unwrap(), expected_val);
+        assert_eq!(
+            key_values
+                .iter()
+                .find(|(k, _)| k == "args0")
+                .map(|(_, y)| &y.value),
+            Some(&Value::String("bar".to_string()))
+        );
     }
 
     #[test]

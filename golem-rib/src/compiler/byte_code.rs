@@ -1017,7 +1017,6 @@ mod compiler_tests {
     #[test]
     fn test_instructions_for_literal() {
         let literal = Expr::literal("hello");
-        let empty_registry = ComponentDependencies::default();
 
         let compiler = RibCompiler::default();
 

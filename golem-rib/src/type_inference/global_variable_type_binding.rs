@@ -151,7 +151,7 @@ fn override_type(expr: &mut Expr, type_spec: &GlobalVariableTypeSpec) {
 mod tests {
     use super::*;
     use crate::rib_source_span::SourceSpan;
-    use crate::{ComponentDependencies, Id, RibCompiler, RibCompilerConfig, TypeName};
+    use crate::{Id, RibCompiler, RibCompilerConfig, TypeName};
     use test_r::test;
 
     #[test]
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_override_types_5() {
-        let mut expr = Expr::from_text(
+        let expr = Expr::from_text(
             r#"
              let res = foo.bar.user-id;
              let hello: u64 = foo.bar.number;
@@ -221,9 +221,7 @@ mod tests {
             inferred_type: InferredType::string(),
         };
 
-        let rib_compiler = RibCompiler::new(
-            RibCompilerConfig::new(vec![], vec![type_spec])
-        );
+        let rib_compiler = RibCompiler::new(RibCompilerConfig::new(vec![], vec![type_spec]));
 
         let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
