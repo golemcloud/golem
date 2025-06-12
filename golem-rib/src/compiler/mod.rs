@@ -34,6 +34,7 @@ mod ir;
 mod type_with_unit;
 mod worker_functions_in_rib;
 
+#[derive(Default)]
 pub struct RibCompiler {
     component_dependency: ComponentDependencies,
     input_spec: Vec<GlobalVariableTypeSpec>,
@@ -121,14 +122,6 @@ impl RibCompiler {
     }
 }
 
-impl Default for RibCompiler {
-    fn default() -> Self {
-        RibCompiler {
-            component_dependency: ComponentDependencies::default(),
-            input_spec: vec![],
-        }
-    }
-}
 
 /// Compiler configuration options for Rib.
 ///
@@ -144,6 +137,7 @@ impl Default for RibCompiler {
 ///   You can also associate specific types with known global variables using
 ///   `GlobalVariableTypeSpec`. For example, the path `request.path.*` can be enforced to always
 ///   be of type `string`. Note that not all global variables require a type specification.
+#[derive(Default)]
 pub struct RibCompilerConfig {
     component_dependencies: Vec<ComponentDependency>,
     input_spec: Vec<GlobalVariableTypeSpec>,
@@ -161,14 +155,6 @@ impl RibCompilerConfig {
     }
 }
 
-impl Default for RibCompilerConfig {
-    fn default() -> Self {
-        RibCompilerConfig {
-            component_dependencies: vec![],
-            input_spec: vec![],
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct ComponentDependency {

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::repl_state::ReplState;
-use crate::worker_name_gen::DynamicWorkerGen;
 use golem_wasm_ast::analysis::{TypeEnum, TypeVariant};
 use rib::*;
 use std::collections::HashMap;
@@ -31,8 +30,7 @@ pub fn compile_rib_script(
 
     repl_state.reset_instance_count();
 
-    let inferred_expr = compiler
-        .infer_types_with_worker_gen(expr, Arc::new(DynamicWorkerGen::new(repl_state.clone())))?;
+    let inferred_expr = compiler.infer_types(expr)?;
 
     let instance_variables = fetch_instance_variables(&inferred_expr);
 

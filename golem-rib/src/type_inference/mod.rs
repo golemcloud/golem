@@ -97,9 +97,6 @@ mod tests {
         let type_spec =
             GlobalVariableTypeSpec::new("foo", Path::from_elems(vec![]), InferredType::string());
 
-        let worker_name_gen: Arc<dyn GenerateWorkerName + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGenerator);
-
         let with_type_spec = expr.infer_types(&ComponentDependencies::default(), &vec![type_spec]);
 
         assert!(with_type_spec.is_ok());

@@ -154,7 +154,6 @@ async fn test_rib_without_worker_param_resource(deps: &EnvBasedTestDependencies)
     );
 }
 
-
 #[test]
 #[tracing::instrument]
 async fn test_rib_with_worker_params(deps: &EnvBasedTestDependencies) {

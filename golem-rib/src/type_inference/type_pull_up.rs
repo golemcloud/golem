@@ -779,8 +779,6 @@ mod type_pull_up_tests {
 
         let mut expr = Expr::from_text(rib).unwrap();
         let component_dependencies = ComponentDependencies::default();
-        let default_worker_gen: Arc<dyn GenerateWorkerName + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGenerator);
 
         expr.infer_types_initial_phase(&component_dependencies, &vec![])
             .unwrap();
