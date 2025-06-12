@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{CallType, Expr, ExprVisitor, InstanceCreationType};
+use crate::{CallType, Expr, ExprVisitor, InstanceCreationType, TypeInternal};
 use uuid::Uuid;
 
 //
@@ -24,10 +24,23 @@ pub fn ensure_stateful_instance(expr: &mut Expr) {
             Expr::Call {
                 call_type:
                     CallType::InstanceCreation(InstanceCreationType::Worker { worker_name, .. }),
+                inferred_type,
                 ..
             } => {
+                let generated = Uuid::new_v4().to_string();
+                let new_worker_name = Expr::literal(generated);
+
                 if worker_name.is_none() {
-                    *worker_name = Some(Box::new(Expr::literal(Uuid::new_v4().to_string())));
+                    *worker_name = Some(Box::new(new_worker_name.clone()));
+                }
+
+                let type_internal = &mut *inferred_type.inner;
+
+                match type_internal {
+                    TypeInternal::Instance {instance_type} => {
+                        instance_type.set_worker_name(new_worker_name)
+                    }
+                    _ => {}
                 }
             }
 
