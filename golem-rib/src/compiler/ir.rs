@@ -71,6 +71,7 @@ pub enum RibIR {
     PushToSink,
     SinkToList,
     Length,
+    GenerateWorkerName,
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
@@ -323,6 +324,7 @@ mod protobuf {
                 .ok_or_else(|| "Missing instruction".to_string())?;
 
             match instruction {
+                Instruction::GenerateWorkerName(_) => Ok(RibIR::GenerateWorkerName),
                 Instruction::PushLit(value) => {
                     let value: ValueAndType = value.try_into()?;
                     Ok(RibIR::PushLit(value))
@@ -550,6 +552,9 @@ mod protobuf {
 
         fn try_from(value: RibIR) -> Result<Self, Self::Error> {
             let instruction = match value {
+                RibIR::GenerateWorkerName => Instruction::GenerateWorkerName(
+                    golem_api_grpc::proto::golem::rib::GenerateWorkerName {},
+                ),
                 RibIR::PushLit(value) => {
                     Instruction::PushLit(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                         type_annotated_value: Some(

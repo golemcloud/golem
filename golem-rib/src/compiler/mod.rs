@@ -26,7 +26,6 @@ use crate::{
 use golem_wasm_ast::analysis::{AnalysedExport, TypeEnum, TypeVariant};
 use std::error::Error;
 use std::fmt::Display;
-use std::sync::Arc;
 
 mod byte_code;
 mod compiler_output;
@@ -38,7 +37,6 @@ mod worker_functions_in_rib;
 pub struct RibCompiler {
     component_dependency: ComponentDependencies,
     input_spec: Vec<GlobalVariableTypeSpec>,
-    worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
 }
 
 impl RibCompiler {
@@ -57,40 +55,12 @@ impl RibCompiler {
         RibCompiler {
             component_dependency: component_dependencies,
             input_spec,
-            worker_name_gen: config.worker_name_gen,
         }
     }
 
-    pub fn update_worker_name_gen(
-        &mut self,
-        worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
-    ) {
-        self.worker_name_gen = worker_name_gen;
-    }
-
     pub fn infer_types(&self, expr: Expr) -> Result<InferredExpr, RibCompilationError> {
-        InferredExpr::from_expr(
-            expr,
-            &self.component_dependency,
-            &self.input_spec,
-            &self.worker_name_gen,
-        )
-        .map_err(RibCompilationError::RibTypeError)
-    }
-
-    // To support more advanced operations such as from REPL
-    pub fn infer_types_with_worker_gen(
-        &self,
-        expr: Expr,
-        worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
-    ) -> Result<InferredExpr, RibCompilationError> {
-        InferredExpr::from_expr(
-            expr,
-            &self.component_dependency,
-            &self.input_spec,
-            &worker_name_gen,
-        )
-        .map_err(RibCompilationError::RibTypeError)
+        InferredExpr::from_expr(expr, &self.component_dependency, &self.input_spec)
+            .map_err(RibCompilationError::RibTypeError)
     }
 
     // Currently supports only 1 component and hence really only one InstanceType
@@ -156,7 +126,6 @@ impl Default for RibCompiler {
         RibCompiler {
             component_dependency: ComponentDependencies::default(),
             input_spec: vec![],
-            worker_name_gen: Arc::new(DefaultWorkerNameGenerator),
         }
     }
 }
@@ -178,7 +147,6 @@ impl Default for RibCompiler {
 pub struct RibCompilerConfig {
     component_dependencies: Vec<ComponentDependency>,
     input_spec: Vec<GlobalVariableTypeSpec>,
-    worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
 }
 
 impl RibCompilerConfig {
@@ -189,16 +157,7 @@ impl RibCompilerConfig {
         RibCompilerConfig {
             component_dependencies,
             input_spec,
-            worker_name_gen: Arc::new(DefaultWorkerNameGenerator),
         }
-    }
-
-    pub fn with_worker_name_gen(
-        mut self,
-        worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
-    ) -> RibCompilerConfig {
-        self.worker_name_gen = worker_name_gen;
-        self
     }
 }
 
@@ -207,7 +166,6 @@ impl Default for RibCompilerConfig {
         RibCompilerConfig {
             component_dependencies: vec![],
             input_spec: vec![],
-            worker_name_gen: Arc::new(DefaultWorkerNameGenerator),
         }
     }
 }
@@ -230,13 +188,13 @@ impl ComponentDependency {
     }
 }
 
-pub trait WorkerNameGenerator {
+pub trait GenerateWorkerName {
     fn generate_worker_name(&self) -> String;
 }
 
 pub struct DefaultWorkerNameGenerator;
 
-impl WorkerNameGenerator for DefaultWorkerNameGenerator {
+impl GenerateWorkerName for DefaultWorkerNameGenerator {
     fn generate_worker_name(&self) -> String {
         let uuid = uuid::Uuid::new_v4();
         format!("worker-{}", uuid)

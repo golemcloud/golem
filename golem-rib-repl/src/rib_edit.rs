@@ -286,6 +286,7 @@ impl Completer for RibEdit {
             }
         }
 
+
         if let Some((new_start, new_completions)) =
             Self::complete_method_calls(word, instance_variables, start, end_pos)?
         {
@@ -329,7 +330,13 @@ impl Completer for RibEdit {
                 self.std_function_names
                     .iter()
                     .filter(|&&fn_name| fn_name.starts_with(word))
-                    .map(|&fn_name| fn_name.to_string()),
+                    .map(|&fn_name| {
+                        if fn_name == "instance" {
+                            "instance()".to_string()
+                        } else {
+                            fn_name.to_string()
+                        }
+                    }),
             )
         }
 

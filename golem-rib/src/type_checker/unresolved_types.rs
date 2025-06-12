@@ -418,6 +418,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             }
             Expr::Unwrap { .. } => {}
             Expr::Throw { .. } => {}
+            Expr::GenerateWorkerName { .. } => {}
             Expr::GetTag { .. } => {}
             outer_expr @ Expr::ListComprehension {
                 iterable_expr,

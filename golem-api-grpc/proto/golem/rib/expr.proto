@@ -47,6 +47,7 @@ message Expr {
     RangeExpr range = 37;
     SelectIndexExprV1 select_index_v1 = 38;
     LengthExpr length = 39;
+    GenerateWorkerNameExpr generate_worker_name = 40;
   }
 }
 
@@ -117,6 +118,8 @@ message RecordFieldExpr {
 message ThrowExpr {
   string message = 1;
 }
+
+message GenerateWorkerNameExpr{}
 
 message TupleExpr {
   repeated Expr exprs = 1;

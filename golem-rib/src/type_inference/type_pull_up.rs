@@ -211,6 +211,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
             }
             Expr::Length { .. } => {}
             Expr::Throw { .. } => {}
+            Expr::GenerateWorkerName { .. } => {}
             Expr::ListComprehension {
                 yield_expr,
                 inferred_type,
@@ -468,8 +469,8 @@ mod type_pull_up_tests {
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
     use crate::{
-        ArmPattern, ComponentDependencies, DefaultWorkerNameGenerator, Expr, InferredType,
-        MatchArm, VariableId, WorkerNameGenerator,
+        ArmPattern, ComponentDependencies, DefaultWorkerNameGenerator, Expr, GenerateWorkerName,
+        InferredType, MatchArm, VariableId,
     };
 
     #[test]
@@ -778,10 +779,10 @@ mod type_pull_up_tests {
 
         let mut expr = Expr::from_text(rib).unwrap();
         let component_dependencies = ComponentDependencies::default();
-        let default_worker_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static> =
+        let default_worker_gen: Arc<dyn GenerateWorkerName + Send + Sync + 'static> =
             Arc::new(DefaultWorkerNameGenerator);
 
-        expr.infer_types_initial_phase(&component_dependencies, &vec![], &default_worker_gen)
+        expr.infer_types_initial_phase(&component_dependencies, &vec![])
             .unwrap();
         expr.infer_all_identifiers();
         expr.pull_types_up().unwrap();

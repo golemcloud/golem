@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::{
-    Expr, RibCompilationError, RibCompiler, RibCompilerConfig, RibComponentFunctionInvoke,
-    RibInput, RibResult, RibRuntimeError,
+    DefaultWorkerNameGenerator, Expr, GenerateWorkerName, RibCompilationError, RibCompiler,
+    RibCompilerConfig, RibComponentFunctionInvoke, RibInput, RibResult, RibRuntimeError,
 };
 use std::sync::Arc;
 
@@ -22,6 +22,7 @@ pub struct RibEvalConfig {
     compiler_config: RibCompilerConfig,
     rib_input: RibInput,
     function_invoke: Arc<dyn RibComponentFunctionInvoke + Sync + Send>,
+    generate_worker_name: Arc<dyn GenerateWorkerName + Sync + Send>,
 }
 
 impl RibEvalConfig {
@@ -29,11 +30,14 @@ impl RibEvalConfig {
         compiler_config: RibCompilerConfig,
         rib_input: RibInput,
         function_invoke: Arc<dyn RibComponentFunctionInvoke + Sync + Send>,
+        generate_worker_name: Option<Arc<dyn GenerateWorkerName + Sync + Send>>,
     ) -> Self {
         RibEvalConfig {
             compiler_config,
             rib_input,
             function_invoke,
+            generate_worker_name: generate_worker_name
+                .unwrap_or_else(|| Arc::new(DefaultWorkerNameGenerator)),
         }
     }
 }
@@ -57,6 +61,7 @@ impl RibEvaluator {
             compiled.byte_code,
             self.config.rib_input,
             self.config.function_invoke,
+            Some(self.config.generate_worker_name.clone()),
         )
         .await?;
 

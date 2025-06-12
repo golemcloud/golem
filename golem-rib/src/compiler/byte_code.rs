@@ -174,6 +174,10 @@ mod internal {
                 instructions.push(RibIR::Deconstruct);
             }
 
+            Expr::GenerateWorkerName { .. } => {
+                instructions.push(RibIR::GenerateWorkerName);
+            }
+
             Expr::Length { expr, .. } => {
                 stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::Length);

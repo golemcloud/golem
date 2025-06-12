@@ -192,8 +192,8 @@ mod tests {
     use crate::parser::type_name::TypeName;
     use crate::type_inference::inference_fix_point::{compare_expr_types, compare_inferred_types};
     use crate::{
-        ComponentDependencies, DefaultWorkerNameGenerator, Expr, InferredType, VariableId,
-        WorkerNameGenerator,
+        ComponentDependencies, DefaultWorkerNameGenerator, Expr, GenerateWorkerName, InferredType,
+        VariableId,
     };
 
     #[test]
@@ -346,10 +346,7 @@ mod tests {
 
         let mut expr = Expr::from_text(expr).unwrap();
 
-        let worker_name_gen: Arc<dyn WorkerNameGenerator + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGenerator);
-
-        expr.infer_types(&ComponentDependencies::default(), &vec![], &worker_name_gen)
+        expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
         let expected = Expr::expr_block(vec![
             Expr::let_binding_with_variable_id(

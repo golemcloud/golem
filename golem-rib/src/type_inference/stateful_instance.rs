@@ -12,14 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::compiler::WorkerNameGenerator;
 use crate::{CallType, Expr, ExprVisitor, InstanceCreationType, TypeInternal};
-use std::sync::Arc;
 
-pub fn ensure_stateful_instance(
-    expr: &mut Expr,
-    worker_name_gen: &Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
-) {
+pub fn ensure_stateful_instance(expr: &mut Expr) {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(expr) = visitor.pop_back() {
@@ -30,15 +25,14 @@ pub fn ensure_stateful_instance(
         } = expr
         {
             if worker_name.is_none() {
-                let generated = worker_name_gen.generate_worker_name();
-                let new_worker_name = Expr::literal(generated);
+                let generate_worker_name = Expr::generate_worker_name();
 
-                *worker_name = Some(Box::new(new_worker_name.clone()));
+                *worker_name = Some(Box::new(generate_worker_name.clone()));
 
                 let type_internal = &mut *inferred_type.inner;
 
                 if let TypeInternal::Instance { instance_type } = type_internal {
-                    instance_type.set_worker_name(new_worker_name)
+                    instance_type.set_worker_name(generate_worker_name)
                 }
             }
         }

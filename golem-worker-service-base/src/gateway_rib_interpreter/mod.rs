@@ -109,7 +109,7 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
         let worker_invoke_function =
             self.rib_invoke(idempotency_key, invocation_context, namespace);
 
-        let result = rib::interpret(expr, rib_input, worker_invoke_function)
+        let result = rib::interpret(expr, rib_input, worker_invoke_function, None)
             .await
             .map_err(|err| RibRuntimeError(err.to_string()))?;
         Ok(result)

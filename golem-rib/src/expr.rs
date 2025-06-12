@@ -19,7 +19,6 @@ use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
-use crate::WorkerNameGenerator;
 use crate::{
     from_string, text, type_checker, type_inference, ComponentDependencies, ComponentDependencyKey,
     DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType,
@@ -39,7 +38,6 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
-use std::sync::Arc;
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Expr {
@@ -309,6 +307,12 @@ pub enum Expr {
         type_annotation: Option<TypeName>,
         source_span: SourceSpan,
     },
+
+    GenerateWorkerName {
+        inferred_type: InferredType,
+        type_annotation: Option<TypeName>,
+        source_span: SourceSpan,
+    },
 }
 
 impl Expr {
@@ -493,6 +497,14 @@ impl Expr {
             inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
+        }
+    }
+
+    pub fn generate_worker_name() -> Self {
+        Expr::GenerateWorkerName {
+            inferred_type: InferredType::string(),
+            type_annotation: None,
+            source_span: SourceSpan::default(),
         }
     }
 
@@ -1072,7 +1084,8 @@ impl Expr {
             | Expr::Call { inferred_type, .. }
             | Expr::Range { inferred_type, .. }
             | Expr::InvokeMethodLazy { inferred_type, .. }
-            | Expr::Length { inferred_type, .. } => inferred_type.clone(),
+            | Expr::Length { inferred_type, .. }
+            | Expr::GenerateWorkerName { inferred_type, .. } => inferred_type.clone(),
         }
     }
 
@@ -1080,9 +1093,8 @@ impl Expr {
         &mut self,
         component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-        worker_name_gen: &Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
     ) -> Result<(), RibTypeError> {
-        self.infer_types_initial_phase(component_dependency, type_spec, worker_name_gen)?;
+        self.infer_types_initial_phase(component_dependency, type_spec)?;
         self.bind_instance_types();
         // Identifying the first fix point with method calls to infer all
         // worker function invocations as this forms the foundation for the rest of the
@@ -1100,11 +1112,10 @@ impl Expr {
         &mut self,
         component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-        worker_name_gen: &Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
     ) -> Result<(), RibTypeError> {
         self.set_origin();
         self.identify_instance_creation(component_dependency)?;
-        self.ensure_stateful_instance(worker_name_gen);
+        self.ensure_stateful_instance();
         self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
         self.bind_default_types_to_index_expressions();
@@ -1184,11 +1195,8 @@ impl Expr {
         type_inference::identify_instance_creation(self, component_dependency)
     }
 
-    pub fn ensure_stateful_instance(
-        &mut self,
-        worker_name_gen: &Arc<dyn WorkerNameGenerator + Send + Sync + 'static>,
-    ) {
-        type_inference::ensure_stateful_instance(self, worker_name_gen)
+    pub fn ensure_stateful_instance(&mut self) {
+        type_inference::ensure_stateful_instance(self)
     }
 
     pub fn infer_function_call_types(
@@ -1276,6 +1284,7 @@ impl Expr {
             | Expr::InvokeMethodLazy { inferred_type, .. }
             | Expr::Range { inferred_type, .. }
             | Expr::Length { inferred_type, .. }
+            | Expr::GenerateWorkerName { inferred_type, .. }
             | Expr::Call { inferred_type, .. } => {
                 if !new_inferred_type.is_unknown() {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -1327,7 +1336,8 @@ impl Expr {
             | Expr::InvokeMethodLazy { source_span, .. }
             | Expr::Range { source_span, .. }
             | Expr::Length { source_span, .. }
-            | Expr::Call { source_span, .. } => source_span.clone(),
+            | Expr::Call { source_span, .. }
+            | Expr::GenerateWorkerName { source_span, .. } => source_span.clone(),
         }
     }
 
@@ -1442,6 +1452,9 @@ impl Expr {
                 type_annotation, ..
             }
             | Expr::Length {
+                type_annotation, ..
+            }
+            | Expr::GenerateWorkerName {
                 type_annotation, ..
             }
             | Expr::Call {
@@ -1579,6 +1592,9 @@ impl Expr {
             | Expr::Length {
                 type_annotation, ..
             }
+            | Expr::GenerateWorkerName {
+                type_annotation, ..
+            }
             | Expr::Call {
                 type_annotation, ..
             } => {
@@ -1632,6 +1648,7 @@ impl Expr {
             | Expr::ListReduce { source_span, .. }
             | Expr::InvokeMethodLazy { source_span, .. }
             | Expr::Length { source_span, .. }
+            | Expr::GenerateWorkerName { source_span, .. }
             | Expr::Call { source_span, .. } => {
                 *source_span = new_source_span;
             }
@@ -1685,6 +1702,7 @@ impl Expr {
             | Expr::InvokeMethodLazy { inferred_type, .. }
             | Expr::Range { inferred_type, .. }
             | Expr::Length { inferred_type, .. }
+            | Expr::GenerateWorkerName { inferred_type, .. }
             | Expr::Call { inferred_type, .. } => {
                 *inferred_type = new_inferred_type;
             }
@@ -2191,6 +2209,10 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 golem_api_grpc::proto::golem::rib::ThrowExpr { message },
             ) => Expr::throw(message),
 
+            golem_api_grpc::proto::golem::rib::expr::Expr::GenerateWorkerName(
+                golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr {},
+            ) => Expr::generate_worker_name(),
+
             golem_api_grpc::proto::golem::rib::expr::Expr::And(expr) => {
                 let left = expr.left.ok_or("Missing left expr")?;
                 let right = expr.right.ok_or("Missing right expr")?;
@@ -2451,6 +2473,11 @@ mod protobuf {
     impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
         fn from(value: Expr) -> Self {
             let expr = match value {
+                Expr::GenerateWorkerName { .. } => Some(
+                    golem_api_grpc::proto::golem::rib::expr::Expr::GenerateWorkerName(
+                        golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr {},
+                    ),
+                ),
                 Expr::Let {
                     variable_id,
                     type_annotation,

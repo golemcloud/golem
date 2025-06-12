@@ -20,13 +20,17 @@ use crate::interpreter::rib_runtime_error::{
 };
 use crate::interpreter::stack::InterpreterStack;
 use crate::{
-    internal_corrupted_state, RibByteCode, RibComponentFunctionInvoke, RibIR, RibInput, RibResult,
+    internal_corrupted_state, DefaultWorkerNameGenerator, GenerateWorkerName, RibByteCode,
+    RibComponentFunctionInvoke, RibIR, RibInput, RibResult,
 };
+use golem_wasm_ast::analysis::analysed_type::str;
+use golem_wasm_rpc::{Value, ValueAndType};
 use std::sync::Arc;
 
 pub struct Interpreter {
     pub input: RibInput,
     pub invoke: Arc<dyn RibComponentFunctionInvoke + Sync + Send>,
+    pub generate_worker_name: Arc<dyn GenerateWorkerName + Sync + Send>,
 }
 
 impl Default for Interpreter {
@@ -34,6 +38,7 @@ impl Default for Interpreter {
         Interpreter {
             input: RibInput::default(),
             invoke: Arc::new(internal::NoopRibFunctionInvoke),
+            generate_worker_name: Arc::new(DefaultWorkerNameGenerator),
         }
     }
 }
@@ -41,19 +46,28 @@ impl Default for Interpreter {
 pub type RibInterpreterResult<T> = Result<T, RibRuntimeError>;
 
 impl Interpreter {
-    pub fn new(input: RibInput, invoke: Arc<dyn RibComponentFunctionInvoke + Sync + Send>) -> Self {
+    pub fn new(
+        input: RibInput,
+        invoke: Arc<dyn RibComponentFunctionInvoke + Sync + Send>,
+        generate_worker_name: Arc<dyn GenerateWorkerName + Sync + Send>,
+    ) -> Self {
         Interpreter {
             input: input.clone(),
             invoke,
+            generate_worker_name,
         }
     }
 
     // Interpreter that's not expected to call a side-effecting function call.
     // All it needs is environment with the required variables to evaluate the Rib script
-    pub fn pure(input: RibInput) -> Self {
+    pub fn pure(
+        input: RibInput,
+        generate_worker_name: Arc<dyn GenerateWorkerName + Sync + Send>,
+    ) -> Self {
         Interpreter {
             input,
             invoke: Arc::new(internal::NoopRibFunctionInvoke),
+            generate_worker_name,
         }
     }
 
@@ -69,6 +83,11 @@ impl Interpreter {
 
         while let Some(instruction) = byte_code_cursor.get_instruction() {
             match instruction {
+                RibIR::GenerateWorkerName => {
+                    let worker_name = self.generate_worker_name.generate_worker_name();
+                    stack.push_val(ValueAndType::new(Value::String(worker_name), str()));
+                }
+
                 RibIR::PushLit(val) => {
                     stack.push_val(val);
                 }
@@ -4690,9 +4709,9 @@ mod tests {
     mod test_utils {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{
-            ComponentDependency, ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn,
-            EvaluatedWorkerName, GetLiteralValue, InstructionId, RibComponentFunctionInvoke,
-            RibFunctionInvokeResult, RibInput,
+            ComponentDependency, ComponentDependencyKey, DefaultWorkerNameGenerator,
+            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue, InstructionId,
+            RibComponentFunctionInvoke, RibFunctionInvokeResult, RibInput,
         };
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
@@ -5062,6 +5081,7 @@ mod tests {
             Interpreter {
                 input: input.unwrap_or_default(),
                 invoke,
+                generate_worker_name: Arc::new(DefaultWorkerNameGenerator),
             }
         }
 
@@ -5078,6 +5098,7 @@ mod tests {
             Interpreter {
                 input: rib_input.unwrap_or_default(),
                 invoke,
+                generate_worker_name: Arc::new(DefaultWorkerNameGenerator),
             }
         }
 
@@ -5088,6 +5109,7 @@ mod tests {
             Interpreter {
                 input: input.unwrap_or_default(),
                 invoke,
+                generate_worker_name: Arc::new(DefaultWorkerNameGenerator),
             }
         }
 
