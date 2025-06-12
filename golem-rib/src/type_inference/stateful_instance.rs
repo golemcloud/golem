@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::compiler::WorkerNameGen;
 use crate::{CallType, Expr, ExprVisitor, InstanceCreationType, TypeInternal};
-use uuid::Uuid;
+use std::sync::Arc;
 
-//
-pub fn ensure_stateful_instance(expr: &mut Expr) {
+pub fn ensure_stateful_instance(expr: &mut Expr, worker_name_gen: Arc<dyn WorkerNameGen>) {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(expr) = visitor.pop_back() {
@@ -26,17 +26,17 @@ pub fn ensure_stateful_instance(expr: &mut Expr) {
             ..
         } = expr
         {
-            let generated = Uuid::new_v4().to_string();
-            let new_worker_name = Expr::literal(generated);
-
             if worker_name.is_none() {
+                let generated = worker_name_gen.generate_worker_name();
+                let new_worker_name = Expr::literal(generated);
+
                 *worker_name = Some(Box::new(new_worker_name.clone()));
-            }
 
-            let type_internal = &mut *inferred_type.inner;
+                let type_internal = &mut *inferred_type.inner;
 
-            if let TypeInternal::Instance { instance_type } = type_internal {
-                instance_type.set_worker_name(new_worker_name)
+                if let TypeInternal::Instance { instance_type } = type_internal {
+                    instance_type.set_worker_name(new_worker_name)
+                }
             }
         }
     }

@@ -19,6 +19,7 @@ use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
+use crate::WorkerNameGen;
 use crate::{
     from_string, text, type_checker, type_inference, ComponentDependencies, ComponentDependencyKey,
     DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType,
@@ -38,6 +39,7 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
+use std::sync::Arc;
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Expr {
@@ -1078,8 +1080,9 @@ impl Expr {
         &mut self,
         component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
+        worker_name_gen: Arc<dyn WorkerNameGen>,
     ) -> Result<(), RibTypeError> {
-        self.infer_types_initial_phase(component_dependency, type_spec)?;
+        self.infer_types_initial_phase(component_dependency, type_spec, worker_name_gen)?;
         self.bind_instance_types();
         // Identifying the first fix point with method calls to infer all
         // worker function invocations as this forms the foundation for the rest of the
@@ -1097,10 +1100,11 @@ impl Expr {
         &mut self,
         component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
+        worker_name_gen: Arc<dyn WorkerNameGen>,
     ) -> Result<(), RibTypeError> {
         self.set_origin();
         self.identify_instance_creation(component_dependency)?;
-        self.ensure_stateful_instance();
+        self.ensure_stateful_instance(worker_name_gen);
         self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
         self.bind_default_types_to_index_expressions();
@@ -1180,8 +1184,8 @@ impl Expr {
         type_inference::identify_instance_creation(self, component_dependency)
     }
 
-    pub fn ensure_stateful_instance(&mut self) {
-        type_inference::ensure_stateful_instance(self)
+    pub fn ensure_stateful_instance(&mut self, worker_name_gen: Arc<dyn WorkerNameGen>) {
+        type_inference::ensure_stateful_instance(self, worker_name_gen)
     }
 
     pub fn infer_function_call_types(

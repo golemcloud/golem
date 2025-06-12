@@ -81,6 +81,7 @@ mod tests {
     };
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
+    use std::sync::Arc;
 
     use test_r::test;
 
@@ -1073,9 +1074,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
+        let component_dependencies = test_utils::get_component_dependencies();
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        expr.infer_types(&component_dependencies, &vec![]).unwrap();
 
         let expected = expr_block(
             vec![
@@ -2178,8 +2179,13 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let inferred_expr =
-            InferredExpr::from_expr(expr, &ComponentDependencies::default(), &vec![]).unwrap();
+        let inferred_expr = InferredExpr::from_expr(
+            expr,
+            &ComponentDependencies::default(),
+            &vec![],
+            Arc::new(DefaultWorkerNameGen),
+        )
+        .unwrap();
 
         let expected = expr_block(
             vec![

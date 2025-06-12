@@ -14,10 +14,7 @@
 
 pub use byte_code::*;
 pub use compiler_output::*;
-use golem_wasm_ast::analysis::{AnalysedExport, TypeEnum, TypeVariant};
 pub use ir::*;
-use std::error::Error;
-use std::fmt::Display;
 pub use type_with_unit::*;
 pub use worker_functions_in_rib::*;
 
@@ -26,6 +23,10 @@ use crate::{
     ComponentDependencies, ComponentDependencyKey, Expr, GlobalVariableTypeSpec, InferredExpr,
     RibInputTypeInfo, RibOutputTypeInfo,
 };
+use golem_wasm_ast::analysis::{AnalysedExport, TypeEnum, TypeVariant};
+use std::error::Error;
+use std::fmt::Display;
+use std::sync::Arc;
 
 mod byte_code;
 mod compiler_output;
@@ -34,10 +35,10 @@ mod ir;
 mod type_with_unit;
 mod worker_functions_in_rib;
 
-#[derive(Default)]
 pub struct RibCompiler {
     component_dependency: ComponentDependencies,
     input_spec: Vec<GlobalVariableTypeSpec>,
+    worker_name_gen: Arc<dyn WorkerNameGen>,
 }
 
 impl RibCompiler {
@@ -56,12 +57,18 @@ impl RibCompiler {
         RibCompiler {
             component_dependency: component_dependencies,
             input_spec,
+            worker_name_gen: config.worker_name_gen,
         }
     }
 
     pub fn infer_types(&self, expr: Expr) -> Result<InferredExpr, RibCompilationError> {
-        InferredExpr::from_expr(expr, &self.component_dependency, &self.input_spec)
-            .map_err(RibCompilationError::RibTypeError)
+        InferredExpr::from_expr(
+            expr,
+            &self.component_dependency,
+            &self.input_spec,
+            self.worker_name_gen.clone(),
+        )
+        .map_err(RibCompilationError::RibTypeError)
     }
 
     // Currently supports only 1 component and hence really only one InstanceType
@@ -122,6 +129,16 @@ impl RibCompiler {
     }
 }
 
+impl Default for RibCompiler {
+    fn default() -> Self {
+        RibCompiler {
+            component_dependency: ComponentDependencies::default(),
+            input_spec: vec![],
+            worker_name_gen: Arc::new(DefaultWorkerNameGen),
+        }
+    }
+}
+
 /// Compiler configuration options for Rib.
 ///
 /// # Fields
@@ -136,10 +153,10 @@ impl RibCompiler {
 ///   You can also associate specific types with known global variables using
 ///   `GlobalVariableTypeSpec`. For example, the path `request.path.*` can be enforced to always
 ///   be of type `string`. Note that not all global variables require a type specification.
-#[derive(Default)]
 pub struct RibCompilerConfig {
     component_dependencies: Vec<ComponentDependency>,
     input_spec: Vec<GlobalVariableTypeSpec>,
+    worker_name_gen: Arc<dyn WorkerNameGen>,
 }
 
 impl RibCompilerConfig {
@@ -150,6 +167,25 @@ impl RibCompilerConfig {
         RibCompilerConfig {
             component_dependencies,
             input_spec,
+            worker_name_gen: Arc::new(DefaultWorkerNameGen),
+        }
+    }
+
+    pub fn with_worker_name_gen(
+        mut self,
+        worker_name_gen: Arc<dyn WorkerNameGen>,
+    ) -> RibCompilerConfig {
+        self.worker_name_gen = worker_name_gen;
+        self
+    }
+}
+
+impl Default for RibCompilerConfig {
+    fn default() -> Self {
+        RibCompilerConfig {
+            component_dependencies: vec![],
+            input_spec: vec![],
+            worker_name_gen: Arc::new(DefaultWorkerNameGen),
         }
     }
 }
@@ -169,6 +205,19 @@ impl ComponentDependency {
             component_dependency_key,
             component_exports,
         }
+    }
+}
+
+pub trait WorkerNameGen {
+    fn generate_worker_name(&self) -> String;
+}
+
+pub struct DefaultWorkerNameGen;
+
+impl WorkerNameGen for DefaultWorkerNameGen {
+    fn generate_worker_name(&self) -> String {
+        let uuid = uuid::Uuid::new_v4();
+        format!("worker-{}", uuid)
     }
 }
 
