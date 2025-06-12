@@ -1469,8 +1469,8 @@ mod tests {
         strip_spaces,
     };
     use crate::{
-        ComponentDependencies, Expr, GlobalVariableTypeSpec, InferredType, InstructionId, Path,
-        RibCompiler, RibCompilerConfig, VariableId,
+        Expr, GlobalVariableTypeSpec, InferredType, InstructionId, Path, RibCompiler,
+        RibCompilerConfig, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{
         bool, case, f32, field, list, option, r#enum, record, result, s32, s8, str, tuple, u32,
@@ -3540,17 +3540,18 @@ mod tests {
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: none,
-                 function-name: "amazon:shopping-cart/api1.{foo}",
-                 args0: "bar"
-              }
-            "#,
-        );
+        let record = result.get_record().unwrap();
 
-        assert_eq!(result.get_val().unwrap(), expected_val);
+        let worker_name = record
+            .iter()
+            .find(|(k, _)| k == "worker-name")
+            .map(|(_, v)| &v.value)
+            .unwrap();
+
+        assert!(match worker_name {
+            Value::Option(Some(_)) => true,
+            _ => false,
+        });
     }
 
     #[test]

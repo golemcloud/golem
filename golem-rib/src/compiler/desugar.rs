@@ -631,7 +631,6 @@ mod desugar_tests {
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
     use std::ops::Deref;
-    use std::sync::Arc;
     use uuid::Uuid;
 
     fn get_test_compiler() -> RibCompiler {

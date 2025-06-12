@@ -1007,9 +1007,7 @@ mod compiler_tests {
     use test_r::test;
 
     use super::*;
-    use crate::{
-        ArmPattern, ComponentDependencies, InferredType, MatchArm, RibCompiler, VariableId,
-    };
+    use crate::{ArmPattern, InferredType, MatchArm, RibCompiler, VariableId};
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
