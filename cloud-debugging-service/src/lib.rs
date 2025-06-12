@@ -97,7 +97,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         blob_storage: Arc<dyn BlobStorage>,
         plugins: Arc<dyn PluginsObservations>,
     ) -> Arc<dyn ComponentService> {
-        golem_worker_executor::services::cloud::component::configured(
+        golem_worker_executor::services::component::configured(
             &golem_config.component_service,
             &golem_config.project_service,
             &golem_config.component_cache,
@@ -120,9 +120,8 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         &self,
         golem_config: &GolemConfig,
     ) -> (Arc<dyn Plugins>, Arc<dyn PluginsObservations>) {
-        let plugins = golem_worker_executor::services::cloud::plugins::cloud_configured(
-            &golem_config.plugin_service,
-        );
+        let plugins =
+            golem_worker_executor::services::plugins::configured(&golem_config.plugin_service);
         (plugins.clone(), plugins)
     }
 

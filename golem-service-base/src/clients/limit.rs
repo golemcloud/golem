@@ -14,8 +14,8 @@
 
 use super::authorised_request;
 use super::RemoteCloudServiceConfig;
+use crate::model::ResourceLimits;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::common::ResourceLimits;
 use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
 use golem_api_grpc::proto::golem::limit::v1::limits_error::Error;
 use golem_api_grpc::proto::golem::limit::v1::{
@@ -35,7 +35,7 @@ use tracing::info;
 use uuid::Uuid;
 
 #[async_trait]
-pub trait LimitService {
+pub trait LimitService: Send + Sync {
     async fn update_component_limit(
         &self,
         account_id: &AccountId,
@@ -288,7 +288,7 @@ impl LimitService for LimitServiceDefault {
                     match response.result {
                         None => Err("Empty response".to_string().into()),
                         Some(get_resource_limits_response::Result::Success(response)) => {
-                            Ok(response)
+                            Ok(response.into())
                         }
                         Some(get_resource_limits_response::Result::Error(error)) => {
                             Err(error.into())

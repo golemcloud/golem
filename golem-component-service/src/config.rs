@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use golem_common::config::{ConfigExample, ConfigLoader, DbConfig, HasConfigExamples};
+use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
-use golem_component_service_base::config::{
-    ComponentCompilationConfig, PluginTransformationsConfig,
-};
 use golem_service_base::clients::RemoteCloudServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
+use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceConfig {
@@ -63,6 +63,49 @@ impl HasConfigExamples<ComponentServiceConfig> for ComponentServiceConfig {
 
 pub fn make_config_loader() -> ConfigLoader<ComponentServiceConfig> {
     ConfigLoader::new_with_examples(&PathBuf::from("config/component-service.toml"))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum ComponentCompilationConfig {
+    Enabled(ComponentCompilationEnabledConfig),
+    Disabled(Empty),
+}
+
+impl Default for ComponentCompilationConfig {
+    fn default() -> Self {
+        Self::Enabled(ComponentCompilationEnabledConfig {
+            host: "localhost".to_string(),
+            port: 9091,
+            retries: RetryConfig::default(),
+            connect_timeout: Duration::from_secs(10),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ComponentCompilationEnabledConfig {
+    pub host: String,
+    pub port: u16,
+    pub retries: RetryConfig,
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: Duration,
+}
+
+impl ComponentCompilationEnabledConfig {
+    pub fn uri(&self) -> Uri {
+        Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build ComponentCompilationService URI")
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct PluginTransformationsConfig {
+    pub(crate) retries: RetryConfig,
 }
 
 #[cfg(test)]

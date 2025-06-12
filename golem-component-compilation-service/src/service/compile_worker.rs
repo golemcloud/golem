@@ -48,7 +48,7 @@ pub struct CompileWorker {
 
     // Resources
     engine: Engine,
-    compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
+    compiled_component_service: Arc<dyn CompiledComponentService>,
     client: Arc<Mutex<Option<ClientWithToken>>>,
 }
 
@@ -58,7 +58,7 @@ impl CompileWorker {
         config: CompileWorkerConfig,
 
         engine: Engine,
-        compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
+        compiled_component_service: Arc<dyn CompiledComponentService>,
 
         sender: mpsc::Sender<CompiledComponent>,
         mut recv: mpsc::Receiver<CompilationRequest>,

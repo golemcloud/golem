@@ -406,6 +406,14 @@ impl From<anyhow::Error> for GolemError {
     }
 }
 
+impl From<std::io::Error> for GolemError {
+    fn from(value: std::io::Error) -> Self {
+        GolemError::Unknown {
+            details: format!("{}", value),
+        }
+    }
+}
+
 impl From<GolemError> for Status {
     fn from(value: GolemError) -> Self {
         match value {

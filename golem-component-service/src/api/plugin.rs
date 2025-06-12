@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::api::dto;
 use crate::api::{ApiTags, ComponentError, Result};
-use crate::service::plugin::CloudPluginService;
+use crate::authed::plugin::AuthedPluginService;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::PluginDefinition;
 use golem_common::model::plugin::PluginScope;
 use golem_common::model::Empty;
 use golem_common::recorded_http_api_request;
-use golem_component_service_base::api::dto;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
@@ -29,12 +29,12 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct PluginApi {
-    plugin_service: Arc<CloudPluginService>,
+    plugin_service: Arc<AuthedPluginService>,
 }
 
 #[OpenApi(prefix_path = "/v1/plugins", tag = ApiTags::Plugin)]
 impl PluginApi {
-    pub fn new(plugin_service: Arc<CloudPluginService>) -> Self {
+    pub fn new(plugin_service: Arc<AuthedPluginService>) -> Self {
         Self { plugin_service }
     }
 

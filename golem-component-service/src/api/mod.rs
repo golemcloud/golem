@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::service::Services;
-use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::error::{ErrorBody, ErrorsBody};
-use golem_common::SafeDisplay;
-use golem_component_service_base::service::component::ComponentError as BaseComponentError;
-use golem_component_service_base::service::plugin::PluginError;
-use poem::error::ReadBodyError;
-use poem::Route;
-use poem_openapi::payload::Json;
-use poem_openapi::{ApiResponse, OpenApiService, Tags};
-
+pub mod common;
 pub mod component;
 pub mod dto;
 pub mod healthcheck;
 pub mod plugin;
+
+use crate::bootstrap::Services;
+use crate::error::ComponentError as DomainComponentError;
+use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
+use golem_common::SafeDisplay;
+use poem::error::ReadBodyError;
+use poem::Route;
+use poem_openapi::payload::Json;
+use poem_openapi::{ApiResponse, OpenApiService, Tags};
 
 #[derive(Tags)]
 enum ApiTags {
@@ -90,6 +90,8 @@ pub enum ComponentError {
     InternalError(Json<ErrorBody>),
 }
 
+type Result<T> = std::result::Result<T, ComponentError>;
+
 impl TraceErrorKind for ComponentError {
     fn trace_error_kind(&self) -> &'static str {
         match &self {
@@ -114,90 +116,61 @@ impl TraceErrorKind for ComponentError {
     }
 }
 
-impl From<PluginError> for ComponentError {
-    fn from(value: PluginError) -> Self {
+impl From<DomainComponentError> for ComponentError {
+    fn from(value: DomainComponentError) -> Self {
         match value {
-            PluginError::InternalRepoError(_) => ComponentError::InternalError(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
-            PluginError::InternalConversionError { .. } => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
-            PluginError::InternalComponentError(_) => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
-            PluginError::ComponentNotFound { .. } => ComponentError::NotFound(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
-            PluginError::FailedToGetAvailableScopes { .. } => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
-            PluginError::PluginNotFound { .. } => ComponentError::NotFound(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
-            PluginError::InvalidScope { .. } => ComponentError::Unauthorized(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
-            PluginError::BlobStorageError(_) => ComponentError::InternalError(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
-            PluginError::InvalidOplogProcessorPlugin => {
-                ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_safe_string()],
-                }))
-            }
-        }
-    }
-}
-
-type Result<T> = std::result::Result<T, ComponentError>;
-
-impl From<crate::service::CloudComponentError> for ComponentError {
-    fn from(value: crate::service::CloudComponentError) -> Self {
-        match value {
-            crate::service::CloudComponentError::Unauthorized(_) => {
+            DomainComponentError::Unauthorized(_) => {
                 ComponentError::Unauthorized(Json(ErrorBody {
                     error: value.to_safe_string(),
                 }))
             }
-            crate::service::CloudComponentError::BaseComponentError(
-                BaseComponentError::ComponentProcessingError(_),
-            ) => ComponentError::BadRequest(Json(ErrorsBody {
-                errors: vec![value.to_safe_string()],
-            })),
-            crate::service::CloudComponentError::BaseComponentError(
-                BaseComponentError::UnknownComponentId(_),
-            )
-            | crate::service::CloudComponentError::BaseComponentError(
-                BaseComponentError::UnknownVersionedComponentId(_),
-            )
-            | crate::service::CloudComponentError::UnknownProject(_)
-            | crate::service::CloudComponentError::BasePluginError(
-                PluginError::ComponentNotFound { .. },
-            ) => ComponentError::NotFound(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
-            crate::service::CloudComponentError::LimitExceeded(_) => {
+
+            DomainComponentError::LimitExceeded(_) => {
                 ComponentError::LimitExceeded(Json(ErrorBody {
                     error: value.to_safe_string(),
                 }))
             }
-            crate::service::CloudComponentError::BaseComponentError(
-                BaseComponentError::AlreadyExists(_),
-            ) => ComponentError::AlreadyExists(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
-            crate::service::CloudComponentError::InternalAuthServiceError(_)
-            | crate::service::CloudComponentError::BaseComponentError(_)
-            | crate::service::CloudComponentError::BasePluginError(_)
-            | crate::service::CloudComponentError::InternalLimitError(_)
-            | crate::service::CloudComponentError::InternalProjectError(_) => {
+
+            DomainComponentError::AlreadyExists(_) => {
+                ComponentError::AlreadyExists(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+
+            DomainComponentError::ComponentProcessingError(_)
+            | DomainComponentError::InitialComponentFileNotFound { .. }
+            | DomainComponentError::InvalidFilePath(_)
+            | DomainComponentError::InvalidComponentName { .. }
+            | DomainComponentError::MalformedComponentArchiveError { .. }
+            | DomainComponentError::ComponentConstraintConflictError(_)
+            | DomainComponentError::InvalidOplogProcessorPlugin
+            | DomainComponentError::InvalidPluginScope { .. } => {
+                ComponentError::BadRequest(Json(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                }))
+            }
+
+            DomainComponentError::UnknownComponentId(_)
+            | DomainComponentError::UnknownVersionedComponentId(_)
+            | DomainComponentError::UnknownProject(_)
+            | DomainComponentError::PluginNotFound { .. } => {
+                ComponentError::NotFound(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+
+            DomainComponentError::InternalAuthServiceError(_)
+            | DomainComponentError::InternalLimitError(_)
+            | DomainComponentError::InternalProjectError(_)
+            | DomainComponentError::InternalRepoError(_)
+            | DomainComponentError::InternalConversionError { .. }
+            | DomainComponentError::ComponentStoreError { .. }
+            | DomainComponentError::ComponentConstraintCreateError(_)
+            | DomainComponentError::InitialComponentFileUploadError { .. }
+            | DomainComponentError::TransformationFailed(_)
+            | DomainComponentError::PluginApplicationFailed(_)
+            | DomainComponentError::FailedToDownloadFile
+            | DomainComponentError::BlobStorageError(_) => {
                 ComponentError::InternalError(Json(ErrorBody {
                     error: value.to_safe_string(),
                 }))

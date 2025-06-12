@@ -365,7 +365,7 @@ impl WorkerServiceDefault {
 
         Ok(WorkerNamespace {
             namespace,
-            resource_limits: resource_limits.into(),
+            resource_limits,
         })
     }
 }

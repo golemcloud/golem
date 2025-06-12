@@ -23,7 +23,6 @@ use tokio::runtime::Handle;
 
 pub mod active_workers;
 pub mod blob_store;
-pub mod cloud;
 pub mod compiled_component;
 pub mod component;
 pub mod events;

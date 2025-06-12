@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod cloud;
+pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
 pub mod error;

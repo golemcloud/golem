@@ -19,7 +19,7 @@ use test_r::test;
 
 use async_trait::async_trait;
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig, RedisConfig};
-use golem_common::model::{ComponentId, RetryConfig};
+use golem_common::model::{AccountId, ComponentId, ComponentType, ProjectId, RetryConfig};
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_service_base::db;
 use golem_service_base::model::{Component, ComponentName};
@@ -45,7 +45,7 @@ use golem_worker_service_base::service::gateway::http_api_definition_validator::
 
 use chrono::Utc;
 use golem_common::model::base64::Base64;
-use golem_common::model::component::VersionedComponentId;
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::redis::RedisPool;
 use golem_service_base::db::postgres::PostgresPool;
@@ -385,6 +385,12 @@ impl TestComponentService {
         };
 
         Component {
+            owner: ComponentOwner {
+                account_id: AccountId {
+                    value: uuid!("6588448A-3BA7-46DF-A437-DA826ED15C3D").to_string(),
+                },
+                project_id: ProjectId(uuid!("8877FD9B-9C80-4EA1-9926-67581EE48DBA")),
+            },
             versioned_component_id: id.clone(),
             component_name: ComponentName("test".to_string()),
             component_size: 0,
@@ -397,8 +403,8 @@ impl TestComponentService {
                 root_package_version: None,
                 dynamic_linking: HashMap::new(),
             },
-            created_at: Some(Utc::now()),
-            component_type: None,
+            created_at: Utc::now(),
+            component_type: ComponentType::Durable,
             files: vec![],
             installed_plugins: vec![],
             env: HashMap::new(),

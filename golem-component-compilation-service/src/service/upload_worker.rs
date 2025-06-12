@@ -23,12 +23,12 @@ use crate::model::*;
 // Worker that uploads compiled components to the cloud.
 #[derive(Clone)]
 pub struct UploadWorker {
-    compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
+    compiled_component_service: Arc<dyn CompiledComponentService>,
 }
 
 impl UploadWorker {
     pub fn start(
-        compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
+        compiled_component_service: Arc<dyn CompiledComponentService>,
         mut recv: mpsc::Receiver<CompiledComponent>,
     ) {
         let worker = Self {
