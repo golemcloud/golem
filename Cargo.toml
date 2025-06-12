@@ -114,12 +114,14 @@ combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
 console-subscriber = "0.4.1"
 convert_case = "0.8.0"
+criterion = "0.5"
 crossterm = "0.28.1"
 darling = "0.20.11"
 dashmap = "6.1.0"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 dirs = "4.0.0"
 drop-stream = "0.3.2"
+fastrand = "2.3.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 fred = { version = "=9.4.0", features = [
     "metrics",
@@ -148,6 +150,8 @@ kube-derive = "0.98.0"
 lazy_static = "1.5.0"
 log = "0.4.26"
 mappable-rc = "0.1.1"
+mime = "0.3.17"
+mime_guess = "2.0.5"
 nom = "7.1.3"
 nonempty-collections = "0.3.0"
 num-traits = "0.2.19"
@@ -190,6 +194,14 @@ reqwest = { version = "0.12.13", features = [
     "multipart",
     "stream",
 ] }
+rsa = "0.9.7"
+rusoto_acm = "0.48.0"
+rusoto_core = "0.48.0"
+rusoto_credential = "0.48.0"
+rusoto_elbv2 = "0.48.0"
+rusoto_route53 = "0.48.0"
+rusoto_sts = "0.48.0"
+rustc-hash = "2.1.1"
 rustls = { version = "0.23.23" }
 rustyline = "15.0.0"
 sanitize-filename = "0.6.0"
@@ -270,6 +282,7 @@ wasmtime-wasi-http = { version = "=33.0.0" }
 webpki-roots = { version = "0.26.7" }
 wit-component = "0.229"
 wit-parser = "0.229"
+x509-certificate = "0.23.1"
 
 [patch.crates-io]
 redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }
