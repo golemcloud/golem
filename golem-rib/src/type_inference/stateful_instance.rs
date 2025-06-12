@@ -20,31 +20,24 @@ pub fn ensure_stateful_instance(expr: &mut Expr) {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(expr) = visitor.pop_back() {
-        match expr {
-            Expr::Call {
-                call_type:
-                    CallType::InstanceCreation(InstanceCreationType::Worker { worker_name, .. }),
-                inferred_type,
-                ..
-            } => {
-                let generated = Uuid::new_v4().to_string();
-                let new_worker_name = Expr::literal(generated);
+        if let Expr::Call {
+            call_type: CallType::InstanceCreation(InstanceCreationType::Worker { worker_name, .. }),
+            inferred_type,
+            ..
+        } = expr
+        {
+            let generated = Uuid::new_v4().to_string();
+            let new_worker_name = Expr::literal(generated);
 
-                if worker_name.is_none() {
-                    *worker_name = Some(Box::new(new_worker_name.clone()));
-                }
-
-                let type_internal = &mut *inferred_type.inner;
-
-                match type_internal {
-                    TypeInternal::Instance { instance_type } => {
-                        instance_type.set_worker_name(new_worker_name)
-                    }
-                    _ => {}
-                }
+            if worker_name.is_none() {
+                *worker_name = Some(Box::new(new_worker_name.clone()));
             }
 
-            _ => {}
+            let type_internal = &mut *inferred_type.inner;
+
+            if let TypeInternal::Instance { instance_type } = type_internal {
+                instance_type.set_worker_name(new_worker_name)
+            }
         }
     }
 }
