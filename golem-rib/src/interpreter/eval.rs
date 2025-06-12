@@ -19,9 +19,23 @@ use crate::{
 use std::sync::Arc;
 
 pub struct RibEvalConfig {
-    pub compiler_config: RibCompilerConfig,
-    pub rib_input: RibInput,
-    pub function_invoke: Arc<dyn RibComponentFunctionInvoke + Sync + Send>,
+    compiler_config: RibCompilerConfig,
+    rib_input: RibInput,
+    function_invoke: Arc<dyn RibComponentFunctionInvoke + Sync + Send>,
+}
+
+impl RibEvalConfig {
+    pub fn new(
+        compiler_config: RibCompilerConfig,
+        rib_input: RibInput,
+        function_invoke: Arc<dyn RibComponentFunctionInvoke + Sync + Send>,
+    ) -> Self {
+        RibEvalConfig {
+            compiler_config,
+            rib_input,
+            function_invoke,
+        }
+    }
 }
 
 pub struct RibEvaluator {
@@ -33,13 +47,14 @@ impl RibEvaluator {
         RibEvaluator { config }
     }
 
-    pub async fn eval(self, expr: Expr) -> Result<RibResult, RibEvaluationError> {
+    pub async fn eval(self, rib: &str) -> Result<RibResult, RibEvaluationError> {
+        let expr = Expr::from_text(rib).map_err(RibEvaluationError::ParseError)?;
         let config = self.config.compiler_config;
         let compiler = RibCompiler::new(config);
-        let ir = compiler.compile(expr.clone())?;
+        let compiled = compiler.compile(expr.clone())?;
 
         let result = crate::interpret(
-            ir.byte_code,
+            compiled.byte_code,
             self.config.rib_input,
             self.config.function_invoke,
         )
@@ -49,7 +64,9 @@ impl RibEvaluator {
     }
 }
 
+#[derive(Debug)]
 pub enum RibEvaluationError {
+    ParseError(String),
     CompileError(RibCompilationError),
     RuntimeError(RibRuntimeError),
 }
