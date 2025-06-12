@@ -2391,9 +2391,7 @@ mod tests {
            }
         "#;
 
-        let mut expr = Expr::from_text(expr).unwrap();
-        expr.infer_types(&ComponentDependencies::default(), &vec![])
-            .unwrap();
+        let expr = Expr::from_text(expr).unwrap();
         let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2414,10 +2412,7 @@ mod tests {
            }
         "#;
 
-        let mut expr = Expr::from_text(expr).unwrap();
-        expr.infer_types(&ComponentDependencies::default(), &vec![])
-            .unwrap();
-
+        let expr = Expr::from_text(expr).unwrap();
         let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();

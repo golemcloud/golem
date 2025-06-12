@@ -459,6 +459,7 @@ fn get_inferred_type_of_selection_dynamic(
 
 #[cfg(test)]
 mod type_pull_up_tests {
+    use std::sync::Arc;
     use bigdecimal::BigDecimal;
     use test_r::test;
 
@@ -466,7 +467,7 @@ mod type_pull_up_tests {
     use crate::function_name::DynamicParsedFunctionName;
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
-    use crate::{ArmPattern, ComponentDependencies, Expr, InferredType, MatchArm, VariableId};
+    use crate::{ArmPattern, ComponentDependencies, DefaultWorkerNameGen, Expr, InferredType, MatchArm, RibCompiler, VariableId, WorkerNameGen};
 
     #[test]
     pub fn test_pull_up_identifier() {
@@ -773,8 +774,10 @@ mod type_pull_up_tests {
         "#;
 
         let mut expr = Expr::from_text(rib).unwrap();
-        let function_registry = ComponentDependencies::default();
-        expr.infer_types_initial_phase(&function_registry, &vec![])
+        let component_dependencies = ComponentDependencies::default();
+        let default_worker_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> = Arc::new(DefaultWorkerNameGen);
+
+        expr.infer_types_initial_phase(&component_dependencies, &vec![], &default_worker_gen)
             .unwrap();
         expr.infer_all_identifiers();
         expr.pull_types_up().unwrap();

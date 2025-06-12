@@ -74,12 +74,7 @@ mod tests {
         number, option, pattern_match, plus, record, result, select_dynamic, select_field,
         sequence, tuple,
     };
-    use crate::{
-        ArmPattern, ComponentDependencies, DefaultWorkerNameGen, DynamicParsedFunctionName,
-        DynamicParsedFunctionReference, Expr, InferredExpr, InferredType, InstanceCreationType,
-        InstanceType, MatchArm, Number, ParsedFunctionSite, RibCompiler, RibCompilerConfig,
-        TypeName, VariableId,
-    };
+    use crate::{ArmPattern, ComponentDependencies, DefaultWorkerNameGen, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, InferredExpr, InferredType, InstanceCreationType, InstanceType, MatchArm, Number, ParsedFunctionSite, RibCompiler, RibCompilerConfig, TypeName, VariableId, WorkerNameGen};
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
     use std::sync::Arc;
@@ -97,19 +92,27 @@ mod tests {
         let type_spec =
             GlobalVariableTypeSpec::new("foo", Path::from_elems(vec![]), InferredType::string());
 
+        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGen);
+
         let with_type_spec = expr.infer_types(
             &ComponentDependencies::default(),
             &vec![type_spec],
-            &Arc::new(DefaultWorkerNameGen),
+            &worker_name_gen
         );
 
         assert!(with_type_spec.is_ok());
 
         let mut new_expr = Expr::from_text(rib_expr).unwrap();
+
+        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGen);
+
+
         let without_type_spec = new_expr.infer_types(
             &ComponentDependencies::default(),
             &vec![],
-            &Arc::new(DefaultWorkerNameGen),
+            &worker_name_gen
         );
 
         assert!(without_type_spec.is_err())
@@ -130,11 +133,14 @@ mod tests {
             InferredType::string(),
         );
 
+        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGen);
+
         assert!(expr
             .infer_types(
                 &ComponentDependencies::default(),
                 &vec![type_spec],
-                &Arc::new(DefaultWorkerNameGen)
+                &worker_name_gen
             )
             .is_ok());
     }
@@ -162,11 +168,14 @@ mod tests {
             ),
         ];
 
+        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGen);
+
         assert!(expr
             .infer_types(
                 &ComponentDependencies::default(),
                 &type_spec,
-                &Arc::new(DefaultWorkerNameGen)
+                &worker_name_gen
             )
             .is_ok());
     }
@@ -186,11 +195,14 @@ mod tests {
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
+        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGen);
+
         assert!(expr
             .infer_types(
                 &ComponentDependencies::default(),
                 &vec![],
-                &Arc::new(DefaultWorkerNameGen)
+                &worker_name_gen
             )
             .is_ok());
     }
@@ -1299,10 +1311,13 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
+        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGen);
+
         expr.infer_types(
             &ComponentDependencies::default(),
             &vec![],
-            &Arc::new(DefaultWorkerNameGen),
+            &worker_name_gen
         )
         .unwrap();
 
@@ -1543,10 +1558,13 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
+        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGen);
+
         expr.infer_types(
             &ComponentDependencies::default(),
             &vec![],
-            &Arc::new(DefaultWorkerNameGen),
+            &worker_name_gen
         )
         .unwrap();
 
@@ -1646,10 +1664,13 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
+        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGen);
+
         expr.infer_types(
             &ComponentDependencies::default(),
             &vec![],
-            &Arc::new(DefaultWorkerNameGen),
+            &worker_name_gen
         )
         .unwrap();
 
@@ -1730,10 +1751,13 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
+        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGen);
+
         expr.infer_types(
             &ComponentDependencies::default(),
             &vec![],
-            &Arc::new(DefaultWorkerNameGen),
+            &worker_name_gen
         )
         .unwrap();
 
@@ -1820,10 +1844,13 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
+        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGen);
+
         expr.infer_types(
             &ComponentDependencies::default(),
             &vec![],
-            &Arc::new(DefaultWorkerNameGen),
+            &worker_name_gen
         )
         .unwrap();
 
@@ -2240,7 +2267,7 @@ mod tests {
         let expected =
             test_utils::expected_expr_for_select_index(&test_deps.expected_component_dependencies);
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -2255,11 +2282,14 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
+        let worker_name_gen: Arc<dyn WorkerNameGen + Send + Sync + 'static> =
+            Arc::new(DefaultWorkerNameGen);
+
         let inferred_expr = InferredExpr::from_expr(
             expr,
             &ComponentDependencies::default(),
             &vec![],
-            &Arc::new(DefaultWorkerNameGen),
+            &worker_name_gen
         )
         .unwrap();
 

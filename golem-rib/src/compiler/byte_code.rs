@@ -1018,9 +1018,10 @@ mod compiler_tests {
     fn test_instructions_for_literal() {
         let literal = Expr::literal("hello");
         let empty_registry = ComponentDependencies::default();
-        let inferred_expr = InferredExpr::from_expr(literal, &empty_registry, &vec![]).unwrap();
 
-        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
+        let compiler = RibCompiler::default();
+
+        let compiler_output = compiler.compile(literal).unwrap();
 
         let instruction_set = vec![RibIR::PushLit("hello".into_value_and_type())];
 
@@ -1028,7 +1029,7 @@ mod compiler_tests {
             instructions: instruction_set,
         };
 
-        assert_eq!(instructions, expected_instructions);
+        assert_eq!(compiler_output.byte_code, expected_instructions);
     }
 
     #[test]
@@ -1486,10 +1487,9 @@ mod compiler_tests {
         )
         .with_inferred_type(InferredType::string());
 
-        let empty_registry = ComponentDependencies::default();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
+        let instructions = rib_compiler.compile(expr).unwrap().byte_code;
 
         // instructions will correspond to an if-else statement
         let instruction_set = vec![
