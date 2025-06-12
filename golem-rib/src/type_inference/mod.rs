@@ -100,21 +100,13 @@ mod tests {
         let worker_name_gen: Arc<dyn GenerateWorkerName + Send + Sync + 'static> =
             Arc::new(DefaultWorkerNameGenerator);
 
-        let with_type_spec = expr.infer_types(
-            &ComponentDependencies::default(),
-            &vec![type_spec],
-            &worker_name_gen,
-        );
+        let with_type_spec = expr.infer_types(&ComponentDependencies::default(), &vec![type_spec]);
 
         assert!(with_type_spec.is_ok());
 
         let mut new_expr = Expr::from_text(rib_expr).unwrap();
 
-        let worker_name_gen: Arc<dyn GenerateWorkerName + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGenerator);
-
-        let without_type_spec =
-            new_expr.infer_types(&ComponentDependencies::default(), &vec![], &worker_name_gen);
+        let without_type_spec = new_expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(without_type_spec.is_err())
     }
@@ -134,15 +126,8 @@ mod tests {
             InferredType::string(),
         );
 
-        let worker_name_gen: Arc<dyn GenerateWorkerName + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGenerator);
-
         assert!(expr
-            .infer_types(
-                &ComponentDependencies::default(),
-                &vec![type_spec],
-                &worker_name_gen
-            )
+            .infer_types(&ComponentDependencies::default(), &vec![type_spec],)
             .is_ok());
     }
 
@@ -169,15 +154,8 @@ mod tests {
             ),
         ];
 
-        let worker_name_gen: Arc<dyn GenerateWorkerName + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGenerator);
-
         assert!(expr
-            .infer_types(
-                &ComponentDependencies::default(),
-                &type_spec,
-                &worker_name_gen
-            )
+            .infer_types(&ComponentDependencies::default(), &type_spec,)
             .is_ok());
     }
 
@@ -200,7 +178,7 @@ mod tests {
             Arc::new(DefaultWorkerNameGenerator);
 
         assert!(expr
-            .infer_types(&ComponentDependencies::default(), &vec![], &worker_name_gen)
+            .infer_types(&ComponentDependencies::default(), &vec![])
             .is_ok());
     }
 
@@ -1308,10 +1286,7 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        let worker_name_gen: Arc<dyn GenerateWorkerName + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGenerator);
-
-        expr.infer_types(&ComponentDependencies::default(), &vec![], &worker_name_gen)
+        expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
 
         let expected = expr_block(
