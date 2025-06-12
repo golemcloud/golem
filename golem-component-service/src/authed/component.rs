@@ -40,7 +40,7 @@ use std::sync::Arc;
 use std::vec;
 
 pub struct AuthedComponentService {
-    base_component_service: Arc<dyn ComponentService>,
+    component_service: Arc<dyn ComponentService>,
     auth_service: Arc<dyn BaseAuthService>,
     project_service: Arc<dyn ProjectService>,
 }
@@ -52,7 +52,7 @@ impl AuthedComponentService {
         project_service: Arc<dyn ProjectService>,
     ) -> Self {
         Self {
-            base_component_service,
+            component_service: base_component_service,
             auth_service,
             project_service,
         }
@@ -99,7 +99,7 @@ impl AuthedComponentService {
         component_id: &ComponentId,
         action: &ProjectAction,
     ) -> Result<ComponentOwner, ComponentError> {
-        let owner = self.base_component_service.get_owner(component_id).await?;
+        let owner = self.component_service.get_owner(component_id).await?;
 
         match owner {
             Some(owner) => {
@@ -130,7 +130,7 @@ impl AuthedComponentService {
             .await?;
 
         let component = self
-            .base_component_service
+            .component_service
             .create(
                 &component_id,
                 component_name,
@@ -164,7 +164,7 @@ impl AuthedComponentService {
             .await?;
 
         let component = self
-            .base_component_service
+            .component_service
             .create_internal(
                 &component_id,
                 component_name,
@@ -196,7 +196,7 @@ impl AuthedComponentService {
             .await?;
 
         let component = self
-            .base_component_service
+            .component_service
             .update(
                 component_id,
                 data.clone(),
@@ -226,7 +226,7 @@ impl AuthedComponentService {
             .await?;
 
         let component = self
-            .base_component_service
+            .component_service
             .update_internal(
                 component_id,
                 data.clone(),
@@ -252,7 +252,7 @@ impl AuthedComponentService {
             .await?;
 
         let data = self
-            .base_component_service
+            .component_service
             .download(component_id, version, &namespace)
             .await?;
 
@@ -270,7 +270,7 @@ impl AuthedComponentService {
             .await?;
 
         let stream = self
-            .base_component_service
+            .component_service
             .download_stream(component_id, version, &owner)
             .await?;
         Ok(stream)
@@ -287,7 +287,7 @@ impl AuthedComponentService {
             .await?;
 
         let result = self
-            .base_component_service
+            .component_service
             .find_by_name(component_name, &owner)
             .await?;
 
@@ -305,7 +305,7 @@ impl AuthedComponentService {
             .await?;
 
         let result = self
-            .base_component_service
+            .component_service
             .find_by_names(component_names, &owner)
             .await?;
 
@@ -321,10 +321,7 @@ impl AuthedComponentService {
             .is_authorized_by_project(auth, project_id, &ProjectAction::ViewComponent)
             .await?;
 
-        let result = self
-            .base_component_service
-            .find_by_name(None, &owner)
-            .await?;
+        let result = self.component_service.find_by_name(None, &owner).await?;
         Ok(result)
     }
 
@@ -342,7 +339,7 @@ impl AuthedComponentService {
             .await?;
 
         let result = self
-            .base_component_service
+            .component_service
             .get_by_version(component_id, &owner)
             .await?;
 
@@ -359,7 +356,7 @@ impl AuthedComponentService {
             .await?;
 
         let result = self
-            .base_component_service
+            .component_service
             .get_latest_version(component_id, &owner)
             .await?;
         Ok(result)
@@ -374,10 +371,7 @@ impl AuthedComponentService {
             .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
             .await?;
 
-        let result = self
-            .base_component_service
-            .get(component_id, &owner)
-            .await?;
+        let result = self.component_service.get(component_id, &owner).await?;
 
         Ok(result)
     }
@@ -399,7 +393,7 @@ impl AuthedComponentService {
         };
 
         let result = self
-            .base_component_service
+            .component_service
             .create_or_update_constraint(&component_constraints)
             .await?;
 
@@ -423,7 +417,7 @@ impl AuthedComponentService {
         };
 
         let result = self
-            .base_component_service
+            .component_service
             .delete_constraints(
                 &owner,
                 &constraints.component_id,
@@ -445,7 +439,7 @@ impl AuthedComponentService {
             .await?;
 
         let installations = self
-            .base_component_service
+            .component_service
             .get_plugin_installations_for_component(&owner, component_id, component_version)
             .await?;
 
@@ -463,7 +457,7 @@ impl AuthedComponentService {
             .await?;
 
         let installation = self
-            .base_component_service
+            .component_service
             .create_plugin_installation_for_component(&owner, component_id, installation)
             .await?;
 
@@ -481,7 +475,7 @@ impl AuthedComponentService {
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
 
-        self.base_component_service
+        self.component_service
             .update_plugin_installation_for_component(&owner, installation_id, component_id, update)
             .await
     }
@@ -496,7 +490,7 @@ impl AuthedComponentService {
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
 
-        self.base_component_service
+        self.component_service
             .delete_plugin_installation_for_component(&owner, installation_id, component_id)
             .await
     }
@@ -511,7 +505,7 @@ impl AuthedComponentService {
             .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
             .await?;
 
-        self.base_component_service
+        self.component_service
             .batch_update_plugin_installations_for_component(&owner, component_id, actions)
             .await
     }
@@ -527,7 +521,7 @@ impl AuthedComponentService {
             .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
             .await?;
 
-        self.base_component_service
+        self.component_service
             .get_file_contents(component_id, version, path, &owner)
             .await
     }

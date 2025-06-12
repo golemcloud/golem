@@ -24,7 +24,7 @@ use golem_service_base::clients::auth::BaseAuthService;
 use std::sync::Arc;
 
 pub struct AuthedPluginService {
-    base_plugin_service: Arc<PluginService>,
+    plugin_service: Arc<PluginService>,
     auth_service: Arc<dyn BaseAuthService>,
     component_service: Arc<dyn ComponentService>,
 }
@@ -36,7 +36,7 @@ impl AuthedPluginService {
         component_service: Arc<dyn ComponentService>,
     ) -> Self {
         Self {
-            base_plugin_service,
+            plugin_service: base_plugin_service,
             auth_service,
             component_service,
         }
@@ -47,7 +47,7 @@ impl AuthedPluginService {
         auth: &AuthCtx,
     ) -> Result<Vec<PluginDefinition>, ComponentError> {
         let owner = self.get_owner(auth).await?;
-        self.base_plugin_service.list_plugins(&owner).await
+        self.plugin_service.list_plugins(&owner).await
     }
 
     pub async fn list_plugins_for_scope(
@@ -59,7 +59,7 @@ impl AuthedPluginService {
 
         let valid_scopes = self.accessible_scopes(scope, auth).await?;
 
-        self.base_plugin_service
+        self.plugin_service
             .list_plugins_for_scopes(&owner, valid_scopes)
             .await
     }
@@ -70,9 +70,7 @@ impl AuthedPluginService {
         name: &str,
     ) -> Result<Vec<PluginDefinition>, ComponentError> {
         let owner = self.get_owner(auth).await?;
-        self.base_plugin_service
-            .list_plugin_versions(&owner, name)
-            .await
+        self.plugin_service.list_plugin_versions(&owner, name).await
     }
 
     pub async fn create_plugin(
@@ -81,7 +79,7 @@ impl AuthedPluginService {
         definition: PluginDefinitionCreation,
     ) -> Result<(), ComponentError> {
         let owner = self.get_owner(auth).await?;
-        self.base_plugin_service
+        self.plugin_service
             .create_plugin(&owner, definition)
             .await?;
         Ok(())
@@ -94,7 +92,7 @@ impl AuthedPluginService {
         version: &str,
     ) -> Result<Option<PluginDefinition>, ComponentError> {
         let owner = self.get_owner(auth).await?;
-        self.base_plugin_service.get(&owner, name, version).await
+        self.plugin_service.get(&owner, name, version).await
     }
 
     pub async fn get_by_id(
@@ -103,7 +101,7 @@ impl AuthedPluginService {
         id: &PluginId,
     ) -> Result<Option<PluginDefinition>, ComponentError> {
         let owner = self.get_owner(auth).await?;
-        self.base_plugin_service.get_by_id(&owner, id).await
+        self.plugin_service.get_by_id(&owner, id).await
     }
 
     pub async fn delete(
@@ -113,9 +111,7 @@ impl AuthedPluginService {
         version: &str,
     ) -> Result<(), ComponentError> {
         let owner = self.get_owner(auth).await?;
-        self.base_plugin_service
-            .delete(&owner, name, version)
-            .await?;
+        self.plugin_service.delete(&owner, name, version).await?;
         Ok(())
     }
 
