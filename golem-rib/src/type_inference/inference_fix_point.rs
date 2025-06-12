@@ -186,15 +186,12 @@ fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bo
 #[cfg(test)]
 mod tests {
     use bigdecimal::BigDecimal;
-    
+
     use test_r::test;
 
     use crate::parser::type_name::TypeName;
     use crate::type_inference::inference_fix_point::{compare_expr_types, compare_inferred_types};
-    use crate::{
-        ComponentDependencies, Expr, InferredType,
-        VariableId,
-    };
+    use crate::{ComponentDependencies, Expr, InferredType, VariableId};
 
     #[test]
     fn test_inferred_type_equality_1() {

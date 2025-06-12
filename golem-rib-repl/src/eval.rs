@@ -14,9 +14,9 @@
 
 use crate::invoke::ReplRibFunctionInvoke;
 use crate::repl_state::ReplState;
+use crate::worker_name_gen::DynamicWorkerGen;
 use rib::{InstructionId, Interpreter, RibByteCode, RibInput, RibResult, RibRuntimeError};
 use std::sync::Arc;
-use crate::worker_name_gen::DynamicWorkerGen;
 
 pub async fn eval(
     rib_byte_code: RibByteCode,
@@ -36,5 +36,9 @@ fn dynamic_interpreter(repl_state: &Arc<ReplState>) -> Interpreter {
     let rib_function_invoke = Arc::new(ReplRibFunctionInvoke::new(repl_state.clone()));
     let worker_name_generator = Arc::new(DynamicWorkerGen::new(repl_state.clone()));
 
-    Interpreter::new(RibInput::default(), rib_function_invoke, worker_name_generator)
+    Interpreter::new(
+        RibInput::default(),
+        rib_function_invoke,
+        worker_name_generator,
+    )
 }

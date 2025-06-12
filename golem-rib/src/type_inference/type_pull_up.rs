@@ -461,17 +461,14 @@ fn get_inferred_type_of_selection_dynamic(
 #[cfg(test)]
 mod type_pull_up_tests {
     use bigdecimal::BigDecimal;
-    use std::sync::Arc;
+
     use test_r::test;
 
     use crate::call_type::CallType;
     use crate::function_name::DynamicParsedFunctionName;
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
-    use crate::{
-        ArmPattern, ComponentDependencies, DefaultWorkerNameGenerator, Expr, GenerateWorkerName,
-        InferredType, MatchArm, VariableId,
-    };
+    use crate::{ArmPattern, ComponentDependencies, Expr, InferredType, MatchArm, VariableId};
 
     #[test]
     pub fn test_pull_up_identifier() {

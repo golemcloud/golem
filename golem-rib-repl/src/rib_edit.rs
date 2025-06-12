@@ -286,7 +286,6 @@ impl Completer for RibEdit {
             }
         }
 
-
         if let Some((new_start, new_completions)) =
             Self::complete_method_calls(word, instance_variables, start, end_pos)?
         {

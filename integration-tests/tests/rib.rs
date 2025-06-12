@@ -66,7 +66,12 @@ async fn test_rib_without_worker_param(deps: &EnvBasedTestDependencies) {
       worker.get-cart-contents()
     "#;
 
-    let eval_config = RibEvalConfig::new(compiler_config, RibInput::default(), rib_function_invoke);
+    let eval_config = RibEvalConfig::new(
+        compiler_config,
+        RibInput::default(),
+        rib_function_invoke,
+        None,
+    );
 
     let rib_evaluator = RibEvaluator::new(eval_config);
 
@@ -126,7 +131,12 @@ async fn test_rib_without_worker_param_resource(deps: &EnvBasedTestDependencies)
       cart.get-cart-contents()
     "#;
 
-    let eval_config = RibEvalConfig::new(compiler_config, RibInput::default(), rib_function_invoke);
+    let eval_config = RibEvalConfig::new(
+        compiler_config,
+        RibInput::default(),
+        rib_function_invoke,
+        None,
+    );
 
     let rib_evaluator = RibEvaluator::new(eval_config);
 
@@ -186,7 +196,12 @@ async fn test_rib_with_worker_params(deps: &EnvBasedTestDependencies) {
       worker.get-cart-contents()
     "#;
 
-    let eval_config = RibEvalConfig::new(compiler_config, RibInput::default(), rib_function_invoke);
+    let eval_config = RibEvalConfig::new(
+        compiler_config,
+        RibInput::default(),
+        rib_function_invoke,
+        None,
+    );
 
     let rib_evaluator = RibEvaluator::new(eval_config);
 

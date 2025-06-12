@@ -75,14 +75,12 @@ mod tests {
         sequence, tuple,
     };
     use crate::{
-        ArmPattern, ComponentDependencies, DefaultWorkerNameGenerator, DynamicParsedFunctionName,
-        DynamicParsedFunctionReference, Expr, GenerateWorkerName, InferredType,
-        InstanceCreationType, InstanceType, MatchArm, Number, ParsedFunctionSite, RibCompiler,
-        RibCompilerConfig, TypeName, VariableId,
+        ArmPattern, ComponentDependencies, DynamicParsedFunctionName,
+        DynamicParsedFunctionReference, Expr, InferredType, InstanceCreationType, InstanceType,
+        MatchArm, Number, ParsedFunctionSite, RibCompiler, RibCompilerConfig, TypeName, VariableId,
     };
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
-    use std::sync::Arc;
 
     use test_r::test;
 
@@ -170,9 +168,6 @@ mod tests {
          "#;
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
-
-        let worker_name_gen: Arc<dyn GenerateWorkerName + Send + Sync + 'static> =
-            Arc::new(DefaultWorkerNameGenerator);
 
         assert!(expr
             .infer_types(&ComponentDependencies::default(), &vec![])

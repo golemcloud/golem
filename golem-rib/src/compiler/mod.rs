@@ -122,7 +122,6 @@ impl RibCompiler {
     }
 }
 
-
 /// Compiler configuration options for Rib.
 ///
 /// # Fields
@@ -154,7 +153,6 @@ impl RibCompilerConfig {
         }
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct ComponentDependency {
