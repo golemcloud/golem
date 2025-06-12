@@ -19,12 +19,12 @@ use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
-use crate::WorkerNameGen;
 use crate::{
     from_string, text, type_checker, type_inference, ComponentDependencies, ComponentDependencyKey,
     DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType,
     ParsedFunctionName, VariableId,
 };
+use crate::{DefaultWorkerNameGen, WorkerNameGen};
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
 use combine::stream::position;
@@ -1184,7 +1184,9 @@ impl Expr {
         type_inference::identify_instance_creation(self, component_dependency)
     }
 
-    pub fn ensure_stateful_instance(&mut self, worker_name_gen: &Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+    pub fn ensure_stateful_instance(
+        &mut self,
+        worker_name_gen: &Arc<dyn WorkerNameGen + Send + Sync + 'static>,
     ) {
         type_inference::ensure_stateful_instance(self, worker_name_gen)
     }

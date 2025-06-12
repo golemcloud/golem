@@ -75,9 +75,10 @@ mod tests {
         sequence, tuple,
     };
     use crate::{
-        ArmPattern, ComponentDependencies, DynamicParsedFunctionName,
+        ArmPattern, ComponentDependencies, DefaultWorkerNameGen, DynamicParsedFunctionName,
         DynamicParsedFunctionReference, Expr, InferredExpr, InferredType, InstanceCreationType,
-        InstanceType, MatchArm, Number, ParsedFunctionSite, TypeName, VariableId,
+        InstanceType, MatchArm, Number, ParsedFunctionSite, RibCompiler, RibCompilerConfig,
+        TypeName, VariableId,
     };
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
@@ -96,12 +97,20 @@ mod tests {
         let type_spec =
             GlobalVariableTypeSpec::new("foo", Path::from_elems(vec![]), InferredType::string());
 
-        let with_type_spec = expr.infer_types(&ComponentDependencies::default(), &vec![type_spec]);
+        let with_type_spec = expr.infer_types(
+            &ComponentDependencies::default(),
+            &vec![type_spec],
+            &Arc::new(DefaultWorkerNameGen),
+        );
 
         assert!(with_type_spec.is_ok());
 
         let mut new_expr = Expr::from_text(rib_expr).unwrap();
-        let without_type_spec = new_expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let without_type_spec = new_expr.infer_types(
+            &ComponentDependencies::default(),
+            &vec![],
+            &Arc::new(DefaultWorkerNameGen),
+        );
 
         assert!(without_type_spec.is_err())
     }
@@ -122,7 +131,11 @@ mod tests {
         );
 
         assert!(expr
-            .infer_types(&ComponentDependencies::default(), &vec![type_spec])
+            .infer_types(
+                &ComponentDependencies::default(),
+                &vec![type_spec],
+                &Arc::new(DefaultWorkerNameGen)
+            )
             .is_ok());
     }
 
@@ -150,7 +163,11 @@ mod tests {
         ];
 
         assert!(expr
-            .infer_types(&ComponentDependencies::default(), &type_spec)
+            .infer_types(
+                &ComponentDependencies::default(),
+                &type_spec,
+                &Arc::new(DefaultWorkerNameGen)
+            )
             .is_ok());
     }
 
@@ -170,7 +187,11 @@ mod tests {
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
         assert!(expr
-            .infer_types(&ComponentDependencies::default(), &vec![])
+            .infer_types(
+                &ComponentDependencies::default(),
+                &vec![],
+                &Arc::new(DefaultWorkerNameGen)
+            )
             .is_ok());
     }
 
@@ -184,14 +205,13 @@ mod tests {
             x
          "#;
 
-        let mut expr = Expr::from_text(rib_expr).unwrap();
+        let expr = Expr::from_text(rib_expr).unwrap();
 
-        expr.infer_types(&ComponentDependencies::default(), &vec![])
-            .unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        assert!(expr
-            .infer_types(&ComponentDependencies::default(), &vec![])
-            .is_ok());
+        let result = rib_compiler.infer_types(expr);
+
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -206,40 +226,43 @@ mod tests {
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
-        expr.infer_types(&ComponentDependencies::default(), &vec![])
-            .unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        assert!(expr
-            .infer_types(&ComponentDependencies::default(), &vec![])
-            .is_ok());
+        let result = rib_compiler.infer_types(expr);
+
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_0() {
-        let mut old = Expr::from_text(r#"1u32"#).unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        let result = old.infer_types(&ComponentDependencies::default(), &vec![]);
+        let old = Expr::from_text(r#"1u32"#).unwrap();
+
+        let result = rib_compiler.compile(old);
 
         assert!(result.is_ok());
 
         // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
-        let mut new = Expr::from_text(r#"1: u32"#).unwrap();
-        let result = new.infer_types(&ComponentDependencies::default(), &vec![]);
+        let new = Expr::from_text(r#"1: u32"#).unwrap();
+
+        let result = rib_compiler.compile(new);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_1() {
-        let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz[0] + 1u32"#).unwrap();
+        let rib_expr = Expr::from_text(r#"foo.bar.baz[0] + 1u32"#).unwrap();
 
-        let result = invalid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let compiler = RibCompiler::default();
+
+        let result = compiler.compile(rib_expr);
 
         assert!(result.is_ok());
 
-        // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
-        let mut valid_rib_expr = Expr::from_text(r#"foo.bar.baz[0]: u32 + 1u32"#).unwrap();
-        let result = valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let rib_expr = Expr::from_text(r#"foo.bar.baz[0]: u32 + 1u32"#).unwrap();
+        let result = compiler.compile(rib_expr);
 
         assert!(result.is_ok());
     }
@@ -252,19 +275,19 @@ mod tests {
             InferredType::string(),
         );
 
+        let rib_compiler = RibCompiler::new(RibCompilerConfig::new(vec![], vec![type_spec]));
+
         // by default foo.bar.* will be inferred to be a string (given the above type spec) and
         // foo.bar.baz + 1u32 should fail compilation since we are adding string with a u32.
-        let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz + 1u32"#).unwrap();
+        let invalid_rib_expr = Expr::from_text(r#"foo.bar.baz + 1u32"#).unwrap();
 
-        let result = invalid_rib_expr
-            .infer_types(&ComponentDependencies::default(), &vec![type_spec.clone()]);
+        let result = rib_compiler.compile(invalid_rib_expr);
 
         assert!(result.is_err());
 
         // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
-        let mut valid_rib_expr = Expr::from_text(r#"foo.bar.baz: u32 + 1u32"#).unwrap();
-        let result =
-            valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![type_spec.clone()]);
+        let valid_rib_expr = Expr::from_text(r#"foo.bar.baz: u32 + 1u32"#).unwrap();
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
@@ -276,17 +299,18 @@ mod tests {
 
         // by default foo will be inferred to be a string (given the above type spec) and
         // foo + 1u32 should fail compilation since we are adding string with a u32.
-        let mut invalid_rib_expr = Expr::from_text(r#"foo + 1u32"#).unwrap();
+        let invalid_rib_expr = Expr::from_text(r#"foo + 1u32"#).unwrap();
 
-        let result = invalid_rib_expr
-            .infer_types(&ComponentDependencies::default(), &vec![type_spec.clone()]);
+        let rib_compiler = RibCompiler::new(RibCompilerConfig::new(vec![], vec![type_spec]));
+
+        let result = rib_compiler.compile(invalid_rib_expr);
 
         assert!(result.is_err());
 
         // We inline the type of foo identifier with u32 (over-riding what's given in the type spec)
-        let mut valid_rib_expr = Expr::from_text(r#"foo: u32 + 1u32"#).unwrap();
-        let result =
-            valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![type_spec.clone()]);
+        let valid_rib_expr = Expr::from_text(r#"foo: u32 + 1u32"#).unwrap();
+
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
@@ -294,94 +318,117 @@ mod tests {
     #[test]
     fn test_inference_inline_type_annotation_4() {
         // Even if 1 is not specified with a specific number type, it should be inferred as u64
-        let mut rib_expr = Expr::from_text(r#"some(1): option<u64>"#).unwrap();
 
-        let result = rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let rib_expr = Expr::from_text(r#"some(1): option<u64>"#).unwrap();
+
+        let result = rib_compiler.compile(rib_expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_6() {
-        // Even if 1 is not specified with a specific number type, it should be inferred as u64
-        let mut rib_expr = Expr::from_text(r#"some(1): option<option<u64>>"#).unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        let result = rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        // Even if 1 is not specified with a specific number type, it should be inferred as u64
+        let rib_expr = Expr::from_text(r#"some(1): option<option<u64>>"#).unwrap();
+
+        let result = rib_compiler.compile(rib_expr);
 
         assert!(result.is_err());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_7() {
-        let mut valid_rib_expr = Expr::from_text(r#"ok(1): result<u64, string>"#).unwrap();
-        let result = valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let valid_rib_expr = Expr::from_text(r#"ok(1): result<u64, string>"#).unwrap();
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_8() {
-        let mut valid_rib_expr = Expr::from_text(r#"ok(1): result<u64>"#).unwrap();
-        let result = valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let valid_rib_expr = Expr::from_text(r#"ok(1): result<u64>"#).unwrap();
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_9() {
-        let mut valid_rib_expr = Expr::from_text(r#"err(1): result<_, u64>"#).unwrap();
-        let result = valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let valid_rib_expr = Expr::from_text(r#"err(1): result<_, u64>"#).unwrap();
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_10() {
-        let mut valid_rib_expr = Expr::from_text(r#"err(1): result"#).unwrap();
-        let result = valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let valid_rib_expr = Expr::from_text(r#"err(1): result"#).unwrap();
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_11() {
-        let mut valid_rib_expr = Expr::from_text(r#"[1, 2]: list<u64>"#).unwrap();
-        let result = valid_rib_expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let valid_rib_expr = Expr::from_text(r#"[1, 2]: list<u64>"#).unwrap();
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_standalone_literals_1() {
-        let mut expr = Expr::from_text(r#"err(1)"#).unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        let result = expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let expr = Expr::from_text(r#"err(1)"#).unwrap();
+
+        let result = rib_compiler.compile(expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_standalone_literals_2() {
-        let mut expr = Expr::from_text(r#"ok(1)"#).unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        let result = expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let expr = Expr::from_text(r#"ok(1)"#).unwrap();
+
+        let result = rib_compiler.compile(expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_standalone_literals_3() {
-        let mut expr = Expr::from_text(r#"[1, 2]"#).unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        let result = expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let expr = Expr::from_text(r#"[1, 2]"#).unwrap();
+
+        let result = rib_compiler.compile(expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_standalone_literals_4() {
-        let mut expr = Expr::from_text("{foo: {status: 200, b: \"hello\"}}").unwrap();
-        let result = expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let expr = Expr::from_text("{foo: {status: 200, b: \"hello\"}}").unwrap();
+        let result = rib_compiler.compile(expr);
         assert!(result.is_ok());
     }
 
@@ -393,17 +440,19 @@ mod tests {
           worker.foo(x)
         "#;
 
-        let component_dependencies = test_utils::get_component_dependencies();
+        let test_deps = test_utils::get_component_dependencies();
 
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-
-        expr.infer_types(&component_dependencies, &vec![]).unwrap();
-
-        let expected_component_dependency = component_dependencies
+        let component_dependency_key = test_deps
+            .expected_component_dependencies
             .dependencies
             .first_key_value()
             .unwrap()
-            .0;
+            .0
+            .clone();
+
+        let expr = Expr::from_text(rib_expr).unwrap();
+
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let let_variable = let_binding(
             VariableId::local("x", 0),
@@ -430,7 +479,7 @@ mod tests {
             )
             .with_inferred_type(InferredType::instance(InstanceType::Global {
                 worker_name: Some(Box::new(Expr::literal("foo"))),
-                component_dependency: component_dependencies.clone(),
+                component_dependency: test_deps.expected_component_dependencies.clone(),
             })),
         );
 
@@ -443,7 +492,7 @@ mod tests {
                         function: "foo".to_string(),
                     },
                 },
-                Some(expected_component_dependency.clone()),
+                Some(component_dependency_key),
             ),
             None,
             vec![identifier(
@@ -459,7 +508,7 @@ mod tests {
             InferredType::sequence(vec![]),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -472,11 +521,19 @@ mod tests {
           worker.baz(y)
         "#;
 
-        let component_dependencies = test_utils::get_component_dependencies();
+        let test_deps = test_utils::get_component_dependencies();
 
-        let mut expr = Expr::from_text(rib_expr).unwrap();
+        let expected_component_in_function_call = test_deps
+            .expected_component_dependencies
+            .dependencies
+            .first_key_value()
+            .unwrap()
+            .0
+            .clone();
 
-        expr.infer_types(&component_dependencies, &vec![]).unwrap();
+        let expr = Expr::from_text(rib_expr).unwrap();
+
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let let_binding1 = let_binding(
             VariableId::local("x", 0),
@@ -515,15 +572,9 @@ mod tests {
             )
             .with_inferred_type(InferredType::instance(InstanceType::Global {
                 worker_name: Some(Box::new(Expr::literal("foo"))),
-                component_dependency: component_dependencies.clone(),
+                component_dependency: test_deps.expected_component_dependencies.clone(),
             })),
         );
-
-        let expected_component_in_function_call = component_dependencies
-            .dependencies
-            .first_key_value()
-            .unwrap()
-            .0;
 
         let call_expr1 = call(
             CallType::function_call_with_worker(
@@ -576,7 +627,7 @@ mod tests {
             InferredType::sequence(vec![]),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -587,9 +638,10 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -609,7 +661,7 @@ mod tests {
             InferredType::u64(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -620,9 +672,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -632,7 +684,7 @@ mod tests {
             InferredType::string(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -647,9 +699,10 @@ mod tests {
           x == y
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -704,7 +757,7 @@ mod tests {
             InferredType::bool(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -713,7 +766,7 @@ mod tests {
 
         let output_enum_type = get_analysed_type_enum(vec!["success", "failure", "in-progress"]);
 
-        let component_dependencies = get_component_dependency(
+        let test_deps = get_component_dependency(
             "process",
             vec![
                 input_enum_type.clone(),
@@ -754,13 +807,14 @@ mod tests {
 
             "#;
 
-        let mut expr = Expr::from_text(expr).unwrap();
+        let expr = Expr::from_text(expr).unwrap();
 
-        expr.infer_types(&component_dependencies, &vec![]).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
-        let expected = test_utils::expected_expr_for_enum_test(&component_dependencies);
+        let expected =
+            test_utils::expected_expr_for_enum_test(&test_deps.expected_component_dependencies);
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -777,7 +831,7 @@ mod tests {
             ("failure", None),
         ]);
 
-        let component_dependencies = get_component_dependency(
+        let test_deps = get_component_dependency(
             "process",
             vec![
                 input_variant_type.clone(),
@@ -818,9 +872,9 @@ mod tests {
 
             "#;
 
-        let mut expr = Expr::from_text(expr).unwrap();
+        let expr = Expr::from_text(expr).unwrap();
 
-        let result = expr.infer_types(&component_dependencies, &vec![]);
+        let result = test_deps.compiler.infer_types(expr);
 
         assert!(result.is_ok());
     }
@@ -833,9 +887,9 @@ mod tests {
           "${x}${y}"
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_type = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -852,7 +906,7 @@ mod tests {
             InferredType::string(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_type.get_expr(), &expected);
     }
 
     #[test]
@@ -863,9 +917,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -875,7 +929,7 @@ mod tests {
             InferredType::bool(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -888,9 +942,9 @@ mod tests {
           if x > y then res1 else res2
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -932,7 +986,7 @@ mod tests {
             InferredType::string(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -944,9 +998,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -961,7 +1015,7 @@ mod tests {
             InferredType::string(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -974,9 +1028,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1006,7 +1060,7 @@ mod tests {
             InferredType::u64(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1017,9 +1071,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1063,7 +1117,7 @@ mod tests {
             InferredType::list(InferredType::u64()),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1074,9 +1128,9 @@ mod tests {
 
           "#;
 
-        let component_dependencies = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&component_dependencies, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1131,7 +1185,7 @@ mod tests {
             InferredType::u64(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1143,9 +1197,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1185,7 +1239,7 @@ mod tests {
             InferredType::u64(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1196,9 +1250,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1228,7 +1282,7 @@ mod tests {
             InferredType::tuple(vec![InferredType::u64(), InferredType::string()]),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1245,8 +1299,12 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&ComponentDependencies::default(), &vec![])
-            .unwrap();
+        expr.infer_types(
+            &ComponentDependencies::default(),
+            &vec![],
+            &Arc::new(DefaultWorkerNameGen),
+        )
+        .unwrap();
 
         let expected = expr_block(
             vec![
@@ -1324,9 +1382,17 @@ mod tests {
                   2 => worker.baz(y)
                 }"#;
 
-        let component_dependencies = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&component_dependencies, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
+
+        let expected_component_key = test_deps
+            .expected_component_dependencies
+            .dependencies
+            .first_key_value()
+            .unwrap()
+            .0
+            .clone();
 
         let let_binding1 = let_binding(
             VariableId::local("x", 0),
@@ -1365,15 +1431,9 @@ mod tests {
             )
             .with_inferred_type(InferredType::instance(InstanceType::Global {
                 worker_name: Some(Box::new(Expr::literal("foo"))),
-                component_dependency: component_dependencies.clone(),
+                component_dependency: test_deps.expected_component_dependencies.clone(),
             })),
         );
-
-        let expected_component_dependency = component_dependencies
-            .dependencies
-            .first_key_value()
-            .unwrap()
-            .0;
 
         let match_expr_expected = pattern_match(
             identifier(VariableId::local("x", 0), None, InferredType::u64()),
@@ -1395,7 +1455,7 @@ mod tests {
                                     function: "foo".to_string(),
                                 },
                             },
-                            Some(expected_component_dependency.clone()),
+                            Some(expected_component_key.clone()),
                         ),
                         None,
                         vec![identifier(
@@ -1423,7 +1483,7 @@ mod tests {
                                     function: "baz".to_string(),
                                 },
                             },
-                            Some(expected_component_dependency.clone()),
+                            Some(expected_component_key.clone()),
                         ),
                         None,
                         vec![identifier(
@@ -1448,7 +1508,7 @@ mod tests {
             InferredType::sequence(vec![]),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1462,11 +1522,11 @@ mod tests {
               }
             "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
+        let test_deps = test_utils::get_component_dependencies();
 
-        let mut expr = Expr::from_text(rib_expr).unwrap();
+        let expr = Expr::from_text(rib_expr).unwrap();
 
-        let result = expr.infer_types(&function_type_registry, &vec![]);
+        let result = test_deps.compiler.infer_types(expr);
         assert!(result.is_ok());
     }
 
@@ -1483,8 +1543,12 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&ComponentDependencies::default(), &vec![])
-            .unwrap();
+        expr.infer_types(
+            &ComponentDependencies::default(),
+            &vec![],
+            &Arc::new(DefaultWorkerNameGen),
+        )
+        .unwrap();
 
         let expected = expr_block(
             vec![
@@ -1582,8 +1646,12 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&ComponentDependencies::default(), &vec![])
-            .unwrap();
+        expr.infer_types(
+            &ComponentDependencies::default(),
+            &vec![],
+            &Arc::new(DefaultWorkerNameGen),
+        )
+        .unwrap();
 
         let expected = expr_block(
             vec![
@@ -1662,8 +1730,12 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&ComponentDependencies::default(), &vec![])
-            .unwrap();
+        expr.infer_types(
+            &ComponentDependencies::default(),
+            &vec![],
+            &Arc::new(DefaultWorkerNameGen),
+        )
+        .unwrap();
 
         let expected = expr_block(
             vec![
@@ -1748,8 +1820,12 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&ComponentDependencies::default(), &vec![])
-            .unwrap();
+        expr.infer_types(
+            &ComponentDependencies::default(),
+            &vec![],
+            &Arc::new(DefaultWorkerNameGen),
+        )
+        .unwrap();
 
         let expected = expr_block(
             vec![
@@ -1904,9 +1980,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1934,7 +2010,7 @@ mod tests {
             InferredType::option(InferredType::u64()),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1946,9 +2022,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1989,7 +2065,7 @@ mod tests {
             InferredType::option(InferredType::option(InferredType::u64())),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -2001,9 +2077,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -2038,7 +2114,7 @@ mod tests {
             InferredType::record(vec![("foo".to_string(), InferredType::u64())]),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -2052,9 +2128,9 @@ mod tests {
           y
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -2121,7 +2197,7 @@ mod tests {
             InferredType::record(vec![("x".to_string(), InferredType::u64())]),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -2148,8 +2224,7 @@ mod tests {
 
         let return_type = golem_wasm_ast::analysis::analysed_type::option(worker_response.typ);
 
-        let component_metadata =
-            get_component_dependency("foo", vec![request_type.clone()], return_type);
+        let test_deps = get_component_dependency("foo", vec![request_type.clone()], return_type);
 
         let expr_str = r#"
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
@@ -2158,11 +2233,12 @@ mod tests {
               match result {  some(value) => "personal-id", none =>  x.body.titles[1] }
             "#;
 
-        let mut expr = Expr::from_text(expr_str).unwrap();
+        let expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&component_metadata, &vec![]).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
-        let expected = test_utils::expected_expr_for_select_index(&component_metadata);
+        let expected =
+            test_utils::expected_expr_for_select_index(&test_deps.expected_component_dependencies);
 
         assert_eq!(expr, expected);
     }
@@ -2183,7 +2259,7 @@ mod tests {
             expr,
             &ComponentDependencies::default(),
             &vec![],
-            Arc::new(DefaultWorkerNameGen),
+            &Arc::new(DefaultWorkerNameGen),
         )
         .unwrap();
 
@@ -2258,10 +2334,11 @@ mod tests {
 
           "#;
 
+        let rib_compiler = RibCompiler::default();
+
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let inferred_expr =
-            InferredExpr::from_expr(expr, &ComponentDependencies::default(), &vec![]).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -2306,9 +2383,9 @@ mod tests {
           { a : p, b: q }
           "#;
 
-        let function_type_registry = test_utils::get_component_dependencies();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let test_deps = test_utils::get_component_dependencies();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_deps.compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -2397,7 +2474,7 @@ mod tests {
             ]),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     mod test_utils {
@@ -2407,9 +2484,9 @@ mod tests {
         use crate::parser::type_name::TypeName;
         use crate::rib_source_span::SourceSpan;
         use crate::{
-            ArmPattern, ComponentDependencies, ComponentDependencyKey, Expr, InferredType,
-            InstanceCreationType, InstanceType, MatchArm, MatchIdentifier, Number,
-            ParsedFunctionSite, VariableId,
+            ArmPattern, ComponentDependencies, ComponentDependency, ComponentDependencyKey, Expr,
+            InferredType, InstanceCreationType, InstanceType, MatchArm, MatchIdentifier, Number,
+            ParsedFunctionSite, RibCompiler, RibCompilerConfig, VariableId,
         };
         use bigdecimal::BigDecimal;
         use golem_wasm_ast::analysis::analysed_type::u64;
@@ -2678,7 +2755,12 @@ mod tests {
             }
         }
 
-        pub(crate) fn get_component_dependencies() -> ComponentDependencies {
+        pub(crate) struct TestCompilerWithDependencies {
+            pub(crate) compiler: RibCompiler,
+            pub(crate) expected_component_dependencies: ComponentDependencies,
+        }
+
+        pub(crate) fn get_component_dependencies() -> TestCompilerWithDependencies {
             let metadata = vec![
                 AnalysedExport::Function(AnalysedFunction {
                     name: "foo".to_string(),
@@ -2698,14 +2780,29 @@ mod tests {
                 }),
             ];
 
-            let component_info = ComponentDependencyKey {
+            let component_dependency_key = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
                 root_package_name: None,
                 root_package_version: None,
             };
 
-            ComponentDependencies::from_raw(vec![(component_info, &metadata)]).unwrap()
+            let dependencies = ComponentDependencies::from_raw(vec![(
+                component_dependency_key.clone(),
+                &metadata,
+            )])
+            .unwrap();
+
+            TestCompilerWithDependencies {
+                compiler: RibCompiler::new(RibCompilerConfig::new(
+                    vec![ComponentDependency::new(
+                        component_dependency_key.clone(),
+                        metadata.clone(),
+                    )],
+                    vec![],
+                )),
+                expected_component_dependencies: dependencies,
+            }
         }
 
         pub(crate) fn get_analysed_type_enum(cases: Vec<&str>) -> AnalysedType {
@@ -2755,7 +2852,7 @@ mod tests {
             function_name: &str,
             input_types: Vec<AnalysedType>,
             output: AnalysedType,
-        ) -> ComponentDependencies {
+        ) -> TestCompilerWithDependencies {
             let analysed_function_parameters = input_types
                 .into_iter()
                 .enumerate()
@@ -2765,22 +2862,35 @@ mod tests {
                 })
                 .collect();
 
-            let component_info = ComponentDependencyKey {
+            let component_dependency_key = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
                 root_package_name: None,
                 root_package_version: None,
             };
 
-            ComponentDependencies::from_raw(vec![(
-                component_info,
-                &vec![AnalysedExport::Function(AnalysedFunction {
-                    name: function_name.to_string(),
-                    parameters: analysed_function_parameters,
-                    result: Some(AnalysedFunctionResult { typ: output }),
-                })],
-            )])
-            .unwrap()
+            let exports = vec![AnalysedExport::Function(AnalysedFunction {
+                name: function_name.to_string(),
+                parameters: analysed_function_parameters,
+                result: Some(AnalysedFunctionResult { typ: output }),
+            })];
+
+            let component_dependencies =
+                ComponentDependencies::from_raw(vec![(component_dependency_key, &exports)])
+                    .unwrap();
+
+            let rib_compiler = RibCompiler::new(RibCompilerConfig::new(
+                vec![ComponentDependency::new(
+                    component_dependency_key.clone(),
+                    exports,
+                )],
+                vec![],
+            ));
+
+            TestCompilerWithDependencies {
+                compiler: rib_compiler,
+                expected_component_dependencies: component_dependencies,
+            }
         }
 
         pub(crate) fn expected_expr_for_enum_test(

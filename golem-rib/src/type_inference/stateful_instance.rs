@@ -16,7 +16,9 @@ use crate::compiler::WorkerNameGen;
 use crate::{CallType, Expr, ExprVisitor, InstanceCreationType, TypeInternal};
 use std::sync::Arc;
 
-pub fn ensure_stateful_instance(expr: &mut Expr, worker_name_gen: &Arc<dyn WorkerNameGen + Send + Sync + 'static>,
+pub fn ensure_stateful_instance(
+    expr: &mut Expr,
+    worker_name_gen: &Arc<dyn WorkerNameGen + Send + Sync + 'static>,
 ) {
     let mut visitor = ExprVisitor::bottom_up(expr);
 

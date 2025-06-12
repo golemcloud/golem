@@ -624,14 +624,18 @@ mod desugar_tests {
 
     use super::*;
     use crate::compiler::desugar::desugar_tests::expectations::expected_condition_with_identifiers;
-    use crate::{ComponentDependencies, ComponentDependencyKey, Expr};
+    use crate::{
+        ComponentDependencies, ComponentDependency, ComponentDependencyKey, DefaultWorkerNameGen,
+        Expr, RibCompiler, RibCompilerConfig,
+    };
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
     use std::ops::Deref;
+    use std::sync::Arc;
     use uuid::Uuid;
 
-    fn get_component_dependency() -> ComponentDependencies {
+    fn get_test_compiler() -> RibCompiler {
         let metadata = vec![
             AnalysedExport::Function(AnalysedFunction {
                 name: "foo".to_string(),
@@ -651,14 +655,17 @@ mod desugar_tests {
             }),
         ];
 
-        let component_info = ComponentDependencyKey {
+        let component_dependency_key = ComponentDependencyKey {
             component_name: "foo".to_string(),
             component_id: Uuid::new_v4(),
             root_package_name: None,
             root_package_version: None,
         };
 
-        ComponentDependencies::from_raw(vec![(component_info, &metadata)]).unwrap()
+        RibCompiler::new(RibCompilerConfig::new(
+            vec![ComponentDependency::new(component_dependency_key, metadata)],
+            vec![],
+        ))
     }
 
     #[test]
@@ -671,19 +678,21 @@ mod desugar_tests {
           }
         "#;
 
-        let function_type_registry = get_component_dependency();
+        let test_compiler = get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_compiler.infer_types(expr).unwrap();
 
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
-
-        let desugared_expr = match internal::last_expr(&expr) {
+        let desugared_expr = match internal::last_expr(inferred_expr.get_expr()) {
             Expr::PatternMatch {
                 predicate,
                 match_arms,
                 ..
-            } => {
-                desugar_pattern_match(predicate.deref(), &match_arms, expr.inferred_type()).unwrap()
-            }
+            } => desugar_pattern_match(
+                predicate.deref(),
+                &match_arms,
+                inferred_expr.get_expr().inferred_type(),
+            )
+            .unwrap(),
             _ => panic!("Expected a match expression"),
         };
 
