@@ -103,30 +103,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 )
                             })?;
 
-                            let mut worker_name = instance_type.worker_name().as_deref().cloned();
-
-                            match &mut worker_name {
-                                Some(expr) => {
-                                    match expr {
-                                        Expr::GenerateWorkerName { variable_id, .. } => {
-                                            match lhs.as_ref() {
-                                                Expr::Identifier {
-                                                    variable_id: lhs_variable_id,
-                                                    ..
-                                                } => {
-                                                    *variable_id = Some(lhs_variable_id.clone());
-                                                }
-                                                _ => {
-                                                    // If lhs is not a generation expression, we can still pass the variable id
-                                                    // but it will not be used in the worker name
-                                                }
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                None => {}
-                            }
+                            let worker_name =
+                                get_generated_worker_name_with_variable_id(instance_type, lhs);
 
                             let new_call = Expr::call_worker_function(
                                 dynamic_parsed_function_name,
@@ -152,10 +130,13 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 TypeOrigin::NoOrigin,
                             );
 
+                            let worker_name =
+                                get_generated_worker_name_with_variable_id(instance_type, lhs);
+
                             let new_call_type =
                                 CallType::InstanceCreation(InstanceCreationType::Resource {
                                     component_info: Some(component.clone()),
-                                    worker_name: instance_type.worker_name(),
+                                    worker_name: worker_name.map(Box::new),
                                     resource_name: fully_qualified_resource_constructor.clone(),
                                 });
 
@@ -256,8 +237,10 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                         _ => {}
                                     };
 
-                                    let worker_name =
-                                        instance_type.worker_name().as_deref().cloned();
+                                    let worker_name = get_generated_worker_name_with_variable_id(
+                                        instance_type,
+                                        lhs,
+                                    );
 
                                     let new_call = Expr::call_worker_function(
                                         dynamic_parsed_function_name,
@@ -315,4 +298,23 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
     }
 
     Ok(())
+}
+
+fn get_generated_worker_name_with_variable_id(
+    instance_type: &InstanceType,
+    lhs: &Expr,
+) -> Option<Expr> {
+    let mut worker_name = instance_type.worker_name().as_deref().cloned();
+
+    if let Some(Expr::GenerateWorkerName { variable_id, .. }) = &mut worker_name {
+        if let Expr::Identifier {
+            variable_id: lhs_variable_id,
+            ..
+        } = lhs
+        {
+            *variable_id = Some(lhs_variable_id.clone());
+        }
+    }
+
+    worker_name
 }
