@@ -123,14 +123,14 @@ async fn test_rib_without_worker_param_2(deps: &EnvBasedTestDependencies) {
       let worker = instance();
       let result = worker.get-cart-contents();
 
-      for i in 1..=2 {
+      for i in 1:u32..=2:u32 {
         yield worker.add-item({
           product-id: "123",
           name: "item1",
           price: 10.0,
           quantity: i
         });
-      }
+      };
 
       worker.get-cart-contents()
     "#;
@@ -153,6 +153,11 @@ async fn test_rib_without_worker_param_2(deps: &EnvBasedTestDependencies) {
         result,
         RibResult::Val(ValueAndType::new(
             Value::List(vec![Value::Record(vec![
+                Value::String("123".to_string()),
+                Value::String("item1".to_string()),
+                Value::F32(10.0),
+                Value::U32(1),
+            ]),Value::Record(vec![
                 Value::String("123".to_string()),
                 Value::String("item1".to_string()),
                 Value::F32(10.0),

@@ -740,7 +740,7 @@ mod internal {
 
                 Ok(())
             }
-            _ => Err(internal_corrupted_state!("Failed to push values to sink")),
+            None => Ok(())
         }
     }
 
@@ -1107,7 +1107,7 @@ mod internal {
                     }
                     Ok(())
                 }
-                
+
                 _ => Err(internal_corrupted_state!(
                     "failed range selection"
                 )),
