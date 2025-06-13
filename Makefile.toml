@@ -827,7 +827,7 @@ RUST_LOG=info \
     GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN="5c832d93-ff85-4a8f-9803-513950fdfdb1" \
     GOLEM__RESOURCE_LIMITS__CONFIG__PORT=9090 \
     GOLEM__RESOURCE_LIMITS__CONFIG__ACCESS_TOKEN="5c832d93-ff85-4a8f-9803-513950fdfdb1" \
-    ../target/debug/golem-worker-executor &
+    ../target/debug/worker-executor &
 
 worker_executor_pid=$!
 popd || exit
