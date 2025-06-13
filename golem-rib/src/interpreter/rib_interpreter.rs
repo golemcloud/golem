@@ -370,7 +370,7 @@ mod internal {
     };
     use crate::type_inference::GetTypeHint;
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::{s8, str, u64};
+    use golem_wasm_ast::analysis::analysed_type::{s16, s32, s64, s8, str, u16, u32, u64, u8};
     use std::ops::Deref;
 
     pub(crate) struct NoopRibFunctionInvoke;
@@ -453,6 +453,37 @@ mod internal {
         Ok(())
     }
 
+    macro_rules! match_range_to_value {
+        (
+        $from_val:expr,
+        $to_val:expr,
+        $variant:ident,
+        $type_fn:expr,
+        $inclusive:expr,
+        $stack:expr
+    ) => {
+            match $to_val {
+                Value::$variant(num2) => {
+                    if $inclusive {
+                        let range_iter = (*$from_val..=*num2)
+                            .map(|i| ValueAndType::new(Value::$variant(i), $type_fn));
+                        $stack.push(RibInterpreterStackValue::Iterator(Box::new(range_iter)));
+                    } else {
+                        let range_iter = (*$from_val..*num2)
+                            .map(|i| ValueAndType::new(Value::$variant(i), $type_fn));
+                        $stack.push(RibInterpreterStackValue::Iterator(Box::new(range_iter)));
+                    }
+                }
+
+                _ => bail_corrupted_state!(concat!(
+                    "expected a field named 'to' to be of type ",
+                    stringify!($variant),
+                    ", but it was not"
+                )),
+            }
+        };
+    }
+
     pub(crate) fn run_to_iterator(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {
@@ -503,164 +534,35 @@ mod internal {
 
                 match from_value {
                     Value::S8(num1) => {
-                        match to_value {
-                            Value::S8(num2) => {
-                                if inclusive {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..=*num2).map(|i| ValueAndType::new(Value::S8(i), s8())),
-                                    )));
-                                } else {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..*num2).map(|i| ValueAndType::new(Value::S8(i), s8())),
-                                    )));
-                                }
-                            }
-
-                            _ => bail_corrupted_state!(
-                                "expected a field named 'to' to be of type S8, but it was not"
-                            ),
-                        }
+                        match_range_to_value!(num1, to_value, S8, s8(), inclusive, interpreter_stack);
                     }
 
                     Value::U8(num1) => {
-                        dbg!(to_value.clone());
-                        match to_value {
-                            Value::U8(num2) => {
-                                if inclusive {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..=*num2).map(|i| ValueAndType::new(Value::U8(i), u64())),
-                                    )));
-                                } else {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..*num2).map(|i| ValueAndType::new(Value::U8(i), u64())),
-                                    )));
-                                }
-                            }
-
-                            _ => bail_corrupted_state!(
-                                "expected a field named 'to' to be of type U8, but it was not"
-                            ),
-                        }
+                        match_range_to_value!(num1, to_value, U8, u8(), inclusive, interpreter_stack);
                     }
 
                     Value::S16(num1) => {
-                        match to_value {
-                            Value::S16(num2) => {
-                                if inclusive {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..=*num2).map(|i| ValueAndType::new(Value::S16(i), s8())),
-                                    )));
-                                } else {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..*num2).map(|i| ValueAndType::new(Value::S16(i), s8())),
-                                    )));
-                                }
-                            }
-
-                            _ => bail_corrupted_state!(
-                                "expected a field named 'to' to be of type S16, but it was not"
-                            ),
-                        }
+                        match_range_to_value!(num1, to_value, S16, s16(), inclusive, interpreter_stack);
                     }
 
                     Value::U16(num1) => {
-                        match to_value {
-                            Value::U16(num2) => {
-                                if inclusive {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..=*num2).map(|i| ValueAndType::new(Value::U16(i), u64())),
-                                    )));
-                                } else {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..*num2).map(|i| ValueAndType::new(Value::U16(i), u64())),
-                                    )));
-                                }
-                            }
-
-                            _ => bail_corrupted_state!(
-                                "expected a field named 'to' to be of type U16, but it was not"
-                            ),
-                        }
+                        match_range_to_value!(num1, to_value, U16, u16(), inclusive, interpreter_stack);
                     }
 
                     Value::S32(num1) => {
-                        match to_value {
-                            Value::S32(num2) => {
-                                if inclusive {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..=*num2).map(|i| ValueAndType::new(Value::S32(i), s8())),
-                                    )));
-                                } else {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..*num2).map(|i| ValueAndType::new(Value::S32(i), s8())),
-                                    )));
-                                }
-                            }
-
-                            _ => bail_corrupted_state!(
-                                "expected a field named 'to' to be of type S32, but it was not"
-                            ),
-                        }
+                        match_range_to_value!(num1, to_value, S32, s32(), inclusive, interpreter_stack);
                     }
 
                     Value::U32(num1) => {
-                        match to_value {
-                            Value::U32(num2) => {
-                                if inclusive {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..=*num2).map(|i| ValueAndType::new(Value::U32(i), u64())),
-                                    )));
-                                } else {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..*num2).map(|i| ValueAndType::new(Value::U32(i), u64())),
-                                    )));
-                                }
-                            }
-
-                            _ => bail_corrupted_state!(
-                                "expected a field named 'to' to be of type U32, but it was not"
-                            ),
-                        }
+                        match_range_to_value!(num1, to_value, U32, u32(), inclusive, interpreter_stack);
                     }
 
                     Value::S64(num1) => {
-                        match to_value {
-                            Value::S64(num2) => {
-                                if inclusive {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..=*num2).map(|i| ValueAndType::new(Value::S64(i), s8())),
-                                    )));
-                                } else {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..*num2).map(|i| ValueAndType::new(Value::S64(i), s8())),
-                                    )));
-                                }
-                            }
-
-                            _ => bail_corrupted_state!(
-                                "expected a field named 'to' to be of type S64, but it was not"
-                            ),
-                        }
+                        match_range_to_value!(num1, to_value, S64, s64(), inclusive, interpreter_stack);
                     }
 
                     Value::U64(num1) => {
-                        match to_value {
-                            Value::U64(num2) => {
-                                if inclusive {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..=*num2).map(|i| ValueAndType::new(Value::U64(i), u64())),
-                                    )));
-                                } else {
-                                    interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                        (*num1..*num2).map(|i| ValueAndType::new(Value::U64(i), u64())),
-                                    )));
-                                }
-                            }
-
-                            _ => bail_corrupted_state!(
-                                "expected a field named 'to' to be of type U64, but it was not"
-                            ),
-                        }
+                        match_range_to_value!(num1, to_value, U64, u64(), inclusive, interpreter_stack);
                     }
 
                     _ => bail_corrupted_state!(
