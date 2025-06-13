@@ -1576,6 +1576,81 @@ async fn rdbms_mysql_select1(
     .await;
 }
 
+#[test]
+#[tracing::instrument]
+async fn rdbms_mysql_transaction_repo_create_table_failure(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    mysql: &DockerMysqlRdb,
+    _tracing: &Tracing,
+) {
+    let db_address = mysql.public_connection_string();
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+    let component_id = executor.component("rdbms-service").store().await;
+
+    let worker_ids = start_workers::<MysqlType>(&executor, &component_id, &db_address, "", 1).await;
+
+    let worker_id = worker_ids[0].clone();
+
+    let create_read_user_test = RdbmsTest::new(
+        vec![
+            StatementTest::execute_test(
+                "CREATE USER 'global_reader'@'%' IDENTIFIED BY 'SomeSecurePass!';".to_string(),
+                vec![],
+                None,
+            ),
+            StatementTest::execute_test(
+                "GRANT SELECT ON *.* TO 'global_reader'@'%';".to_string(),
+                vec![],
+                None,
+            ),
+            StatementTest::execute_test("FLUSH PRIVILEGES;".to_string(), vec![], None),
+        ],
+        None,
+    );
+
+    let result1 = execute_worker_test::<MysqlType>(
+        &executor,
+        &worker_id,
+        &IdempotencyKey::fresh(),
+        create_read_user_test.clone(),
+    )
+    .await;
+
+    check_test_result(&worker_id, result1.clone(), create_read_user_test.clone());
+
+    let db_address = mysql.public_connection_string_with_user("global_reader", "SomeSecurePass!");
+
+    let worker_ids = start_workers::<MysqlType>(&executor, &component_id, &db_address, "", 1).await;
+
+    let worker_id = worker_ids[0].clone();
+
+    let test = RdbmsTest::new(
+        vec![StatementTest::execute_test(
+            "SELECT 1".to_string(),
+            vec![],
+            Some(0),
+        )],
+        None,
+    );
+
+    let result1 = execute_worker_test::<MysqlType>(
+        &executor,
+        &worker_id,
+        &IdempotencyKey::fresh(),
+        test.clone(),
+    )
+    .await;
+
+    let error = get_test_result_error(result1);
+
+    // Error::Other("There was a problem to create 'golem_transactions' table, see: https://learn.golem.cloud/common-language-guide/rdbms for more details (error: 1142 (42000): CREATE command denied to user 'global_reader'@'192.168.65.1' for table 'golem_transactions')")
+    check!(error.contains("There was a problem to create 'golem_transactions' table"));
+
+    drop(executor);
+}
+
 async fn rdbms_component_test<T: RdbmsType>(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1735,6 +1810,23 @@ fn check_test_result(
             check!(false, "result {fn_name} for worker {worker_id} is not ok");
         }
     }
+}
+
+fn get_test_result_error(result: Result<Option<ValueAndType>, Error>) -> String {
+    check!(result.is_ok());
+
+    let response = result
+        .unwrap()
+        .map(|response| serde_json::to_value(response).unwrap())
+        .and_then(|response| response.get("value").cloned());
+
+    let err_response = response
+        .and_then(|v| v.get("err").cloned())
+        .and_then(|v| v.as_str().map(|v| v.to_string()));
+
+    check!(err_response.is_some());
+
+    err_response.unwrap()
 }
 
 async fn start_workers<T: RdbmsType>(

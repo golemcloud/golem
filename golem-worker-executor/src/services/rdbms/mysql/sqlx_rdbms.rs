@@ -27,6 +27,7 @@ use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use futures_util::stream::BoxStream;
+use sqlx::mysql::MySqlDatabaseError;
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -78,11 +79,16 @@ impl GolemTransactionRepo<sqlx::MySql> for MysqlType {
             "#,
         );
         let _ = query.execute(executor).await.map_err(|e| {
-            Error::other_response_failure(format!(
-                "There was a problem to create 'golem_transactions' table (error: {})",
-                e
-            ))
-        })?; // TODO better error message
+            match e {
+                sqlx::Error::Database(e) if e.downcast_ref::<MySqlDatabaseError>().number() == 1142 => {
+                    Error::other_response_failure(format!(
+                        "There was a problem to create 'golem_transactions' table, see: https://learn.golem.cloud/common-language-guide/rdbms for more details (error: {})",
+                        e
+                    ))
+                }
+                _ => Error::other_response_failure(e)
+            }
+        })?;
         Ok(())
     }
 
