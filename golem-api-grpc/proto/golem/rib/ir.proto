@@ -61,7 +61,9 @@ message RibIR {
 
 message Length {}
 
-message GenerateWorkerName {}
+message GenerateWorkerName {
+  uint32 instance_count = 1;
+}
 
 message SelectIndexV1{}
 

@@ -25,6 +25,7 @@ pub enum VariableId {
     MatchIdentifier(MatchIdentifier),
     ListComprehension(ListComprehensionIdentifier),
     ListReduce(ListAggregationIdentifier),
+    InstanceVar(u32),
 }
 
 impl VariableId {
@@ -54,6 +55,7 @@ impl VariableId {
             VariableId::MatchIdentifier(m) => m.name.clone(),
             VariableId::ListComprehension(l) => l.name.clone(),
             VariableId::ListReduce(r) => r.name.clone(),
+            VariableId::InstanceVar(id) => format!("instance_var_{}", id),
         }
     }
 
@@ -64,6 +66,7 @@ impl VariableId {
             VariableId::MatchIdentifier(_) => false,
             VariableId::ListComprehension(_) => false,
             VariableId::ListReduce(_) => false,
+            VariableId::InstanceVar(_) => false,
         }
     }
 
@@ -74,6 +77,7 @@ impl VariableId {
             VariableId::MatchIdentifier(_) => false,
             VariableId::ListComprehension(_) => false,
             VariableId::ListReduce(_) => false,
+            VariableId::InstanceVar(_) => false,
         }
     }
 
@@ -84,6 +88,7 @@ impl VariableId {
             VariableId::MatchIdentifier(_) => true,
             VariableId::ListComprehension(_) => false,
             VariableId::ListReduce(_) => false,
+            VariableId::InstanceVar(_) => false,
         }
     }
 
@@ -115,6 +120,10 @@ impl VariableId {
             VariableId::MatchIdentifier(m) => VariableId::MatchIdentifier(m.clone()),
             VariableId::ListComprehension(l) => VariableId::ListComprehension(l.clone()),
             VariableId::ListReduce(l) => VariableId::ListReduce(l.clone()),
+            VariableId::InstanceVar(id) => {
+                *id += 1;
+                VariableId::InstanceVar(*id)
+            }
         }
     }
 }
@@ -158,6 +167,7 @@ impl Display for VariableId {
             VariableId::MatchIdentifier(m) => write!(f, "{}", m.name),
             VariableId::ListComprehension(l) => write!(f, "{}", l.name),
             VariableId::ListReduce(r) => write!(f, "{}", r.name),
+            VariableId::InstanceVar(id) => write!(f, "instance_var_{}", id),
         }
     }
 }
@@ -202,6 +212,15 @@ mod protobuf {
                     variable_id: Some(
                         golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
                             golem_api_grpc::proto::golem::rib::Global { name: m.name },
+                        ),
+                    ),
+                },
+                VariableId::InstanceVar(id) => ProtoVariableId {
+                    variable_id: Some(
+                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
+                            golem_api_grpc::proto::golem::rib::Global {
+                                name: format!("instance_var_{}", id),
+                            },
                         ),
                     ),
                 },

@@ -71,8 +71,10 @@ pub enum RibIR {
     PushToSink,
     SinkToList,
     Length,
-    GenerateWorkerName,
+    GenerateWorkerName(InstanceCount),
 }
+
+type InstanceCount = u32;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum WorkerNamePresence {
@@ -324,7 +326,9 @@ mod protobuf {
                 .ok_or_else(|| "Missing instruction".to_string())?;
 
             match instruction {
-                Instruction::GenerateWorkerName(_) => Ok(RibIR::GenerateWorkerName),
+                Instruction::GenerateWorkerName(generate_worker_name) => Ok(
+                    RibIR::GenerateWorkerName(generate_worker_name.instance_count),
+                ),
                 Instruction::PushLit(value) => {
                     let value: ValueAndType = value.try_into()?;
                     Ok(RibIR::PushLit(value))
@@ -552,8 +556,8 @@ mod protobuf {
 
         fn try_from(value: RibIR) -> Result<Self, Self::Error> {
             let instruction = match value {
-                RibIR::GenerateWorkerName => Instruction::GenerateWorkerName(
-                    golem_api_grpc::proto::golem::rib::GenerateWorkerName {},
+                RibIR::GenerateWorkerName(instance_count) => Instruction::GenerateWorkerName(
+                    golem_api_grpc::proto::golem::rib::GenerateWorkerName { instance_count },
                 ),
                 RibIR::PushLit(value) => {
                     Instruction::PushLit(golem_wasm_rpc::protobuf::TypeAnnotatedValue {

@@ -23,8 +23,6 @@ use crate::{
     internal_corrupted_state, DefaultWorkerNameGenerator, GenerateWorkerName, RibByteCode,
     RibComponentFunctionInvoke, RibIR, RibInput, RibResult,
 };
-use golem_wasm_ast::analysis::analysed_type::str;
-use golem_wasm_rpc::{Value, ValueAndType};
 use std::sync::Arc;
 
 pub struct Interpreter {
@@ -83,9 +81,13 @@ impl Interpreter {
 
         while let Some(instruction) = byte_code_cursor.get_instruction() {
             match instruction {
-                RibIR::GenerateWorkerName => {
-                    let worker_name = self.generate_worker_name.generate_worker_name();
-                    stack.push_val(ValueAndType::new(Value::String(worker_name), str()));
+                RibIR::GenerateWorkerName(instance_count) => {
+                    internal::run_generate_worker_name(
+                        instance_count,
+                        self,
+                        &mut stack,
+                        &mut interpreter_env,
+                    )?;
                 }
 
                 RibIR::PushLit(val) => {
@@ -351,9 +353,9 @@ mod internal {
     use crate::{
         bail_corrupted_state, internal_corrupted_state, AnalysedTypeWithUnit, CoercedNumericValue,
         ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName,
-        FunctionReferenceType, InstructionId, ParsedFunctionName, ParsedFunctionReference,
-        ParsedFunctionSite, RibComponentFunctionInvoke, RibFunctionInvokeResult,
-        RibInterpreterResult, TypeHint, VariableId, WorkerNamePresence,
+        FunctionReferenceType, InstructionId, Interpreter, ParsedFunctionName,
+        ParsedFunctionReference, ParsedFunctionSite, RibComponentFunctionInvoke,
+        RibFunctionInvokeResult, RibInterpreterResult, TypeHint, VariableId, WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
@@ -368,7 +370,7 @@ mod internal {
     };
     use crate::type_inference::GetTypeHint;
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::u64;
+    use golem_wasm_ast::analysis::analysed_type::{str, u64};
     use std::ops::Deref;
 
     pub(crate) struct NoopRibFunctionInvoke;
@@ -714,6 +716,38 @@ mod internal {
             }
             RibInterpreterStackValue::Sink(_, _) => {
                 bail_corrupted_state!("internal error: unable to assign a sink to a variable")
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn run_generate_worker_name(
+        instance_count: u32,
+        interpreter: &mut Interpreter,
+        interpreter_stack: &mut InterpreterStack,
+        interpreter_env: &mut InterpreterEnv,
+    ) -> RibInterpreterResult<()> {
+        let env_key = EnvironmentKey::from(VariableId::InstanceVar(instance_count));
+
+        let worker_id = interpreter_env.lookup(&env_key);
+
+        match worker_id {
+            Some(worker_id) => {
+                let value_and_type = worker_id.get_val().ok_or_else(|| {
+                    internal_corrupted_state!(
+                        "expected a worker name to be present in the environment, but it was not found"
+                    )
+                })?;
+
+                interpreter_stack.push_val(value_and_type);
+            }
+
+            None => {
+                let worker_name = interpreter.generate_worker_name.generate_worker_name();
+
+                interpreter_stack
+                    .push_val(ValueAndType::new(Value::String(worker_name.clone()), str()));
             }
         }
 

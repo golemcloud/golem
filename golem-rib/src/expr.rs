@@ -312,6 +312,7 @@ pub enum Expr {
         inferred_type: InferredType,
         type_annotation: Option<TypeName>,
         source_span: SourceSpan,
+        instance_count: u32,
     },
 }
 
@@ -500,11 +501,12 @@ impl Expr {
         }
     }
 
-    pub fn generate_worker_name() -> Self {
+    pub fn generate_worker_name(instance_count: u32) -> Self {
         Expr::GenerateWorkerName {
             inferred_type: InferredType::string(),
             type_annotation: None,
             source_span: SourceSpan::default(),
+            instance_count,
         }
     }
 
@@ -2210,8 +2212,8 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             ) => Expr::throw(message),
 
             golem_api_grpc::proto::golem::rib::expr::Expr::GenerateWorkerName(
-                golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr {},
-            ) => Expr::generate_worker_name(),
+                golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr { instance_count },
+            ) => Expr::generate_worker_name(instance_count),
 
             golem_api_grpc::proto::golem::rib::expr::Expr::And(expr) => {
                 let left = expr.left.ok_or("Missing left expr")?;
@@ -2473,9 +2475,11 @@ mod protobuf {
     impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
         fn from(value: Expr) -> Self {
             let expr = match value {
-                Expr::GenerateWorkerName { .. } => Some(
+                Expr::GenerateWorkerName { instance_count, .. } => Some(
                     golem_api_grpc::proto::golem::rib::expr::Expr::GenerateWorkerName(
-                        golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr {},
+                        golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr {
+                            instance_count,
+                        },
                     ),
                 ),
                 Expr::Let {

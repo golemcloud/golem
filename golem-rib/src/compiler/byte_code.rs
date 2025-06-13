@@ -174,8 +174,8 @@ mod internal {
                 instructions.push(RibIR::Deconstruct);
             }
 
-            Expr::GenerateWorkerName { .. } => {
-                instructions.push(RibIR::GenerateWorkerName);
+            Expr::GenerateWorkerName { instance_count, .. } => {
+                instructions.push(RibIR::GenerateWorkerName(*instance_count));
             }
 
             Expr::Length { expr, .. } => {

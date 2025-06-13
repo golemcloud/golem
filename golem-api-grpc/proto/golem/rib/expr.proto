@@ -119,7 +119,9 @@ message ThrowExpr {
   string message = 1;
 }
 
-message GenerateWorkerNameExpr{}
+message GenerateWorkerNameExpr{
+  uint32 instance_count = 1;
+}
 
 message TupleExpr {
   repeated Expr exprs = 1;
