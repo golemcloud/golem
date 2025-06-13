@@ -28,6 +28,23 @@ pub enum VariableId {
 }
 
 impl VariableId {
+    pub fn as_instance_variable(&self) -> VariableId {
+        let variable_string = match self {
+            VariableId::Global(name) => name.clone(),
+            VariableId::Local(name, identifier) => {
+                if let Some(id) = identifier {
+                    format!("{}-{}", name, id.0)
+                } else {
+                    name.clone()
+                }
+            }
+            VariableId::MatchIdentifier(m) => format!("{}-{}", m.name, m.match_arm_index),
+            VariableId::ListComprehension(l) => l.name.clone(),
+            VariableId::ListReduce(r) => r.name.clone(),
+        };
+
+        VariableId::global(format!("__instance_{}", variable_string))
+    }
     pub fn list_comprehension_identifier(name: impl AsRef<str>) -> VariableId {
         VariableId::ListComprehension(ListComprehensionIdentifier {
             name: name.as_ref().to_string(),

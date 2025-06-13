@@ -732,26 +732,14 @@ mod internal {
             None => {
                 let worker_name = interpreter.generate_worker_name.generate_worker_name();
 
-                let instance_variable = format!("__instance-{:?}", variable_id);
-
-                let env_key = EnvironmentKey::from(VariableId::global(instance_variable));
-
-                interpreter_env.insert(
-                    env_key,
-                    RibInterpreterStackValue::Val(ValueAndType::new(
-                        Value::String(worker_name.clone()),
-                        str(),
-                    )),
-                );
-
                 interpreter_stack
                     .push_val(ValueAndType::new(Value::String(worker_name.clone()), str()));
             }
 
             Some(variable_id) => {
-                let instance_variable = format!("__instance-{:?}", variable_id);
+                let instance_variable = variable_id.as_instance_variable();
 
-                let env_key = EnvironmentKey::from(VariableId::global(instance_variable));
+                let env_key = EnvironmentKey::from(instance_variable);
 
                 let worker_id = interpreter_env.lookup(&env_key);
 

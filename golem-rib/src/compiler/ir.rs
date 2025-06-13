@@ -74,8 +74,6 @@ pub enum RibIR {
     GenerateWorkerName(Option<VariableId>),
 }
 
-type InstanceCount = u32;
-
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum WorkerNamePresence {
     Present,
