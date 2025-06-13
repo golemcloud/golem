@@ -523,6 +523,7 @@ mod internal {
                     }
 
                     Value::U8(num1) => {
+                        dbg!(to_value.clone());
                         match to_value {
                             Value::U8(num2) => {
                                 if inclusive {
