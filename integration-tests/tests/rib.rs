@@ -152,17 +152,20 @@ async fn test_rib_without_worker_param_2(deps: &EnvBasedTestDependencies) {
     assert_eq!(
         result,
         RibResult::Val(ValueAndType::new(
-            Value::List(vec![Value::Record(vec![
-                Value::String("123".to_string()),
-                Value::String("item1".to_string()),
-                Value::F32(10.0),
-                Value::U32(1),
-            ]),Value::Record(vec![
-                Value::String("123".to_string()),
-                Value::String("item1".to_string()),
-                Value::F32(10.0),
-                Value::U32(2),
-            ]),]),
+            Value::List(vec![
+                Value::Record(vec![
+                    Value::String("123".to_string()),
+                    Value::String("item1".to_string()),
+                    Value::F32(10.0),
+                    Value::U32(1),
+                ]),
+                Value::Record(vec![
+                    Value::String("123".to_string()),
+                    Value::String("item1".to_string()),
+                    Value::F32(10.0),
+                    Value::U32(2),
+                ]),
+            ]),
             list(record(vec![
                 field("product-id", str()),
                 field("name", str()),
@@ -259,10 +262,10 @@ async fn test_rib_without_worker_param_resource_2(deps: &EnvBasedTestDependencie
     let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.clone()));
 
     let rib = r#"
-      let resource = instance("foo");
+      let resource = instance("foo3");
       let cart = resource.cart("foo");
 
-      for i in 1..=2 {
+      for i in 1:u32..=2:u32 {
          yield cart.add-item({
           product-id: "123",
           name: "item1",
@@ -291,17 +294,20 @@ async fn test_rib_without_worker_param_resource_2(deps: &EnvBasedTestDependencie
     assert_eq!(
         result,
         RibResult::Val(ValueAndType::new(
-            Value::List(vec![Value::Record(vec![
-                Value::String("123".to_string()),
-                Value::String("item1".to_string()),
-                Value::F32(10.0),
-                Value::U32(1),
-            ]),Value::Record(vec![
-                Value::String("123".to_string()),
-                Value::String("item1".to_string()),
-                Value::F32(10.0),
-                Value::U32(2),
-            ])]),
+            Value::List(vec![
+                Value::Record(vec![
+                    Value::String("123".to_string()),
+                    Value::String("item1".to_string()),
+                    Value::F32(10.0),
+                    Value::U32(1),
+                ]),
+                Value::Record(vec![
+                    Value::String("123".to_string()),
+                    Value::String("item1".to_string()),
+                    Value::F32(10.0),
+                    Value::U32(2),
+                ])
+            ]),
             list(record(vec![
                 field("product-id", str()),
                 field("name", str()),
@@ -333,7 +339,7 @@ async fn test_rib_with_worker_params(deps: &EnvBasedTestDependencies) {
     let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.clone()));
 
     let rib = r#"
-      let worker = instance("foo");
+      let worker = instance("foo1");
       let result = worker.get-cart-contents();
       worker.add-item({
         product-id: "123",
@@ -398,7 +404,7 @@ async fn test_rib_with_worker_param_resource(deps: &EnvBasedTestDependencies) {
     let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.clone()));
 
     let rib = r#"
-      let resource = instance("foo");
+      let resource = instance("foo2");
       let cart = resource.cart("foo");
       cart.add-item({
         product-id: "123",
@@ -441,9 +447,6 @@ async fn test_rib_with_worker_param_resource(deps: &EnvBasedTestDependencies) {
         ))
     );
 }
-
-
-
 
 struct TestRibFunctionInvoke {
     dependencies: EnvBasedTestDependencies,
