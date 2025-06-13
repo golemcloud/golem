@@ -1129,13 +1129,20 @@ where
         db_transaction: &SqlxDbTransaction<T, DB>,
     ) -> Result<(), Error> {
         let id = db_transaction.transaction_id();
-        let _res = <T as GolemTransactionRepo<DB>>::update_transaction_status(
+        let updated = <T as GolemTransactionRepo<DB>>::update_transaction_status(
             &id,
             RdbmsTransactionStatus::Committed,
             db_transaction.tx_connection.clone(),
         )
         .await?;
-        Ok(())
+
+        if updated {
+            Ok(())
+        } else {
+            Err(Error::other_response_failure(
+                "Pre-commit transaction status not updated, transaction not found",
+            ))
+        }
     }
 
     async fn pre_rollback_transaction(
@@ -1143,13 +1150,20 @@ where
         db_transaction: &SqlxDbTransaction<T, DB>,
     ) -> Result<(), Error> {
         let id = db_transaction.transaction_id();
-        let _res = <T as GolemTransactionRepo<DB>>::update_transaction_status(
+        let updated = <T as GolemTransactionRepo<DB>>::update_transaction_status(
             &id,
             RdbmsTransactionStatus::RolledBack,
             pool,
         )
         .await?;
-        Ok(())
+
+        if updated {
+            Ok(())
+        } else {
+            Err(Error::other_response_failure(
+                "Pre-rollback transaction status not updated, transaction not found",
+            ))
+        }
     }
 
     async fn get_transaction_status(
