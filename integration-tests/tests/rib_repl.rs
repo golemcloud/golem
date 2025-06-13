@@ -38,6 +38,28 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
+    test_repl_invoking_functions(deps, Some("worker-repl-simple-test")).await;
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_rib_repl_without_worker_param(deps: &EnvBasedTestDependencies) {
+    test_repl_invoking_functions(deps, None).await;
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
+    test_repl_invoking_resource_methods(deps, Some("worker-repl-resource-test")).await;
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_rib_repl_with_resource_without_param(deps: &EnvBasedTestDependencies) {
+    test_repl_invoking_resource_methods(deps, None).await;
+}
+
+async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
         history_file: None,
         dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
@@ -53,9 +75,10 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
     .await
     .expect("Failed to bootstrap REPL");
 
-    let rib1 = r#"
-      let worker = instance("my_worker")
-    "#;
+    let rib1 = match worker_name {
+        Some(name) => format!(r#"let worker = instance("{}")"#, name),
+        None => r#"let worker = instance()"#.to_string(),
+    };
 
     let rib2 = r#"
       let result = worker.add(1, 2)
@@ -79,7 +102,7 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
      "#;
 
     let result = rib_repl
-        .execute(rib1)
+        .execute(&rib1)
         .await
         .expect("Failed to process command");
 
@@ -141,9 +164,10 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
     );
 }
 
-#[test]
-#[tracing::instrument]
-async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
+async fn test_repl_invoking_resource_methods(
+    deps: &EnvBasedTestDependencies,
+    worker_name: Option<&str>,
+) {
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
         history_file: None,
         dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
@@ -161,9 +185,10 @@ async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
     .await
     .expect("Failed to bootstrap REPL");
 
-    let rib1 = r#"
-      let worker = instance("my_worker")
-    "#;
+    let rib1 = match worker_name {
+        Some(name) => format!(r#"let worker = instance("{}")"#, name),
+        None => r#"let worker = instance()"#.to_string(),
+    };
 
     let rib2 = r#"
       let resource = worker.cart("foo")
@@ -187,7 +212,7 @@ async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
      "#;
 
     let result = rib_repl
-        .execute(rib1)
+        .execute(&rib1)
         .await
         .expect("Failed to process command");
 
@@ -249,7 +274,7 @@ async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
                 field("quantity", u32()),
             ],)),
         )))
-    );
+    )
 }
 
 struct TestRibReplDependencyManager {
