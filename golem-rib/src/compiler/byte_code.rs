@@ -1012,7 +1012,7 @@ mod compiler_tests {
 
     use super::*;
     use crate::{ArmPattern, InferredType, MatchArm, RibCompiler, VariableId};
-    use golem_wasm_ast::analysis::analysed_type::{list, s32, str, u64};
+    use golem_wasm_ast::analysis::analysed_type::{list, s32, str};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 

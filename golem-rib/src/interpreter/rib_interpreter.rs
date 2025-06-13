@@ -363,10 +363,10 @@ mod internal {
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
     use crate::interpreter::rib_runtime_error::{
-        cast_error, cast_error_custom, empty_stack, exhausted_iterator, field_not_found,
-        function_invoke_fail, index_out_of_bound, infinite_computation, input_not_found,
-        instruction_jump_error, insufficient_stack_items, invalid_type_with_stack_value,
-        type_mismatch_with_type_hint, type_mismatch_with_value, RibRuntimeError,
+        cast_error_custom, empty_stack, exhausted_iterator, field_not_found, function_invoke_fail,
+        index_out_of_bound, infinite_computation, input_not_found, instruction_jump_error,
+        insufficient_stack_items, invalid_type_with_stack_value, type_mismatch_with_type_hint,
+        RibRuntimeError,
     };
     use crate::type_inference::GetTypeHint;
     use async_trait::async_trait;
@@ -474,10 +474,11 @@ mod internal {
                 Ok(())
             }
             (Value::Record(fields), AnalysedType::Record(_)) => {
-                let from_value = fields.get(0).ok_or_else(|| {
-                    internal_corrupted_state!("expected a field named 'from' to be present in the record")
+                let from_value = fields.first().ok_or_else(|| {
+                    internal_corrupted_state!(
+                        "expected a field named 'from' to be present in the record"
+                    )
                 })?;
-
 
                 let to_value = fields.get(1).ok_or_else(|| {
                     infinite_computation(
@@ -487,8 +488,8 @@ mod internal {
 
                 let inclusive_value = fields.get(2).ok_or_else(|| {
                     internal_corrupted_state!(
-                            "expected a field named 'inclusive' to be present in the record"
-                        )
+                        "expected a field named 'inclusive' to be present in the record"
+                    )
                 })?;
 
                 let inclusive = match inclusive_value {
@@ -499,7 +500,6 @@ mod internal {
                         )
                     }
                 };
-
 
                 match from_value {
                     Value::S8(num1) => {
@@ -740,7 +740,7 @@ mod internal {
 
                 Ok(())
             }
-            None => Ok(())
+            None => Ok(()),
         }
     }
 
@@ -1021,9 +1021,7 @@ mod internal {
         let result = left.evaluate_math_op(&right, compare_fn)?;
         let numerical_type = result
             .cast_to(target_numerical_type)
-            .ok_or_else(|| {
-                cast_error_custom(result, target_numerical_type.get_type_hint())
-            })?;
+            .ok_or_else(|| cast_error_custom(result, target_numerical_type.get_type_hint()))?;
 
         interpreter_stack.push_val(numerical_type);
 
@@ -1100,17 +1098,12 @@ mod internal {
 
                         interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
                     } else {
-                        return Err(index_out_of_bound(
-                            index as usize,
-                            items.len(),
-                        ));
+                        return Err(index_out_of_bound(index as usize, items.len()));
                     }
                     Ok(())
                 }
 
-                _ => Err(internal_corrupted_state!(
-                    "failed range selection"
-                )),
+                _ => Err(internal_corrupted_state!("failed range selection")),
             },
             RibInterpreterStackValue::Val(ValueAndType {
                 value: Value::Tuple(items),
@@ -3374,10 +3367,7 @@ mod tests {
                 Value::S32(1),
                 Value::Bool(false), // non inclusive
             ]),
-            record(vec![
-                field("from", s32()),
-                field("inclusive", bool()),
-            ]),
+            record(vec![field("from", s32()), field("inclusive", bool())]),
         );
 
         assert_eq!(result.get_val().unwrap(), expected);

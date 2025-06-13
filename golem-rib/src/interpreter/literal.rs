@@ -137,18 +137,36 @@ impl CoercedNumericValue {
                 let num = *number;
 
                 match analysed_type {
-                    AnalysedType::U8(_) if num <= u8::MAX as u64 => Some((num as u8).into_value_and_type()),
-                    AnalysedType::U16(_) if num <= u16::MAX as u64 => Some((num as u16).into_value_and_type()),
-                    AnalysedType::U32(_) if num <= u32::MAX as u64 => Some((num as u32).into_value_and_type()),
+                    AnalysedType::U8(_) if num <= u8::MAX as u64 => {
+                        Some((num as u8).into_value_and_type())
+                    }
+                    AnalysedType::U16(_) if num <= u16::MAX as u64 => {
+                        Some((num as u16).into_value_and_type())
+                    }
+                    AnalysedType::U32(_) if num <= u32::MAX as u64 => {
+                        Some((num as u32).into_value_and_type())
+                    }
                     AnalysedType::U64(_) => Some(num.into_value_and_type()),
 
-                    AnalysedType::S8(_) if num <= i8::MAX as u64 => Some((num as i8).into_value_and_type()),
-                    AnalysedType::S16(_) if num <= i16::MAX as u64 => Some((num as i16).into_value_and_type()),
-                    AnalysedType::S32(_) if num <= i32::MAX as u64 => Some((num as i32).into_value_and_type()),
-                    AnalysedType::S64(_) if num <= i64::MAX as u64 => Some((num as i64).into_value_and_type()),
+                    AnalysedType::S8(_) if num <= i8::MAX as u64 => {
+                        Some((num as i8).into_value_and_type())
+                    }
+                    AnalysedType::S16(_) if num <= i16::MAX as u64 => {
+                        Some((num as i16).into_value_and_type())
+                    }
+                    AnalysedType::S32(_) if num <= i32::MAX as u64 => {
+                        Some((num as i32).into_value_and_type())
+                    }
+                    AnalysedType::S64(_) if num <= i64::MAX as u64 => {
+                        Some((num as i64).into_value_and_type())
+                    }
 
-                    AnalysedType::F32(_) if num <= f32::MAX as u64 => Some((num as f32).into_value_and_type()),
-                    AnalysedType::F64(_) if num <= f64::MAX as u64 => Some((num as f64).into_value_and_type()),
+                    AnalysedType::F32(_) if num <= f32::MAX as u64 => {
+                        Some((num as f32).into_value_and_type())
+                    }
+                    AnalysedType::F64(_) if num <= f64::MAX as u64 => {
+                        Some((num as f64).into_value_and_type())
+                    }
 
                     _ => None,
                 }
@@ -158,19 +176,35 @@ impl CoercedNumericValue {
                 let num = *number;
 
                 match analysed_type {
-                    AnalysedType::S8(_) if num >= i8::MIN as i64 && num <= i8::MAX as i64 => Some((num as i8).into_value_and_type()),
-                    AnalysedType::S16(_) if num >= i16::MIN as i64 && num <= i16::MAX as i64 => Some((num as i16).into_value_and_type()),
-                    AnalysedType::S32(_) if num >= i32::MIN as i64 && num <= i32::MAX as i64 => Some((num as i32).into_value_and_type()),
+                    AnalysedType::S8(_) if num >= i8::MIN as i64 && num <= i8::MAX as i64 => {
+                        Some((num as i8).into_value_and_type())
+                    }
+                    AnalysedType::S16(_) if num >= i16::MIN as i64 && num <= i16::MAX as i64 => {
+                        Some((num as i16).into_value_and_type())
+                    }
+                    AnalysedType::S32(_) if num >= i32::MIN as i64 && num <= i32::MAX as i64 => {
+                        Some((num as i32).into_value_and_type())
+                    }
                     AnalysedType::S64(_) => Some(num.into_value_and_type()),
 
                     // Allow unsigned conversion only if non-negative
-                    AnalysedType::U8(_) if num >= 0 && num <= u8::MAX as i64 => Some((num as u8).into_value_and_type()),
-                    AnalysedType::U16(_) if num >= 0 && num <= u16::MAX as i64 => Some((num as u16).into_value_and_type()),
-                    AnalysedType::U32(_) if num >= 0 && num <= u32::MAX as i64 => Some((num as u32).into_value_and_type()),
+                    AnalysedType::U8(_) if num >= 0 && num <= u8::MAX as i64 => {
+                        Some((num as u8).into_value_and_type())
+                    }
+                    AnalysedType::U16(_) if num >= 0 && num <= u16::MAX as i64 => {
+                        Some((num as u16).into_value_and_type())
+                    }
+                    AnalysedType::U32(_) if num >= 0 && num <= u32::MAX as i64 => {
+                        Some((num as u32).into_value_and_type())
+                    }
                     AnalysedType::U64(_) if num >= 0 => Some((num as u64).into_value_and_type()),
 
-                    AnalysedType::F32(_) if num >= f32::MIN as i64 && num <= f32::MAX as i64 => Some((num as f32).into_value_and_type()),
-                    AnalysedType::F64(_) if num >= f64::MIN as i64 && num <= f64::MAX as i64 => Some((num as f64).into_value_and_type()),
+                    AnalysedType::F32(_) if num >= f32::MIN as i64 && num <= f32::MAX as i64 => {
+                        Some((num as f32).into_value_and_type())
+                    }
+                    AnalysedType::F64(_) if num >= f64::MIN as i64 && num <= f64::MAX as i64 => {
+                        Some((num as f64).into_value_and_type())
+                    }
 
                     _ => None,
                 }
@@ -182,15 +216,27 @@ impl CoercedNumericValue {
                 match analysed_type {
                     AnalysedType::F64(_) => Some(num.into_value_and_type()),
 
-                    AnalysedType::F32(_) if num.is_finite() && num >= f32::MIN as f64 && num <= f32::MAX as f64 => {
+                    AnalysedType::F32(_)
+                        if num.is_finite() && num >= f32::MIN as f64 && num <= f32::MAX as f64 =>
+                    {
                         Some((num as f32).into_value_and_type())
                     }
 
-                    AnalysedType::U64(_) if num.is_finite() && num >= 0.0 && num <= u64::MAX as f64 && num.fract() == 0.0 => {
+                    AnalysedType::U64(_)
+                        if num.is_finite()
+                            && num >= 0.0
+                            && num <= u64::MAX as f64
+                            && num.fract() == 0.0 =>
+                    {
                         Some((num as u64).into_value_and_type())
                     }
 
-                    AnalysedType::S64(_) if num.is_finite() && num >= i64::MIN as f64 && num <= i64::MAX as f64 && num.fract() == 0.0 => {
+                    AnalysedType::S64(_)
+                        if num.is_finite()
+                            && num >= i64::MIN as f64
+                            && num <= i64::MAX as f64
+                            && num.fract() == 0.0 =>
+                    {
                         Some((num as i64).into_value_and_type())
                     }
 
@@ -199,7 +245,6 @@ impl CoercedNumericValue {
             }
         }
     }
-
 }
 
 macro_rules! impl_ops {

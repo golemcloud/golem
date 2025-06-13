@@ -14,7 +14,7 @@
 
 use crate::{GetTypeHint, InferredType, InstanceType, TypeInternal};
 use bincode::{Decode, Encode};
-use golem_wasm_ast::analysis::analysed_type::{bool, field, option, record, str, tuple};
+use golem_wasm_ast::analysis::analysed_type::{bool, field, record, str, tuple};
 use golem_wasm_ast::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,
     TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption,
@@ -103,10 +103,9 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                         field("inclusive", bool()),
                     ]),
 
-                    (from_type, None) => record(vec![
-                        field("from", from_type),
-                        field("inclusive", bool()),
-                    ]),
+                    (from_type, None) => {
+                        record(vec![field("from", from_type), field("inclusive", bool())])
+                    }
                 };
                 Ok(AnalysedTypeWithUnit::analysed_type(analysed_type))
             }

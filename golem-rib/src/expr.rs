@@ -1118,7 +1118,7 @@ impl Expr {
         self.set_origin();
         self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
-       // self.bind_default_types_to_index_expressions();
+        // self.bind_default_types_to_index_expressions();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();
         self.bind_variables_of_pattern_match();

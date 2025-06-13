@@ -327,7 +327,7 @@ mod protobuf {
                 Instruction::GenerateWorkerName(generate_worker_name) => {
                     let variable_id = generate_worker_name
                         .variable_id
-                        .map(|v| VariableId::try_from(v))
+                        .map(VariableId::try_from)
                         .transpose()?;
 
                     Ok(RibIR::GenerateWorkerName(variable_id))
