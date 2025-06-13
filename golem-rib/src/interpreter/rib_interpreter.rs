@@ -740,11 +740,21 @@ mod internal {
                     )
                 })?;
 
+
                 interpreter_stack.push_val(value_and_type);
             }
 
             None => {
                 let worker_name = interpreter.generate_worker_name.generate_worker_name();
+
+                interpreter_env
+                    .insert(
+                        env_key,
+                        RibInterpreterStackValue::Val(ValueAndType::new(
+                            Value::String(worker_name.clone()),
+                            str(),
+                        )),
+                    );
 
                 interpreter_stack
                     .push_val(ValueAndType::new(Value::String(worker_name.clone()), str()));
