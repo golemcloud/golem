@@ -745,7 +745,7 @@ condition_script = [
 ]
 
 script = '''
-mkdir -pv data logs
+mkdir -pv data/redis logs
 
 # start redis
 redis-server --port 6380 --appendonly yes --dir data/redis &> logs/redis.log &
