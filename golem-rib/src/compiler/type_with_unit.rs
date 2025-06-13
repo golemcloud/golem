@@ -98,13 +98,13 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                     to.as_ref().map(AnalysedType::try_from).transpose()?;
                 let analysed_type = match (from, to) {
                     (from_type, Some(to_type)) => record(vec![
-                        field("from", option(from_type)),
-                        field("to", option(to_type)),
+                        field("from", from_type),
+                        field("to", to_type),
                         field("inclusive", bool()),
                     ]),
 
                     (from_type, None) => record(vec![
-                        field("from", option(from_type)),
+                        field("from", from_type),
                         field("inclusive", bool()),
                     ]),
                 };

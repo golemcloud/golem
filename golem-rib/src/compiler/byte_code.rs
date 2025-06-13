@@ -1012,7 +1012,7 @@ mod compiler_tests {
 
     use super::*;
     use crate::{ArmPattern, InferredType, MatchArm, RibCompiler, VariableId};
-    use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
+    use golem_wasm_ast::analysis::analysed_type::{list, s32, str, u64};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 
@@ -1453,7 +1453,7 @@ mod compiler_tests {
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let instruction_set = vec![
-            RibIR::PushLit(ValueAndType::new(Value::U64(1), u64())),
+            RibIR::PushLit(ValueAndType::new(Value::S32(1), s32())),
             RibIR::PushLit("bar".into_value_and_type()),
             RibIR::PushLit("foo".into_value_and_type()),
             RibIR::PushList(list(str()), 2),

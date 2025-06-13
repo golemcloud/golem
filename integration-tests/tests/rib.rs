@@ -36,7 +36,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_without_worker_param(deps: &EnvBasedTestDependencies) {
+async fn test_rib_without_worker_param_1(deps: &EnvBasedTestDependencies) {
     let component_id = deps.component("shopping-cart").store().await;
 
     let metadata = deps.get_latest_component_metadata(&component_id).await;
@@ -101,7 +101,76 @@ async fn test_rib_without_worker_param(deps: &EnvBasedTestDependencies) {
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_without_worker_param_resource(deps: &EnvBasedTestDependencies) {
+async fn test_rib_without_worker_param_2(deps: &EnvBasedTestDependencies) {
+    let component_id = deps.component("shopping-cart").store().await;
+
+    let metadata = deps.get_latest_component_metadata(&component_id).await;
+
+    let component_dependency_key = ComponentDependencyKey {
+        component_name: "shopping-cart".to_string(),
+        component_id: component_id.0,
+        root_package_name: metadata.root_package_name,
+        root_package_version: metadata.root_package_version,
+    };
+
+    let component_dependency = ComponentDependency::new(component_dependency_key, metadata.exports);
+
+    let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
+
+    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.clone()));
+
+    let rib = r#"
+      let worker = instance();
+      let result = worker.get-cart-contents();
+
+      for i in 1..=2 {
+        yield worker.add-item({
+          product-id: "123",
+          name: "item1",
+          price: 10.0,
+          quantity: i
+        });
+      }
+
+      worker.get-cart-contents()
+    "#;
+
+    let eval_config = RibEvalConfig::new(
+        compiler_config,
+        RibInput::default(),
+        rib_function_invoke,
+        None,
+    );
+
+    let rib_evaluator = RibEvaluator::new(eval_config);
+
+    let result = rib_evaluator
+        .eval(rib)
+        .await
+        .expect("Failed to evaluate rib");
+
+    assert_eq!(
+        result,
+        RibResult::Val(ValueAndType::new(
+            Value::List(vec![Value::Record(vec![
+                Value::String("123".to_string()),
+                Value::String("item1".to_string()),
+                Value::F32(10.0),
+                Value::U32(2),
+            ]),]),
+            list(record(vec![
+                field("product-id", str()),
+                field("name", str()),
+                field("price", f32()),
+                field("quantity", u32()),
+            ],),),
+        ))
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_rib_without_worker_param_resource_1(deps: &EnvBasedTestDependencies) {
     let component_id = deps.component("shopping-cart-resource").store().await;
 
     let metadata = deps.get_latest_component_metadata(&component_id).await;
@@ -154,6 +223,80 @@ async fn test_rib_without_worker_param_resource(deps: &EnvBasedTestDependencies)
                 Value::F32(10.0),
                 Value::U32(2),
             ]),]),
+            list(record(vec![
+                field("product-id", str()),
+                field("name", str()),
+                field("price", f32()),
+                field("quantity", u32()),
+            ],),),
+        ))
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_rib_without_worker_param_resource_2(deps: &EnvBasedTestDependencies) {
+    let component_id = deps.component("shopping-cart-resource").store().await;
+
+    let metadata = deps.get_latest_component_metadata(&component_id).await;
+
+    let component_dependency_key = ComponentDependencyKey {
+        component_name: "shopping-cart".to_string(),
+        component_id: component_id.0,
+        root_package_name: metadata.root_package_name,
+        root_package_version: metadata.root_package_version,
+    };
+
+    let component_dependency = ComponentDependency::new(component_dependency_key, metadata.exports);
+
+    let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
+
+    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.clone()));
+
+    let rib = r#"
+      let resource = instance("foo");
+      let cart = resource.cart("foo");
+
+      for i in 1..=2 {
+         yield cart.add-item({
+          product-id: "123",
+          name: "item1",
+          price: 10.0,
+          quantity: i
+        });
+      };
+
+      cart.get-cart-contents()
+    "#;
+
+    let eval_config = RibEvalConfig::new(
+        compiler_config,
+        RibInput::default(),
+        rib_function_invoke,
+        None,
+    );
+
+    let rib_evaluator = RibEvaluator::new(eval_config);
+
+    let result = rib_evaluator
+        .eval(rib)
+        .await
+        .expect("Failed to evaluate rib");
+
+    assert_eq!(
+        result,
+        RibResult::Val(ValueAndType::new(
+            Value::List(vec![Value::Record(vec![
+                Value::String("123".to_string()),
+                Value::String("item1".to_string()),
+                Value::F32(10.0),
+                Value::U32(1),
+            ]),Value::Record(vec![
+                Value::String("123".to_string()),
+                Value::String("item1".to_string()),
+                Value::F32(10.0),
+                Value::U32(2),
+            ])]),
             list(record(vec![
                 field("product-id", str()),
                 field("name", str()),
@@ -228,6 +371,74 @@ async fn test_rib_with_worker_params(deps: &EnvBasedTestDependencies) {
         ))
     );
 }
+
+#[test]
+#[tracing::instrument]
+async fn test_rib_with_worker_param_resource(deps: &EnvBasedTestDependencies) {
+    let component_id = deps.component("shopping-cart-resource").store().await;
+
+    let metadata = deps.get_latest_component_metadata(&component_id).await;
+
+    let component_dependency_key = ComponentDependencyKey {
+        component_name: "shopping-cart".to_string(),
+        component_id: component_id.0,
+        root_package_name: metadata.root_package_name,
+        root_package_version: metadata.root_package_version,
+    };
+
+    let component_dependency = ComponentDependency::new(component_dependency_key, metadata.exports);
+
+    let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
+
+    let rib_function_invoke = Arc::new(TestRibFunctionInvoke::new(deps.clone()));
+
+    let rib = r#"
+      let resource = instance("foo");
+      let cart = resource.cart("foo");
+      cart.add-item({
+        product-id: "123",
+        name: "item1",
+        price: 10.0,
+        quantity: 2
+      });
+      cart.get-cart-contents()
+    "#;
+
+    let eval_config = RibEvalConfig::new(
+        compiler_config,
+        RibInput::default(),
+        rib_function_invoke,
+        None,
+    );
+
+    let rib_evaluator = RibEvaluator::new(eval_config);
+
+    let result = rib_evaluator
+        .eval(rib)
+        .await
+        .expect("Failed to evaluate rib");
+
+    assert_eq!(
+        result,
+        RibResult::Val(ValueAndType::new(
+            Value::List(vec![Value::Record(vec![
+                Value::String("123".to_string()),
+                Value::String("item1".to_string()),
+                Value::F32(10.0),
+                Value::U32(2),
+            ]),]),
+            list(record(vec![
+                field("product-id", str()),
+                field("name", str()),
+                field("price", f32()),
+                field("quantity", u32()),
+            ],),),
+        ))
+    );
+}
+
+
+
 
 struct TestRibFunctionInvoke {
     dependencies: EnvBasedTestDependencies,
