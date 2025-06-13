@@ -71,7 +71,7 @@ pub enum RibIR {
     PushToSink,
     SinkToList,
     Length,
-    GenerateWorkerName(InstanceCount),
+    GenerateWorkerName(Option<VariableId>),
 }
 
 type InstanceCount = u32;
@@ -191,7 +191,7 @@ impl InstructionId {
 mod protobuf {
     use crate::{
         AnalysedTypeWithUnit, ComponentDependencyKey, FunctionReferenceType, InstructionId,
-        ParsedFunctionSite, RibIR, WorkerNamePresence,
+        ParsedFunctionSite, RibIR, VariableId, WorkerNamePresence,
     };
     use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
     use golem_api_grpc::proto::golem::rib::{
@@ -326,9 +326,14 @@ mod protobuf {
                 .ok_or_else(|| "Missing instruction".to_string())?;
 
             match instruction {
-                Instruction::GenerateWorkerName(generate_worker_name) => Ok(
-                    RibIR::GenerateWorkerName(generate_worker_name.instance_count),
-                ),
+                Instruction::GenerateWorkerName(generate_worker_name) => {
+                    let variable_id = generate_worker_name
+                        .variable_id
+                        .map(|v| VariableId::try_from(v))
+                        .transpose()?;
+
+                    Ok(RibIR::GenerateWorkerName(variable_id))
+                }
                 Instruction::PushLit(value) => {
                     let value: ValueAndType = value.try_into()?;
                     Ok(RibIR::PushLit(value))
@@ -556,9 +561,15 @@ mod protobuf {
 
         fn try_from(value: RibIR) -> Result<Self, Self::Error> {
             let instruction = match value {
-                RibIR::GenerateWorkerName(instance_count) => Instruction::GenerateWorkerName(
-                    golem_api_grpc::proto::golem::rib::GenerateWorkerName { instance_count },
-                ),
+                RibIR::GenerateWorkerName(variable_id) => {
+                    let variable_id_proto = variable_id.map(|v| v.into());
+
+                    Instruction::GenerateWorkerName(
+                        golem_api_grpc::proto::golem::rib::GenerateWorkerName {
+                            variable_id: variable_id_proto,
+                        },
+                    )
+                }
                 RibIR::PushLit(value) => {
                     Instruction::PushLit(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                         type_annotated_value: Some(

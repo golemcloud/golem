@@ -723,28 +723,18 @@ mod internal {
     }
 
     pub(crate) fn run_generate_worker_name(
-        instance_count: u32,
+        variable_id: Option<VariableId>,
         interpreter: &mut Interpreter,
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
     ) -> RibInterpreterResult<()> {
-        let env_key = EnvironmentKey::from(VariableId::InstanceVar(instance_count));
-
-        let worker_id = interpreter_env.lookup(&env_key);
-
-        match worker_id {
-            Some(worker_id) => {
-                let value_and_type = worker_id.get_val().ok_or_else(|| {
-                    internal_corrupted_state!(
-                        "expected a worker name to be present in the environment, but it was not found"
-                    )
-                })?;
-
-                interpreter_stack.push_val(value_and_type);
-            }
-
+        match variable_id {
             None => {
                 let worker_name = interpreter.generate_worker_name.generate_worker_name();
+
+                let instance_variable = format!("__instance-{:?}", variable_id);
+
+                let env_key = EnvironmentKey::from(VariableId::global(instance_variable));
 
                 interpreter_env.insert(
                     env_key,
@@ -756,6 +746,41 @@ mod internal {
 
                 interpreter_stack
                     .push_val(ValueAndType::new(Value::String(worker_name.clone()), str()));
+            }
+
+            Some(variable_id) => {
+                let instance_variable = format!("__instance-{:?}", variable_id);
+
+                let env_key = EnvironmentKey::from(VariableId::global(instance_variable));
+
+                let worker_id = interpreter_env.lookup(&env_key);
+
+                match worker_id {
+                    Some(worker_id) => {
+                        let value_and_type = worker_id.get_val().ok_or_else(|| {
+                            internal_corrupted_state!(
+                        "expected a worker name to be present in the environment, but it was not found"
+                    )
+                        })?;
+
+                        interpreter_stack.push_val(value_and_type);
+                    }
+
+                    None => {
+                        let worker_name = interpreter.generate_worker_name.generate_worker_name();
+
+                        interpreter_env.insert(
+                            env_key,
+                            RibInterpreterStackValue::Val(ValueAndType::new(
+                                Value::String(worker_name.clone()),
+                                str(),
+                            )),
+                        );
+
+                        interpreter_stack
+                            .push_val(ValueAndType::new(Value::String(worker_name.clone()), str()));
+                    }
+                }
             }
         }
 

@@ -174,8 +174,8 @@ mod internal {
                 instructions.push(RibIR::Deconstruct);
             }
 
-            Expr::GenerateWorkerName { instance_count, .. } => {
-                instructions.push(RibIR::GenerateWorkerName(*instance_count));
+            Expr::GenerateWorkerName { variable_id, .. } => {
+                instructions.push(RibIR::GenerateWorkerName(variable_id.clone()));
             }
 
             Expr::Length { expr, .. } => {

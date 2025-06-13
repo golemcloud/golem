@@ -312,7 +312,7 @@ pub enum Expr {
         inferred_type: InferredType,
         type_annotation: Option<TypeName>,
         source_span: SourceSpan,
-        instance_count: u32,
+        variable_id: Option<VariableId>,
     },
 }
 
@@ -501,12 +501,12 @@ impl Expr {
         }
     }
 
-    pub fn generate_worker_name(instance_count: u32) -> Self {
+    pub fn generate_worker_name(variable_id: Option<VariableId>) -> Self {
         Expr::GenerateWorkerName {
             inferred_type: InferredType::string(),
             type_annotation: None,
             source_span: SourceSpan::default(),
-            instance_count,
+            variable_id,
         }
     }
 
@@ -1116,8 +1116,6 @@ impl Expr {
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibTypeError> {
         self.set_origin();
-        self.identify_instance_creation(component_dependency)?;
-        self.ensure_stateful_instance();
         self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
         self.bind_default_types_to_index_expressions();
@@ -1125,6 +1123,8 @@ impl Expr {
         self.bind_variables_of_list_reduce();
         self.bind_variables_of_pattern_match();
         self.bind_variables_of_let_assignment();
+        self.identify_instance_creation(component_dependency)?;
+        self.ensure_stateful_instance();
         self.infer_variants(component_dependency);
         self.infer_enums(component_dependency);
         Ok(())
@@ -2212,8 +2212,8 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             ) => Expr::throw(message),
 
             golem_api_grpc::proto::golem::rib::expr::Expr::GenerateWorkerName(
-                golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr { instance_count },
-            ) => Expr::generate_worker_name(instance_count),
+                golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr {},
+            ) => Expr::generate_worker_name(None),
 
             golem_api_grpc::proto::golem::rib::expr::Expr::And(expr) => {
                 let left = expr.left.ok_or("Missing left expr")?;
@@ -2472,14 +2472,29 @@ mod protobuf {
     use crate::{ArmPattern, Expr, MatchArm, Range};
     use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 
+    // It is to be noted that when we change `Expr` tree solely for the purpose of
+    // updating type inference, we don't need to change the proto version
+    // of Expr. A proto version of Expr changes only when Rib adds/updates the grammar itself.
+    // This makes it easy to keep backward compatibility at the persistence level
+    // (if persistence using grpc encode)
+    //
+    // Reason: A proto version of Expr doesn't take into the account the type inferred
+    // for each expr, or encode any behaviour that's the result of a type inference
+    // Example: in a type inference, a variable-id of expr which is tagged as `global` becomes
+    // `VariableId::Local(Identifier)` after a particular type inference phase, however, when encoding
+    // we don't need to consider this `Identifier` and is kept as global (i.e, the raw form) in Expr.
+    // This is because we never (want to) encode an Expr which is a result of `infer_types` function.
+    //
+    // Summary: We encode Expr only prior to compilation. After compilation, we encode only the RibByteCode.
+    // If we ever want to encode Expr after type-inference phase, it implies, we need to encode `InferredExpr`
+    // rather than `Expr` and this will ensure, users when retrieving back the `Expr` will never have
+    // noise regarding types and variable-ids, and will always stay one to one in round trip
     impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
         fn from(value: Expr) -> Self {
             let expr = match value {
-                Expr::GenerateWorkerName { instance_count, .. } => Some(
+                Expr::GenerateWorkerName { .. } => Some(
                     golem_api_grpc::proto::golem::rib::expr::Expr::GenerateWorkerName(
-                        golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr {
-                            instance_count,
-                        },
+                        golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr {},
                     ),
                 ),
                 Expr::Let {

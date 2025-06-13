@@ -17,7 +17,6 @@ use crate::{CallType, Expr, ExprVisitor, InstanceCreationType, TypeInternal};
 pub fn ensure_stateful_instance(expr: &mut Expr) {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
-    let mut instance_count = 0;
     while let Some(expr) = visitor.pop_back() {
         if let Expr::Call {
             call_type: CallType::InstanceCreation(InstanceCreationType::Worker { worker_name, .. }),
@@ -26,14 +25,12 @@ pub fn ensure_stateful_instance(expr: &mut Expr) {
         } = expr
         {
             if worker_name.is_none() {
-                instance_count += 1;
-
-                *worker_name = Some(Box::new(Expr::generate_worker_name(instance_count)));
+                *worker_name = Some(Box::new(Expr::generate_worker_name(None)));
 
                 let type_internal = &mut *inferred_type.inner;
 
                 if let TypeInternal::Instance { instance_type } = type_internal {
-                    instance_type.set_worker_name(Expr::generate_worker_name(instance_count))
+                    instance_type.set_worker_name(Expr::generate_worker_name(None))
                 }
             }
         }

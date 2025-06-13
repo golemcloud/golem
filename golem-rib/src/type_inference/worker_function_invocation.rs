@@ -103,7 +103,30 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 )
                             })?;
 
-                            let worker_name = instance_type.worker_name().as_deref().cloned();
+                            let mut worker_name = instance_type.worker_name().as_deref().cloned();
+
+                            match &mut worker_name {
+                                Some(expr) => {
+                                    match expr {
+                                        Expr::GenerateWorkerName { variable_id, .. } => {
+                                            match lhs.as_ref() {
+                                                Expr::Identifier {
+                                                    variable_id: lhs_variable_id,
+                                                    ..
+                                                } => {
+                                                    *variable_id = Some(lhs_variable_id.clone());
+                                                }
+                                                _ => {
+                                                    // If lhs is not a generation expression, we can still pass the variable id
+                                                    // but it will not be used in the worker name
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                None => {}
+                            }
 
                             let new_call = Expr::call_worker_function(
                                 dynamic_parsed_function_name,

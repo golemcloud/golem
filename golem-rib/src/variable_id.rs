@@ -25,7 +25,6 @@ pub enum VariableId {
     MatchIdentifier(MatchIdentifier),
     ListComprehension(ListComprehensionIdentifier),
     ListReduce(ListAggregationIdentifier),
-    InstanceVar(u32),
 }
 
 impl VariableId {
@@ -55,7 +54,6 @@ impl VariableId {
             VariableId::MatchIdentifier(m) => m.name.clone(),
             VariableId::ListComprehension(l) => l.name.clone(),
             VariableId::ListReduce(r) => r.name.clone(),
-            VariableId::InstanceVar(id) => format!("instance_var_{}", id),
         }
     }
 
@@ -66,7 +64,6 @@ impl VariableId {
             VariableId::MatchIdentifier(_) => false,
             VariableId::ListComprehension(_) => false,
             VariableId::ListReduce(_) => false,
-            VariableId::InstanceVar(_) => false,
         }
     }
 
@@ -77,7 +74,6 @@ impl VariableId {
             VariableId::MatchIdentifier(_) => false,
             VariableId::ListComprehension(_) => false,
             VariableId::ListReduce(_) => false,
-            VariableId::InstanceVar(_) => false,
         }
     }
 
@@ -88,7 +84,6 @@ impl VariableId {
             VariableId::MatchIdentifier(_) => true,
             VariableId::ListComprehension(_) => false,
             VariableId::ListReduce(_) => false,
-            VariableId::InstanceVar(_) => false,
         }
     }
 
@@ -120,10 +115,6 @@ impl VariableId {
             VariableId::MatchIdentifier(m) => VariableId::MatchIdentifier(m.clone()),
             VariableId::ListComprehension(l) => VariableId::ListComprehension(l.clone()),
             VariableId::ListReduce(l) => VariableId::ListReduce(l.clone()),
-            VariableId::InstanceVar(id) => {
-                *id += 1;
-                VariableId::InstanceVar(*id)
-            }
         }
     }
 }
@@ -167,7 +158,6 @@ impl Display for VariableId {
             VariableId::MatchIdentifier(m) => write!(f, "{}", m.name),
             VariableId::ListComprehension(l) => write!(f, "{}", l.name),
             VariableId::ListReduce(r) => write!(f, "{}", r.name),
-            VariableId::InstanceVar(id) => write!(f, "instance_var_{}", id),
         }
     }
 }
@@ -194,6 +184,26 @@ mod protobuf {
                 golem_api_grpc::proto::golem::rib::variable_id::VariableId::Local(local) => Ok(
                     VariableId::Local(local.name, local.id.map(|x| Id(x as u32))),
                 ),
+                golem_api_grpc::proto::golem::rib::variable_id::VariableId::MatchIdentifier(
+                    match_identifier,
+                ) => Ok(VariableId::MatchIdentifier(crate::MatchIdentifier {
+                    name: match_identifier.name,
+                    match_arm_index: match_identifier.match_arm_index as usize
+                })),
+                golem_api_grpc::proto::golem::rib::variable_id::VariableId::ListComprehensionIdentifier(
+                    list_comprehension,
+                ) => Ok(VariableId::ListComprehension(
+                    crate::ListComprehensionIdentifier {
+                        name: list_comprehension.name,
+                    },
+                )),
+                golem_api_grpc::proto::golem::rib::variable_id::VariableId::ListAggregationIdentifier(
+                    list_aggregation,
+                ) => Ok(VariableId::ListReduce(
+                    crate::ListAggregationIdentifier {
+                        name: list_aggregation.name,
+                    },
+                )),
             }
         }
     }
@@ -210,16 +220,10 @@ mod protobuf {
                 },
                 VariableId::MatchIdentifier(m) => ProtoVariableId {
                     variable_id: Some(
-                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
-                            golem_api_grpc::proto::golem::rib::Global { name: m.name },
-                        ),
-                    ),
-                },
-                VariableId::InstanceVar(id) => ProtoVariableId {
-                    variable_id: Some(
-                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
-                            golem_api_grpc::proto::golem::rib::Global {
-                                name: format!("instance_var_{}", id),
+                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::MatchIdentifier(
+                            golem_api_grpc::proto::golem::rib::MatchIdentifier {
+                                name: m.name,
+                                match_arm_index: m.match_arm_index as u32,
                             },
                         ),
                     ),
@@ -236,15 +240,19 @@ mod protobuf {
                 },
                 VariableId::ListComprehension(l) => ProtoVariableId {
                     variable_id: Some(
-                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
-                            golem_api_grpc::proto::golem::rib::Global { name: l.name },
+                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::ListComprehensionIdentifier(
+                            golem_api_grpc::proto::golem::rib::ListComprehensionIdentifier {
+                                name: l.name,
+                            },
                         ),
                     ),
                 },
                 VariableId::ListReduce(r) => ProtoVariableId {
                     variable_id: Some(
-                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
-                            golem_api_grpc::proto::golem::rib::Global { name: r.name },
+                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::ListAggregationIdentifier(
+                            golem_api_grpc::proto::golem::rib::ListAggregationIdentifier {
+                                name: r.name,
+                            },
                         ),
                     ),
                 },
