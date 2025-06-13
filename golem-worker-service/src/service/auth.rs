@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::ComponentServiceConfig;
+use crate::service::component::ComponentServiceError;
+use crate::service::with_metadata;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
@@ -24,9 +27,6 @@ use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_common::retries::with_retries;
 use golem_service_base::clients::auth::{AuthServiceError, BaseAuthService};
-use golem_worker_service_base::app_config::ComponentServiceConfig;
-use golem_worker_service_base::service::component::ComponentServiceError;
-use golem_worker_service_base::service::with_metadata;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -203,7 +203,7 @@ fn is_retriable(error: &ComponentServiceError) -> bool {
 mod tests {
     use test_r::test;
 
-    use golem_worker_service_base::service::with_metadata;
+    use crate::service::with_metadata;
     use uuid::Uuid;
 
     #[test]

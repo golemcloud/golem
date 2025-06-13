@@ -12,6 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod api_certificate;
+mod api_definition;
+mod api_deployment;
+mod api_domain;
+mod api_security;
+pub mod common;
+mod custom_http_request;
+pub mod dto;
+mod healthcheck;
+mod worker;
+
+use self::custom_http_request::CustomHttpRequestApi;
+use self::healthcheck::HealthcheckApi;
 use crate::api::api_certificate::ApiCertificateApi;
 use crate::api::api_definition::ApiDefinitionApi;
 use crate::api::api_deployment::ApiDeploymentApi;
@@ -19,17 +32,8 @@ use crate::api::api_domain::ApiDomainApi;
 use crate::api::api_security::SecuritySchemeApi;
 use crate::api::worker::WorkerApi;
 use crate::service::ApiServices;
-use golem_worker_service_base::api::{CustomHttpRequestApi, HealthcheckApi};
 use poem::Route;
 use poem_openapi::OpenApiService;
-
-mod api_certificate;
-mod api_definition;
-mod api_deployment;
-mod api_domain;
-mod api_security;
-mod common;
-mod worker;
 
 type WorkerServiceApis = (
     HealthcheckApi,

@@ -13,22 +13,20 @@
 // limitations under the License.
 
 use crate::api::common::{ApiEndpointError, ApiTags};
+use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
+use crate::gateway_api_deployment;
+use crate::gateway_api_deployment::ApiSiteString;
 use crate::model::ApiDeployment;
 use crate::model::ApiDeploymentRequest;
 use crate::service::api_domain::RegisterDomainRoute;
 use crate::service::auth::AuthService;
+use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
+use crate::service::gateway::api_deployment::{ApiDeploymentError, ApiDeploymentService};
 use golem_common::model::auth::ProjectAction;
 use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe, SafeDisplay};
 use golem_service_base::model::auth::GolemSecurityScheme;
-use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
-use golem_worker_service_base::gateway_api_deployment;
-use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
-use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionIdWithVersion;
-use golem_worker_service_base::service::gateway::api_deployment::{
-    ApiDeploymentError, ApiDeploymentService,
-};
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -36,17 +34,17 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct ApiDeploymentApi {
-    deployment_service: Arc<dyn ApiDeploymentService<AuthCtx, Namespace> + Sync + Send>,
-    auth_service: Arc<dyn AuthService + Sync + Send>,
-    domain_route: Arc<dyn RegisterDomainRoute + Sync + Send>,
+    deployment_service: Arc<dyn ApiDeploymentService>,
+    auth_service: Arc<dyn AuthService>,
+    domain_route: Arc<dyn RegisterDomainRoute>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/deployments", tag = ApiTags::ApiDeployment)]
 impl ApiDeploymentApi {
     pub fn new(
-        deployment_service: Arc<dyn ApiDeploymentService<AuthCtx, Namespace> + Sync + Send>,
-        auth_service: Arc<dyn AuthService + Sync + Send>,
-        domain_route: Arc<dyn RegisterDomainRoute + Sync + Send>,
+        deployment_service: Arc<dyn ApiDeploymentService>,
+        auth_service: Arc<dyn AuthService>,
+        domain_route: Arc<dyn RegisterDomainRoute>,
     ) -> Self {
         Self {
             deployment_service,

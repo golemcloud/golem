@@ -1,8 +1,10 @@
 ## Generated from default config
+cors_origin_regex = "https://*.golem.cloud"
 custom_request_port = 9006
 environment = "local"
 port = 9005
 worker_grpc_port = 9007
+workspace = "release"
 
 [api_definition]
 component_by_id_cache_size = 1024
@@ -13,6 +15,18 @@ type = "LocalFileSystem"
 
 [blob_storage.config]
 root = "../data/blob_storage"
+
+[cloud_service]
+access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+host = "localhost"
+port = 8080
+
+[cloud_service.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
 
 [component_service]
 access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
@@ -36,6 +50,11 @@ type = "Sqlite"
 [db.config]
 database = "../data/golem_worker.sqlite"
 max_connections = 10
+
+[domain_records]
+domain_allow_list = []
+register_domain_black_list = ["dev-api.golem.cloud", "api.golem.cloud"]
+subdomain_black_list = ["api-gateway", "release", "grafana"]
 
 [gateway_session_storage]
 type = "Redis"
@@ -107,10 +126,12 @@ multiplier = 10.0
 
 
 ## Generated from example config: with postgres
+# cors_origin_regex = "https://*.golem.cloud"
 # custom_request_port = 9006
 # environment = "local"
 # port = 9005
 # worker_grpc_port = 9007
+# workspace = "release"
 # 
 # [api_definition]
 # component_by_id_cache_size = 1024
@@ -121,6 +142,18 @@ multiplier = 10.0
 # 
 # [blob_storage.config]
 # root = "../data/blob_storage"
+# 
+# [cloud_service]
+# access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+# host = "localhost"
+# port = 8080
+# 
+# [cloud_service.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
 # 
 # [component_service]
 # access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
@@ -148,6 +181,11 @@ multiplier = 10.0
 # password = "postgres"
 # port = 5432
 # username = "postgres"
+# 
+# [domain_records]
+# domain_allow_list = []
+# register_domain_black_list = ["dev-api.golem.cloud", "api.golem.cloud"]
+# subdomain_black_list = ["api-gateway", "release", "grafana"]
 # 
 # [gateway_session_storage]
 # type = "Redis"
@@ -218,10 +256,12 @@ multiplier = 10.0
 # multiplier = 10.0
 
 ## Generated from example config: with postgres and s3
+# cors_origin_regex = "https://*.golem.cloud"
 # custom_request_port = 9006
 # environment = "local"
 # port = 9005
 # worker_grpc_port = 9007
+# workspace = "release"
 # 
 # [api_definition]
 # component_by_id_cache_size = 1024
@@ -249,6 +289,18 @@ multiplier = 10.0
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
+# [cloud_service]
+# access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+# host = "localhost"
+# port = 8080
+# 
+# [cloud_service.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
 # [component_service]
 # access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
 # host = "localhost"
@@ -275,6 +327,11 @@ multiplier = 10.0
 # password = "postgres"
 # port = 5432
 # username = "postgres"
+# 
+# [domain_records]
+# domain_allow_list = []
+# register_domain_black_list = ["dev-api.golem.cloud", "api.golem.cloud"]
+# subdomain_black_list = ["api-gateway", "release", "grafana"]
 # 
 # [gateway_session_storage]
 # type = "Redis"
@@ -343,24 +400,3 @@ multiplier = 10.0
 # max_jitter_factor = 0.15
 # min_delay = "10ms"
 # multiplier = 10.0
-## Generated from default config
-cors_origin_regex = "https://*.golem.cloud"
-workspace = "release"
-
-[cloud_service]
-access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
-host = "localhost"
-port = 8080
-
-[cloud_service.retries]
-max_attempts = 5
-max_delay = "2s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 2.0
-
-[domain_records]
-domain_allow_list = []
-register_domain_black_list = ["dev-api.golem.cloud", "api.golem.cloud"]
-subdomain_black_list = ["api-gateway", "release", "grafana"]
-

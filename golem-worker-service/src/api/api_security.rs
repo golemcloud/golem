@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::dto::SecuritySchemeData;
 use crate::api::common::ApiEndpointError;
+use crate::gateway_security::{SecurityScheme, SecuritySchemeIdentifier};
 use crate::service::api_security::SecuritySchemeService;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
-use golem_worker_service_base::api::SecuritySchemeData;
-use golem_worker_service_base::gateway_security::{SecurityScheme, SecuritySchemeIdentifier};
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::OpenApi;
@@ -28,11 +28,11 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct SecuritySchemeApi {
-    security_scheme_service: Arc<dyn SecuritySchemeService + Sync + Send>,
+    security_scheme_service: Arc<dyn SecuritySchemeService>,
 }
 
 impl SecuritySchemeApi {
-    pub fn new(security_scheme_service: Arc<dyn SecuritySchemeService + Sync + Send>) -> Self {
+    pub fn new(security_scheme_service: Arc<dyn SecuritySchemeService>) -> Self {
         Self {
             security_scheme_service,
         }

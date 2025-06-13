@@ -12,25 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::service::auth::AuthService;
-use async_trait::async_trait;
-use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{AuthCtx, Namespace};
-use golem_common::model::ProjectId;
-use golem_service_base::clients::auth::AuthServiceError;
-use golem_worker_service_base::gateway_security::{
+use crate::gateway_security::{
     SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata,
 };
-use golem_worker_service_base::service::gateway::security_scheme::{
+use crate::service::auth::AuthService;
+use crate::service::gateway::security_scheme::{
     SecuritySchemeService as BaseSecuritySchemeService,
     SecuritySchemeServiceError as BaseSecuritySchemeServiceError,
 };
+use async_trait::async_trait;
+use golem_common::model::auth::AuthCtx;
+use golem_common::model::auth::ProjectAction;
+use golem_common::model::ProjectId;
+use golem_service_base::clients::auth::AuthServiceError;
 use std::sync::Arc;
 
-type BaseService = Arc<dyn BaseSecuritySchemeService<Namespace> + Sync + Send>;
+type BaseService = Arc<dyn BaseSecuritySchemeService>;
 
 #[async_trait]
-pub trait SecuritySchemeService {
+pub trait SecuritySchemeService: Send + Sync {
     async fn get(
         &self,
         security_scheme_name: &SecuritySchemeIdentifier,

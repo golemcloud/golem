@@ -67,7 +67,7 @@ impl TryFrom<CertificateRecord> for Certificate {
 }
 
 #[async_trait]
-pub trait ApiCertificateRepo {
+pub trait ApiCertificateRepo: Send + Sync {
     async fn create_or_update(&self, record: &CertificateRecord) -> Result<(), RepoError>;
 
     async fn get(&self, namespace: &str, id: &Uuid)

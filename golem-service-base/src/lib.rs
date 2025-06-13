@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod api_tags;
-pub mod auth;
 pub mod clients;
 pub mod config;
 pub mod db;

@@ -484,7 +484,7 @@ async fn fork_invalid_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("WorkerNotFound"));
+    assert!(error.contains(&format!("Worker not found: {source_worker_id}")));
 }
 
 // Divergence possibility is mainly respect to environment variables referring to worker-ids.

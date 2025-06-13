@@ -86,7 +86,7 @@ impl TryFrom<ApiDomainRecord> for ApiDomain {
 }
 
 #[async_trait]
-pub trait ApiDomainRepo {
+pub trait ApiDomainRepo: Send + Sync {
     async fn create_or_update(&self, record: &ApiDomainRecord) -> Result<(), RepoError>;
 
     async fn get(&self, domain_name: &str) -> Result<Option<ApiDomainRecord>, RepoError>;

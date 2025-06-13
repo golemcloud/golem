@@ -34,11 +34,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-uuid = { version = "1.15.1", features = ["v4"] }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 test-r = { workspace = true }
-wac-graph = "0.6.1"
+wac-graph = {workspace = true}
 
 [lib]
 harness = false

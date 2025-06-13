@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
+use crate::gateway_api_deployment::ApiSite;
 use derive_more::FromStr;
-use golem_common::model::auth::Namespace;
 use golem_common::model::{AccountId, PluginInstallationId, ScanCursor, WorkerId};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
 use golem_service_base::model::{ResourceMetadata, UpdateRecord};
-use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
-use golem_worker_service_base::gateway_api_deployment::ApiSite;
 use poem_openapi::{NewType, Object};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -147,12 +146,8 @@ pub struct ApiDefinitionInfo {
     pub version: ApiVersion,
 }
 
-impl From<golem_worker_service_base::gateway_api_deployment::ApiDeployment<Namespace>>
-    for ApiDeployment
-{
-    fn from(
-        api_deployment: golem_worker_service_base::gateway_api_deployment::ApiDeployment<Namespace>,
-    ) -> Self {
+impl From<crate::gateway_api_deployment::ApiDeployment> for ApiDeployment {
+    fn from(api_deployment: crate::gateway_api_deployment::ApiDeployment) -> Self {
         Self {
             api_definitions: api_deployment
                 .api_definition_keys

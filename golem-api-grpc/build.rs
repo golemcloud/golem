@@ -23,7 +23,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/accountsummary/v1/account_summary_error.proto",
                 "proto/golem/accountsummary/v1/account_summary_service.proto",
                 "proto/golem/apidefinition/api_definition.proto",
-                "proto/golem/apidefinition/v1/api_definition_error.proto",
                 "proto/golem/apidefinition/v1/api_definition_service.proto",
                 "proto/golem/auth/v1/auth_error.proto",
                 "proto/golem/auth/v1/auth_service.proto",

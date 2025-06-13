@@ -134,7 +134,7 @@ impl From<RepoError> for ApiDomainServiceError {
 }
 
 #[async_trait]
-pub trait ApiDomainService {
+pub trait ApiDomainService: Send + Sync {
     async fn create_or_update(
         &self,
         payload: &DomainRequest,
@@ -156,16 +156,16 @@ pub trait ApiDomainService {
 }
 
 pub struct ApiDomainServiceDefault {
-    auth_service: Arc<dyn AuthService + Send + Sync>,
-    register_domain: Arc<dyn RegisterDomain + Sync + Send>,
-    domain_repo: Arc<dyn ApiDomainRepo + Sync + Send>,
+    auth_service: Arc<dyn AuthService>,
+    register_domain: Arc<dyn RegisterDomain>,
+    domain_repo: Arc<dyn ApiDomainRepo>,
 }
 
 impl ApiDomainServiceDefault {
     pub fn new(
-        auth_service: Arc<dyn AuthService + Send + Sync>,
-        register_domain: Arc<dyn RegisterDomain + Sync + Send>,
-        domain_repo: Arc<dyn ApiDomainRepo + Sync + Send>,
+        auth_service: Arc<dyn AuthService>,
+        register_domain: Arc<dyn RegisterDomain>,
+        domain_repo: Arc<dyn ApiDomainRepo>,
     ) -> Self {
         Self {
             auth_service,
@@ -388,7 +388,7 @@ impl SafeDisplay for RegisterDomainError {
 }
 
 #[async_trait]
-pub trait RegisterDomain {
+pub trait RegisterDomain: Send + Sync {
     // Register domain is specifically registering domain with golem cloud, and
     // assumes the domain_name is pre-registered with appropriate registrars (godaddy)
     async fn register(
@@ -698,7 +698,7 @@ impl SafeDisplay for RegisterDomainRouteError {
 
 // Register user specified api-site in Route Infrastructure
 #[async_trait]
-pub trait RegisterDomainRoute {
+pub trait RegisterDomainRoute: Send + Sync {
     async fn register(
         &self,
         domain: &str,

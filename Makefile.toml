@@ -357,8 +357,8 @@ description = "Runs worker service integration tests only"
 dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
-cargo test --package golem-worker-service-base --test services_tests -- --nocapture --report-time $JUNIT_OPTS
-cargo test --package golem-worker-service-base --test api_gateway_end_to_end_tests -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-worker-service --test services_tests -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package golem-worker-service --test api_gateway_end_to_end_tests -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group4]
@@ -745,7 +745,7 @@ condition_script = [
 ]
 
 script = '''
-mkdir -pv data logs
+mkdir -pv data/redis logs
 
 # start redis
 redis-server --port 6380 --appendonly yes --dir data/redis &> logs/redis.log &
@@ -827,7 +827,7 @@ RUST_LOG=info \
     GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN="5c832d93-ff85-4a8f-9803-513950fdfdb1" \
     GOLEM__RESOURCE_LIMITS__CONFIG__PORT=9090 \
     GOLEM__RESOURCE_LIMITS__CONFIG__ACCESS_TOKEN="5c832d93-ff85-4a8f-9803-513950fdfdb1" \
-    ../target/debug/golem-worker-executor &
+    ../target/debug/worker-executor &
 
 worker_executor_pid=$!
 popd || exit
