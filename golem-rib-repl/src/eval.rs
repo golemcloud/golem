@@ -14,6 +14,7 @@
 
 use crate::invoke::ReplRibFunctionInvoke;
 use crate::repl_state::ReplState;
+use crate::worker_name_gen::DynamicWorkerGen;
 use rib::{InstructionId, Interpreter, RibByteCode, RibInput, RibResult, RibRuntimeError};
 use std::sync::Arc;
 
@@ -33,6 +34,11 @@ pub async fn eval(
 // A dynamic rib interpreter that is created based on the state of the repl
 fn dynamic_interpreter(repl_state: &Arc<ReplState>) -> Interpreter {
     let rib_function_invoke = Arc::new(ReplRibFunctionInvoke::new(repl_state.clone()));
+    let worker_name_generator = Arc::new(DynamicWorkerGen::new(repl_state.clone()));
 
-    Interpreter::new(RibInput::default(), rib_function_invoke)
+    Interpreter::new(
+        RibInput::default(),
+        rib_function_invoke,
+        worker_name_generator,
+    )
 }

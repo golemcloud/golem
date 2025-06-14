@@ -88,12 +88,7 @@ impl Ord for SourceSpan {
 
 impl Debug for SourceSpan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "at line {}, column {}",
-            self.start_line(),
-            self.start_column()
-        )
+        write!(f, "<SourceSpan>")
     }
 }
 

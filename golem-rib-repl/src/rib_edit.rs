@@ -16,7 +16,7 @@ use crate::compiler::{InstanceVariables, ReplCompilerOutput};
 use crate::value_generator::generate_value;
 use crate::CommandRegistry;
 use colored::Colorize;
-use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeVariant};
+use golem_wasm_ast::analysis::{TypeEnum, TypeVariant};
 use golem_wasm_rpc::ValueAndType;
 use rib::{Expr, VariableId};
 use rustyline::completion::Completer;
@@ -127,8 +127,7 @@ impl RibEdit {
                 if name_with_paren == method_prefix {
                     let args = tpe
                         .parameter_types()
-                        .iter()
-                        .filter_map(|arg| AnalysedType::try_from(arg).ok())
+                        .into_iter()
                         .map(|analysed_type| {
                             ValueAndType::new(generate_value(&analysed_type), analysed_type)
                         })
@@ -160,9 +159,8 @@ impl RibEdit {
                 if resource_method_with_paren == method_prefix {
                     let args = tpe
                         .parameter_types()
-                        .iter()
+                        .into_iter()
                         .skip(1) // Skip the first argument, which is the instance itself
-                        .filter_map(|arg| AnalysedType::try_from(arg).ok())
                         .map(|analysed_type| {
                             ValueAndType::new(generate_value(&analysed_type), analysed_type)
                         })
@@ -331,7 +329,13 @@ impl Completer for RibEdit {
                 self.std_function_names
                     .iter()
                     .filter(|&&fn_name| fn_name.starts_with(word))
-                    .map(|&fn_name| fn_name.to_string()),
+                    .map(|&fn_name| {
+                        if fn_name == "instance" {
+                            "instance()".to_string()
+                        } else {
+                            fn_name.to_string()
+                        }
+                    }),
             )
         }
 

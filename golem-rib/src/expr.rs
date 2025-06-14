@@ -19,10 +19,10 @@ use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
-use crate::type_registry::FunctionTypeRegistry;
 use crate::{
-    from_string, text, type_checker, type_inference, DynamicParsedFunctionName, ExprVisitor,
-    GlobalVariableTypeSpec, InferredType, ParsedFunctionName, VariableId,
+    from_string, text, type_checker, type_inference, ComponentDependencies, ComponentDependencyKey,
+    DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType,
+    ParsedFunctionName, VariableId,
 };
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
@@ -307,6 +307,13 @@ pub enum Expr {
         type_annotation: Option<TypeName>,
         source_span: SourceSpan,
     },
+
+    GenerateWorkerName {
+        inferred_type: InferredType,
+        type_annotation: Option<TypeName>,
+        source_span: SourceSpan,
+        variable_id: Option<VariableId>,
+    },
 }
 
 impl Expr {
@@ -494,6 +501,15 @@ impl Expr {
         }
     }
 
+    pub fn generate_worker_name(variable_id: Option<VariableId>) -> Self {
+        Expr::GenerateWorkerName {
+            inferred_type: InferredType::string(),
+            type_annotation: None,
+            source_span: SourceSpan::default(),
+            variable_id,
+        }
+    }
+
     pub fn plus(left: Expr, right: Expr) -> Self {
         Expr::Plus {
             lhs: Box::new(left),
@@ -556,11 +572,13 @@ impl Expr {
         generic_type_parameter: Option<GenericTypeParameter>,
         worker_name: Option<Expr>,
         args: Vec<Expr>,
+        component_info: Option<ComponentDependencyKey>,
     ) -> Self {
         Expr::Call {
             call_type: CallType::Function {
                 function_name: dynamic_parsed_fn_name,
                 worker: worker_name.map(Box::new),
+                component_info,
             },
             generic_type_parameter,
             args,
@@ -1068,45 +1086,47 @@ impl Expr {
             | Expr::Call { inferred_type, .. }
             | Expr::Range { inferred_type, .. }
             | Expr::InvokeMethodLazy { inferred_type, .. }
-            | Expr::Length { inferred_type, .. } => inferred_type.clone(),
+            | Expr::Length { inferred_type, .. }
+            | Expr::GenerateWorkerName { inferred_type, .. } => inferred_type.clone(),
         }
     }
 
     pub fn infer_types(
         &mut self,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibTypeError> {
-        self.infer_types_initial_phase(function_type_registry, type_spec)?;
+        self.infer_types_initial_phase(component_dependency, type_spec)?;
         self.bind_instance_types();
         // Identifying the first fix point with method calls to infer all
         // worker function invocations as this forms the foundation for the rest of the
         // compilation. This is compiler doing its best to infer all the calls such
         // as worker invokes or instance calls etc.
         type_inference::type_inference_fix_point(Self::resolve_method_calls, self)?;
-        self.infer_function_call_types(function_type_registry)?;
+        self.infer_function_call_types(component_dependency)?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)?;
-        self.check_types(function_type_registry)?;
+        self.check_types(component_dependency)?;
         self.unify_types()?;
         Ok(())
     }
 
     pub fn infer_types_initial_phase(
         &mut self,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibTypeError> {
         self.set_origin();
-        self.identify_instance_creation(function_type_registry)?;
         self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
-        self.bind_default_types_to_index_expressions();
+        // self.bind_default_types_to_index_expressions();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();
         self.bind_variables_of_pattern_match();
         self.bind_variables_of_let_assignment();
-        self.infer_variants(function_type_registry);
-        self.infer_enums(function_type_registry);
+        self.identify_instance_creation(component_dependency)?;
+        self.ensure_stateful_instance();
+        self.infer_variants(component_dependency);
+        self.infer_enums(component_dependency);
         Ok(())
     }
 
@@ -1172,16 +1192,20 @@ impl Expr {
 
     pub fn identify_instance_creation(
         &mut self,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
     ) -> Result<(), RibTypeError> {
-        type_inference::identify_instance_creation(self, function_type_registry)
+        type_inference::identify_instance_creation(self, component_dependency)
+    }
+
+    pub fn ensure_stateful_instance(&mut self) {
+        type_inference::ensure_stateful_instance(self)
     }
 
     pub fn infer_function_call_types(
         &mut self,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
     ) -> Result<(), RibTypeError> {
-        type_inference::infer_function_call_types(self, function_type_registry)?;
+        type_inference::infer_function_call_types(self, component_dependency)?;
         Ok(())
     }
 
@@ -1207,9 +1231,9 @@ impl Expr {
 
     pub fn check_types(
         &mut self,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
     ) -> Result<(), RibTypeError> {
-        type_checker::type_check(self, function_type_registry)
+        type_checker::type_check(self, component_dependency)
     }
 
     pub fn unify_types(&mut self) -> Result<(), RibTypeError> {
@@ -1262,6 +1286,7 @@ impl Expr {
             | Expr::InvokeMethodLazy { inferred_type, .. }
             | Expr::Range { inferred_type, .. }
             | Expr::Length { inferred_type, .. }
+            | Expr::GenerateWorkerName { inferred_type, .. }
             | Expr::Call { inferred_type, .. } => {
                 if !new_inferred_type.is_unknown() {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -1313,7 +1338,8 @@ impl Expr {
             | Expr::InvokeMethodLazy { source_span, .. }
             | Expr::Range { source_span, .. }
             | Expr::Length { source_span, .. }
-            | Expr::Call { source_span, .. } => source_span.clone(),
+            | Expr::Call { source_span, .. }
+            | Expr::GenerateWorkerName { source_span, .. } => source_span.clone(),
         }
     }
 
@@ -1428,6 +1454,9 @@ impl Expr {
                 type_annotation, ..
             }
             | Expr::Length {
+                type_annotation, ..
+            }
+            | Expr::GenerateWorkerName {
                 type_annotation, ..
             }
             | Expr::Call {
@@ -1565,6 +1594,9 @@ impl Expr {
             | Expr::Length {
                 type_annotation, ..
             }
+            | Expr::GenerateWorkerName {
+                type_annotation, ..
+            }
             | Expr::Call {
                 type_annotation, ..
             } => {
@@ -1618,6 +1650,7 @@ impl Expr {
             | Expr::ListReduce { source_span, .. }
             | Expr::InvokeMethodLazy { source_span, .. }
             | Expr::Length { source_span, .. }
+            | Expr::GenerateWorkerName { source_span, .. }
             | Expr::Call { source_span, .. } => {
                 *source_span = new_source_span;
             }
@@ -1671,18 +1704,19 @@ impl Expr {
             | Expr::InvokeMethodLazy { inferred_type, .. }
             | Expr::Range { inferred_type, .. }
             | Expr::Length { inferred_type, .. }
+            | Expr::GenerateWorkerName { inferred_type, .. }
             | Expr::Call { inferred_type, .. } => {
                 *inferred_type = new_inferred_type;
             }
         }
     }
 
-    pub fn infer_enums(&mut self, function_type_registry: &FunctionTypeRegistry) {
-        type_inference::infer_enums(self, function_type_registry);
+    pub fn infer_enums(&mut self, component_dependency: &ComponentDependencies) {
+        type_inference::infer_enums(self, component_dependency);
     }
 
-    pub fn infer_variants(&mut self, function_type_registry: &FunctionTypeRegistry) {
-        type_inference::infer_variants(self, function_type_registry);
+    pub fn infer_variants(&mut self, component_dependency: &ComponentDependencies) {
+        type_inference::infer_variants(self, component_dependency);
     }
 
     pub fn visit_expr_nodes_lazy<'a>(&'a mut self, queue: &mut VecDeque<&'a mut Expr>) {
@@ -2177,6 +2211,10 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 golem_api_grpc::proto::golem::rib::ThrowExpr { message },
             ) => Expr::throw(message),
 
+            golem_api_grpc::proto::golem::rib::expr::Expr::GenerateWorkerName(
+                golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr {},
+            ) => Expr::generate_worker_name(None),
+
             golem_api_grpc::proto::golem::rib::expr::Expr::And(expr) => {
                 let left = expr.left.ok_or("Missing left expr")?;
                 let right = expr.right.ok_or("Missing right expr")?;
@@ -2319,28 +2357,28 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                                 // Reading the previous parsed-function-name in persistent store as a dynamic-parsed-function-name
                                 Expr::call_worker_function(DynamicParsedFunctionName::parse(
                                     ParsedFunctionName::try_from(name)?.to_string()
-                                )?, generic_type_parameter, None, params)
+                                )?, generic_type_parameter, None, params, None)
                             }
                             golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
                                 name,
-                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params, None),
                             golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(
                                 name,
-                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params, None),
                         }
                     }
                     (_, Some(call_type)) => {
                         let name = call_type.name.ok_or("Missing function call name")?;
                         match name {
                             golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(name) => {
-                                Expr::call_worker_function(name.try_into()?, generic_type_parameter, None, params)
+                                Expr::call_worker_function(name.try_into()?, generic_type_parameter, None, params, None)
                             }
                             golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(
                                 name,
-                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params, None),
                             golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(
                                 name,
-                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params, None),
                             golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(instance_creation) => {
                                 let instance_creation_type = InstanceCreationType::try_from(*instance_creation)?;
                                 let call_type = CallType::InstanceCreation(instance_creation_type);
@@ -2434,9 +2472,31 @@ mod protobuf {
     use crate::{ArmPattern, Expr, MatchArm, Range};
     use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 
+    // It is to be noted that when we change `Expr` tree solely for the purpose of
+    // updating type inference, we don't need to change the proto version
+    // of Expr. A proto version of Expr changes only when Rib adds/updates the grammar itself.
+    // This makes it easy to keep backward compatibility at the persistence level
+    // (if persistence using grpc encode)
+    //
+    // Reason: A proto version of Expr doesn't take into the account the type inferred
+    // for each expr, or encode any behaviour that's the result of a type inference
+    // Example: in a type inference, a variable-id of expr which is tagged as `global` becomes
+    // `VariableId::Local(Identifier)` after a particular type inference phase, however, when encoding
+    // we don't need to consider this `Identifier` and is kept as global (i.e, the raw form) in Expr.
+    // This is because we never (want to) encode an Expr which is a result of `infer_types` function.
+    //
+    // Summary: We encode Expr only prior to compilation. After compilation, we encode only the RibByteCode.
+    // If we ever want to encode Expr after type-inference phase, it implies, we need to encode `InferredExpr`
+    // rather than `Expr` and this will ensure, users when retrieving back the `Expr` will never have
+    // noise regarding types and variable-ids, and will always stay one to one in round trip
     impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
         fn from(value: Expr) -> Self {
             let expr = match value {
+                Expr::GenerateWorkerName { .. } => Some(
+                    golem_api_grpc::proto::golem::rib::expr::Expr::GenerateWorkerName(
+                        golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr {},
+                    ),
+                ),
                 Expr::Let {
                     variable_id,
                     type_annotation,
@@ -3191,6 +3251,7 @@ mod tests {
                         Expr::identifier_global("baz", None),
                         Expr::identifier_global("qux", None),
                     ],
+                    None,
                 ),
                 None,
             ),

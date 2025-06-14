@@ -21,6 +21,8 @@ use test_r::test_dep;
 test_r::enable!();
 
 mod fork;
+
+mod rib;
 mod rib_repl;
 mod worker;
 

@@ -26,6 +26,7 @@ pub use inferred_expr::*;
 pub use instance_type_binding::*;
 pub use rib_input_type::*;
 pub use rib_output_type::*;
+pub use stateful_instance::*;
 pub use type_annotation_binding::*;
 pub use type_hint::*;
 pub use type_pull_up::*;
@@ -50,6 +51,7 @@ mod inferred_expr;
 mod instance_type_binding;
 mod rib_input_type;
 mod rib_output_type;
+mod stateful_instance;
 mod type_annotation_binding;
 mod type_hint;
 mod type_pull_up;
@@ -66,15 +68,16 @@ mod tests {
     use crate::type_checker::Path;
     use crate::type_inference::global_variable_type_binding::GlobalVariableTypeSpec;
     use crate::type_inference::tests::test_utils::{
-        call, concat, cond, equal_to, expr_block, get_analysed_exports, get_analysed_type_enum,
-        get_analysed_type_variant, greater_than, greater_than_or_equal_to, identifier, less_than,
-        less_than_or_equal_to, let_binding, number, option, pattern_match, plus, record, result,
-        select_dynamic, select_field, sequence, tuple,
+        call, concat, cond, equal_to, expr_block, get_analysed_type_enum,
+        get_analysed_type_variant, get_test_rib_compiler_with, greater_than,
+        greater_than_or_equal_to, identifier, less_than, less_than_or_equal_to, let_binding,
+        number, option, pattern_match, plus, record, result, select_dynamic, select_field,
+        sequence, tuple,
     };
     use crate::{
-        ArmPattern, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr,
-        FunctionTypeRegistry, InferredExpr, InferredType, MatchArm, Number, ParsedFunctionSite,
-        TypeName, VariableId,
+        ArmPattern, ComponentDependencies, DynamicParsedFunctionName,
+        DynamicParsedFunctionReference, Expr, InferredType, InstanceCreationType, InstanceType,
+        MatchArm, Number, ParsedFunctionSite, RibCompiler, RibCompilerConfig, TypeName, VariableId,
     };
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
@@ -92,12 +95,13 @@ mod tests {
         let type_spec =
             GlobalVariableTypeSpec::new("foo", Path::from_elems(vec![]), InferredType::string());
 
-        let with_type_spec = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec]);
+        let with_type_spec = expr.infer_types(&ComponentDependencies::default(), &vec![type_spec]);
 
         assert!(with_type_spec.is_ok());
 
         let mut new_expr = Expr::from_text(rib_expr).unwrap();
-        let without_type_spec = new_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+
+        let without_type_spec = new_expr.infer_types(&ComponentDependencies::default(), &vec![]);
 
         assert!(without_type_spec.is_err())
     }
@@ -118,7 +122,7 @@ mod tests {
         );
 
         assert!(expr
-            .infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec])
+            .infer_types(&ComponentDependencies::default(), &vec![type_spec],)
             .is_ok());
     }
 
@@ -146,7 +150,7 @@ mod tests {
         ];
 
         assert!(expr
-            .infer_types(&FunctionTypeRegistry::empty(), &type_spec)
+            .infer_types(&ComponentDependencies::default(), &type_spec,)
             .is_ok());
     }
 
@@ -166,7 +170,7 @@ mod tests {
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
         assert!(expr
-            .infer_types(&FunctionTypeRegistry::empty(), &vec![])
+            .infer_types(&ComponentDependencies::default(), &vec![])
             .is_ok());
     }
 
@@ -180,14 +184,13 @@ mod tests {
             x
          "#;
 
-        let mut expr = Expr::from_text(rib_expr).unwrap();
+        let expr = Expr::from_text(rib_expr).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
-            .unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        assert!(expr
-            .infer_types(&FunctionTypeRegistry::empty(), &vec![])
-            .is_ok());
+        let result = rib_compiler.infer_types(expr);
+
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -200,42 +203,45 @@ mod tests {
             x
          "#;
 
-        let mut expr = Expr::from_text(rib_expr).unwrap();
+        let expr = Expr::from_text(rib_expr).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
-            .unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        assert!(expr
-            .infer_types(&FunctionTypeRegistry::empty(), &vec![])
-            .is_ok());
+        let result = rib_compiler.infer_types(expr);
+
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_0() {
-        let mut old = Expr::from_text(r#"1u32"#).unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        let result = old.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let old = Expr::from_text(r#"1u32"#).unwrap();
+
+        let result = rib_compiler.compile(old);
 
         assert!(result.is_ok());
 
         // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
-        let mut new = Expr::from_text(r#"1: u32"#).unwrap();
-        let result = new.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let new = Expr::from_text(r#"1: u32"#).unwrap();
+
+        let result = rib_compiler.compile(new);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_1() {
-        let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz[0] + 1u32"#).unwrap();
+        let rib_expr = Expr::from_text(r#"foo.bar.baz[0] + 1u32"#).unwrap();
 
-        let result = invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let compiler = RibCompiler::default();
+
+        let result = compiler.compile(rib_expr);
 
         assert!(result.is_ok());
 
-        // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
-        let mut valid_rib_expr = Expr::from_text(r#"foo.bar.baz[0]: u32 + 1u32"#).unwrap();
-        let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let rib_expr = Expr::from_text(r#"foo.bar.baz[0]: u32 + 1u32"#).unwrap();
+        let result = compiler.compile(rib_expr);
 
         assert!(result.is_ok());
     }
@@ -248,19 +254,19 @@ mod tests {
             InferredType::string(),
         );
 
+        let rib_compiler = RibCompiler::new(RibCompilerConfig::new(vec![], vec![type_spec]));
+
         // by default foo.bar.* will be inferred to be a string (given the above type spec) and
         // foo.bar.baz + 1u32 should fail compilation since we are adding string with a u32.
-        let mut invalid_rib_expr = Expr::from_text(r#"foo.bar.baz + 1u32"#).unwrap();
+        let invalid_rib_expr = Expr::from_text(r#"foo.bar.baz + 1u32"#).unwrap();
 
-        let result =
-            invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+        let result = rib_compiler.compile(invalid_rib_expr);
 
         assert!(result.is_err());
 
         // We inline the type of foo.bar.baz with u32 (over-riding what's given in the type spec)
-        let mut valid_rib_expr = Expr::from_text(r#"foo.bar.baz: u32 + 1u32"#).unwrap();
-        let result =
-            valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+        let valid_rib_expr = Expr::from_text(r#"foo.bar.baz: u32 + 1u32"#).unwrap();
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
@@ -272,17 +278,18 @@ mod tests {
 
         // by default foo will be inferred to be a string (given the above type spec) and
         // foo + 1u32 should fail compilation since we are adding string with a u32.
-        let mut invalid_rib_expr = Expr::from_text(r#"foo + 1u32"#).unwrap();
+        let invalid_rib_expr = Expr::from_text(r#"foo + 1u32"#).unwrap();
 
-        let result =
-            invalid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+        let rib_compiler = RibCompiler::new(RibCompilerConfig::new(vec![], vec![type_spec]));
+
+        let result = rib_compiler.compile(invalid_rib_expr);
 
         assert!(result.is_err());
 
         // We inline the type of foo identifier with u32 (over-riding what's given in the type spec)
-        let mut valid_rib_expr = Expr::from_text(r#"foo: u32 + 1u32"#).unwrap();
-        let result =
-            valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![type_spec.clone()]);
+        let valid_rib_expr = Expr::from_text(r#"foo: u32 + 1u32"#).unwrap();
+
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
@@ -290,94 +297,117 @@ mod tests {
     #[test]
     fn test_inference_inline_type_annotation_4() {
         // Even if 1 is not specified with a specific number type, it should be inferred as u64
-        let mut rib_expr = Expr::from_text(r#"some(1): option<u64>"#).unwrap();
 
-        let result = rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let rib_expr = Expr::from_text(r#"some(1): option<u64>"#).unwrap();
+
+        let result = rib_compiler.compile(rib_expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_6() {
-        // Even if 1 is not specified with a specific number type, it should be inferred as u64
-        let mut rib_expr = Expr::from_text(r#"some(1): option<option<u64>>"#).unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        let result = rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        // Even if 1 is not specified with a specific number type, it should be inferred as u64
+        let rib_expr = Expr::from_text(r#"some(1): option<option<u64>>"#).unwrap();
+
+        let result = rib_compiler.compile(rib_expr);
 
         assert!(result.is_err());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_7() {
-        let mut valid_rib_expr = Expr::from_text(r#"ok(1): result<u64, string>"#).unwrap();
-        let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let valid_rib_expr = Expr::from_text(r#"ok(1): result<u64, string>"#).unwrap();
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_8() {
-        let mut valid_rib_expr = Expr::from_text(r#"ok(1): result<u64>"#).unwrap();
-        let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let valid_rib_expr = Expr::from_text(r#"ok(1): result<u64>"#).unwrap();
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_9() {
-        let mut valid_rib_expr = Expr::from_text(r#"err(1): result<_, u64>"#).unwrap();
-        let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let valid_rib_expr = Expr::from_text(r#"err(1): result<_, u64>"#).unwrap();
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_10() {
-        let mut valid_rib_expr = Expr::from_text(r#"err(1): result"#).unwrap();
-        let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let valid_rib_expr = Expr::from_text(r#"err(1): result"#).unwrap();
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_inline_type_annotation_11() {
-        let mut valid_rib_expr = Expr::from_text(r#"[1, 2]: list<u64>"#).unwrap();
-        let result = valid_rib_expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let valid_rib_expr = Expr::from_text(r#"[1, 2]: list<u64>"#).unwrap();
+        let result = rib_compiler.compile(valid_rib_expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_standalone_literals_1() {
-        let mut expr = Expr::from_text(r#"err(1)"#).unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let expr = Expr::from_text(r#"err(1)"#).unwrap();
+
+        let result = rib_compiler.compile(expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_standalone_literals_2() {
-        let mut expr = Expr::from_text(r#"ok(1)"#).unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let expr = Expr::from_text(r#"ok(1)"#).unwrap();
+
+        let result = rib_compiler.compile(expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_standalone_literals_3() {
-        let mut expr = Expr::from_text(r#"[1, 2]"#).unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let expr = Expr::from_text(r#"[1, 2]"#).unwrap();
+
+        let result = rib_compiler.compile(expr);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_inference_standalone_literals_4() {
-        let mut expr = Expr::from_text("{foo: {status: 200, b: \"hello\"}}").unwrap();
-        let result = expr.infer_types(&FunctionTypeRegistry::empty(), &vec![]);
+        let rib_compiler = RibCompiler::default();
+
+        let expr = Expr::from_text("{foo: {status: 200, b: \"hello\"}}").unwrap();
+        let result = rib_compiler.compile(expr);
         assert!(result.is_ok());
     }
 
@@ -385,16 +415,25 @@ mod tests {
     fn test_inference_simple_let_binding_type_inference() {
         let rib_expr = r#"
           let x = 1;
-          foo(x)
+          let worker = instance("foo");
+          worker.foo(x)
         "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let rib_compiler = test_utils::get_test_compiler();
 
-        let mut expr = Expr::from_text(rib_expr).unwrap();
+        let component_dependency_key = rib_compiler
+            .get_component_dependencies()
+            .dependencies
+            .first_key_value()
+            .unwrap()
+            .0
+            .clone();
 
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let expr = Expr::from_text(rib_expr).unwrap();
 
-        let let_binding = let_binding(
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
+
+        let let_variable = let_binding(
             VariableId::local("x", 0),
             None,
             number(
@@ -406,13 +445,34 @@ mod tests {
             ), // The number in let expression is identified to be a U64
         );
 
+        let let_instance = let_binding(
+            VariableId::local("worker", 0),
+            None,
+            Expr::call(
+                CallType::InstanceCreation(InstanceCreationType::Worker {
+                    component_info: None,
+                    worker_name: Some(Box::new(Expr::literal("foo"))),
+                }),
+                None,
+                vec![Expr::literal("foo")],
+            )
+            .with_inferred_type(InferredType::instance(InstanceType::Global {
+                worker_name: Some(Box::new(Expr::literal("foo"))),
+                component_dependency: rib_compiler.get_component_dependencies().clone(),
+            })),
+        );
+
         let call_expr = call(
-            CallType::function_without_worker(DynamicParsedFunctionName {
-                site: ParsedFunctionSite::Global,
-                function: DynamicParsedFunctionReference::Function {
-                    function: "foo".to_string(),
+            CallType::function_call_with_worker(
+                Expr::literal("foo"),
+                DynamicParsedFunctionName {
+                    site: ParsedFunctionSite::Global,
+                    function: DynamicParsedFunctionReference::Function {
+                        function: "foo".to_string(),
+                    },
                 },
-            }),
+                Some(component_dependency_key),
+            ),
             None,
             vec![identifier(
                 VariableId::local("x", 0),
@@ -422,9 +482,12 @@ mod tests {
             InferredType::sequence(vec![]),
         );
 
-        let expected = expr_block(vec![let_binding, call_expr], InferredType::sequence(vec![]));
+        let expected = expr_block(
+            vec![let_variable, let_instance, call_expr],
+            InferredType::sequence(vec![]),
+        );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -432,15 +495,24 @@ mod tests {
         let rib_expr = r#"
           let x = 1;
           let y = 2;
-          foo(x);
-          baz(y)
+          let worker = instance("foo");
+          worker.foo(x);
+          worker.baz(y)
         "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let rib_compiler = test_utils::get_test_compiler();
 
-        let mut expr = Expr::from_text(rib_expr).unwrap();
+        let expected_component_in_function_call = rib_compiler
+            .get_component_dependencies()
+            .dependencies
+            .first_key_value()
+            .unwrap()
+            .0
+            .clone();
 
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let expr = Expr::from_text(rib_expr).unwrap();
+
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let let_binding1 = let_binding(
             VariableId::local("x", 0),
@@ -466,13 +538,34 @@ mod tests {
             ),
         );
 
+        let let_binding3 = let_binding(
+            VariableId::local("worker", 0),
+            None,
+            Expr::call(
+                CallType::InstanceCreation(InstanceCreationType::Worker {
+                    component_info: None,
+                    worker_name: Some(Box::new(Expr::literal("foo"))),
+                }),
+                None,
+                vec![Expr::literal("foo")],
+            )
+            .with_inferred_type(InferredType::instance(InstanceType::Global {
+                worker_name: Some(Box::new(Expr::literal("foo"))),
+                component_dependency: rib_compiler.get_component_dependencies().clone(),
+            })),
+        );
+
         let call_expr1 = call(
-            CallType::function_without_worker(DynamicParsedFunctionName {
-                site: ParsedFunctionSite::Global,
-                function: DynamicParsedFunctionReference::Function {
-                    function: "foo".to_string(),
+            CallType::function_call_with_worker(
+                Expr::literal("foo"),
+                DynamicParsedFunctionName {
+                    site: ParsedFunctionSite::Global,
+                    function: DynamicParsedFunctionReference::Function {
+                        function: "foo".to_string(),
+                    },
                 },
-            }),
+                Some(expected_component_in_function_call.clone()),
+            ),
             None,
             vec![identifier(
                 VariableId::local("x", 0),
@@ -483,12 +576,16 @@ mod tests {
         );
 
         let call_expr2 = call(
-            CallType::function_without_worker(DynamicParsedFunctionName {
-                site: ParsedFunctionSite::Global,
-                function: DynamicParsedFunctionReference::Function {
-                    function: "baz".to_string(),
+            CallType::function_call_with_worker(
+                Expr::literal("foo"),
+                DynamicParsedFunctionName {
+                    site: ParsedFunctionSite::Global,
+                    function: DynamicParsedFunctionReference::Function {
+                        function: "baz".to_string(),
+                    },
                 },
-            }),
+                Some(expected_component_in_function_call.clone()),
+            ),
             None,
             vec![identifier(
                 VariableId::local("y", 0),
@@ -499,11 +596,17 @@ mod tests {
         );
 
         let expected = expr_block(
-            vec![let_binding1, let_binding2, call_expr1, call_expr2],
+            vec![
+                let_binding1,
+                let_binding2,
+                let_binding3,
+                call_expr1,
+                call_expr2,
+            ],
             InferredType::sequence(vec![]),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -514,9 +617,10 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -536,7 +640,7 @@ mod tests {
             InferredType::u64(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -547,9 +651,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -559,7 +663,7 @@ mod tests {
             InferredType::string(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -574,9 +678,10 @@ mod tests {
           x == y
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -631,7 +736,7 @@ mod tests {
             InferredType::bool(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -640,7 +745,7 @@ mod tests {
 
         let output_enum_type = get_analysed_type_enum(vec!["success", "failure", "in-progress"]);
 
-        let component_metadata = get_analysed_exports(
+        let rib_compiler = get_test_rib_compiler_with(
             "process",
             vec![
                 input_enum_type.clone(),
@@ -656,7 +761,8 @@ mod tests {
               let query1 = foo;
               let query2 = bar;
               let query3 = foo-bar;
-              let result = process(query1, query2, query3, user);
+              let worker = instance("foo");
+              let result = worker.process(query1, query2, query3, user);
 
               let x = match result {
                 success => "success ${user}",
@@ -680,16 +786,14 @@ mod tests {
 
             "#;
 
-        let function_type_registry =
-            FunctionTypeRegistry::from_export_metadata(&component_metadata);
+        let expr = Expr::from_text(expr).unwrap();
 
-        let mut expr = Expr::from_text(expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let expected =
+            test_utils::expected_expr_for_enum_test(&rib_compiler.get_component_dependencies());
 
-        let expected = test_utils::expected_expr_for_enum_test();
-
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -706,7 +810,7 @@ mod tests {
             ("failure", None),
         ]);
 
-        let component_metadata = get_analysed_exports(
+        let rib_compiler = get_test_rib_compiler_with(
             "process",
             vec![
                 input_variant_type.clone(),
@@ -718,11 +822,12 @@ mod tests {
         );
 
         let expr = r#"
+              let worker = instance();
               let user = request.body.user-id;
               let query1 = foo(user);
               let query2 = bar-baz("jon");
               let query3 = foo-bar;
-              let result = process(query1, query2, query3, user);
+              let result = worker.process(query1, query2, query3, user);
 
               let x = match result {
                 success(number) => "success ${number}",
@@ -746,12 +851,10 @@ mod tests {
 
             "#;
 
-        let function_type_registry =
-            FunctionTypeRegistry::from_export_metadata(&component_metadata);
+        let expr = Expr::from_text(expr).unwrap();
 
-        let mut expr = Expr::from_text(expr).unwrap();
+        let result = rib_compiler.infer_types(expr);
 
-        let result = expr.infer_types(&function_type_registry, &vec![]);
         assert!(result.is_ok());
     }
 
@@ -763,9 +866,9 @@ mod tests {
           "${x}${y}"
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_type = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -782,7 +885,7 @@ mod tests {
             InferredType::string(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_type.get_expr(), &expected);
     }
 
     #[test]
@@ -793,9 +896,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -805,7 +908,7 @@ mod tests {
             InferredType::bool(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -818,9 +921,9 @@ mod tests {
           if x > y then res1 else res2
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -862,7 +965,7 @@ mod tests {
             InferredType::string(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -874,9 +977,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -891,7 +994,7 @@ mod tests {
             InferredType::string(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -904,9 +1007,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -936,7 +1039,7 @@ mod tests {
             InferredType::u64(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -947,9 +1050,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -993,7 +1096,7 @@ mod tests {
             InferredType::list(InferredType::u64()),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1004,9 +1107,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1052,7 +1155,7 @@ mod tests {
                             value: BigDecimal::from(0),
                         },
                         None,
-                        InferredType::u64(),
+                        InferredType::s32(),
                     ),
                     None,
                     InferredType::u64(),
@@ -1061,7 +1164,7 @@ mod tests {
             InferredType::u64(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1073,9 +1176,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1115,7 +1218,7 @@ mod tests {
             InferredType::u64(),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1126,9 +1229,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1158,7 +1261,7 @@ mod tests {
             InferredType::tuple(vec![InferredType::u64(), InferredType::string()]),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1175,7 +1278,7 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
 
         let expected = expr_block(
@@ -1247,15 +1350,24 @@ mod tests {
         let rib_expr = r#"
                 let x = 1;
                 let y = 2;
+                let worker = instance("foo");
 
                 match x {
-                  1 => foo(x),
-                  2 => baz(y)
+                  1 => worker.foo(x),
+                  2 => worker.baz(y)
                 }"#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
+
+        let expected_component_key = rib_compiler
+            .get_component_dependencies()
+            .dependencies
+            .first_key_value()
+            .unwrap()
+            .0
+            .clone();
 
         let let_binding1 = let_binding(
             VariableId::local("x", 0),
@@ -1281,6 +1393,23 @@ mod tests {
             ),
         );
 
+        let let_binding3 = let_binding(
+            VariableId::local("worker", 0),
+            None,
+            Expr::call(
+                CallType::InstanceCreation(InstanceCreationType::Worker {
+                    component_info: None,
+                    worker_name: Some(Box::new(Expr::literal("foo"))),
+                }),
+                None,
+                vec![Expr::literal("foo")],
+            )
+            .with_inferred_type(InferredType::instance(InstanceType::Global {
+                worker_name: Some(Box::new(Expr::literal("foo"))),
+                component_dependency: rib_compiler.get_component_dependencies().clone(),
+            })),
+        );
+
         let match_expr_expected = pattern_match(
             identifier(VariableId::local("x", 0), None, InferredType::u64()),
             vec![
@@ -1293,12 +1422,16 @@ mod tests {
                         InferredType::u64(),
                     ))),
                     call(
-                        CallType::function_without_worker(DynamicParsedFunctionName {
-                            site: ParsedFunctionSite::Global,
-                            function: DynamicParsedFunctionReference::Function {
-                                function: "foo".to_string(),
+                        CallType::function_call_with_worker(
+                            Expr::literal("foo"),
+                            DynamicParsedFunctionName {
+                                site: ParsedFunctionSite::Global,
+                                function: DynamicParsedFunctionReference::Function {
+                                    function: "foo".to_string(),
+                                },
                             },
-                        }),
+                            Some(expected_component_key.clone()),
+                        ),
                         None,
                         vec![identifier(
                             VariableId::local("x", 0),
@@ -1317,12 +1450,16 @@ mod tests {
                         InferredType::u64(), // because predicate is u64
                     ))),
                     call(
-                        CallType::function_without_worker(DynamicParsedFunctionName {
-                            site: ParsedFunctionSite::Global,
-                            function: DynamicParsedFunctionReference::Function {
-                                function: "baz".to_string(),
+                        CallType::function_call_with_worker(
+                            Expr::literal("foo"),
+                            DynamicParsedFunctionName {
+                                site: ParsedFunctionSite::Global,
+                                function: DynamicParsedFunctionReference::Function {
+                                    function: "baz".to_string(),
+                                },
                             },
-                        }),
+                            Some(expected_component_key.clone()),
+                        ),
                         None,
                         vec![identifier(
                             VariableId::local("y", 0),
@@ -1337,11 +1474,16 @@ mod tests {
         );
 
         let expected = expr_block(
-            vec![let_binding1, let_binding2, match_expr_expected],
+            vec![
+                let_binding1,
+                let_binding2,
+                let_binding3,
+                match_expr_expected,
+            ],
             InferredType::sequence(vec![]),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1355,11 +1497,12 @@ mod tests {
               }
             "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
+        let rib_compiler = test_utils::get_test_compiler();
 
-        let mut expr = Expr::from_text(rib_expr).unwrap();
+        let expr = Expr::from_text(rib_expr).unwrap();
 
-        let result = expr.infer_types(&function_type_registry, &vec![]);
+        let result = rib_compiler.infer_types(expr);
+
         assert!(result.is_ok());
     }
 
@@ -1374,10 +1517,11 @@ mod tests {
               }
             "#;
 
-        let mut expr = Expr::from_text(expr_str).unwrap();
+        let expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
-            .unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1460,7 +1604,7 @@ mod tests {
             InferredType::option(InferredType::option(InferredType::u64())),
         );
 
-        assert_eq!(expr, expected)
+        assert_eq!(inferred_expr.get_expr(), &expected)
     }
 
     #[test]
@@ -1473,10 +1617,11 @@ mod tests {
               }
             "#;
 
-        let mut expr = Expr::from_text(expr_str).unwrap();
+        let expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
-            .unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1540,7 +1685,7 @@ mod tests {
             InferredType::record(vec![("foo".to_string(), InferredType::string())]),
         );
 
-        assert_eq!(expr, expected)
+        assert_eq!(inferred_expr.get_expr(), &expected)
     }
 
     #[test]
@@ -1553,10 +1698,11 @@ mod tests {
               }
             "#;
 
-        let mut expr = Expr::from_text(expr_str).unwrap();
+        let expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
-            .unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1619,7 +1765,7 @@ mod tests {
             InferredType::string(),
         );
 
-        assert_eq!(expr, expected)
+        assert_eq!(inferred_expr.get_expr(), &expected)
     }
 
     #[test]
@@ -1639,10 +1785,11 @@ mod tests {
               }
             "#;
 
-        let mut expr = Expr::from_text(expr_str).unwrap();
+        let expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
-            .unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1763,7 +1910,7 @@ mod tests {
                                         value: BigDecimal::from(0),
                                     },
                                     None,
-                                    InferredType::u64(),
+                                    InferredType::s32(),
                                 ),
                                 None,
                                 InferredType::u64(),
@@ -1786,7 +1933,7 @@ mod tests {
             InferredType::u64(),
         );
 
-        assert_eq!(expr, expected)
+        assert_eq!(inferred_expr.get_expr(), &expected)
     }
 
     #[test]
@@ -1797,9 +1944,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1827,7 +1974,7 @@ mod tests {
             InferredType::option(InferredType::u64()),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1839,9 +1986,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1882,7 +2029,7 @@ mod tests {
             InferredType::option(InferredType::option(InferredType::u64())),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1894,9 +2041,9 @@ mod tests {
 
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -1931,7 +2078,7 @@ mod tests {
             InferredType::record(vec![("foo".to_string(), InferredType::u64())]),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -1945,9 +2092,9 @@ mod tests {
           y
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -2014,7 +2161,7 @@ mod tests {
             InferredType::record(vec![("x".to_string(), InferredType::u64())]),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -2041,25 +2188,24 @@ mod tests {
 
         let return_type = golem_wasm_ast::analysis::analysed_type::option(worker_response.typ);
 
-        let component_metadata =
-            get_analysed_exports("foo", vec![request_type.clone()], return_type);
+        let rib_compiler =
+            get_test_rib_compiler_with("foo", vec![request_type.clone()], return_type);
 
         let expr_str = r#"
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
-              let result = foo(x);
+              let worker = instance("foo");
+              let result = worker.foo(x);
               match result {  some(value) => "personal-id", none =>  x.body.titles[1] }
             "#;
 
-        let mut expr = Expr::from_text(expr_str).unwrap();
+        let expr = Expr::from_text(expr_str).unwrap();
 
-        let function_type_registry =
-            FunctionTypeRegistry::from_export_metadata(&component_metadata);
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let expected =
+            test_utils::expected_expr_for_select_index(&rib_compiler.get_component_dependencies());
 
-        let expected = test_utils::expected_expr_for_select_index();
-
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     #[test]
@@ -2074,8 +2220,9 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let inferred_expr =
-            InferredExpr::from_expr(expr, &FunctionTypeRegistry::empty(), &vec![]).unwrap();
+        let compiler = RibCompiler::default();
+
+        let inferred_expr = compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -2148,10 +2295,11 @@ mod tests {
 
           "#;
 
+        let rib_compiler = RibCompiler::default();
+
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let inferred_expr =
-            InferredExpr::from_expr(expr, &FunctionTypeRegistry::empty(), &vec![]).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -2196,9 +2344,9 @@ mod tests {
           { a : p, b: q }
           "#;
 
-        let function_type_registry = test_utils::get_function_type_registry();
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
+        let rib_compiler = test_utils::get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
         let expected = expr_block(
             vec![
@@ -2287,7 +2435,7 @@ mod tests {
             ]),
         );
 
-        assert_eq!(expr, expected);
+        assert_eq!(inferred_expr.get_expr(), &expected);
     }
 
     mod test_utils {
@@ -2297,8 +2445,9 @@ mod tests {
         use crate::parser::type_name::TypeName;
         use crate::rib_source_span::SourceSpan;
         use crate::{
-            ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
-            Number, ParsedFunctionSite, VariableId,
+            ArmPattern, ComponentDependencies, ComponentDependency, ComponentDependencyKey, Expr,
+            InferredType, InstanceCreationType, InstanceType, MatchArm, MatchIdentifier, Number,
+            ParsedFunctionSite, RibCompiler, RibCompilerConfig, VariableId,
         };
         use bigdecimal::BigDecimal;
         use golem_wasm_ast::analysis::analysed_type::u64;
@@ -2308,6 +2457,7 @@ mod tests {
             AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeU32,
         };
         use golem_wasm_rpc::{Value, ValueAndType};
+        use uuid::Uuid;
 
         pub(crate) fn result(
             expr: Result<Expr, Expr>,
@@ -2566,7 +2716,7 @@ mod tests {
             }
         }
 
-        pub(crate) fn get_function_type_registry() -> FunctionTypeRegistry {
+        pub(crate) fn get_test_compiler() -> RibCompiler {
             let metadata = vec![
                 AnalysedExport::Function(AnalysedFunction {
                     name: "foo".to_string(),
@@ -2585,7 +2735,21 @@ mod tests {
                     result: None,
                 }),
             ];
-            FunctionTypeRegistry::from_export_metadata(&metadata)
+
+            let component_dependency_key = ComponentDependencyKey {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            RibCompiler::new(RibCompilerConfig::new(
+                vec![ComponentDependency::new(
+                    component_dependency_key.clone(),
+                    metadata.clone(),
+                )],
+                vec![],
+            ))
         }
 
         pub(crate) fn get_analysed_type_enum(cases: Vec<&str>) -> AnalysedType {
@@ -2631,11 +2795,11 @@ mod tests {
             )
         }
 
-        pub(crate) fn get_analysed_exports(
+        pub(crate) fn get_test_rib_compiler_with(
             function_name: &str,
             input_types: Vec<AnalysedType>,
             output: AnalysedType,
-        ) -> Vec<AnalysedExport> {
+        ) -> RibCompiler {
             let analysed_function_parameters = input_types
                 .into_iter()
                 .enumerate()
@@ -2645,14 +2809,39 @@ mod tests {
                 })
                 .collect();
 
-            vec![AnalysedExport::Function(AnalysedFunction {
+            let component_dependency_key = ComponentDependencyKey {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            let exports = vec![AnalysedExport::Function(AnalysedFunction {
                 name: function_name.to_string(),
                 parameters: analysed_function_parameters,
                 result: Some(AnalysedFunctionResult { typ: output }),
-            })]
+            })];
+
+            RibCompiler::new(RibCompilerConfig::new(
+                vec![ComponentDependency::new(
+                    component_dependency_key.clone(),
+                    exports,
+                )],
+                vec![],
+            ))
         }
 
-        pub(crate) fn expected_expr_for_enum_test() -> Expr {
+        pub(crate) fn expected_expr_for_enum_test(
+            component_dependencies: &ComponentDependencies,
+        ) -> Expr {
+            let expected_component_in_function_calls = component_dependencies
+                .clone()
+                .dependencies
+                .first_key_value()
+                .unwrap()
+                .0
+                .clone();
+
             expr_block(
                 vec![
                     let_binding(
@@ -2726,15 +2915,37 @@ mod tests {
                         ),
                     ),
                     let_binding(
+                        VariableId::local("worker", 0),
+                        None,
+                        Expr::call(
+                            CallType::InstanceCreation(InstanceCreationType::Worker {
+                                component_info: None,
+                                worker_name: Some(Box::new(Expr::literal("foo"))),
+                            }),
+                            None,
+                            vec![Expr::literal("foo")],
+                        )
+                        .with_inferred_type(InferredType::instance(
+                            InstanceType::Global {
+                                worker_name: Some(Box::new(Expr::literal("foo"))),
+                                component_dependency: component_dependencies.clone(),
+                            },
+                        )),
+                    ),
+                    let_binding(
                         VariableId::local("result", 0),
                         None,
                         call(
-                            CallType::function_without_worker(DynamicParsedFunctionName {
-                                site: ParsedFunctionSite::Global,
-                                function: DynamicParsedFunctionReference::Function {
-                                    function: "process".to_string(),
+                            CallType::function_call_with_worker(
+                                Expr::literal("foo"),
+                                DynamicParsedFunctionName {
+                                    site: ParsedFunctionSite::Global,
+                                    function: DynamicParsedFunctionReference::Function {
+                                        function: "process".to_string(),
+                                    },
                                 },
-                            }),
+                                Some(expected_component_in_function_calls.clone()),
+                            ),
                             None,
                             vec![
                                 identifier(
@@ -3047,7 +3258,17 @@ mod tests {
             )
         }
 
-        pub(crate) fn expected_expr_for_select_index() -> Expr {
+        pub(crate) fn expected_expr_for_select_index(
+            component_dependencies: &ComponentDependencies,
+        ) -> Expr {
+            let expected_component_in_function_calls = component_dependencies
+                .clone()
+                .dependencies
+                .first_key_value()
+                .unwrap()
+                .0
+                .clone();
+
             expr_block(
                 vec![
                     let_binding(
@@ -3224,15 +3445,37 @@ mod tests {
                         ),
                     ),
                     let_binding(
+                        VariableId::local("worker", 0),
+                        None,
+                        Expr::call(
+                            CallType::InstanceCreation(InstanceCreationType::Worker {
+                                component_info: None,
+                                worker_name: Some(Box::new(Expr::literal("foo"))),
+                            }),
+                            None,
+                            vec![Expr::literal("foo")],
+                        )
+                        .with_inferred_type(InferredType::instance(
+                            InstanceType::Global {
+                                worker_name: Some(Box::new(Expr::literal("foo"))),
+                                component_dependency: component_dependencies.clone(),
+                            },
+                        )),
+                    ),
+                    let_binding(
                         VariableId::local("result", 0),
                         None,
                         call(
-                            CallType::function_without_worker(DynamicParsedFunctionName {
-                                site: ParsedFunctionSite::Global,
-                                function: DynamicParsedFunctionReference::Function {
-                                    function: "foo".to_string(),
+                            CallType::function_call_with_worker(
+                                Expr::literal("foo"),
+                                DynamicParsedFunctionName {
+                                    site: ParsedFunctionSite::Global,
+                                    function: DynamicParsedFunctionReference::Function {
+                                        function: "foo".to_string(),
+                                    },
                                 },
-                            }),
+                                Some(expected_component_in_function_calls.clone()),
+                            ),
                             None,
                             vec![identifier(
                                 VariableId::local("x", 0),
@@ -3349,7 +3592,7 @@ mod tests {
                                     Expr::number_inferred(
                                         BigDecimal::from(1),
                                         None,
-                                        InferredType::u64(),
+                                        InferredType::s32(),
                                     ),
                                     None,
                                     InferredType::string(),

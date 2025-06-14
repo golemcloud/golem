@@ -20,8 +20,7 @@ use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
 pub(crate) use gateway_binding_compiled::*;
 use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType;
 use golem_common::model::component::VersionedComponentId;
-use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{Expr, RibByteCode, RibCompilationError, RibInputTypeInfo};
+use rib::{ComponentDependency, Expr, RibByteCode, RibCompilationError, RibInputTypeInfo};
 pub use static_binding::*;
 
 mod gateway_binding_compiled;
@@ -37,10 +36,10 @@ mod worker_binding;
 // from anything dynamic in nature. This implies, there will not be Rib in either pre-compiled or raw form.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GatewayBinding {
-    Default(WorkerBinding),
-    FileServer(WorkerBinding),
+    Default(Box<WorkerBinding>),
+    FileServer(Box<FileServerBinding>),
     Static(StaticBinding),
-    HttpHandler(HttpHandlerBinding),
+    HttpHandler(Box<HttpHandlerBinding>),
 }
 
 impl GatewayBinding {
@@ -92,7 +91,7 @@ impl TryFrom<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Ga
                 golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
                     binding_type: Some(GatewayBindingType::Default.into()),
                     component: Some(worker_binding.component_id.into()),
-                    worker_name: worker_binding.worker_name.map(|x| x.into()),
+                    worker_name: None,
                     response: Some(worker_binding.response_mapping.0.into()),
                     idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
                     static_binding: None,
@@ -170,20 +169,18 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 let component_id = VersionedComponentId::try_from(
                     value.component.ok_or("Missing component id".to_string())?,
                 )?;
-                let worker_name = value.worker_name.map(Expr::try_from).transpose()?;
                 let idempotency_key = value.idempotency_key.map(Expr::try_from).transpose()?;
                 let invocation_context =
                     value.invocation_context.map(Expr::try_from).transpose()?;
                 let response_proto = value.response.ok_or("Missing response field")?;
                 let response = Expr::try_from(response_proto)?;
 
-                Ok(GatewayBinding::Default(WorkerBinding {
+                Ok(GatewayBinding::Default(Box::new(WorkerBinding {
                     component_id,
-                    worker_name,
                     idempotency_key,
                     response_mapping: ResponseMapping(response),
                     invocation_context,
-                }))
+                })))
             }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer => {
                 let component_id = VersionedComponentId::try_from(
@@ -194,13 +191,13 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 let response_proto = value.response.ok_or("Missing response field")?;
                 let response = Expr::try_from(response_proto)?;
 
-                Ok(GatewayBinding::FileServer(WorkerBinding {
+                Ok(GatewayBinding::FileServer(Box::new(FileServerBinding {
                     component_id,
                     worker_name,
                     idempotency_key,
                     response_mapping: ResponseMapping(response),
                     invocation_context: None,
-                }))
+                })))
             }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler => {
                 let component_id = VersionedComponentId::try_from(
@@ -209,11 +206,11 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 let worker_name = value.worker_name.map(Expr::try_from).transpose()?;
                 let idempotency_key = value.idempotency_key.map(Expr::try_from).transpose()?;
 
-                Ok(GatewayBinding::HttpHandler(HttpHandlerBinding {
+                Ok(GatewayBinding::HttpHandler(Box::new(HttpHandlerBinding {
                     component_id,
                     worker_name,
                     idempotency_key,
-                }))
+                })))
             }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {
                 let static_binding = value.static_binding.ok_or("Missing static binding")?;
@@ -242,11 +239,8 @@ pub struct WorkerNameCompiled {
 }
 
 impl WorkerNameCompiled {
-    pub fn from_worker_name(
-        worker_name: &Expr,
-        exports: &[AnalysedExport],
-    ) -> Result<Self, RibCompilationError> {
-        let compiled_worker_name = DefaultWorkerServiceRibCompiler::compile(worker_name, exports)?;
+    pub fn from_worker_name(worker_name: &Expr) -> Result<Self, RibCompilationError> {
+        let compiled_worker_name = DefaultWorkerServiceRibCompiler::compile(worker_name, &[])?;
 
         Ok(WorkerNameCompiled {
             worker_name: worker_name.clone(),
@@ -264,12 +258,9 @@ pub struct IdempotencyKeyCompiled {
 }
 
 impl IdempotencyKeyCompiled {
-    pub fn from_idempotency_key(
-        idempotency_key: &Expr,
-        exports: &[AnalysedExport],
-    ) -> Result<Self, RibCompilationError> {
+    pub fn from_idempotency_key(idempotency_key: &Expr) -> Result<Self, RibCompilationError> {
         let idempotency_key_compiled =
-            DefaultWorkerServiceRibCompiler::compile(idempotency_key, exports)?;
+            DefaultWorkerServiceRibCompiler::compile(idempotency_key, &[])?;
 
         Ok(IdempotencyKeyCompiled {
             idempotency_key: idempotency_key.clone(),
@@ -289,7 +280,7 @@ pub struct InvocationContextCompiled {
 impl InvocationContextCompiled {
     pub fn from_invocation_context(
         invocation_context: &Expr,
-        exports: &[AnalysedExport],
+        exports: &[ComponentDependency],
     ) -> Result<Self, RibCompilationError> {
         let invocation_context_compiled =
             DefaultWorkerServiceRibCompiler::compile(invocation_context, exports)?;

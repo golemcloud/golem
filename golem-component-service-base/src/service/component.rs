@@ -58,7 +58,7 @@ use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_wasm_ast::analysis::AnalysedType;
-use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
+use rib::{FunctionDictionary, FunctionName};
 use sqlx::types::Json;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
@@ -544,36 +544,32 @@ impl ComponentServiceDefault {
 
     pub fn find_component_metadata_conflicts(
         function_constraints: &FunctionConstraints,
-        new_type_registry: &FunctionTypeRegistry,
+        new_type_registry: &FunctionDictionary,
     ) -> ConflictReport {
         let mut missing_functions = vec![];
         let mut conflicting_functions = vec![];
 
         for existing_function_call in &function_constraints.constraints {
-            if let Some(new_registry_value) =
-                new_type_registry.lookup(existing_function_call.function_key())
+            if let Some(function_type) =
+                new_type_registry.get(existing_function_call.function_key())
             {
                 let mut parameter_conflict = false;
                 let mut return_conflict = false;
 
-                if existing_function_call.parameter_types() != &new_registry_value.argument_types()
-                {
+                if existing_function_call.parameter_types() != &function_type.parameter_types() {
                     parameter_conflict = true;
                 }
 
-                let new_return_type = match new_registry_value.clone() {
-                    RegistryValue::Function { return_type, .. } => return_type,
-                    _ => None,
-                };
+                let new_return_type = &function_type.return_type();
 
-                if existing_function_call.return_type() != &new_return_type {
+                if existing_function_call.return_type() != new_return_type {
                     return_conflict = true;
                 }
 
                 let parameter_conflict = if parameter_conflict {
                     Some(ParameterTypeConflict {
                         existing: existing_function_call.parameter_types().clone(),
-                        new: new_registry_value.clone().argument_types().clone(),
+                        new: function_type.parameter_types().clone(),
                     })
                 } else {
                     None
@@ -582,7 +578,7 @@ impl ComponentServiceDefault {
                 let return_conflict = if return_conflict {
                     Some(ReturnTypeConflict {
                         existing: existing_function_call.return_type().clone(),
-                        new: new_return_type,
+                        new: new_return_type.clone(),
                     })
                 } else {
                     None
@@ -813,11 +809,17 @@ impl ComponentServiceDefault {
             .get_constraint(&owner.to_string(), component_id.0)
             .await?;
 
-        let new_type_registry = FunctionTypeRegistry::from_export_metadata(&metadata.exports);
+        let new_function_dictionary =
+            FunctionDictionary::from_exports(&metadata.exports).map_err(|e| {
+                ComponentError::InternalConversionError {
+                    what: "exports".to_string(),
+                    error: e,
+                }
+            })?;
 
         if let Some(constraints) = constraints {
             let conflicts =
-                Self::find_component_metadata_conflicts(&constraints, &new_type_registry);
+                Self::find_component_metadata_conflicts(&constraints, &new_function_dictionary);
             if !conflicts.is_empty() {
                 return Err(ComponentError::ComponentConstraintConflictError(conflicts));
             }
@@ -2241,7 +2243,7 @@ impl ComponentService for LazyComponentService {
 
 #[derive(Debug)]
 pub struct ConflictingFunction {
-    pub function: RegistryKey,
+    pub function: FunctionName,
     pub parameter_type_conflict: Option<ParameterTypeConflict>,
     pub return_type_conflict: Option<ReturnTypeConflict>,
 }
@@ -2306,7 +2308,7 @@ impl Display for ConflictingFunction {
 
 #[derive(Debug)]
 pub struct ConflictReport {
-    pub missing_functions: Vec<RegistryKey>,
+    pub missing_functions: Vec<FunctionName>,
     pub conflicting_functions: Vec<ConflictingFunction>,
 }
 

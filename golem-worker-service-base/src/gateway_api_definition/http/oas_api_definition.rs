@@ -255,7 +255,7 @@ mod internal {
                         Ok(RouteRequest {
                             path: path_pattern.clone(),
                             method,
-                            binding: GatewayBinding::Default(binding),
+                            binding: GatewayBinding::Default(Box::new(binding)),
                             security,
                         })
                     }
@@ -265,7 +265,7 @@ mod internal {
                         Ok(RouteRequest {
                             path: path_pattern.clone(),
                             method,
-                            binding: GatewayBinding::Default(binding),
+                            binding: GatewayBinding::Default(Box::new(binding)),
                             security,
                         })
                     }
@@ -275,7 +275,7 @@ mod internal {
                         Ok(RouteRequest {
                             path: path_pattern.clone(),
                             method,
-                            binding: GatewayBinding::HttpHandler(binding),
+                            binding: GatewayBinding::HttpHandler(Box::new(binding)),
                             security,
                         })
                     }
@@ -315,7 +315,6 @@ mod internal {
         let component_view = ctx.component_by_name(&component_name).await?;
 
         let binding = WorkerBinding {
-            worker_name: get_worker_id_expr(gateway_binding_value)?,
             component_id: VersionedComponentId {
                 component_id: component_view.id,
                 version: component_version.unwrap_or(component_view.latest_version),

@@ -19,7 +19,7 @@ use golem_wasm_ast::analysis::{AnalysedType, TypeEnum};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
-// A type-registry is a mapping from a function/variant/enum to the `arguments` and `return types` of that function/variant/enum.
+// A `FunctionTypeRegistry` is a mapping from a function/variant/enum to the `arguments` and `return types` of that function/variant/enum.
 // The structure is raw and closer to the original component metadata.
 // FunctionTypeRegistry act as a set of all dependencies in Rib.
 // Currently, it talks about only 1 component.
@@ -267,27 +267,6 @@ impl RegistryKey {
             }
         })
     }
-
-    pub fn from_call_type(call_type: &CallType) -> Option<RegistryKey> {
-        match call_type {
-            CallType::VariantConstructor(variant_name) => {
-                Some(RegistryKey::FunctionName(variant_name.clone()))
-            }
-            CallType::EnumConstructor(enum_name) => {
-                Some(RegistryKey::FunctionName(enum_name.clone()))
-            }
-            CallType::Function { function_name, .. } => match function_name.site.interface_name() {
-                None => Some(RegistryKey::FunctionName(
-                    function_name.function_name_with_prefix_identifiers(),
-                )),
-                Some(interface_name) => Some(RegistryKey::FunctionNameWithInterface {
-                    interface_name: interface_name.to_string(),
-                    function_name: function_name.function_name_with_prefix_identifiers(),
-                }),
-            },
-            CallType::InstanceCreation(_) => None,
-        }
-    }
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
@@ -410,62 +389,6 @@ mod internal {
             AnalysedType::S8(_) => {}
             AnalysedType::Bool(_) => {}
             AnalysedType::Handle(_) => {}
-        }
-    }
-}
-
-#[cfg(feature = "protobuf")]
-mod protobuf {
-    use crate::RegistryKey;
-    use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
-
-    impl TryFrom<golem_api_grpc::proto::golem::rib::RegistryKey> for RegistryKey {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::rib::RegistryKey,
-        ) -> Result<Self, Self::Error> {
-            let key_type = value.key_type.ok_or("key type missing")?;
-
-            let registry_key = match key_type {
-                KeyType::FunctionName(string) => RegistryKey::FunctionName(string.name),
-                KeyType::FunctionNameWithInterface(function_with_interface) => {
-                    let interface_name = function_with_interface.interface_name.clone();
-                    let function_name = function_with_interface.function_name;
-
-                    RegistryKey::FunctionNameWithInterface {
-                        interface_name,
-                        function_name,
-                    }
-                }
-            };
-
-            Ok(registry_key)
-        }
-    }
-
-    impl From<&RegistryKey> for golem_api_grpc::proto::golem::rib::RegistryKey {
-        fn from(value: &RegistryKey) -> Self {
-            match value {
-                RegistryKey::FunctionName(name) => golem_api_grpc::proto::golem::rib::RegistryKey {
-                    key_type: Some(KeyType::FunctionName(
-                        golem_api_grpc::proto::golem::rib::FunctionName {
-                            name: name.to_string(),
-                        },
-                    )),
-                },
-                RegistryKey::FunctionNameWithInterface {
-                    function_name,
-                    interface_name,
-                } => golem_api_grpc::proto::golem::rib::RegistryKey {
-                    key_type: Some(KeyType::FunctionNameWithInterface(
-                        golem_api_grpc::proto::golem::rib::FunctionNameWithInterface {
-                            interface_name: interface_name.clone(),
-                            function_name: function_name.clone(),
-                        },
-                    )),
-                },
-            }
         }
     }
 }

@@ -302,7 +302,8 @@ mod test {
                     },
                     None,
                     None,
-                    vec![]
+                    vec![],
+                    None
                 ),
                 Expr::call_worker_function(
                     DynamicParsedFunctionName {
@@ -313,7 +314,8 @@ mod test {
                     },
                     None,
                     None,
-                    vec![]
+                    vec![],
+                    None
                 ),
             ))
         );

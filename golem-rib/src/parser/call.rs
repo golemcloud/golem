@@ -48,7 +48,7 @@ where
             sep_by(rib_expr(), char(',').skip(spaces())),
         ),
     )
-        .map(|(name, tp, args)| Expr::call_worker_function(name, tp, None, args))
+        .map(|(name, tp, args)| Expr::call_worker_function(name, tp, None, args, None))
 }
 
 pub fn function_name<Input>() -> impl Parser<Input, Output = DynamicParsedFunctionName>
@@ -287,6 +287,7 @@ mod function_call_tests {
             None,
             None,
             vec![],
+            None,
         ));
 
         assert_eq!(result, expected);
@@ -307,6 +308,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::identifier_global("bar", None)],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -328,6 +330,7 @@ mod function_call_tests {
                 Expr::identifier_global("bar", None),
                 Expr::identifier_global("baz", None),
             ],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -350,6 +353,7 @@ mod function_call_tests {
                 Expr::identifier_global("baz", None),
                 Expr::identifier_global("qux", None),
             ],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -373,6 +377,7 @@ mod function_call_tests {
                 Expr::identifier_global("qux", None),
                 Expr::identifier_global("quux", None),
             ],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -397,6 +402,7 @@ mod function_call_tests {
                 Expr::identifier_global("quux", None),
                 Expr::identifier_global("quuz", None),
             ],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -422,6 +428,7 @@ mod function_call_tests {
                 Expr::identifier_global("quuz", None),
                 Expr::identifier_global("quuux", None),
             ],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -443,6 +450,7 @@ mod function_call_tests {
                 "bar".to_string(),
                 Expr::identifier_global("baz", None),
             )])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -467,6 +475,7 @@ mod function_call_tests {
                 )]),
                 Expr::identifier_global("qux", None),
             ],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -494,6 +503,7 @@ mod function_call_tests {
                     Expr::identifier_global("quux", None),
                 )]),
             ],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -522,6 +532,7 @@ mod function_call_tests {
                 )]),
                 Expr::identifier_global("quuz", None),
             ],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -546,6 +557,7 @@ mod function_call_tests {
                 ],
                 None,
             )],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -573,6 +585,7 @@ mod function_call_tests {
                 ),
                 Expr::identifier_global("qux", None),
             ],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -606,6 +619,7 @@ mod function_call_tests {
                     None,
                 ),
             ],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -627,6 +641,7 @@ mod function_call_tests {
                 Expr::identifier_global("bar", None),
                 Expr::identifier_global("baz", None),
             ])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -651,6 +666,7 @@ mod function_call_tests {
                 ]),
                 Expr::identifier_global("qux", None),
             ],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -669,6 +685,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -689,6 +706,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -712,6 +730,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -735,6 +754,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -758,6 +778,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -781,6 +802,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -805,6 +827,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -834,6 +857,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -865,6 +889,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -889,6 +914,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         );
         assert_eq!(result, expected);
     }
@@ -913,6 +939,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -938,6 +965,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -962,6 +990,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -985,6 +1014,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -1009,6 +1039,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -1037,6 +1068,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -1068,6 +1100,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }
@@ -1091,6 +1124,7 @@ mod function_call_tests {
             None,
             None,
             vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+            None,
         ));
         assert_eq!(result, expected);
     }

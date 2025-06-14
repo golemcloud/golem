@@ -22,7 +22,9 @@ pub fn check_invalid_worker_name(expr: &mut Expr) -> Result<(), InvalidWorkerNam
     while let Some(expr) = visitor.pop_back() {
         if let Expr::Call { call_type, .. } = expr {
             match call_type {
-                CallType::InstanceCreation(InstanceCreationType::Worker { worker_name }) => {
+                CallType::InstanceCreation(InstanceCreationType::Worker {
+                    worker_name, ..
+                }) => {
                     internal::check_worker_name(worker_name)?;
                 }
                 CallType::Function { worker, .. } => {

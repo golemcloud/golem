@@ -91,26 +91,28 @@ impl RibRepl {
             }
         }
 
-        let component_dependency = match config.component_source {
-            Some(ref details) => config
-                .dependency_manager
-                .add_component(&details.source_path, details.component_name.clone())
-                .await
-                .map_err(|err| ReplBootstrapError::ComponentLoadError(err.to_string())),
+        let component_dependencies = match config.component_source {
+            Some(ref details) => {
+                let component_dependency = config
+                    .dependency_manager
+                    .add_component(&details.source_path, details.component_name.clone())
+                    .await
+                    .map_err(|err| ReplBootstrapError::ComponentLoadError(err.to_string()))?;
+
+                Ok(vec![component_dependency])
+            }
             None => {
                 let dependencies = config.dependency_manager.get_dependencies().await;
 
                 match dependencies {
                     Ok(dependencies) => {
-                        let mut component_dependencies = dependencies.component_dependencies;
+                        let component_dependencies = dependencies.component_dependencies;
 
-                        match &component_dependencies.len() {
-                            0 => Err(ReplBootstrapError::NoComponentsFound),
-                            1 => Ok(component_dependencies.pop().unwrap()),
-                            _ => Err(ReplBootstrapError::MultipleComponentsFound(
-                                "multiple components detected. rib repl currently support only a single component".to_string(),
-                            )),
+                        if component_dependencies.is_empty() {
+                            return Err(ReplBootstrapError::NoComponentsFound);
                         }
+
+                        Ok(component_dependencies)
                     }
                     Err(err) => Err(ReplBootstrapError::ComponentLoadError(format!(
                         "failed to register components: {}",
@@ -118,17 +120,13 @@ impl RibRepl {
                     ))),
                 }
             }
-        }?;
+        };
 
         // Once https://github.com/golemcloud/golem/issues/1608 is resolved,
         // component dependency will not be required in the REPL state
         let repl_state = ReplState::new(
-            component_dependency.clone(),
             config.worker_function_invoke,
-            RibCompiler::new(RibCompilerConfig::new(
-                component_dependency.metadata,
-                vec![],
-            )),
+            RibCompiler::new(RibCompilerConfig::new(component_dependencies?, vec![])),
             history_file_path.clone(),
         );
 
@@ -189,7 +187,7 @@ impl RibRepl {
                         .editor
                         .save_history(self.repl_state.history_file_path());
 
-                    match compile_rib_script(&self.current_rib_program(), &self.repl_state) {
+                    match compile_rib_script(&self.current_rib_program(), self.repl_state.clone()) {
                         Ok(compiler_output) => {
                             let rib_edit = self.editor.helper_mut().unwrap();
 

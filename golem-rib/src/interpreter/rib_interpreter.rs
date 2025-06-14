@@ -19,12 +19,16 @@ use crate::interpreter::rib_runtime_error::{
     arithmetic_error, no_result, throw_error, RibRuntimeError,
 };
 use crate::interpreter::stack::InterpreterStack;
-use crate::{internal_corrupted_state, RibByteCode, RibFunctionInvoke, RibIR, RibInput, RibResult};
+use crate::{
+    internal_corrupted_state, DefaultWorkerNameGenerator, GenerateWorkerName, RibByteCode,
+    RibComponentFunctionInvoke, RibIR, RibInput, RibResult,
+};
 use std::sync::Arc;
 
 pub struct Interpreter {
     pub input: RibInput,
-    pub invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
+    pub invoke: Arc<dyn RibComponentFunctionInvoke + Sync + Send>,
+    pub generate_worker_name: Arc<dyn GenerateWorkerName + Sync + Send>,
 }
 
 impl Default for Interpreter {
@@ -32,6 +36,7 @@ impl Default for Interpreter {
         Interpreter {
             input: RibInput::default(),
             invoke: Arc::new(internal::NoopRibFunctionInvoke),
+            generate_worker_name: Arc::new(DefaultWorkerNameGenerator),
         }
     }
 }
@@ -39,19 +44,28 @@ impl Default for Interpreter {
 pub type RibInterpreterResult<T> = Result<T, RibRuntimeError>;
 
 impl Interpreter {
-    pub fn new(input: RibInput, invoke: Arc<dyn RibFunctionInvoke + Sync + Send>) -> Self {
+    pub fn new(
+        input: RibInput,
+        invoke: Arc<dyn RibComponentFunctionInvoke + Sync + Send>,
+        generate_worker_name: Arc<dyn GenerateWorkerName + Sync + Send>,
+    ) -> Self {
         Interpreter {
             input: input.clone(),
             invoke,
+            generate_worker_name,
         }
     }
 
     // Interpreter that's not expected to call a side-effecting function call.
     // All it needs is environment with the required variables to evaluate the Rib script
-    pub fn pure(input: RibInput) -> Self {
+    pub fn pure(
+        input: RibInput,
+        generate_worker_name: Arc<dyn GenerateWorkerName + Sync + Send>,
+    ) -> Self {
         Interpreter {
             input,
             invoke: Arc::new(internal::NoopRibFunctionInvoke),
+            generate_worker_name,
         }
     }
 
@@ -67,6 +81,15 @@ impl Interpreter {
 
         while let Some(instruction) = byte_code_cursor.get_instruction() {
             match instruction {
+                RibIR::GenerateWorkerName(instance_count) => {
+                    internal::run_generate_worker_name(
+                        instance_count,
+                        self,
+                        &mut stack,
+                        &mut interpreter_env,
+                    )?;
+                }
+
                 RibIR::PushLit(val) => {
                     stack.push_val(val);
                 }
@@ -201,13 +224,20 @@ impl Interpreter {
                     )?;
                 }
 
-                RibIR::InvokeFunction(worker_type, arg_size, _) => {
+                RibIR::InvokeFunction(
+                    component_info,
+                    worker_type,
+                    arg_size,
+                    expected_result_type,
+                ) => {
                     internal::run_call_instruction(
+                        component_info,
                         &byte_code_cursor.position(),
                         arg_size,
                         worker_type,
                         &mut stack,
                         &mut interpreter_env,
+                        expected_result_type,
                     )
                     .await?;
                 }
@@ -321,9 +351,10 @@ mod internal {
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::stack::InterpreterStack;
     use crate::{
-        bail_corrupted_state, internal_corrupted_state, CoercedNumericValue, EvaluatedFnArgs,
-        EvaluatedFqFn, EvaluatedWorkerName, FunctionReferenceType, InstructionId,
-        ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke,
+        bail_corrupted_state, internal_corrupted_state, AnalysedTypeWithUnit, CoercedNumericValue,
+        ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName,
+        FunctionReferenceType, InstructionId, Interpreter, ParsedFunctionName,
+        ParsedFunctionReference, ParsedFunctionSite, RibComponentFunctionInvoke,
         RibFunctionInvokeResult, RibInterpreterResult, TypeHint, VariableId, WorkerNamePresence,
     };
     use golem_wasm_ast::analysis::AnalysedType;
@@ -332,26 +363,28 @@ mod internal {
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
     use crate::interpreter::rib_runtime_error::{
-        cast_error, cast_error_custom, empty_stack, exhausted_iterator, field_not_found,
-        function_invoke_fail, index_out_of_bound, infinite_computation, input_not_found,
-        instruction_jump_error, insufficient_stack_items, invalid_type_with_stack_value,
-        type_mismatch_with_type_hint, type_mismatch_with_value, RibRuntimeError,
+        cast_error_custom, empty_stack, exhausted_iterator, field_not_found, function_invoke_fail,
+        index_out_of_bound, infinite_computation, input_not_found, instruction_jump_error,
+        insufficient_stack_items, invalid_type_with_stack_value, type_mismatch_with_type_hint,
+        RibRuntimeError,
     };
     use crate::type_inference::GetTypeHint;
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::u64;
+    use golem_wasm_ast::analysis::analysed_type::{s16, s32, s64, s8, str, u16, u32, u64, u8};
     use std::ops::Deref;
 
     pub(crate) struct NoopRibFunctionInvoke;
 
     #[async_trait]
-    impl RibFunctionInvoke for NoopRibFunctionInvoke {
+    impl RibComponentFunctionInvoke for NoopRibFunctionInvoke {
         async fn invoke(
             &self,
+            _component_dependency_key: ComponentDependencyKey,
             _instruction_id: &InstructionId,
             _worker_name: Option<EvaluatedWorkerName>,
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
+            _return_type: Option<AnalysedType>,
         ) -> RibFunctionInvokeResult {
             Ok(None)
         }
@@ -420,6 +453,37 @@ mod internal {
         Ok(())
     }
 
+    macro_rules! match_range_to_value {
+        (
+        $from_val:expr,
+        $to_val:expr,
+        $variant:ident,
+        $type_fn:expr,
+        $inclusive:expr,
+        $stack:expr
+    ) => {
+            match $to_val {
+                Value::$variant(num2) => {
+                    if $inclusive {
+                        let range_iter = (*$from_val..=*num2)
+                            .map(|i| ValueAndType::new(Value::$variant(i), $type_fn));
+                        $stack.push(RibInterpreterStackValue::Iterator(Box::new(range_iter)));
+                    } else {
+                        let range_iter = (*$from_val..*num2)
+                            .map(|i| ValueAndType::new(Value::$variant(i), $type_fn));
+                        $stack.push(RibInterpreterStackValue::Iterator(Box::new(range_iter)));
+                    }
+                }
+
+                _ => bail_corrupted_state!(concat!(
+                    "expected a field named 'to' to be of type ",
+                    stringify!($variant),
+                    ", but it was not"
+                )),
+            }
+        };
+    }
+
     pub(crate) fn run_to_iterator(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {
@@ -440,86 +504,71 @@ mod internal {
 
                 Ok(())
             }
-            (Value::Record(fields), AnalysedType::Record(record_type)) => {
-                let mut from: Option<usize> = None;
-                let mut to: Option<usize> = None;
-                let mut inclusive = false;
+            (Value::Record(fields), AnalysedType::Record(_)) => {
+                let from_value = fields.first().ok_or_else(|| {
+                    internal_corrupted_state!(
+                        "expected a field named 'from' to be present in the record"
+                    )
+                })?;
 
-                let value_and_names = fields.into_iter().zip(record_type.fields);
+                let to_value = fields.get(1).ok_or_else(|| {
+                    infinite_computation(
+                        "an infinite range is being iterated. make sure range is finite to avoid infinite computation",
+                    )
+                })?;
 
-                for (value, name_and_type) in value_and_names {
-                    match name_and_type.name.as_str() {
-                        "from" => {
-                            from = Some(
-                                to_num(&value)
-                                    .ok_or_else(|| cast_error(value, TypeHint::Number))?,
-                            )
-                        }
-                        "to" => {
-                            to = Some(
-                                to_num(&value)
-                                    .ok_or_else(|| cast_error(value, TypeHint::Number))?,
-                            )
-                        }
-                        "inclusive" => {
-                            inclusive = match value {
-                                Value::Bool(b) => b,
-                                _ => {
-                                    return Err(type_mismatch_with_value(
-                                        vec![TypeHint::Boolean],
-                                        value,
-                                    ))
-                                }
-                            }
-                        }
-                        _ => bail_corrupted_state!("Invalid field name {}", name_and_type.name),
-                    }
-                }
+                let inclusive_value = fields.get(2).ok_or_else(|| {
+                    internal_corrupted_state!(
+                        "expected a field named 'inclusive' to be present in the record"
+                    )
+                })?;
 
-                match (from, to) {
-                    (Some(from), Some(to)) => {
-                        if inclusive {
-                            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                (from..=to).map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
-                            )));
-                        } else {
-                            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                (from..to).map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
-                            )));
-                        }
-                    }
-
-                    (None, Some(to)) => {
-                        if inclusive {
-                            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                (0..=to).map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
-                            )));
-                        } else {
-                            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(
-                                (0..to).map(|i| ValueAndType::new(Value::U64(i as u64), u64())),
-                            )));
-                        }
-                    }
-
-                    // avoiding panicking with stack overflow for rib like the following
-                    // for i in 0.. {
-                    //   yield i
-                    // }
-                    (Some(_), None) => {
-                        return Err(infinite_computation(
-                            "an infinite range is being iterated. make sure range is finite to avoid infinite computation",
-                        ))
-                    }
-
-                    (None, None) => {
-                        interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new({
-                            let range = 0..;
-                            range
-                                .into_iter()
-                                .map(|i| ValueAndType::new(Value::U64(i as u64), u64()))
-                        })));
+                let inclusive = match inclusive_value {
+                    Value::Bool(b) => *b,
+                    _ => {
+                        bail_corrupted_state!(
+                            "expected a field named 'inclusive' to be of type boolean, but it was not"
+                        )
                     }
                 };
+
+                match from_value {
+                    Value::S8(num1) => {
+                        match_range_to_value!(num1, to_value, S8, s8(), inclusive, interpreter_stack);
+                    }
+
+                    Value::U8(num1) => {
+                        match_range_to_value!(num1, to_value, U8, u8(), inclusive, interpreter_stack);
+                    }
+
+                    Value::S16(num1) => {
+                        match_range_to_value!(num1, to_value, S16, s16(), inclusive, interpreter_stack);
+                    }
+
+                    Value::U16(num1) => {
+                        match_range_to_value!(num1, to_value, U16, u16(), inclusive, interpreter_stack);
+                    }
+
+                    Value::S32(num1) => {
+                        match_range_to_value!(num1, to_value, S32, s32(), inclusive, interpreter_stack);
+                    }
+
+                    Value::U32(num1) => {
+                        match_range_to_value!(num1, to_value, U32, u32(), inclusive, interpreter_stack);
+                    }
+
+                    Value::S64(num1) => {
+                        match_range_to_value!(num1, to_value, S64, s64(), inclusive, interpreter_stack);
+                    }
+
+                    Value::U64(num1) => {
+                        match_range_to_value!(num1, to_value, U64, u64(), inclusive, interpreter_stack);
+                    }
+
+                    _ => bail_corrupted_state!(
+                        "expected a field named 'from' to be of type S8, U8, S16, U16, S32, U32, S64, U64, but it was not"
+                    ),
+                }
 
                 Ok(())
             }
@@ -527,23 +576,6 @@ mod internal {
             _ => Err(internal_corrupted_state!(
                 "failed to convert to an iterator"
             )),
-        }
-    }
-
-    fn to_num(value: &Value) -> Option<usize> {
-        match value {
-            Value::U64(u64) => Some(*u64 as usize),
-            Value::Bool(_) => None,
-            Value::U8(u8) => Some(*u8 as usize),
-            Value::U16(u16) => Some(*u16 as usize),
-            Value::U32(u32) => Some(*u32 as usize),
-            Value::S8(s8) => Some(*s8 as usize),
-            Value::S16(s16) => Some(*s16 as usize),
-            Value::S32(s32) => Some(*s32 as usize),
-            Value::S64(s64) => Some(*s64 as usize),
-            Value::F32(f32) => Some(*f32 as usize),
-            Value::F64(f64) => Some(*f64 as usize),
-            _ => None,
         }
     }
 
@@ -611,7 +643,7 @@ mod internal {
 
                 Ok(())
             }
-            _ => Err(internal_corrupted_state!("Failed to push values to sink")),
+            None => Ok(()),
         }
     }
 
@@ -683,6 +715,59 @@ mod internal {
             }
             RibInterpreterStackValue::Sink(_, _) => {
                 bail_corrupted_state!("internal error: unable to assign a sink to a variable")
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn run_generate_worker_name(
+        variable_id: Option<VariableId>,
+        interpreter: &mut Interpreter,
+        interpreter_stack: &mut InterpreterStack,
+        interpreter_env: &mut InterpreterEnv,
+    ) -> RibInterpreterResult<()> {
+        match variable_id {
+            None => {
+                let worker_name = interpreter.generate_worker_name.generate_worker_name();
+
+                interpreter_stack
+                    .push_val(ValueAndType::new(Value::String(worker_name.clone()), str()));
+            }
+
+            Some(variable_id) => {
+                let instance_variable = variable_id.as_instance_variable();
+
+                let env_key = EnvironmentKey::from(instance_variable);
+
+                let worker_id = interpreter_env.lookup(&env_key);
+
+                match worker_id {
+                    Some(worker_id) => {
+                        let value_and_type = worker_id.get_val().ok_or_else(|| {
+                            internal_corrupted_state!(
+                        "expected a worker name to be present in the environment, but it was not found"
+                    )
+                        })?;
+
+                        interpreter_stack.push_val(value_and_type);
+                    }
+
+                    None => {
+                        let worker_name = interpreter.generate_worker_name.generate_worker_name();
+
+                        interpreter_env.insert(
+                            env_key,
+                            RibInterpreterStackValue::Val(ValueAndType::new(
+                                Value::String(worker_name.clone()),
+                                str(),
+                            )),
+                        );
+
+                        interpreter_stack
+                            .push_val(ValueAndType::new(Value::String(worker_name.clone()), str()));
+                    }
+                }
             }
         }
 
@@ -907,9 +992,21 @@ mod internal {
                     interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
                     Ok(())
                 }
-                _ => Err(internal_corrupted_state!(
-                    "range selection not supported at byte code level. missing desugar phase"
-                )),
+                Some(CoercedNumericValue::NegInt(index)) => {
+                    if index >= 0 {
+                        let value = items
+                            .get(index as usize)
+                            .ok_or_else(|| index_out_of_bound(index as usize, items.len()))?
+                            .clone();
+
+                        interpreter_stack.push_val(ValueAndType::new(value, (*typ.inner).clone()));
+                    } else {
+                        return Err(index_out_of_bound(index as usize, items.len()));
+                    }
+                    Ok(())
+                }
+
+                _ => Err(internal_corrupted_state!("failed range selection")),
             },
             RibInterpreterStackValue::Val(ValueAndType {
                 value: Value::Tuple(items),
@@ -1221,11 +1318,13 @@ mod internal {
     }
 
     pub(crate) async fn run_call_instruction(
+        component_info: ComponentDependencyKey,
         instruction_id: &InstructionId,
         arg_size: usize,
         worker_type: WorkerNamePresence,
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
+        expected_result_type: AnalysedTypeWithUnit,
     ) -> RibInterpreterResult<()> {
         let function_name = interpreter_stack
             .pop_str()
@@ -1257,12 +1356,19 @@ mod internal {
             })
             .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
+        let expected_result_type = match expected_result_type {
+            AnalysedTypeWithUnit::Type(analysed_type) => Some(analysed_type),
+            AnalysedTypeWithUnit::Unit => None,
+        };
+
         let value_and_type_opt = interpreter_env
             .invoke_worker_function_async(
+                component_info,
                 instruction_id,
                 worker_name,
                 function_name_cloned,
                 parameter_values,
+                expected_result_type,
             )
             .await
             .map_err(|err| function_invoke_fail(function_name.as_str(), err))?;
@@ -1448,8 +1554,8 @@ mod tests {
         strip_spaces,
     };
     use crate::{
-        Expr, FunctionTypeRegistry, GlobalVariableTypeSpec, InferredType, InstructionId, Path,
-        RibCompiler, RibCompilerConfig, VariableId,
+        Expr, GlobalVariableTypeSpec, InferredType, InstructionId, Path, RibCompiler,
+        RibCompilerConfig, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{
         bool, case, f32, field, list, option, r#enum, record, result, s32, s8, str, tuple, u32,
@@ -1977,23 +2083,23 @@ mod tests {
         let expr = r#"
           let x = x;
           let y = x;
-          let result1 = add-enum(x, y);
+          let a = instance();
+          let result1 = a.add-enum(x, y);
           let validate = validate;
           let validate2 = validate;
-          let result2 = add-variant(validate, validate2);
+          let result2 = a.add-variant(validate, validate2);
           {res1: result1, res2: result2}
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(
-            get_metadata_with_enum_and_variant(),
-            vec![],
-        ));
+        let metadata = get_metadata_with_enum_and_variant();
 
-        let compiled = compiler.compile(expr).unwrap();
+        let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
 
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
+        let compiled = compiler.compile(expr);
+
+        let result = interpreter.run(compiled.unwrap().byte_code).await.unwrap();
         let expected_enum_type = r#enum(&["x", "y", "z"]);
         let expected_variant_type = get_analysed_type_variant();
 
@@ -2030,10 +2136,11 @@ mod tests {
         let expr = r#"
           let x = 1;
           let y = 2;
-          let result1 = add-u32(x, y);
+          let a = instance();
+          let result1 = a.add-u32(x, y);
           let process-user = 3;
           let validate = 4;
-          let result2 = add-u64(process-user, validate);
+          let result2 = a.add-u64(process-user, validate);
           {res1: result1, res2: result2}
         "#;
 
@@ -2349,9 +2456,7 @@ mod tests {
            }
         "#;
 
-        let mut expr = Expr::from_text(expr).unwrap();
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
-            .unwrap();
+        let expr = Expr::from_text(expr).unwrap();
         let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2371,9 +2476,7 @@ mod tests {
            }
         "#;
 
-        let mut expr = Expr::from_text(expr).unwrap();
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
-            .unwrap();
+        let expr = Expr::from_text(expr).unwrap();
         let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2394,10 +2497,7 @@ mod tests {
            }
         "#;
 
-        let mut expr = Expr::from_text(expr).unwrap();
-        expr.infer_types(&FunctionTypeRegistry::empty(), &vec![])
-            .unwrap();
-
+        let expr = Expr::from_text(expr).unwrap();
         let compiler = RibCompiler::default();
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -2487,10 +2587,10 @@ mod tests {
         let analysed_exports = test_utils::get_component_metadata("foo", vec![tuple], Some(str()));
 
         let expr = r#"
-
+           let worker = instance();
            let record = { request : { path : { user : "jak" } }, y : "bar" };
            let input = (1, ok(100), "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
-           foo(input);
+           worker.foo(input);
            match input {
              (n1, err(x1), txt, rec, process-user(x), register-user(n), validate, dev, prod, test) =>  "Invalid",
              (n1, ok(x2), txt, rec, process-user(x), register-user(n), validate, prod, dev, test) =>  "foo ${x2} ${n1} ${txt} ${rec.request.path.user} ${validate} ${prod} ${dev} ${test}"
@@ -2519,10 +2619,10 @@ mod tests {
             test_utils::get_component_metadata("my-worker-function", vec![tuple], Some(str()));
 
         let expr = r#"
-
+           let worker = instance();
            let record = { request : { path : { user : "jak" } }, y : "baz" };
            let input = (1, ok(1), "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
-           my-worker-function(input);
+           worker.my-worker-function(input);
            match input {
              (n1, ok(x), txt, rec, _, _, _, _, prod, _) =>  "prod ${n1} ${txt} ${rec.request.path.user} ${rec.y}",
              (n1, ok(x), txt, rec, _, _, _, _, dev, _) =>   "dev ${n1} ${txt} ${rec.request.path.user} ${rec.y}"
@@ -2556,8 +2656,9 @@ mod tests {
         );
 
         let expr = r#"
+           let worker = instance();
            let input = { request : { path : { user : "jak" } }, y : "baz" };
-           let result = my-worker-function(input);
+           let result = worker.my-worker-function(input);
            match result {
              ok(result) => { body: result, status: 200 },
              err(result) => { status: 400, body: 400 }
@@ -2593,9 +2694,9 @@ mod tests {
         );
 
         let expr = r#"
-
            let input = { request : { path : { user : "jak" } }, y : "baz" };
-           let result = my-worker-function(input);
+           let worker = instance();
+           let result = worker.my-worker-function(input);
            match result {
              ok(res) => ("${res}", "foo"),
              err(msg) => (msg, "bar")
@@ -2616,7 +2717,9 @@ mod tests {
     async fn test_interpreter_with_indexed_resource_drop() {
         let expr = r#"
            let user_id = "user";
-           golem:it/api.{cart(user_id).drop}();
+           let worker = instance();
+           let cart = worker.cart(user_id);
+           cart.drop();
            "success"
         "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -2636,7 +2739,9 @@ mod tests {
     async fn test_interpreter_with_indexed_resource_checkout() {
         let expr = r#"
            let user_id = "foo";
-           let result = golem:it/api.{cart(user_id).checkout}();
+           let worker = instance();
+           let cart = worker.cart(user_id);
+           let result = cart.checkout();
            result
         "#;
 
@@ -2671,7 +2776,9 @@ mod tests {
     async fn test_interpreter_with_indexed_resource_get_cart_contents() {
         let expr = r#"
            let user_id = "bar";
-           let result = golem:it/api.{cart(user_id).get-cart-contents}();
+           let worker = instance();
+           let cart = worker.cart(user_id);
+           let result = cart.get-cart-contents();
            result[0].product-id
         "#;
 
@@ -2710,7 +2817,9 @@ mod tests {
            let user_id = "jon";
            let product_id = "mac";
            let quantity = 1032;
-           golem:it/api.{cart(user_id).update-item-quantity}(product_id, quantity);
+           let worker = instance();
+           let cart = worker.cart(user_id);
+           cart.update-item-quantity(product_id, quantity);
            "successfully updated"
         "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -2737,7 +2846,9 @@ mod tests {
         let expr = r#"
            let user_id = "foo";
            let product = { product-id: "mac", name: "macbook", quantity: 1u32, price: 1f32 };
-           golem:it/api.{cart(user_id).add-item}(product);
+           let worker = instance();
+           let cart = worker.cart(user_id);
+           cart.add-item(product);
 
            "successfully added"
         "#;
@@ -2764,9 +2875,11 @@ mod tests {
     #[test]
     async fn test_interpreter_with_resource_add_item() {
         let expr = r#"
+           let worker = instance();
+           let cart = worker.cart();
            let user_id = "foo";
            let product = { product-id: "mac", name: "macbook", quantity: 1u32, price: 1f32 };
-           golem:it/api.{cart.add-item}(product);
+           cart.add-item(product);
 
            "successfully added"
         "#;
@@ -2793,7 +2906,9 @@ mod tests {
     #[test]
     async fn test_interpreter_with_resource_get_cart_contents() {
         let expr = r#"
-           let result = golem:it/api.{cart.get-cart-contents}();
+           let worker = instance();
+           let cart = worker.cart();
+           let result = cart.get-cart-contents();
            result[0].product-id
         "#;
 
@@ -2829,9 +2944,11 @@ mod tests {
     #[test]
     async fn test_interpreter_with_resource_update_item() {
         let expr = r#"
+           let worker = instance();
            let product_id = "mac";
            let quantity = 1032;
-           golem:it/api.{cart.update-item-quantity}(product_id, quantity);
+           let cart = worker.cart();
+           cart.update-item-quantity(product_id, quantity);
            "successfully updated"
         "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -2856,7 +2973,9 @@ mod tests {
     #[test]
     async fn test_interpreter_with_resource_checkout() {
         let expr = r#"
-           let result = golem:it/api.{cart.checkout}();
+           let worker = instance();
+           let cart = worker.cart();
+           let result = cart.checkout();
            result
         "#;
 
@@ -2890,7 +3009,9 @@ mod tests {
     #[test]
     async fn test_interpreter_with_resource_drop() {
         let expr = r#"
-           golem:it/api.{cart.drop}();
+           let worker = instance();
+           let cart = worker.cart();
+           cart.drop();
            "success"
         "#;
         let expr = Expr::from_text(expr).unwrap();
@@ -3146,13 +3267,10 @@ mod tests {
 
         let expected = ValueAndType::new(
             Value::Record(vec![
-                Value::U64(1),
+                Value::S32(1),
                 Value::Bool(false), // non inclusive
             ]),
-            record(vec![
-                field("from", option(u64())),
-                field("inclusive", bool()),
-            ]),
+            record(vec![field("from", s32()), field("inclusive", bool())]),
         );
 
         assert_eq!(result.get_val().unwrap(), expected);
@@ -3175,13 +3293,13 @@ mod tests {
 
         let expected = ValueAndType::new(
             Value::Record(vec![
-                Value::U64(1),
-                Value::U64(2),
+                Value::S32(1),
+                Value::S32(2),
                 Value::Bool(false), // non inclusive
             ]),
             record(vec![
-                field("from", option(u64())),
-                field("to", option(u64())),
+                field("from", s32()),
+                field("to", s32()),
                 field("inclusive", bool()),
             ]),
         );
@@ -3206,13 +3324,13 @@ mod tests {
 
         let expected = ValueAndType::new(
             Value::Record(vec![
-                Value::U64(1),
-                Value::U64(10),
+                Value::S32(1),
+                Value::S32(10),
                 Value::Bool(true), // inclusive
             ]),
             record(vec![
-                field("from", option(u64())),
-                field("to", option(u64())),
+                field("from", s32()),
+                field("to", s32()),
                 field("inclusive", bool()),
             ]),
         );
@@ -3244,8 +3362,8 @@ mod tests {
         let expected = ValueAndType::new(
             Value::Record(vec![Value::U64(1), Value::U64(1), Value::Bool(false)]),
             record(vec![
-                field("from", option(u64())),
-                field("to", option(u64())),
+                field("from", u64()),
+                field("to", u64()),
                 field("inclusive", bool()),
             ]),
         );
@@ -3269,10 +3387,10 @@ mod tests {
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         let expected = ValueAndType::new(
-            Value::Record(vec![Value::U64(1), Value::S32(11), Value::Bool(false)]),
+            Value::Record(vec![Value::S32(1), Value::S32(11), Value::Bool(false)]),
             record(vec![
-                field("from", option(u64())),
-                field("to", option(s32())),
+                field("from", s32()),
+                field("to", s32()),
                 field("inclusive", bool()),
             ]),
         );
@@ -3300,13 +3418,13 @@ mod tests {
 
         let expected = ValueAndType::new(
             Value::List(vec![
-                Value::U64(1),
-                Value::U64(2),
-                Value::U64(3),
-                Value::U64(4),
-                Value::U64(5),
+                Value::S32(1),
+                Value::S32(2),
+                Value::S32(3),
+                Value::S32(4),
+                Value::S32(5),
             ]),
-            list(u64()),
+            list(s32()),
         );
 
         assert_eq!(result.get_val().unwrap(), expected);
@@ -3332,12 +3450,12 @@ mod tests {
 
         let expected = ValueAndType::new(
             Value::List(vec![
-                Value::U64(1),
-                Value::U64(2),
-                Value::U64(3),
-                Value::U64(4),
+                Value::S32(1),
+                Value::S32(2),
+                Value::S32(3),
+                Value::S32(4),
             ]),
-            list(u64()),
+            list(s32()),
         );
 
         assert_eq!(result.get_val().unwrap(), expected);
@@ -3412,17 +3530,27 @@ mod tests {
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: none,
-                 function-name: "amazon:shopping-cart/api1.{foo}",
-                 args0: "bar"
-              }
-            "#,
+        let key_values = result.get_record().unwrap();
+
+        assert!(key_values.iter().any(|(k, _)| k == "worker-name"));
+
+        assert_eq!(
+            key_values
+                .iter()
+                .find(|(k, _)| k == "function-name")
+                .map(|(_, y)| &y.value),
+            Some(&Value::String(
+                "amazon:shopping-cart/api1.{foo}".to_string()
+            ))
         );
 
-        assert_eq!(result.get_val().unwrap(), expected_val);
+        assert_eq!(
+            key_values
+                .iter()
+                .find(|(k, _)| k == "args0")
+                .map(|(_, y)| &y.value),
+            Some(&Value::String("bar".to_string()))
+        );
     }
 
     #[test]
@@ -3491,17 +3619,15 @@ mod tests {
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: none,
-                 function-name: "amazon:shopping-cart/api1.{foo}",
-                 args0: "bar"
-              }
-            "#,
-        );
+        let record = result.get_record().unwrap();
 
-        assert_eq!(result.get_val().unwrap(), expected_val);
+        let worker_name = record
+            .iter()
+            .find(|(k, _)| k == "worker-name")
+            .map(|(_, v)| &v.value)
+            .unwrap();
+
+        assert!(matches!(worker_name, Value::Option(Some(_))))
     }
 
     #[test]
@@ -4646,8 +4772,9 @@ mod tests {
     mod test_utils {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{
+            ComponentDependency, ComponentDependencyKey, DefaultWorkerNameGenerator,
             EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue, InstructionId,
-            RibFunctionInvoke, RibFunctionInvokeResult, RibInput,
+            RibComponentFunctionInvoke, RibFunctionInvokeResult, RibInput,
         };
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
@@ -4660,6 +4787,7 @@ mod tests {
         };
         use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
+        use uuid::Uuid;
 
         pub(crate) fn strip_spaces(input: &str) -> String {
             let lines = input.lines();
@@ -4737,7 +4865,7 @@ mod tests {
             function_name: &str,
             input_types: Vec<AnalysedType>,
             output: Option<AnalysedType>,
-        ) -> Vec<AnalysedExport> {
+        ) -> Vec<ComponentDependency> {
             let analysed_function_parameters = input_types
                 .into_iter()
                 .enumerate()
@@ -4749,25 +4877,35 @@ mod tests {
 
             let result = output.map(|typ| AnalysedFunctionResult { typ });
 
-            vec![AnalysedExport::Function(AnalysedFunction {
-                name: function_name.to_string(),
-                parameters: analysed_function_parameters,
-                result,
-            })]
+            let component_info = ComponentDependencyKey {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency::new(
+                component_info,
+                vec![AnalysedExport::Function(AnalysedFunction {
+                    name: function_name.to_string(),
+                    parameters: analysed_function_parameters,
+                    result,
+                })],
+            )]
         }
 
-        pub(crate) fn get_metadata_with_resource_with_params() -> Vec<AnalysedExport> {
+        pub(crate) fn get_metadata_with_resource_with_params() -> Vec<ComponentDependency> {
             get_metadata_with_resource(vec![AnalysedFunctionParameter {
                 name: "user-id".to_string(),
                 typ: str(),
             }])
         }
 
-        pub(crate) fn get_metadata_with_resource_without_params() -> Vec<AnalysedExport> {
+        pub(crate) fn get_metadata_with_resource_without_params() -> Vec<ComponentDependency> {
             get_metadata_with_resource(vec![])
         }
 
-        pub(crate) fn get_metadata() -> Vec<AnalysedExport> {
+        pub(crate) fn get_metadata() -> Vec<ComponentDependency> {
             // Exist in only amazon:shopping-cart/api1
             let analysed_function_in_api1 = AnalysedFunction {
                 name: "foo".to_string(),
@@ -4846,12 +4984,22 @@ mod tests {
                 ],
             });
 
-            vec![analysed_export1, analysed_export2, analysed_export3]
+            let component_info = ComponentDependencyKey {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency::new(
+                component_info,
+                vec![analysed_export1, analysed_export2, analysed_export3],
+            )]
         }
 
         fn get_metadata_with_resource(
             resource_constructor_params: Vec<AnalysedFunctionParameter>,
-        ) -> Vec<AnalysedExport> {
+        ) -> Vec<ComponentDependency> {
             let instance = AnalysedExport::Instance(AnalysedInstance {
                 name: "golem:it/api".to_string(),
                 functions: vec![
@@ -4966,7 +5114,14 @@ mod tests {
                 ],
             });
 
-            vec![instance]
+            let component_info = ComponentDependencyKey {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency::new(component_info, vec![instance])]
         }
 
         pub(crate) fn get_value_and_type(
@@ -4989,6 +5144,7 @@ mod tests {
             Interpreter {
                 input: input.unwrap_or_default(),
                 invoke,
+                generate_worker_name: Arc::new(DefaultWorkerNameGenerator),
             }
         }
 
@@ -5000,11 +5156,12 @@ mod tests {
         pub(crate) fn interpreter_worker_details_response(
             rib_input: Option<RibInput>,
         ) -> Interpreter {
-            let invoke: Arc<dyn RibFunctionInvoke + Send + Sync> = Arc::new(TestInvoke2);
+            let invoke: Arc<dyn RibComponentFunctionInvoke + Send + Sync> = Arc::new(TestInvoke2);
 
             Interpreter {
                 input: rib_input.unwrap_or_default(),
                 invoke,
+                generate_worker_name: Arc::new(DefaultWorkerNameGenerator),
             }
         }
 
@@ -5015,6 +5172,7 @@ mod tests {
             Interpreter {
                 input: input.unwrap_or_default(),
                 invoke,
+                generate_worker_name: Arc::new(DefaultWorkerNameGenerator),
             }
         }
 
@@ -5033,13 +5191,15 @@ mod tests {
         }
 
         #[async_trait]
-        impl RibFunctionInvoke for TestInvoke1 {
+        impl RibComponentFunctionInvoke for TestInvoke1 {
             async fn invoke(
                 &self,
+                _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
                 _worker_name: Option<EvaluatedWorkerName>,
                 _fqn: EvaluatedFqFn,
                 _args: EvaluatedFnArgs,
+                _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
                 let value = self.value.clone();
                 Ok(Some(value))
@@ -5049,13 +5209,15 @@ mod tests {
         struct TestInvoke2;
 
         #[async_trait]
-        impl RibFunctionInvoke for TestInvoke2 {
+        impl RibComponentFunctionInvoke for TestInvoke2 {
             async fn invoke(
                 &self,
+                _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
                 worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
+                _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
                 let worker_name = worker_name.map(|x| x.0);
 
@@ -5094,8 +5256,8 @@ mod tests {
             }
         }
 
-        pub(crate) fn get_metadata_with_enum_and_variant() -> Vec<AnalysedExport> {
-            vec![
+        pub(crate) fn get_metadata_with_enum_and_variant() -> Vec<ComponentDependency> {
+            let exports = vec![
                 AnalysedExport::Function(AnalysedFunction {
                     name: "add-u32".to_string(),
                     parameters: vec![
@@ -5156,19 +5318,30 @@ mod tests {
                         typ: get_analysed_type_variant(),
                     }),
                 }),
-            ]
+            ];
+
+            let component_info = ComponentDependencyKey {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency::new(component_info, exports)]
         }
 
         struct TestInvoke3;
 
         #[async_trait]
-        impl RibFunctionInvoke for TestInvoke3 {
+        impl RibComponentFunctionInvoke for TestInvoke3 {
             async fn invoke(
                 &self,
+                _component_dependency: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
                 _worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
+                _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
                 match function_name.0.as_str() {
                     "add-u32" => {

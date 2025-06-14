@@ -139,7 +139,6 @@ mod tests {
                 component_id: ComponentId::new_v4(),
                 version: 1,
             },
-            worker_name: None,
             idempotency_key: None,
             response_mapping: ResponseMapping(Expr::literal("")),
             invocation_context: None,
@@ -148,7 +147,7 @@ mod tests {
         Route {
             method: MethodPattern::Get,
             path: AllPathPatterns::parse("/test").unwrap(),
-            binding: GatewayBinding::Default(worker_binding.clone()),
+            binding: GatewayBinding::Default(Box::new(worker_binding.clone())),
             middlewares: None,
         }
     }
@@ -159,7 +158,6 @@ mod tests {
                 component_id: ComponentId::new_v4(),
                 version: 1,
             },
-            worker_name: None,
             idempotency_key: None,
             response_mapping: ResponseMapping(Expr::literal("")),
             invocation_context: None,
@@ -168,7 +166,7 @@ mod tests {
         Route {
             method: MethodPattern::Get,
             path: AllPathPatterns::parse("/test").unwrap(),
-            binding: GatewayBinding::Default(worker_binding.clone()),
+            binding: GatewayBinding::Default(Box::new(worker_binding.clone())),
             middlewares: Some(HttpMiddlewares(vec![HttpMiddleware::Cors(cors())])),
         }
     }

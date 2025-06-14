@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 use test_r::test;
 
 use crate::Tracing;
@@ -18,13 +19,14 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, TargetWorkerId};
 use golem_rib_repl::{ComponentSource, RibRepl};
-use golem_rib_repl::{ReplDependencies, RibComponentMetadata, RibDependencyManager};
+use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{Value, ValueAndType};
-use rib::RibResult;
+use rib::{ComponentDependency, ComponentDependencyKey, RibResult};
 use std::path::Path;
 use std::sync::Arc;
 use test_r::inherit_test_dep;
@@ -36,6 +38,28 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
+    test_repl_invoking_functions(deps, Some("worker-repl-simple-test")).await;
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_rib_repl_without_worker_param(deps: &EnvBasedTestDependencies) {
+    test_repl_invoking_functions(deps, None).await;
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
+    test_repl_invoking_resource_methods(deps, Some("worker-repl-resource-test")).await;
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_rib_repl_with_resource_without_param(deps: &EnvBasedTestDependencies) {
+    test_repl_invoking_resource_methods(deps, None).await;
+}
+
+async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
         history_file: None,
         dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
@@ -51,9 +75,10 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
     .await
     .expect("Failed to bootstrap REPL");
 
-    let rib1 = r#"
-      let worker = instance("my_worker")
-    "#;
+    let rib1 = match worker_name {
+        Some(name) => format!(r#"let worker = instance("{}")"#, name),
+        None => r#"let worker = instance()"#.to_string(),
+    };
 
     let rib2 = r#"
       let result = worker.add(1, 2)
@@ -77,7 +102,7 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
      "#;
 
     let result = rib_repl
-        .execute(rib1)
+        .execute(&rib1)
         .await
         .expect("Failed to process command");
 
@@ -139,9 +164,10 @@ async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
     );
 }
 
-#[test]
-#[tracing::instrument]
-async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
+async fn test_repl_invoking_resource_methods(
+    deps: &EnvBasedTestDependencies,
+    worker_name: Option<&str>,
+) {
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
         history_file: None,
         dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
@@ -159,9 +185,10 @@ async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
     .await
     .expect("Failed to bootstrap REPL");
 
-    let rib1 = r#"
-      let worker = instance("my_worker")
-    "#;
+    let rib1 = match worker_name {
+        Some(name) => format!(r#"let worker = instance("{}")"#, name),
+        None => r#"let worker = instance()"#.to_string(),
+    };
 
     let rib2 = r#"
       let resource = worker.cart("foo")
@@ -185,7 +212,7 @@ async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
      "#;
 
     let result = rib_repl
-        .execute(rib1)
+        .execute(&rib1)
         .await
         .expect("Failed to process command");
 
@@ -247,7 +274,7 @@ async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
                 field("quantity", u32()),
             ],)),
         )))
-    );
+    )
 }
 
 struct TestRibReplDependencyManager {
@@ -262,7 +289,7 @@ impl TestRibReplDependencyManager {
 
 #[async_trait]
 impl RibDependencyManager for TestRibReplDependencyManager {
-    async fn get_dependencies(&self) -> anyhow::Result<ReplDependencies> {
+    async fn get_dependencies(&self) -> anyhow::Result<ReplComponentDependencies> {
         Err(anyhow!(
             "test will need to run with a single component".to_string()
         ))
@@ -272,7 +299,7 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         &self,
         _source_path: &Path,
         component_name: String,
-    ) -> anyhow::Result<RibComponentMetadata> {
+    ) -> anyhow::Result<ComponentDependency> {
         let component_id = self
             .dependencies
             .component(component_name.as_str())
@@ -284,11 +311,17 @@ impl RibDependencyManager for TestRibReplDependencyManager {
             .get_latest_component_metadata(&component_id)
             .await;
 
-        Ok(RibComponentMetadata {
+        let component_dependency_key = ComponentDependencyKey {
             component_name,
             component_id: component_id.0,
-            metadata: metadata.exports,
-        })
+            root_package_name: metadata.root_package_name,
+            root_package_version: metadata.root_package_version,
+        };
+
+        Ok(ComponentDependency::new(
+            component_dependency_key,
+            metadata.exports,
+        ))
     }
 }
 
@@ -314,6 +347,7 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
         worker_name: Option<String>,
         function_name: &str,
         args: Vec<ValueAndType>,
+        _return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>> {
         let target_worker_id = worker_name
             .map(|w| TargetWorkerId {

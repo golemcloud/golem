@@ -132,49 +132,117 @@ impl CoercedNumericValue {
     }
 
     pub fn cast_to(&self, analysed_type: &AnalysedType) -> Option<ValueAndType> {
-        match (self, analysed_type) {
-            (CoercedNumericValue::PosInt(val), AnalysedType::U8(_)) if *val <= u8::MAX as u64 => {
-                Some((*val as u8).into_value_and_type())
-            }
-            (CoercedNumericValue::PosInt(val), AnalysedType::U16(_)) if *val <= u16::MAX as u64 => {
-                Some((*val as u16).into_value_and_type())
-            }
-            (CoercedNumericValue::PosInt(val), AnalysedType::U32(_)) if *val <= u32::MAX as u64 => {
-                Some((*val as u32).into_value_and_type())
-            }
-            (CoercedNumericValue::PosInt(val), AnalysedType::U64(_)) => {
-                Some((*val).into_value_and_type())
+        match self {
+            CoercedNumericValue::PosInt(number) => {
+                let num = *number;
+
+                match analysed_type {
+                    AnalysedType::U8(_) if num <= u8::MAX as u64 => {
+                        Some((num as u8).into_value_and_type())
+                    }
+                    AnalysedType::U16(_) if num <= u16::MAX as u64 => {
+                        Some((num as u16).into_value_and_type())
+                    }
+                    AnalysedType::U32(_) if num <= u32::MAX as u64 => {
+                        Some((num as u32).into_value_and_type())
+                    }
+                    AnalysedType::U64(_) => Some(num.into_value_and_type()),
+
+                    AnalysedType::S8(_) if num <= i8::MAX as u64 => {
+                        Some((num as i8).into_value_and_type())
+                    }
+                    AnalysedType::S16(_) if num <= i16::MAX as u64 => {
+                        Some((num as i16).into_value_and_type())
+                    }
+                    AnalysedType::S32(_) if num <= i32::MAX as u64 => {
+                        Some((num as i32).into_value_and_type())
+                    }
+                    AnalysedType::S64(_) if num <= i64::MAX as u64 => {
+                        Some((num as i64).into_value_and_type())
+                    }
+
+                    AnalysedType::F32(_) if num <= f32::MAX as u64 => {
+                        Some((num as f32).into_value_and_type())
+                    }
+                    AnalysedType::F64(_) if num <= f64::MAX as u64 => {
+                        Some((num as f64).into_value_and_type())
+                    }
+
+                    _ => None,
+                }
             }
 
-            (CoercedNumericValue::NegInt(val), AnalysedType::S8(_))
-                if *val >= i8::MIN as i64 && *val <= i8::MAX as i64 =>
-            {
-                Some((*val as i8).into_value_and_type())
-            }
-            (CoercedNumericValue::NegInt(val), AnalysedType::S16(_))
-                if *val >= i16::MIN as i64 && *val <= i16::MAX as i64 =>
-            {
-                Some((*val as i16).into_value_and_type())
-            }
-            (CoercedNumericValue::NegInt(val), AnalysedType::S32(_))
-                if *val >= i32::MIN as i64 && *val <= i32::MAX as i64 =>
-            {
-                Some((*val as i32).into_value_and_type())
-            }
-            (CoercedNumericValue::NegInt(val), AnalysedType::S64(_)) => {
-                Some((*val).into_value_and_type())
+            CoercedNumericValue::NegInt(number) => {
+                let num = *number;
+
+                match analysed_type {
+                    AnalysedType::S8(_) if num >= i8::MIN as i64 && num <= i8::MAX as i64 => {
+                        Some((num as i8).into_value_and_type())
+                    }
+                    AnalysedType::S16(_) if num >= i16::MIN as i64 && num <= i16::MAX as i64 => {
+                        Some((num as i16).into_value_and_type())
+                    }
+                    AnalysedType::S32(_) if num >= i32::MIN as i64 && num <= i32::MAX as i64 => {
+                        Some((num as i32).into_value_and_type())
+                    }
+                    AnalysedType::S64(_) => Some(num.into_value_and_type()),
+
+                    // Allow unsigned conversion only if non-negative
+                    AnalysedType::U8(_) if num >= 0 && num <= u8::MAX as i64 => {
+                        Some((num as u8).into_value_and_type())
+                    }
+                    AnalysedType::U16(_) if num >= 0 && num <= u16::MAX as i64 => {
+                        Some((num as u16).into_value_and_type())
+                    }
+                    AnalysedType::U32(_) if num >= 0 && num <= u32::MAX as i64 => {
+                        Some((num as u32).into_value_and_type())
+                    }
+                    AnalysedType::U64(_) if num >= 0 => Some((num as u64).into_value_and_type()),
+
+                    AnalysedType::F32(_) if num >= f32::MIN as i64 && num <= f32::MAX as i64 => {
+                        Some((num as f32).into_value_and_type())
+                    }
+                    AnalysedType::F64(_) if num >= f64::MIN as i64 && num <= f64::MAX as i64 => {
+                        Some((num as f64).into_value_and_type())
+                    }
+
+                    _ => None,
+                }
             }
 
-            (CoercedNumericValue::Float(val), AnalysedType::F64(_)) => {
-                Some((*val).into_value_and_type())
-            }
-            (CoercedNumericValue::Float(val), AnalysedType::F32(_))
-                if *val >= f32::MIN as f64 && *val <= f32::MAX as f64 =>
-            {
-                Some((*val as f32).into_value_and_type())
-            }
+            CoercedNumericValue::Float(number) => {
+                let num = *number;
 
-            _ => None,
+                match analysed_type {
+                    AnalysedType::F64(_) => Some(num.into_value_and_type()),
+
+                    AnalysedType::F32(_)
+                        if num.is_finite() && num >= f32::MIN as f64 && num <= f32::MAX as f64 =>
+                    {
+                        Some((num as f32).into_value_and_type())
+                    }
+
+                    AnalysedType::U64(_)
+                        if num.is_finite()
+                            && num >= 0.0
+                            && num <= u64::MAX as f64
+                            && num.fract() == 0.0 =>
+                    {
+                        Some((num as u64).into_value_and_type())
+                    }
+
+                    AnalysedType::S64(_)
+                        if num.is_finite()
+                            && num >= i64::MIN as f64
+                            && num <= i64::MAX as f64
+                            && num.fract() == 0.0 =>
+                    {
+                        Some((num as i64).into_value_and_type())
+                    }
+
+                    _ => None,
+                }
+            }
         }
     }
 }

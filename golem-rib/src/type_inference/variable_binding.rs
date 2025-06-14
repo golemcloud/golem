@@ -294,12 +294,15 @@ mod name_binding_tests {
         );
 
         let call_expr = Expr::call(
-            CallType::function_without_worker(DynamicParsedFunctionName {
-                site: ParsedFunctionSite::Global,
-                function: DynamicParsedFunctionReference::Function {
-                    function: "foo".to_string(),
+            CallType::function_call(
+                DynamicParsedFunctionName {
+                    site: ParsedFunctionSite::Global,
+                    function: DynamicParsedFunctionReference::Function {
+                        function: "foo".to_string(),
+                    },
                 },
-            }),
+                None,
+            ),
             None,
             vec![Expr::identifier_local("x", 0, None)],
         );
@@ -336,23 +339,29 @@ mod name_binding_tests {
         );
 
         let call_expr1 = Expr::call(
-            CallType::function_without_worker(DynamicParsedFunctionName {
-                site: ParsedFunctionSite::Global,
-                function: DynamicParsedFunctionReference::Function {
-                    function: "foo".to_string(),
+            CallType::function_call(
+                DynamicParsedFunctionName {
+                    site: ParsedFunctionSite::Global,
+                    function: DynamicParsedFunctionReference::Function {
+                        function: "foo".to_string(),
+                    },
                 },
-            }),
+                None,
+            ),
             None,
             vec![Expr::identifier_local("x", 0, None)],
         );
 
         let call_expr2 = Expr::call(
-            CallType::function_without_worker(DynamicParsedFunctionName {
-                site: ParsedFunctionSite::Global,
-                function: DynamicParsedFunctionReference::Function {
-                    function: "foo".to_string(),
+            CallType::function_call(
+                DynamicParsedFunctionName {
+                    site: ParsedFunctionSite::Global,
+                    function: DynamicParsedFunctionReference::Function {
+                        function: "foo".to_string(),
+                    },
                 },
-            }),
+                None,
+            ),
             None,
             vec![Expr::identifier_local("y", 0, None)],
         );
@@ -389,23 +398,29 @@ mod name_binding_tests {
         );
 
         let call_expr1 = Expr::call(
-            CallType::function_without_worker(DynamicParsedFunctionName {
-                site: ParsedFunctionSite::Global,
-                function: DynamicParsedFunctionReference::Function {
-                    function: "foo".to_string(),
+            CallType::function_call(
+                DynamicParsedFunctionName {
+                    site: ParsedFunctionSite::Global,
+                    function: DynamicParsedFunctionReference::Function {
+                        function: "foo".to_string(),
+                    },
                 },
-            }),
+                None,
+            ),
             None,
             vec![Expr::identifier_local("x", 0, None)],
         );
 
         let call_expr2 = Expr::call(
-            CallType::function_without_worker(DynamicParsedFunctionName {
-                site: ParsedFunctionSite::Global,
-                function: DynamicParsedFunctionReference::Function {
-                    function: "foo".to_string(),
+            CallType::function_call(
+                DynamicParsedFunctionName {
+                    site: ParsedFunctionSite::Global,
+                    function: DynamicParsedFunctionReference::Function {
+                        function: "foo".to_string(),
+                    },
                 },
-            }),
+                None,
+            ),
             None,
             vec![Expr::identifier_local("x", 1, None)],
         );

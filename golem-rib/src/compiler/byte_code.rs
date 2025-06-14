@@ -34,6 +34,9 @@ pub enum RibByteCodeGenerationError {
         expected: TypeHint,
         actual: TypeHint,
     },
+    UnresolvedWasmComponent {
+        function: String,
+    },
 }
 
 impl std::error::Error for RibByteCodeGenerationError {}
@@ -58,6 +61,9 @@ impl Display for RibByteCodeGenerationError {
                     expected.get_type_kind(),
                     actual.get_type_kind()
                 )
+            }
+            RibByteCodeGenerationError::UnresolvedWasmComponent { function } => {
+                write!(f, "Unresolved wasm component for function: {}", function)
             }
         }
     }
@@ -166,6 +172,10 @@ mod internal {
             Expr::Unwrap { expr, .. } => {
                 stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::Deconstruct);
+            }
+
+            Expr::GenerateWorkerName { variable_id, .. } => {
+                instructions.push(RibIR::GenerateWorkerName(variable_id.clone()));
             }
 
             Expr::Length { expr, .. } => {
@@ -431,6 +441,7 @@ mod internal {
                     CallType::Function {
                         function_name,
                         worker,
+                        component_info,
                     } => {
                         for expr in args.iter().rev() {
                             stack.push(ExprState::from_expr(expr));
@@ -451,7 +462,14 @@ mod internal {
                             None => WorkerNamePresence::Absent,
                         };
 
+                        let component_info = component_info.as_ref().ok_or(
+                            RibByteCodeGenerationError::UnresolvedWasmComponent {
+                                function: function_name.to_string(),
+                            },
+                        )?;
+
                         instructions.push(RibIR::InvokeFunction(
+                            component_info.clone(),
                             worker_name,
                             args.len(),
                             function_result_type,
@@ -583,7 +601,7 @@ mod internal {
                     // we need to push a place holder in the stack that does nothing
                     CallType::InstanceCreation(instance_creation_type) => {
                         match instance_creation_type {
-                            InstanceCreationType::Worker { worker_name } => {
+                            InstanceCreationType::Worker { worker_name, .. } => {
                                 for expr in args.iter().rev() {
                                     stack.push(ExprState::from_expr(expr));
                                 }
@@ -993,20 +1011,18 @@ mod compiler_tests {
     use test_r::test;
 
     use super::*;
-    use crate::{
-        ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, RibCompiler, VariableId,
-    };
-    use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
+    use crate::{ArmPattern, InferredType, MatchArm, RibCompiler, VariableId};
+    use golem_wasm_ast::analysis::analysed_type::{list, s32, str};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 
     #[test]
     fn test_instructions_for_literal() {
         let literal = Expr::literal("hello");
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(literal, &empty_registry, &vec![]).unwrap();
 
-        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
+        let compiler = RibCompiler::default();
+
+        let compiler_output = compiler.compile(literal).unwrap();
 
         let instruction_set = vec![RibIR::PushLit("hello".into_value_and_type())];
 
@@ -1014,7 +1030,7 @@ mod compiler_tests {
             instructions: instruction_set,
         };
 
-        assert_eq!(instructions, expected_instructions);
+        assert_eq!(compiler_output.byte_code, expected_instructions);
     }
 
     #[test]
@@ -1437,7 +1453,7 @@ mod compiler_tests {
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let instruction_set = vec![
-            RibIR::PushLit(ValueAndType::new(Value::U64(1), u64())),
+            RibIR::PushLit(ValueAndType::new(Value::S32(1), s32())),
             RibIR::PushLit("bar".into_value_and_type()),
             RibIR::PushLit("foo".into_value_and_type()),
             RibIR::PushList(list(str()), 2),
@@ -1472,10 +1488,9 @@ mod compiler_tests {
         )
         .with_inferred_type(InferredType::string());
 
-        let empty_registry = FunctionTypeRegistry::empty();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
+        let instructions = rib_compiler.compile(expr).unwrap().byte_code;
 
         // instructions will correspond to an if-else statement
         let instruction_set = vec![
@@ -1554,7 +1569,7 @@ mod compiler_tests {
 
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 4, column 16\n`add-item(\"apple\")`\ncause: invalid function call `[constructor]cart0`\nunknown function\n"
+                "error in the following rib found at line 4, column 16\n`add-item(\"apple\")`\ncause: invalid function call `cart0`\nunknown function\n"
             );
         }
 
@@ -1577,7 +1592,7 @@ mod compiler_tests {
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 4, column 16\n`foo(\"apple\")`\ncause: invalid function call `[method]cart.foo`\nunknown function\n"
+                "error in the following rib found at line 4, column 16\n`foo(\"apple\")`\ncause: invalid function call `foo`\nunknown function\n"
             );
         }
 
@@ -1793,7 +1808,8 @@ mod compiler_tests {
 
             let expr = r#"
                let x = request;
-               my-worker-function(x);
+               let worker = instance();
+               worker.my-worker-function(x);
                match x {
                 "foo"  => "success",
                  _ => "fallback"
@@ -1823,7 +1839,8 @@ mod compiler_tests {
 
             let expr = r#"
                let x = request;
-               my-worker-function(x);
+               let worker = instance();
+               worker.my-worker-function(x);
                match x {
                 1  => "success",
                 0 => "failure"
@@ -1873,7 +1890,8 @@ mod compiler_tests {
             // This means the rib interpreter env has to have a request variable in it,
             // with a value that should be of the type Variant
             let expr = r#"
-               my-worker-function(request);
+               let worker = instance();
+               worker.my-worker-function(request);
                match request {
                  process-user(user) => user,
                  _ => "default"
@@ -1911,7 +1929,8 @@ mod compiler_tests {
             // This means the rib interpreter env has to have a request variable in it,
             // with a value that should be of the type Result
             let expr = r#"
-               my-worker-function(request);
+               let worker = instance();
+               worker.my-worker-function(request);
                match request {
                  ok(x) => "${x}",
                  err(msg) => msg
@@ -1948,7 +1967,8 @@ mod compiler_tests {
             // This means the rib interpreter env has to have a request variable in it,
             // with a value that should be of the type Option
             let expr = r#"
-               my-worker-function(request);
+               let worker = instance();
+               worker.my-worker-function(request);
                match request {
                  some(x) => x,
                  none => "error"
@@ -1985,7 +2005,8 @@ mod compiler_tests {
             // This means the rib interpreter env has to have a request variable in it,
             // with a value that should be of the type Option
             let expr = r#"
-               my-worker-function(request);
+               let worker = instance();
+               worker.my-worker-function(request);
                match request {
                  prod  => "p",
                  dev => "d",
@@ -2032,7 +2053,8 @@ mod compiler_tests {
             // with a value that should be of the type Record
             let expr = r#"
                let x = request;
-               my-worker-function(x);
+               let worker = instance();
+               worker.my-worker-function(x);
 
                let name = x.path.user;
 
@@ -2080,7 +2102,8 @@ mod compiler_tests {
             // implies the type of request is a Tuple.
             let expr = r#"
                let x = request;
-               my-worker-function(x);
+               let worker = instance();
+               worker.my-worker-function(x);
                match x {
                 (_, _, record) =>  record.user,
                  _ => "fallback"
@@ -2116,7 +2139,8 @@ mod compiler_tests {
             // implies the type of request should be a List
             let expr = r#"
                let x = request;
-               my-worker-function(x);
+               let worker = instance();
+               worker.my-worker-function(x);
                match x {
                [a, b, c]  => a,
                  _ => "fallback"
@@ -2134,11 +2158,12 @@ mod compiler_tests {
     }
 
     mod internal {
-        use crate::RibInputTypeInfo;
+        use crate::{ComponentDependency, ComponentDependencyKey, RibInputTypeInfo};
         use golem_wasm_ast::analysis::*;
         use std::collections::HashMap;
+        use uuid::Uuid;
 
-        pub(crate) fn metadata_with_variants() -> Vec<AnalysedExport> {
+        pub(crate) fn metadata_with_variants() -> Vec<ComponentDependency> {
             let instance = AnalysedExport::Instance(AnalysedInstance {
                 name: "golem:it/api".to_string(),
                 functions: vec![AnalysedFunction {
@@ -2171,10 +2196,20 @@ mod compiler_tests {
                 }],
             });
 
-            vec![instance]
+            let component_info = ComponentDependencyKey {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency {
+                component_dependency_key: component_info,
+                component_exports: vec![instance],
+            }]
         }
 
-        pub(crate) fn metadata_with_resource_methods() -> Vec<AnalysedExport> {
+        pub(crate) fn metadata_with_resource_methods() -> Vec<ComponentDependency> {
             let instance = AnalysedExport::Instance(AnalysedInstance {
                 name: "golem:it/api".to_string(),
                 functions: vec![
@@ -2216,13 +2251,23 @@ mod compiler_tests {
                 ],
             });
 
-            vec![instance]
+            let component_info = ComponentDependencyKey {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency {
+                component_dependency_key: component_info,
+                component_exports: vec![instance],
+            }]
         }
         pub(crate) fn get_component_metadata(
             function_name: &str,
             input_types: Vec<AnalysedType>,
             output: AnalysedType,
-        ) -> Vec<AnalysedExport> {
+        ) -> Vec<ComponentDependency> {
             let analysed_function_parameters = input_types
                 .into_iter()
                 .enumerate()
@@ -2232,11 +2277,21 @@ mod compiler_tests {
                 })
                 .collect();
 
-            vec![AnalysedExport::Function(AnalysedFunction {
-                name: function_name.to_string(),
-                parameters: analysed_function_parameters,
-                result: Some(AnalysedFunctionResult { typ: output }),
-            })]
+            let component_info = ComponentDependencyKey {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency {
+                component_dependency_key: component_info,
+                component_exports: vec![AnalysedExport::Function(AnalysedFunction {
+                    name: function_name.to_string(),
+                    parameters: analysed_function_parameters,
+                    result: Some(AnalysedFunctionResult { typ: output }),
+                })],
+            }]
         }
 
         pub(crate) fn rib_input_type_info(types: Vec<(&str, AnalysedType)>) -> RibInputTypeInfo {

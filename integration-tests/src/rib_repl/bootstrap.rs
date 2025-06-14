@@ -2,10 +2,12 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::base_model::{ComponentId, TargetWorkerId};
 use golem_rib_repl::WorkerFunctionInvoke;
-use golem_rib_repl::{ReplDependencies, RibComponentMetadata, RibDependencyManager};
+use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
+use rib::{ComponentDependency, ComponentDependencyKey};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -21,7 +23,7 @@ impl TestRibReplDependencyManager {
 
 #[async_trait]
 impl RibDependencyManager for TestRibReplDependencyManager {
-    async fn get_dependencies(&self) -> anyhow::Result<ReplDependencies> {
+    async fn get_dependencies(&self) -> anyhow::Result<ReplComponentDependencies> {
         Err(anyhow!("test will need to run with a single component"))
     }
 
@@ -29,21 +31,29 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         &self,
         _source_path: &Path,
         component_name: String,
-    ) -> anyhow::Result<RibComponentMetadata> {
+    ) -> anyhow::Result<ComponentDependency> {
         let component_id = self
             .dependencies
             .component(component_name.as_str())
             .store()
             .await;
+
         let metadata = self
             .dependencies
             .get_latest_component_metadata(&component_id)
             .await;
-        Ok(RibComponentMetadata {
+
+        let component_dependency_key = ComponentDependencyKey {
             component_name,
             component_id: component_id.0,
-            metadata: metadata.exports,
-        })
+            root_package_name: metadata.root_package_name,
+            root_package_version: metadata.root_package_version,
+        };
+
+        Ok(ComponentDependency::new(
+            component_dependency_key,
+            metadata.exports,
+        ))
     }
 }
 
@@ -69,6 +79,7 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
         worker_name: Option<String>,
         function_name: &str,
         args: Vec<ValueAndType>,
+        _return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>> {
         let target_worker_id = worker_name
             .map(|w| TargetWorkerId {

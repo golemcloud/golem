@@ -13,10 +13,8 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::AnalysedExport;
-use std::fmt::Debug;
+use rib::ComponentDependency;
 use std::path::Path;
-use uuid::Uuid;
 
 /// Dependency manager for the Rib REPL environment.
 #[async_trait]
@@ -26,7 +24,7 @@ pub trait RibDependencyManager {
     ///
     /// Note: It is the responsibility of the REPL client to resolve component paths.
     /// In the future, Rib may support multiple components.
-    async fn get_dependencies(&self) -> anyhow::Result<ReplDependencies>;
+    async fn get_dependencies(&self) -> anyhow::Result<ReplComponentDependencies>;
 
     /// Deploys a specific component if the REPL was started with a reference to it.
     ///
@@ -44,16 +42,9 @@ pub trait RibDependencyManager {
         &self,
         source_path: &Path,
         component_name: String,
-    ) -> anyhow::Result<RibComponentMetadata>;
+    ) -> anyhow::Result<ComponentDependency>;
 }
 
-pub struct ReplDependencies {
-    pub component_dependencies: Vec<RibComponentMetadata>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RibComponentMetadata {
-    pub component_id: Uuid,
-    pub component_name: String,
-    pub metadata: Vec<AnalysedExport>,
+pub struct ReplComponentDependencies {
+    pub component_dependencies: Vec<ComponentDependency>,
 }

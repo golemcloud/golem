@@ -14,10 +14,11 @@
 
 use crate::repl_state::ReplState;
 use async_trait::async_trait;
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 use rib::{
-    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibFunctionInvoke,
-    RibFunctionInvokeResult,
+    ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId,
+    RibComponentFunctionInvoke, RibFunctionInvokeResult,
 };
 use std::sync::Arc;
 use uuid::Uuid;
@@ -31,6 +32,7 @@ pub trait WorkerFunctionInvoke {
         worker_name: Option<String>,
         function_name: &str,
         args: Vec<ValueAndType>,
+        return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>>;
 }
 
@@ -61,17 +63,16 @@ impl ReplRibFunctionInvoke {
 }
 
 #[async_trait]
-impl RibFunctionInvoke for ReplRibFunctionInvoke {
+impl RibComponentFunctionInvoke for ReplRibFunctionInvoke {
     async fn invoke(
         &self,
+        component_dependency: ComponentDependencyKey,
         instruction_id: &InstructionId,
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
+        return_type: Option<AnalysedType>,
     ) -> RibFunctionInvokeResult {
-        let component_id = self.repl_state.dependency().component_id;
-        let component_name = &self.repl_state.dependency().component_name;
-
         match self.get_cached_result(instruction_id) {
             Some(result) => Ok(result),
             None => {
@@ -79,11 +80,12 @@ impl RibFunctionInvoke for ReplRibFunctionInvoke {
                     .repl_state
                     .worker_function_invoke()
                     .invoke(
-                        component_id,
-                        component_name,
+                        component_dependency.component_id,
+                        component_dependency.component_name.as_str(),
                         worker_name.map(|x| x.0),
                         function_name.0.as_str(),
                         args.0,
+                        return_type,
                     )
                     .await;
 
