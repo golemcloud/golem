@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::call_type::{CallType, InstanceCreationType};
+use crate::call_type::{CallType, InstanceCreationType, ModuleIdentifier};
 use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
 use crate::{
@@ -103,13 +103,23 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 )
                             })?;
 
-                            let worker_name =
-                                get_generated_worker_name_with_variable_id(instance_type, lhs);
+                            // let x = instance();
+                            // x is now fo the type instance
+                            // when we bump into add.
+                            // the interpretation of add should lookup the variable-id  which is optional
+                            // or it should lookup the instance type itself which is already part of
+                            // the call_type. If there is no variable-id, then no reuse, otherwise
+                            // do what's in the instance type
+                            // This implies the CallType::Function should take a variable-id representing the instance
+                            // such that it can lookup or it can use InstanceType
+                            // x.add("item");
+                            let module =
+                                get_module_identifier(instance_type, lhs);
 
                             let new_call = Expr::call_worker_function(
                                 dynamic_parsed_function_name,
                                 None,
-                                worker_name,
+                                Some(module),
                                 args.clone(),
                                 Some(component),
                             )
@@ -130,13 +140,13 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 TypeOrigin::NoOrigin,
                             );
 
-                            let worker_name =
-                                get_generated_worker_name_with_variable_id(instance_type, lhs);
+                            let module =
+                                get_module_identifier(instance_type, lhs);
 
                             let new_call_type =
                                 CallType::InstanceCreation(InstanceCreationType::Resource {
                                     component_info: Some(component.clone()),
-                                    worker_name: worker_name.map(Box::new),
+                                    module: module.map(Box::new),
                                     resource_name: fully_qualified_resource_constructor.clone(),
                                 });
 
@@ -237,7 +247,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                         _ => {}
                                     };
 
-                                    let worker_name = get_generated_worker_name_with_variable_id(
+                                    let worker_name = get_module_identifier(
                                         instance_type,
                                         lhs,
                                     );
@@ -300,21 +310,22 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
     Ok(())
 }
 
-fn get_generated_worker_name_with_variable_id(
+fn get_module_identifier(
     instance_type: &InstanceType,
     lhs: &Expr,
-) -> Option<Expr> {
-    let mut worker_name = instance_type.worker_name().as_deref().cloned();
+) -> ModuleIdentifier {
 
-    if let Some(Expr::GenerateWorkerName { variable_id, .. }) = &mut worker_name {
-        if let Expr::Identifier {
-            variable_id: lhs_variable_id,
-            ..
-        } = lhs
-        {
-            *variable_id = Some(lhs_variable_id.clone());
+   let variable_id =  match lhs {
+        Expr::Identifier { variable_id, .. } => {
+            Some(variable_id)
         }
+        _ => None,
+    };
+
+
+    ModuleIdentifier {
+        variable_id: variable_id.cloned(),
+        instance_type: Box::new(instance_type.clone()),
     }
 
-    worker_name
 }
