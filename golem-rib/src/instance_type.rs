@@ -380,7 +380,11 @@ impl InstanceType {
                 function_dictionary
                     .name_and_types
                     .iter()
-                    .filter(|(f, _)| !matches!(f, FunctionName::ResourceMethod(_)))
+                    .filter(|(f, _)| {
+                        !matches!(f, FunctionName::ResourceMethod(_))
+                            && !matches!(f, FunctionName::Variant(_))
+                            && !matches!(f, FunctionName::Enum(_))
+                    })
                     .map(|(f, t)| (f.clone(), t.clone()))
                     .collect::<Vec<_>>()
             })
