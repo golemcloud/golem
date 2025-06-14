@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::FullyQualifiedResourceConstructor;
+use crate::{FullyQualifiedResourceConstructor, InstanceType, VariableId};
 use crate::{ComponentDependencyKey, DynamicParsedFunctionName, Expr};
 use std::fmt::Display;
 
@@ -20,7 +20,7 @@ use std::fmt::Display;
 pub enum CallType {
     Function {
         component_info: Option<ComponentDependencyKey>,
-        worker: Option<Box<Expr>>,
+        module: Option<ModuleIdentifier>,
         function_name: DynamicParsedFunctionName,
     },
     VariantConstructor(String),
@@ -29,14 +29,25 @@ pub enum CallType {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
+pub struct ModuleIdentifier {
+   pub variable_id: Option<VariableId>, // The variable-id of the worker instance, `let x = instance(); x.foo()`. The variable-id can either represent a worker
+   pub instance_type: Box<InstanceType>
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum InstanceCreationType {
-    Worker {
+    // A wit worker instance can be created without another module
+    WitWorker {
         component_info: Option<ComponentDependencyKey>,
         worker_name: Option<Box<Expr>>,
     },
-    Resource {
+    // an instance type of the type wit resource can only be part of
+    // another instance (we call it module), which can be theoretically only be
+    // a worker, but we don't restrict this in types, such that it will easily
+    // handle nested wit resources
+    WitResource {
         component_info: Option<ComponentDependencyKey>,
-        worker_name: Option<Box<Expr>>,
+        module: Option<ModuleIdentifier>,
         resource_name: FullyQualifiedResourceConstructor,
     },
 }
@@ -44,8 +55,9 @@ pub enum InstanceCreationType {
 impl InstanceCreationType {
     pub fn worker_name(&self) -> Option<&Expr> {
         match self {
-            InstanceCreationType::Worker { worker_name, .. } => worker_name.as_deref(),
-            InstanceCreationType::Resource { worker_name, .. } => worker_name.as_deref(),
+            InstanceCreationType::WitWorker { worker_name, .. } => worker_name.as_deref(),
+            InstanceCreationType::WitResource { module, .. } =>
+                module.as_ref().and_then(|m | m.instance_type.worker_name().as_deref())
         }
     }
 }
@@ -59,14 +71,19 @@ impl CallType {
     }
     pub fn worker_expr(&self) -> Option<&Expr> {
         match self {
-            CallType::Function { worker, .. } => worker.as_deref(),
+            CallType::Function { module: worker, .. } =>
+                worker.as_ref().and_then(|w| w.instance_type.worker_name().as_deref()),
             _ => None,
         }
     }
 
     pub fn worker_expr_mut(&mut self) -> Option<&mut Box<Expr>> {
         match self {
-            CallType::Function { worker, .. } => worker.as_mut(),
+            CallType::Function { module, .. } => {
+                let module = module.as_mut()?;
+                let instance = &mut *module.instance_type;
+                instance.worker_mut()
+            }
             _ => None,
         }
     }
@@ -75,19 +92,19 @@ impl CallType {
         component_info: Option<ComponentDependencyKey>,
     ) -> CallType {
         CallType::Function {
-            worker: None,
+            module: None,
             function_name: function,
             component_info,
         }
     }
 
     pub fn function_call_with_worker(
-        worker: Expr,
+        module: ModuleIdentifier,
         function: DynamicParsedFunctionName,
         component_info: Option<ComponentDependencyKey>,
     ) -> CallType {
         CallType::Function {
-            worker: Some(Box::new(worker)),
+            module: Some(module),
             function_name: function,
             component_info,
         }
@@ -112,10 +129,10 @@ impl Display for CallType {
             CallType::VariantConstructor(name) => write!(f, "{}", name),
             CallType::EnumConstructor(name) => write!(f, "{}", name),
             CallType::InstanceCreation(instance_creation_type) => match instance_creation_type {
-                InstanceCreationType::Worker { .. } => {
+                InstanceCreationType::WitWorker { .. } => {
                     write!(f, "instance")
                 }
-                InstanceCreationType::Resource { resource_name, .. } => {
+                InstanceCreationType::WitResource { resource_name, .. } => {
                     write!(f, "{}", resource_name.resource_name)
                 }
             },
@@ -178,7 +195,7 @@ mod protobuf {
                         .transpose()?
                         .map(Box::new);
 
-                    Ok(InstanceCreationType::Worker {
+                    Ok(InstanceCreationType::WitWorker {
                         component_info: None,
                         worker_name,
                     })
@@ -186,11 +203,8 @@ mod protobuf {
                 golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(
                     resource_instance,
                 ) => {
-                    let worker_name = resource_instance
-                        .worker_name
-                        .map(|w| Expr::try_from(*w))
-                        .transpose()?
-                        .map(Box::new);
+
+
                     let resource_constructor_proto = resource_instance
                         .resource_name
                         .ok_or("Missing resource name")?;
@@ -202,9 +216,9 @@ mod protobuf {
                         .map(ComponentDependencyKey::try_from)
                         .transpose()?;
 
-                    Ok(InstanceCreationType::Resource {
+                    Ok(InstanceCreationType::WitResource {
                         component_info,
-                        worker_name,
+                        module: None,
                         resource_name,
                     })
                 }
@@ -215,19 +229,19 @@ mod protobuf {
     impl From<InstanceCreationType> for golem_api_grpc::proto::golem::rib::InstanceCreationType {
         fn from(value: InstanceCreationType) -> Self {
             match value {
-                InstanceCreationType::Worker { component_info, worker_name } => {
+                InstanceCreationType::WitWorker { component_info, .. } => {
                     golem_api_grpc::proto::golem::rib::InstanceCreationType {
                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Worker(Box::new(WorkerInstance {
                             component: component_info.map(golem_api_grpc::proto::golem::rib::ComponentDependencyKey::from),
-                            worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
+                            worker_name: None
                         }))),
                     }
                 }
-                InstanceCreationType::Resource { component_info, worker_name, resource_name } => {
+                InstanceCreationType::WitResource { component_info, module: worker_name, resource_name } => {
                     golem_api_grpc::proto::golem::rib::InstanceCreationType {
                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(golem_api_grpc::proto::golem::rib::ResourceInstanceWithWorkerName {
                             component: component_info.map(golem_api_grpc::proto::golem::rib::ComponentDependencyKey::from),
-                            worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
+                            worker_name: None,
                             resource_name: Some(golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor::from(resource_name)),
                         }))),
                     }
@@ -252,7 +266,7 @@ mod protobuf {
                     Ok(CallType::Function {
                         component_info: None,
                         function_name: DynamicParsedFunctionName::try_from(name)?,
-                        worker,
+                        module: None,
                     })
                 }
                 golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(name) => {
@@ -276,11 +290,11 @@ mod protobuf {
         fn from(value: CallType) -> Self {
             match value {
                 CallType::Function {
-                    worker,
+                    module,
                     function_name,
                     ..
                 } => golem_api_grpc::proto::golem::rib::CallType {
-                    worker_name: worker.map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
+                    worker_name: None,
                     name: Some(golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(
                         function_name.into(),
                     )),
@@ -301,7 +315,7 @@ mod protobuf {
                 },
                 CallType::InstanceCreation(instance_creation) => {
                     match instance_creation {
-                        InstanceCreationType::Worker { worker_name , component_info} => {
+                        InstanceCreationType::WitWorker { worker_name , component_info} => {
                             golem_api_grpc::proto::golem::rib::CallType {
                                 worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
                                 name:  Some(golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
@@ -314,9 +328,9 @@ mod protobuf {
                                 )),
                             }
                         }
-                        InstanceCreationType::Resource { worker_name, resource_name, component_info } => {
+                        InstanceCreationType::WitResource { module: worker_name, resource_name, component_info } => {
                             golem_api_grpc::proto::golem::rib::CallType {
-                                worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
+                                worker_name: None,
                                 name:  Some(golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
                                     Box::new(golem_api_grpc::proto::golem::rib::InstanceCreationType {
                                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(golem_api_grpc::proto::golem::rib::ResourceInstanceWithWorkerName {
@@ -348,7 +362,7 @@ mod protobuf {
                 golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => {
                     Ok(CallType::Function {
                         component_info: None,
-                        worker: None,
+                        module: None,
                         function_name: DynamicParsedFunctionName::parse(
                             ParsedFunctionName::try_from(name)?.to_string(),
                         )?,
