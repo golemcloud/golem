@@ -440,7 +440,7 @@ mod internal {
                 match call_type {
                     CallType::Function {
                         function_name,
-                        worker,
+                        module: worker,
                         component_info,
                     } => {
                         for expr in args.iter().rev() {
@@ -601,7 +601,7 @@ mod internal {
                     // we need to push a place holder in the stack that does nothing
                     CallType::InstanceCreation(instance_creation_type) => {
                         match instance_creation_type {
-                            InstanceCreationType::Worker { worker_name, .. } => {
+                            InstanceCreationType::WitWorker { worker_name, .. } => {
                                 for expr in args.iter().rev() {
                                     stack.push(ExprState::from_expr(expr));
                                 }
@@ -641,8 +641,8 @@ mod internal {
                                 }
                             }
 
-                            InstanceCreationType::Resource {
-                                worker_name,
+                            InstanceCreationType::WitResource {
+                                module: worker_name,
                                 resource_name,
                                 ..
                             } => {
