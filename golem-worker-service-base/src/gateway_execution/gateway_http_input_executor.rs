@@ -241,7 +241,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
         let rib_input: RibInput = resolve_rib_input(request, &rib_input_type_info).await?;
 
-        let result = rib::interpret_pure(compiled_worker_name, rib_input)
+        let result = rib::interpret_pure(compiled_worker_name, rib_input, None)
             .await
             .map_err(|err| GatewayHttpError::RibInterpretPureError(err.to_string()))?
             .get_literal()
@@ -266,7 +266,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
         let rib_input: RibInput = resolve_rib_input(request, &rib_input).await?;
 
-        let value = rib::interpret_pure(compiled_idempotency_key, rib_input)
+        let value = rib::interpret_pure(compiled_idempotency_key, rib_input, None)
             .await
             .map_err(|err| GatewayHttpError::RibInterpretPureError(err.to_string()))?
             .get_literal()
@@ -291,7 +291,7 @@ impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
 
         let rib_input: RibInput = resolve_rib_input(request, &rib_input).await?;
 
-        let value = rib::interpret_pure(compiled_invocation_context, rib_input)
+        let value = rib::interpret_pure(compiled_invocation_context, rib_input, None)
             .await
             .map_err(|err| GatewayHttpError::RibInterpretPureError(err.to_string()))?
             .get_record()

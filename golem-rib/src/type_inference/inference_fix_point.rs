@@ -186,6 +186,7 @@ fn compare_inferred_types_internal(left: &TypeInternal, right: &TypeInternal, bo
 #[cfg(test)]
 mod tests {
     use bigdecimal::BigDecimal;
+
     use test_r::test;
 
     use crate::parser::type_name::TypeName;
@@ -341,6 +342,7 @@ mod tests {
         "#;
 
         let mut expr = Expr::from_text(expr).unwrap();
+
         expr.infer_types(&ComponentDependencies::default(), &vec![])
             .unwrap();
         let expected = Expr::expr_block(vec![

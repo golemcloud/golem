@@ -70,7 +70,7 @@ impl CallType {
             _ => None,
         }
     }
-    pub fn function_without_worker(
+    pub fn function_call(
         function: DynamicParsedFunctionName,
         component_info: Option<ComponentDependencyKey>,
     ) -> CallType {
@@ -80,6 +80,19 @@ impl CallType {
             component_info,
         }
     }
+
+    pub fn function_call_with_worker(
+        worker: Expr,
+        function: DynamicParsedFunctionName,
+        component_info: Option<ComponentDependencyKey>,
+    ) -> CallType {
+        CallType::Function {
+            worker: Some(Box::new(worker)),
+            function_name: function,
+            component_info,
+        }
+    }
+
     pub fn is_resource_method(&self) -> bool {
         match self {
             CallType::Function { function_name, .. } => function_name

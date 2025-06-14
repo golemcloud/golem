@@ -294,7 +294,7 @@ mod name_binding_tests {
         );
 
         let call_expr = Expr::call(
-            CallType::function_without_worker(
+            CallType::function_call(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -339,7 +339,7 @@ mod name_binding_tests {
         );
 
         let call_expr1 = Expr::call(
-            CallType::function_without_worker(
+            CallType::function_call(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -353,7 +353,7 @@ mod name_binding_tests {
         );
 
         let call_expr2 = Expr::call(
-            CallType::function_without_worker(
+            CallType::function_call(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -398,7 +398,7 @@ mod name_binding_tests {
         );
 
         let call_expr1 = Expr::call(
-            CallType::function_without_worker(
+            CallType::function_call(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -412,7 +412,7 @@ mod name_binding_tests {
         );
 
         let call_expr2 = Expr::call(
-            CallType::function_without_worker(
+            CallType::function_call(
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {

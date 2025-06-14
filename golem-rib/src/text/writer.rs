@@ -94,6 +94,8 @@ impl<W: Write> Writer<W> {
                 }
             }
 
+            Expr::GenerateWorkerName { .. } => Ok(()),
+
             Expr::Range { range, .. } => match range {
                 Range::Range { from, to } => {
                     self.write_expr(from)?;

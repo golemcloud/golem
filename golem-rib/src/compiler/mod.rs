@@ -14,10 +14,7 @@
 
 pub use byte_code::*;
 pub use compiler_output::*;
-use golem_wasm_ast::analysis::{AnalysedExport, TypeEnum, TypeVariant};
 pub use ir::*;
-use std::error::Error;
-use std::fmt::Display;
 pub use type_with_unit::*;
 pub use worker_functions_in_rib::*;
 
@@ -26,6 +23,9 @@ use crate::{
     ComponentDependencies, ComponentDependencyKey, Expr, GlobalVariableTypeSpec, InferredExpr,
     RibInputTypeInfo, RibOutputTypeInfo,
 };
+use golem_wasm_ast::analysis::{AnalysedExport, TypeEnum, TypeVariant};
+use std::error::Error;
+use std::fmt::Display;
 
 mod byte_code;
 mod compiler_output;
@@ -169,6 +169,19 @@ impl ComponentDependency {
             component_dependency_key,
             component_exports,
         }
+    }
+}
+
+pub trait GenerateWorkerName {
+    fn generate_worker_name(&self) -> String;
+}
+
+pub struct DefaultWorkerNameGenerator;
+
+impl GenerateWorkerName for DefaultWorkerNameGenerator {
+    fn generate_worker_name(&self) -> String {
+        let uuid = uuid::Uuid::new_v4();
+        format!("worker-{}", uuid)
     }
 }
 

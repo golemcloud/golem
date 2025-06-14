@@ -55,10 +55,15 @@ message RibIR {
         IsEmpty is_empty = 43;
         SelectIndexV1 select_index_v1 = 44;
         Length length = 45;
+        GenerateWorkerName generate_worker_name = 46;
     }
 }
 
 message Length {}
+
+message GenerateWorkerName {
+  optional VariableId variable_id = 1;
+}
 
 message SelectIndexV1{}
 
@@ -66,11 +71,28 @@ message VariableId {
     oneof variable_id {
         Global global = 1;
         Local local = 2;
+        MatchIdentifier match_identifier = 3;
+        ListComprehensionIdentifier list_comprehension_identifier = 4;
+        ListAggregationIdentifier list_aggregation_identifier = 5;
     }
 }
 
 message Global {
     string name = 1;
+}
+
+message ListComprehensionIdentifier {
+    string name = 1;
+}
+
+message ListAggregationIdentifier {
+    string name = 1;
+}
+
+
+message MatchIdentifier {
+    string name = 1;
+    uint32 match_arm_index  = 2;
 }
 
 message Local {

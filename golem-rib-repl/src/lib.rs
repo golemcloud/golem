@@ -38,6 +38,7 @@ mod rib_edit;
 mod rib_execution_error;
 mod rib_repl;
 mod value_generator;
+mod worker_name_gen;
 
 #[cfg(test)]
 test_r::enable!();

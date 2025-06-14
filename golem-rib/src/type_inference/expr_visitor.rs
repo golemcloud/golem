@@ -256,6 +256,7 @@ fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
             Expr::Boolean { .. } => {}
             Expr::Option { expr: None, .. } => {}
             Expr::Throw { .. } => {}
+            Expr::GenerateWorkerName { .. } => {}
         }
     }
 }
@@ -438,6 +439,7 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
             Expr::Boolean { .. } => {}
             Expr::Option { expr: None, .. } => {}
             Expr::Throw { .. } => {}
+            Expr::GenerateWorkerName { .. } => {}
         }
     }
 }
@@ -610,6 +612,7 @@ pub fn visit_expr_nodes_lazy<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mu
         Expr::Boolean { .. } => {}
         Expr::Option { expr: None, .. } => {}
         Expr::Throw { .. } => {}
+        Expr::GenerateWorkerName { .. } => {}
     }
 }
 

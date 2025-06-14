@@ -307,6 +307,13 @@ pub enum Expr {
         type_annotation: Option<TypeName>,
         source_span: SourceSpan,
     },
+
+    GenerateWorkerName {
+        inferred_type: InferredType,
+        type_annotation: Option<TypeName>,
+        source_span: SourceSpan,
+        variable_id: Option<VariableId>,
+    },
 }
 
 impl Expr {
@@ -491,6 +498,15 @@ impl Expr {
             inferred_type: InferredType::unknown(),
             source_span: SourceSpan::default(),
             type_annotation: None,
+        }
+    }
+
+    pub fn generate_worker_name(variable_id: Option<VariableId>) -> Self {
+        Expr::GenerateWorkerName {
+            inferred_type: InferredType::string(),
+            type_annotation: None,
+            source_span: SourceSpan::default(),
+            variable_id,
         }
     }
 
@@ -1070,7 +1086,8 @@ impl Expr {
             | Expr::Call { inferred_type, .. }
             | Expr::Range { inferred_type, .. }
             | Expr::InvokeMethodLazy { inferred_type, .. }
-            | Expr::Length { inferred_type, .. } => inferred_type.clone(),
+            | Expr::Length { inferred_type, .. }
+            | Expr::GenerateWorkerName { inferred_type, .. } => inferred_type.clone(),
         }
     }
 
@@ -1099,14 +1116,15 @@ impl Expr {
         type_spec: &Vec<GlobalVariableTypeSpec>,
     ) -> Result<(), RibTypeError> {
         self.set_origin();
-        self.identify_instance_creation(component_dependency)?;
         self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
-        self.bind_default_types_to_index_expressions();
+        // self.bind_default_types_to_index_expressions();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();
         self.bind_variables_of_pattern_match();
         self.bind_variables_of_let_assignment();
+        self.identify_instance_creation(component_dependency)?;
+        self.ensure_stateful_instance();
         self.infer_variants(component_dependency);
         self.infer_enums(component_dependency);
         Ok(())
@@ -1177,6 +1195,10 @@ impl Expr {
         component_dependency: &ComponentDependencies,
     ) -> Result<(), RibTypeError> {
         type_inference::identify_instance_creation(self, component_dependency)
+    }
+
+    pub fn ensure_stateful_instance(&mut self) {
+        type_inference::ensure_stateful_instance(self)
     }
 
     pub fn infer_function_call_types(
@@ -1264,6 +1286,7 @@ impl Expr {
             | Expr::InvokeMethodLazy { inferred_type, .. }
             | Expr::Range { inferred_type, .. }
             | Expr::Length { inferred_type, .. }
+            | Expr::GenerateWorkerName { inferred_type, .. }
             | Expr::Call { inferred_type, .. } => {
                 if !new_inferred_type.is_unknown() {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -1315,7 +1338,8 @@ impl Expr {
             | Expr::InvokeMethodLazy { source_span, .. }
             | Expr::Range { source_span, .. }
             | Expr::Length { source_span, .. }
-            | Expr::Call { source_span, .. } => source_span.clone(),
+            | Expr::Call { source_span, .. }
+            | Expr::GenerateWorkerName { source_span, .. } => source_span.clone(),
         }
     }
 
@@ -1430,6 +1454,9 @@ impl Expr {
                 type_annotation, ..
             }
             | Expr::Length {
+                type_annotation, ..
+            }
+            | Expr::GenerateWorkerName {
                 type_annotation, ..
             }
             | Expr::Call {
@@ -1567,6 +1594,9 @@ impl Expr {
             | Expr::Length {
                 type_annotation, ..
             }
+            | Expr::GenerateWorkerName {
+                type_annotation, ..
+            }
             | Expr::Call {
                 type_annotation, ..
             } => {
@@ -1620,6 +1650,7 @@ impl Expr {
             | Expr::ListReduce { source_span, .. }
             | Expr::InvokeMethodLazy { source_span, .. }
             | Expr::Length { source_span, .. }
+            | Expr::GenerateWorkerName { source_span, .. }
             | Expr::Call { source_span, .. } => {
                 *source_span = new_source_span;
             }
@@ -1673,6 +1704,7 @@ impl Expr {
             | Expr::InvokeMethodLazy { inferred_type, .. }
             | Expr::Range { inferred_type, .. }
             | Expr::Length { inferred_type, .. }
+            | Expr::GenerateWorkerName { inferred_type, .. }
             | Expr::Call { inferred_type, .. } => {
                 *inferred_type = new_inferred_type;
             }
@@ -2179,6 +2211,10 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 golem_api_grpc::proto::golem::rib::ThrowExpr { message },
             ) => Expr::throw(message),
 
+            golem_api_grpc::proto::golem::rib::expr::Expr::GenerateWorkerName(
+                golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr {},
+            ) => Expr::generate_worker_name(None),
+
             golem_api_grpc::proto::golem::rib::expr::Expr::And(expr) => {
                 let left = expr.left.ok_or("Missing left expr")?;
                 let right = expr.right.ok_or("Missing right expr")?;
@@ -2436,9 +2472,31 @@ mod protobuf {
     use crate::{ArmPattern, Expr, MatchArm, Range};
     use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 
+    // It is to be noted that when we change `Expr` tree solely for the purpose of
+    // updating type inference, we don't need to change the proto version
+    // of Expr. A proto version of Expr changes only when Rib adds/updates the grammar itself.
+    // This makes it easy to keep backward compatibility at the persistence level
+    // (if persistence using grpc encode)
+    //
+    // Reason: A proto version of Expr doesn't take into the account the type inferred
+    // for each expr, or encode any behaviour that's the result of a type inference
+    // Example: in a type inference, a variable-id of expr which is tagged as `global` becomes
+    // `VariableId::Local(Identifier)` after a particular type inference phase, however, when encoding
+    // we don't need to consider this `Identifier` and is kept as global (i.e, the raw form) in Expr.
+    // This is because we never (want to) encode an Expr which is a result of `infer_types` function.
+    //
+    // Summary: We encode Expr only prior to compilation. After compilation, we encode only the RibByteCode.
+    // If we ever want to encode Expr after type-inference phase, it implies, we need to encode `InferredExpr`
+    // rather than `Expr` and this will ensure, users when retrieving back the `Expr` will never have
+    // noise regarding types and variable-ids, and will always stay one to one in round trip
     impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
         fn from(value: Expr) -> Self {
             let expr = match value {
+                Expr::GenerateWorkerName { .. } => Some(
+                    golem_api_grpc::proto::golem::rib::expr::Expr::GenerateWorkerName(
+                        golem_api_grpc::proto::golem::rib::GenerateWorkerNameExpr {},
+                    ),
+                ),
                 Expr::Let {
                     variable_id,
                     type_annotation,

@@ -9,7 +9,7 @@ use golem_wasm_ast::analysis::{
 use golem_wasm_rpc::ValueAndType;
 use rib::{
     EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, Expr, Interpreter, RibCompiler,
-    RibCompilerConfig, RibFunctionInvoke, RibFunctionInvokeResult, RibInput,
+    RibCompilerConfig, RibComponentFunctionInvoke, RibFunctionInvokeResult, RibInput,
 };
 
 #[test]
@@ -2031,14 +2031,14 @@ mod mock_data {
 mod mock_interpreter {
     use crate::{mock_data, test_utils, Interpreter};
     use crate::{
-        EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibFunctionInvoke,
+        EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, RibComponentFunctionInvoke,
         RibFunctionInvokeResult, RibInput,
     };
     use async_trait::async_trait;
 
     use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
     use golem_wasm_rpc::ValueAndType;
-    use rib::{ComponentDependencyKey, InstructionId};
+    use rib::{ComponentDependencyKey, DefaultWorkerNameGenerator, InstructionId};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -2232,7 +2232,11 @@ mod mock_interpreter {
             functions_and_result,
         });
 
-        Interpreter::new(RibInput::new(interpreter_env_input), dynamic_worker_invoke)
+        Interpreter::new(
+            RibInput::new(interpreter_env_input),
+            dynamic_worker_invoke,
+            Arc::new(DefaultWorkerNameGenerator),
+        )
     }
 
     struct DynamicRibFunctionInvoke {
@@ -2240,7 +2244,7 @@ mod mock_interpreter {
     }
 
     #[async_trait]
-    impl RibFunctionInvoke for DynamicRibFunctionInvoke {
+    impl RibComponentFunctionInvoke for DynamicRibFunctionInvoke {
         async fn invoke(
             &self,
             _component_info: ComponentDependencyKey,

@@ -211,6 +211,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
             }
             Expr::Length { .. } => {}
             Expr::Throw { .. } => {}
+            Expr::GenerateWorkerName { .. } => {}
             Expr::ListComprehension {
                 yield_expr,
                 inferred_type,
@@ -460,6 +461,7 @@ fn get_inferred_type_of_selection_dynamic(
 #[cfg(test)]
 mod type_pull_up_tests {
     use bigdecimal::BigDecimal;
+
     use test_r::test;
 
     use crate::call_type::CallType;
@@ -773,8 +775,9 @@ mod type_pull_up_tests {
         "#;
 
         let mut expr = Expr::from_text(rib).unwrap();
-        let function_registry = ComponentDependencies::default();
-        expr.infer_types_initial_phase(&function_registry, &vec![])
+        let component_dependencies = ComponentDependencies::default();
+
+        expr.infer_types_initial_phase(&component_dependencies, &vec![])
             .unwrap();
         expr.infer_all_identifiers();
         expr.pull_types_up().unwrap();
@@ -799,7 +802,7 @@ mod type_pull_up_tests {
                 None,
             ),
             Expr::call(
-                CallType::function_without_worker(
+                CallType::function_call(
                     DynamicParsedFunctionName {
                         site: PackagedInterface {
                             namespace: "golem".to_string(),

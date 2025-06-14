@@ -174,6 +174,10 @@ mod internal {
                 instructions.push(RibIR::Deconstruct);
             }
 
+            Expr::GenerateWorkerName { variable_id, .. } => {
+                instructions.push(RibIR::GenerateWorkerName(variable_id.clone()));
+            }
+
             Expr::Length { expr, .. } => {
                 stack.push(ExprState::from_expr(expr.deref()));
                 instructions.push(RibIR::Length);
@@ -1007,20 +1011,18 @@ mod compiler_tests {
     use test_r::test;
 
     use super::*;
-    use crate::{
-        ArmPattern, ComponentDependencies, InferredType, MatchArm, RibCompiler, VariableId,
-    };
-    use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
+    use crate::{ArmPattern, InferredType, MatchArm, RibCompiler, VariableId};
+    use golem_wasm_ast::analysis::analysed_type::{list, s32, str};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 
     #[test]
     fn test_instructions_for_literal() {
         let literal = Expr::literal("hello");
-        let empty_registry = ComponentDependencies::default();
-        let inferred_expr = InferredExpr::from_expr(literal, &empty_registry, &vec![]).unwrap();
 
-        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
+        let compiler = RibCompiler::default();
+
+        let compiler_output = compiler.compile(literal).unwrap();
 
         let instruction_set = vec![RibIR::PushLit("hello".into_value_and_type())];
 
@@ -1028,7 +1030,7 @@ mod compiler_tests {
             instructions: instruction_set,
         };
 
-        assert_eq!(instructions, expected_instructions);
+        assert_eq!(compiler_output.byte_code, expected_instructions);
     }
 
     #[test]
@@ -1451,7 +1453,7 @@ mod compiler_tests {
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let instruction_set = vec![
-            RibIR::PushLit(ValueAndType::new(Value::U64(1), u64())),
+            RibIR::PushLit(ValueAndType::new(Value::S32(1), s32())),
             RibIR::PushLit("bar".into_value_and_type()),
             RibIR::PushLit("foo".into_value_and_type()),
             RibIR::PushList(list(str()), 2),
@@ -1486,10 +1488,9 @@ mod compiler_tests {
         )
         .with_inferred_type(InferredType::string());
 
-        let empty_registry = ComponentDependencies::default();
-        let inferred_expr = InferredExpr::from_expr(expr, &empty_registry, &vec![]).unwrap();
+        let rib_compiler = RibCompiler::default();
 
-        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
+        let instructions = rib_compiler.compile(expr).unwrap().byte_code;
 
         // instructions will correspond to an if-else statement
         let instruction_set = vec![

@@ -187,7 +187,7 @@ impl RibRepl {
                         .editor
                         .save_history(self.repl_state.history_file_path());
 
-                    match compile_rib_script(&self.current_rib_program(), &self.repl_state) {
+                    match compile_rib_script(&self.current_rib_program(), self.repl_state.clone()) {
                         Ok(compiler_output) => {
                             let rib_edit = self.editor.helper_mut().unwrap();
 
