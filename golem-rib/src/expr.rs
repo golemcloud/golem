@@ -19,11 +19,7 @@ use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
-use crate::{
-    from_string, text, type_checker, type_inference, ComponentDependencies, ComponentDependencyKey,
-    DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType,
-    ParsedFunctionName, VariableId,
-};
+use crate::{from_string, text, type_checker, type_inference, ComponentDependencies, ComponentDependencyKey, DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType, ModuleIdentifier, ParsedFunctionName, VariableId};
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
 use combine::stream::position;
@@ -570,14 +566,14 @@ impl Expr {
     pub fn call_worker_function(
         dynamic_parsed_fn_name: DynamicParsedFunctionName,
         generic_type_parameter: Option<GenericTypeParameter>,
-        worker_name: Option<Expr>,
+        module_identifier: Option<ModuleIdentifier>,
         args: Vec<Expr>,
         component_info: Option<ComponentDependencyKey>,
     ) -> Self {
         Expr::Call {
             call_type: CallType::Function {
                 function_name: dynamic_parsed_fn_name,
-                worker: worker_name.map(Box::new),
+                module: module_identifier,
                 component_info,
             },
             generic_type_parameter,
