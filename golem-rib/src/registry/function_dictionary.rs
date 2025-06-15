@@ -510,7 +510,6 @@ impl FullyQualifiedResourceMethod {
     // We rely on the fully parsed function name itself to retrieve the original function name
     pub fn dynamic_parsed_function_name(
         &self,
-        resource_args: Vec<Expr>,
     ) -> Result<DynamicParsedFunctionName, String> {
         let mut dynamic_parsed_str = String::new();
 
@@ -528,21 +527,6 @@ impl FullyQualifiedResourceMethod {
         // Start the dynamic function name with resource
         dynamic_parsed_str.push('{');
         dynamic_parsed_str.push_str(&self.resource_name);
-
-        // If arguments exist, format them inside parentheses
-        if !resource_args.is_empty() {
-            dynamic_parsed_str.push('(');
-            dynamic_parsed_str.push_str(
-                &resource_args
-                    .into_iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            );
-            dynamic_parsed_str.push(')');
-        }
-
-        // Append the method name
         dynamic_parsed_str.push('.');
         dynamic_parsed_str.push_str(&self.method_name);
         dynamic_parsed_str.push('}');

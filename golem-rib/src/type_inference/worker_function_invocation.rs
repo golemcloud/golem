@@ -208,8 +208,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                             ),
                                         ))?;
 
-                                    let mut dynamic_parsed_function_name = resource_method
-                                        .dynamic_parsed_function_name(resource_args.clone())
+                                    let dynamic_parsed_function_name = resource_method
+                                        .dynamic_parsed_function_name()
                                         .map_err(|err| {
                                             FunctionCallError::invalid_function_call(
                                                 resource_method.method_name(),
@@ -226,27 +226,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                                 format!("Invalid function name: {}", err),
                                             )
                                         })?;
-
-                                    // Making sure the various compile phased resolved resource_args are kept intact
-                                    match &mut dynamic_parsed_function_name.function {
-                                        DynamicParsedFunctionReference::IndexedResourceConstructor { resource_params, .. } => {
-                                            *resource_params = resource_args.clone();
-                                        }
-                                        DynamicParsedFunctionReference::IndexedResourceMethod { resource_params, .. } => {
-                                            *resource_params = resource_args.clone();
-                                        }
-
-                                        DynamicParsedFunctionReference::IndexedResourceStaticMethod { resource_params, .. } => {
-                                            *resource_params = resource_args.clone();
-                                        }
-
-                                        DynamicParsedFunctionReference::IndexedResourceDrop { resource_params, .. } => {
-                                            *resource_params = resource_args.clone();
-                                        }
-
-                                        _ => {}
-                                    };
-
+                                    
                                     let module = get_module_identifier(
                                         instance_type,
                                         lhs,
