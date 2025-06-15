@@ -386,7 +386,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                         )
                     }
                     CallType::InstanceCreation(instance) => match instance {
-                        InstanceCreationType::Worker { worker_name, .. } => {
+                        InstanceCreationType::WitWorker { worker_name, .. } => {
                             let worker_name = worker_name
                                 .as_ref()
                                 .map_or("".to_string(), |x| format!(", with worker `{}`", x));
@@ -395,14 +395,16 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                                 worker_name
                             )
                         }
-                        InstanceCreationType::Resource {
-                            worker_name,
+                        InstanceCreationType::WitResource {
+                            module,
                             resource_name,
                             ..
                         } => {
-                            let worker_name = worker_name
+                            let worker_name = module
                                 .as_ref()
+                                .and_then(|x| x.instance_type.worker_name())
                                 .map_or("".to_string(), |x| format!(", with worker `{}`", x));
+
                             format!(
                                 "cannot determine the type of the resource creation `{}`{}",
                                 resource_name.resource_name, worker_name

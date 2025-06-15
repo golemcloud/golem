@@ -253,7 +253,7 @@ impl ComponentDependencies {
         worker_name: Option<Expr>,
     ) -> Result<InstanceCreationType, String> {
         match type_parameter {
-            None => Ok(InstanceCreationType::Worker {
+            None => Ok(InstanceCreationType::WitWorker {
                 component_info: None,
                 worker_name: worker_name.map(Box::new),
             }),
@@ -277,19 +277,19 @@ impl ComponentDependencies {
                     });
 
                 if let Some(result) = result {
-                    Ok(InstanceCreationType::Worker {
+                    Ok(InstanceCreationType::WitWorker {
                         component_info: Some(result.0.clone()),
                         worker_name: worker_name.map(Box::new),
                     })
                 } else {
-                    Ok(InstanceCreationType::Worker {
+                    Ok(InstanceCreationType::WitWorker {
                         component_info: None,
                         worker_name: worker_name.map(Box::new),
                     })
                 }
             }
 
-            _ => Ok(InstanceCreationType::Worker {
+            _ => Ok(InstanceCreationType::WitWorker {
                 component_info: None,
                 worker_name: worker_name.map(Box::new),
             }),

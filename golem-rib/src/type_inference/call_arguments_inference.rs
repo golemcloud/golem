@@ -70,7 +70,7 @@ mod internal {
 
         match call_type {
             CallType::InstanceCreation(instance) => match instance {
-                InstanceCreationType::Worker { .. } => {
+                InstanceCreationType::WitWorker { .. } => {
                     for arg in args.iter_mut() {
                         arg.add_infer_type_mut(InferredType::string());
                     }
@@ -78,7 +78,7 @@ mod internal {
                     Ok(())
                 }
 
-                InstanceCreationType::Resource { resource_name, .. } => {
+                InstanceCreationType::WitResource { resource_name, .. } => {
                     infer_resource_constructor_arguments(
                         original_expr,
                         resource_name,

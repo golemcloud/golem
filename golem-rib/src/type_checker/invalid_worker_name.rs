@@ -22,20 +22,27 @@ pub fn check_invalid_worker_name(expr: &mut Expr) -> Result<(), InvalidWorkerNam
     while let Some(expr) = visitor.pop_back() {
         if let Expr::Call { call_type, .. } = expr {
             match call_type {
-                CallType::InstanceCreation(InstanceCreationType::Worker {
+                CallType::InstanceCreation(InstanceCreationType::WitWorker {
                     worker_name, ..
                 }) => {
                     internal::check_worker_name(worker_name)?;
                 }
-                CallType::Function { worker, .. } => {
-                    internal::check_worker_name(worker)?;
+                CallType::Function { module, .. } => {
+                    let worker_name_opt =
+                        module.as_ref().and_then(|x| x.instance_type.worker_name());
+
+                    internal::check_worker_name(&worker_name_opt)?;
                 }
                 CallType::VariantConstructor(_) => {}
                 CallType::EnumConstructor(_) => {}
-                CallType::InstanceCreation(InstanceCreationType::Resource {
-                    worker_name, ..
+                CallType::InstanceCreation(InstanceCreationType::WitResource {
+                    module, ..
                 }) => {
-                    internal::check_worker_name(worker_name)?;
+                    let worker_name_opt = module
+                        .as_ref()
+                        .and_then(|x| x.instance_type.worker_name());
+
+                    internal::check_worker_name(&worker_name_opt)?;
                 }
             }
         }
@@ -47,13 +54,14 @@ pub fn check_invalid_worker_name(expr: &mut Expr) -> Result<(), InvalidWorkerNam
 mod internal {
     use crate::type_refinement::precise_types::StringType;
     use crate::type_refinement::TypeRefinement;
-    use crate::{Expr, InvalidWorkerName, TypeName};
+    use crate::{Expr, InvalidWorkerName, ModuleIdentifier, TypeName};
     use std::ops::Deref;
 
     pub(crate) fn check_worker_name(
-        worker_name: &Option<Box<Expr>>,
+        worker_name_opt: &Option<Box<Expr>>,
     ) -> Result<(), InvalidWorkerName> {
-        match worker_name {
+
+        match worker_name_opt {
             None => {}
             Some(expr) => {
                 let inferred_type = expr.inferred_type();

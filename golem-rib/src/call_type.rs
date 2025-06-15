@@ -335,7 +335,7 @@ mod protobuf {
                                     Box::new(golem_api_grpc::proto::golem::rib::InstanceCreationType {
                                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(golem_api_grpc::proto::golem::rib::ResourceInstanceWithWorkerName {
                                             component: component_info.map(golem_api_grpc::proto::golem::rib::ComponentDependencyKey::from),
-                                            worker_name: worker_name.map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
+                                            worker_name: None,
                                             resource_name: Some(golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor::from(resource_name)),
                                         }))),
                                     })

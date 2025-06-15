@@ -144,9 +144,9 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 get_module_identifier(instance_type, lhs);
 
                             let new_call_type =
-                                CallType::InstanceCreation(InstanceCreationType::Resource {
+                                CallType::InstanceCreation(InstanceCreationType::WitResource {
                                     component_info: Some(component.clone()),
-                                    module: module.map(Box::new),
+                                    module: Some(module),
                                     resource_name: fully_qualified_resource_constructor.clone(),
                                 });
 
@@ -247,7 +247,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                         _ => {}
                                     };
 
-                                    let worker_name = get_module_identifier(
+                                    let module = get_module_identifier(
                                         instance_type,
                                         lhs,
                                     );
@@ -255,7 +255,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                     let new_call = Expr::call_worker_function(
                                         dynamic_parsed_function_name,
                                         None,
-                                        worker_name,
+                                        Some(module),
                                         args.clone(),
                                         Some(component),
                                     )
