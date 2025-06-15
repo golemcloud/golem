@@ -100,7 +100,7 @@ impl StatementTest {
             statement,
             params,
             sleep: None,
-            expected: expected.map(execute_ok_response),
+            expected: expected.map(execute_response),
         }
     }
 
@@ -322,7 +322,7 @@ async fn rdbms_postgres_crud(
     )
     .await;
 
-    let select_test = select_test.with_expected(Some(query_empty_ok_response()));
+    let select_test = select_test.with_expected(Some(query_empty_response()));
 
     rdbms_workers_test::<PostgresType>(
         &executor,
@@ -702,7 +702,7 @@ async fn rdbms_postgres_pre_rollback_recovery(
             postgres,
             TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", fail_count),
             TransactionEnd::Rollback,
-            true,
+            false,
         )
         .await;
     }
@@ -710,7 +710,7 @@ async fn rdbms_postgres_pre_rollback_recovery(
 
 #[test]
 #[tracing::instrument]
-async fn rdbms_postgres_rollback_and_tx_status_not_found_recovery(
+async fn rdbms_postgres_commit_and_tx_status_not_found_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
@@ -721,12 +721,12 @@ async fn rdbms_postgres_rollback_and_tx_status_not_found_recovery(
         deps,
         postgres,
         TransactionFailOn::oplog_add_and_tx(
-            "RolledBackRemoteTransaction",
+            "CommittedRemoteTransaction",
             1,
             "GetTransactionStatusNotFound",
             1,
         ),
-        TransactionEnd::Rollback,
+        TransactionEnd::Commit,
         true,
     )
     .await;
@@ -870,7 +870,7 @@ fn postgres_get_expected(expected_values: Vec<(Uuid, String, String)>) -> serde_
             }),
         ]
     };
-    query_ok_response(expected_columns, expected_rows)
+    query_response(expected_columns, expected_rows)
 }
 
 #[test]
@@ -898,7 +898,7 @@ async fn rdbms_postgres_select1(
         "name":"?column?",
         "ordinal":0
     })];
-    let expected = query_ok_response(expected_columns, expected_rows);
+    let expected = query_response(expected_columns, expected_rows);
 
     let test2 = StatementTest::query_test("SELECT 1".to_string(), vec![], Some(expected));
 
@@ -1015,7 +1015,7 @@ async fn rdbms_mysql_crud(
     )
     .await;
 
-    let select_test = select_test.with_expected(Some(query_empty_ok_response()));
+    let select_test = select_test.with_expected(Some(query_empty_response()));
 
     rdbms_workers_test::<MysqlType>(
         &executor,
@@ -1381,7 +1381,7 @@ async fn rdbms_mysql_pre_rollback_recovery(
             mysql,
             TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", fail_count),
             TransactionEnd::Rollback,
-            true,
+            false,
         )
         .await;
     }
@@ -1389,7 +1389,7 @@ async fn rdbms_mysql_pre_rollback_recovery(
 
 #[test]
 #[tracing::instrument]
-async fn rdbms_mysql_rollback_and_tx_status_not_found_recovery(
+async fn rdbms_mysql_commit_and_tx_status_not_found_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
@@ -1400,12 +1400,12 @@ async fn rdbms_mysql_rollback_and_tx_status_not_found_recovery(
         deps,
         mysql,
         TransactionFailOn::oplog_add_and_tx(
-            "RolledBackRemoteTransaction",
+            "CommittedRemoteTransaction",
             1,
             "GetTransactionStatusNotFound",
             1,
         ),
-        TransactionEnd::Rollback,
+        TransactionEnd::Commit,
         true,
     )
     .await;
@@ -1534,7 +1534,7 @@ fn mysql_get_expected(expected_values: Vec<(String, String)>) -> serde_json::Val
             }),
         ]
     };
-    query_ok_response(expected_columns, expected_rows)
+    query_response(expected_columns, expected_rows)
 }
 
 #[test]
@@ -1562,7 +1562,7 @@ async fn rdbms_mysql_select1(
         "name":"1",
         "ordinal":0
     })];
-    let expected = query_ok_response(expected_columns, expected_rows);
+    let expected = query_response(expected_columns, expected_rows);
 
     let test2 = StatementTest::query_test("SELECT 1".to_string(), vec![], Some(expected));
 
@@ -1899,34 +1899,30 @@ async fn workers_interrupt_test(executor: &TestWorkerExecutor, worker_ids: Vec<W
     }
 }
 
-fn execute_ok_response(value: u64) -> serde_json::Value {
+fn execute_response(value: u64) -> serde_json::Value {
     json!(
        {
-          "ok": {
-              "execute": value
-           }
+           "execute": value
        }
     )
 }
 
-fn query_ok_response(
+fn query_response(
     columns: Vec<serde_json::Value>,
     rows: Vec<serde_json::Value>,
 ) -> serde_json::Value {
     json!(
         {
-          "ok":{
-             "query":{
-                 "columns": columns,
-                 "rows": rows
-             }
-           }
+         "query":{
+             "columns": columns,
+             "rows": rows
+         }
        }
     )
 }
 
-fn query_empty_ok_response() -> serde_json::Value {
-    query_ok_response(vec![], vec![])
+fn query_empty_response() -> serde_json::Value {
+    query_response(vec![], vec![])
 }
 
 fn check_transaction_oplog_entries<T: RdbmsType>(

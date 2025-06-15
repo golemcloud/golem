@@ -35,13 +35,13 @@ interface api {
 
   check: func() -> string;
 
-  mysql-transaction: func(statements: list<statement>, end: transaction-end) -> result<list<result<mysql-result, string>>, string>;
+  mysql-transaction: func(statements: list<statement>, end: transaction-end) -> result<list<mysql-result>, string>;
 
-  mysql-executions: func(statements: list<statement>) -> result<list<result<mysql-result, string>>, string>;
+  mysql-executions: func(statements: list<statement>) -> result<list<mysql-result>, string>;
 
-  postgres-transaction: func(statements: list<statement>, end: transaction-end) -> result<list<result<postgres-result, string>>, string>;
+  postgres-transaction: func(statements: list<statement>, end: transaction-end) -> result<list<postgres-result>, string>;
 
-  postgres-executions: func(statements: list<statement>) -> result<list<result<postgres-result, string>>, string>;
+  postgres-executions: func(statements: list<statement>) -> result<list<postgres-result>, string>;
 
 }
 

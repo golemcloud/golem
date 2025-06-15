@@ -2510,21 +2510,24 @@ impl PrivateDurableWorkerState {
                     //     "begin_transaction_function tx_id {tx_id}, pre_index {pre_index} end_entry {} jumped {jumped}",
                     //     end_entry.clone().map(|(i, _)| i.to_string()).unwrap_or("None".to_string())
                     // );
-                    if end_entry.is_none() {
-                        if pre_entry.is_pre_commit_remote_transaction(begin_index) {
-                            let committed = handler.is_committed(&tx_id).await?;
-                            // println!(
-                            //     "begin_transaction_function tx_id {tx_id}, pre commit - committed: {committed}",
-                            // );
-                            restart = !committed;
-                        } else if pre_entry.is_pre_rollback_remote_transaction(begin_index) {
-                            let rolled_back = handler.is_rolled_back(&tx_id).await?;
-                            // println!(
-                            //     "begin_transaction_function tx_id {tx_id}, pre rollback - rolled_back: {rolled_back}",
-                            // );
-                            restart = !rolled_back;
-                        }
+                    if end_entry.is_none()
+                        && pre_entry.is_pre_commit_remote_transaction(begin_index)
+                    {
+                        let committed = handler.is_committed(&tx_id).await?;
+                        // println!(
+                        //     "begin_transaction_function tx_id {tx_id}, pre commit - committed: {committed}",
+                        // );
+                        restart = !committed;
                     }
+                    // else if end_entry.is_none()
+                    //     && pre_entry.is_pre_rollback_remote_transaction(begin_index)
+                    // {
+                    //     let rolled_back = handler.is_rolled_back(&tx_id).await?;
+                    //     // println!(
+                    //     //     "begin_transaction_function tx_id {tx_id}, pre rollback - rolled_back: {rolled_back}",
+                    //     // );
+                    //     restart = !rolled_back;
+                    // }
                 } else {
                     restart = true;
                 }
