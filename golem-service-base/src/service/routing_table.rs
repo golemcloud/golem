@@ -124,7 +124,7 @@ impl Default for RoutingTableConfig {
 }
 
 #[async_trait]
-pub trait RoutingTableService {
+pub trait RoutingTableService: Send + Sync {
     async fn get_routing_table(&self) -> Result<RoutingTable, RoutingTableError>;
     // Returns false in case of skipped (throttled) invalidation
     async fn try_invalidate_routing_table(&self) -> bool;

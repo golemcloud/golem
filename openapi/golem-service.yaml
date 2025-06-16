@@ -3948,41 +3948,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkersMetadataResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4022,41 +4022,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkerCreationResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4108,41 +4108,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkerMetadata'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4178,41 +4178,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/DeleteWorkerResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4270,41 +4270,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/InvokeResult'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4356,41 +4356,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/InvokeResult'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4449,41 +4449,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/InvokeResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4536,41 +4536,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/InvokeResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4616,41 +4616,41 @@ paths:
               schema:
                 type: boolean
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4699,41 +4699,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/InterruptResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4787,41 +4787,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkersMetadataResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4857,41 +4857,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/ResumeResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -4933,41 +4933,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/UpdateWorkerResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5034,41 +5034,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/GetOplogResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5112,41 +5112,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/GetFilesResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5191,41 +5191,41 @@ paths:
                 type: string
                 format: binary
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5271,41 +5271,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/ActivatePluginResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5351,41 +5351,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/DeactivatePluginResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5428,41 +5428,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/RevertWorkerResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5507,41 +5507,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/CancelInvocationResponse'
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
       - Token: []
@@ -5573,41 +5573,41 @@ paths:
         '101':
           description: A websocket response
         '400':
-          description: Invalid request, returning with a list of issues detected in the request
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: Unauthorized
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
-          description: Maximum number of workers exceeded
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Component / Worker / Promise not found
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: Worker already exists
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '500':
-          description: Internal server error
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
   /v1/api/definitions/{project_id}/import:
     put:
       tags:
@@ -5652,7 +5652,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -5670,13 +5670,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -5724,7 +5724,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -5742,13 +5742,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -5797,7 +5797,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -5815,13 +5815,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -5876,7 +5876,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -5894,13 +5894,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -5963,7 +5963,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -5981,13 +5981,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6041,7 +6041,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6059,13 +6059,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6100,7 +6100,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6118,13 +6118,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6174,7 +6174,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6192,13 +6192,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6245,7 +6245,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6263,13 +6263,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6315,7 +6315,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6333,13 +6333,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6402,7 +6402,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6420,13 +6420,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6477,7 +6477,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6495,13 +6495,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6539,7 +6539,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6557,13 +6557,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6610,7 +6610,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6628,13 +6628,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6675,7 +6675,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6693,13 +6693,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6732,7 +6732,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6750,13 +6750,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6801,7 +6801,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6819,13 +6819,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6872,7 +6872,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6890,13 +6890,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -6940,7 +6940,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+                $ref: '#/components/schemas/ErrorsBody'
         '401':
           description: ''
           content:
@@ -6958,13 +6958,13 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/MessageBody'
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -9234,580 +9234,6 @@ components:
       - entries
       - firstIndexInChunk
       - lastIndex
-    GolemError:
-      discriminator:
-        propertyName: type
-        mapping:
-          InvalidRequest: '#/components/schemas/GolemError_GolemErrorInvalidRequest'
-          WorkerAlreadyExists: '#/components/schemas/GolemError_GolemErrorWorkerAlreadyExists'
-          WorkerNotFound: '#/components/schemas/GolemError_GolemErrorWorkerNotFound'
-          WorkerCreationFailed: '#/components/schemas/GolemError_GolemErrorWorkerCreationFailed'
-          FailedToResumeWorker: '#/components/schemas/GolemError_GolemErrorFailedToResumeWorker'
-          ComponentDownloadFailed: '#/components/schemas/GolemError_GolemErrorComponentDownloadFailed'
-          ComponentParseFailed: '#/components/schemas/GolemError_GolemErrorComponentParseFailed'
-          GetLatestVersionOfComponentFailed: '#/components/schemas/GolemError_GolemErrorGetLatestVersionOfComponentFailed'
-          PromiseNotFound: '#/components/schemas/GolemError_GolemErrorPromiseNotFound'
-          PromiseDropped: '#/components/schemas/GolemError_GolemErrorPromiseDropped'
-          PromiseAlreadyCompleted: '#/components/schemas/GolemError_GolemErrorPromiseAlreadyCompleted'
-          Interrupted: '#/components/schemas/GolemError_GolemErrorInterrupted'
-          ParamTypeMismatch: '#/components/schemas/GolemError_GolemErrorParamTypeMismatch'
-          NoValueInMessage: '#/components/schemas/GolemError_GolemErrorNoValueInMessage'
-          ValueMismatch: '#/components/schemas/GolemError_GolemErrorValueMismatch'
-          UnexpectedOplogEntry: '#/components/schemas/GolemError_GolemErrorUnexpectedOplogEntry'
-          RuntimeError: '#/components/schemas/GolemError_GolemErrorRuntimeError'
-          InvalidShardId: '#/components/schemas/GolemError_GolemErrorInvalidShardId'
-          PreviousInvocationFailed: '#/components/schemas/GolemError_GolemErrorPreviousInvocationFailed'
-          PreviousInvocationExited: '#/components/schemas/GolemError_GolemErrorPreviousInvocationExited'
-          Unknown: '#/components/schemas/GolemError_GolemErrorUnknown'
-          InvalidAccount: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
-          ShardingNotReady: '#/components/schemas/GolemError_GolemErrorShardingNotReady'
-          InitialComponentFileDownloadFailed: '#/components/schemas/GolemError_GolemErrorInitialComponentFileDownloadFailed'
-          FileSystemError: '#/components/schemas/GolemError_GolemErrorFileSystemError'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidRequest'
-      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerAlreadyExists'
-      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerNotFound'
-      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerCreationFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorFailedToResumeWorker'
-      - $ref: '#/components/schemas/GolemError_GolemErrorComponentDownloadFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorComponentParseFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorGetLatestVersionOfComponentFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseNotFound'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseDropped'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseAlreadyCompleted'
-      - $ref: '#/components/schemas/GolemError_GolemErrorInterrupted'
-      - $ref: '#/components/schemas/GolemError_GolemErrorParamTypeMismatch'
-      - $ref: '#/components/schemas/GolemError_GolemErrorNoValueInMessage'
-      - $ref: '#/components/schemas/GolemError_GolemErrorValueMismatch'
-      - $ref: '#/components/schemas/GolemError_GolemErrorUnexpectedOplogEntry'
-      - $ref: '#/components/schemas/GolemError_GolemErrorRuntimeError'
-      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidShardId'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPreviousInvocationFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPreviousInvocationExited'
-      - $ref: '#/components/schemas/GolemError_GolemErrorUnknown'
-      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
-      - $ref: '#/components/schemas/GolemError_GolemErrorShardingNotReady'
-      - $ref: '#/components/schemas/GolemError_GolemErrorInitialComponentFileDownloadFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorFileSystemError'
-    GolemErrorBody:
-      title: GolemErrorBody
-      type: object
-      properties:
-        golemError:
-          $ref: '#/components/schemas/GolemError'
-      required:
-      - golemError
-    GolemErrorComponentDownloadFailed:
-      title: GolemErrorComponentDownloadFailed
-      type: object
-      properties:
-        componentId:
-          $ref: '#/components/schemas/VersionedComponentId'
-        reason:
-          type: string
-      required:
-      - componentId
-      - reason
-    GolemErrorComponentParseFailed:
-      title: GolemErrorComponentParseFailed
-      type: object
-      properties:
-        componentId:
-          $ref: '#/components/schemas/VersionedComponentId'
-        reason:
-          type: string
-      required:
-      - componentId
-      - reason
-    GolemErrorFailedToResumeWorker:
-      title: GolemErrorFailedToResumeWorker
-      type: object
-      properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-        reason:
-          $ref: '#/components/schemas/GolemError'
-      required:
-      - workerId
-      - reason
-    GolemErrorFileSystemError:
-      title: GolemErrorFileSystemError
-      type: object
-      properties:
-        path:
-          type: string
-        reason:
-          type: string
-      required:
-      - path
-      - reason
-    GolemErrorGetLatestVersionOfComponentFailed:
-      title: GolemErrorGetLatestVersionOfComponentFailed
-      type: object
-      properties:
-        componentId:
-          type: string
-          format: uuid
-        reason:
-          type: string
-      required:
-      - componentId
-      - reason
-    GolemErrorInitialComponentFileDownloadFailed:
-      title: GolemErrorInitialComponentFileDownloadFailed
-      type: object
-      properties:
-        path:
-          type: string
-        reason:
-          type: string
-      required:
-      - path
-      - reason
-    GolemErrorInterrupted:
-      title: GolemErrorInterrupted
-      type: object
-      properties:
-        recoverImmediately:
-          type: boolean
-      required:
-      - recoverImmediately
-    GolemErrorInvalidAccount:
-      title: GolemErrorInvalidAccount
-      type: object
-    GolemErrorInvalidRequest:
-      title: GolemErrorInvalidRequest
-      type: object
-      properties:
-        details:
-          type: string
-      required:
-      - details
-    GolemErrorInvalidShardId:
-      title: GolemErrorInvalidShardId
-      type: object
-      properties:
-        shardId:
-          $ref: '#/components/schemas/ShardId'
-        shardIds:
-          type: array
-          items:
-            $ref: '#/components/schemas/ShardId'
-      required:
-      - shardId
-      - shardIds
-    GolemErrorNoValueInMessage:
-      title: GolemErrorNoValueInMessage
-      type: object
-    GolemErrorParamTypeMismatch:
-      title: GolemErrorParamTypeMismatch
-      type: object
-      properties:
-        details:
-          type: string
-      required:
-      - details
-    GolemErrorPreviousInvocationExited:
-      title: GolemErrorPreviousInvocationExited
-      type: object
-    GolemErrorPreviousInvocationFailed:
-      title: GolemErrorPreviousInvocationFailed
-      type: object
-      properties:
-        details:
-          type: string
-      required:
-      - details
-    GolemErrorPromiseAlreadyCompleted:
-      title: GolemErrorPromiseAlreadyCompleted
-      type: object
-      properties:
-        promiseId:
-          $ref: '#/components/schemas/PromiseId'
-      required:
-      - promiseId
-    GolemErrorPromiseDropped:
-      title: GolemErrorPromiseDropped
-      type: object
-      properties:
-        promiseId:
-          $ref: '#/components/schemas/PromiseId'
-      required:
-      - promiseId
-    GolemErrorPromiseNotFound:
-      title: GolemErrorPromiseNotFound
-      type: object
-      properties:
-        promiseId:
-          $ref: '#/components/schemas/PromiseId'
-      required:
-      - promiseId
-    GolemErrorRuntimeError:
-      title: GolemErrorRuntimeError
-      type: object
-      properties:
-        details:
-          type: string
-      required:
-      - details
-    GolemErrorShardingNotReady:
-      title: GolemErrorShardingNotReady
-      type: object
-    GolemErrorUnexpectedOplogEntry:
-      title: GolemErrorUnexpectedOplogEntry
-      type: object
-      properties:
-        expected:
-          type: string
-        got:
-          type: string
-      required:
-      - expected
-      - got
-    GolemErrorUnknown:
-      title: GolemErrorUnknown
-      type: object
-      properties:
-        details:
-          type: string
-      required:
-      - details
-    GolemErrorValueMismatch:
-      title: GolemErrorValueMismatch
-      type: object
-      properties:
-        details:
-          type: string
-      required:
-      - details
-    GolemErrorWorkerAlreadyExists:
-      title: GolemErrorWorkerAlreadyExists
-      type: object
-      properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-      required:
-      - workerId
-    GolemErrorWorkerCreationFailed:
-      title: GolemErrorWorkerCreationFailed
-      type: object
-      properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-        details:
-          type: string
-      required:
-      - workerId
-      - details
-    GolemErrorWorkerNotFound:
-      title: GolemErrorWorkerNotFound
-      type: object
-      properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-      required:
-      - workerId
-    GolemError_GolemErrorComponentDownloadFailed:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ComponentDownloadFailed
-            type: string
-            enum:
-            - ComponentDownloadFailed
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorComponentDownloadFailed'
-    GolemError_GolemErrorComponentParseFailed:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ComponentParseFailed
-            type: string
-            enum:
-            - ComponentParseFailed
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorComponentParseFailed'
-    GolemError_GolemErrorFailedToResumeWorker:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: FailedToResumeWorker
-            type: string
-            enum:
-            - FailedToResumeWorker
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorFailedToResumeWorker'
-    GolemError_GolemErrorFileSystemError:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: FileSystemError
-            type: string
-            enum:
-            - FileSystemError
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorFileSystemError'
-    GolemError_GolemErrorGetLatestVersionOfComponentFailed:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: GetLatestVersionOfComponentFailed
-            type: string
-            enum:
-            - GetLatestVersionOfComponentFailed
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorGetLatestVersionOfComponentFailed'
-    GolemError_GolemErrorInitialComponentFileDownloadFailed:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: InitialComponentFileDownloadFailed
-            type: string
-            enum:
-            - InitialComponentFileDownloadFailed
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorInitialComponentFileDownloadFailed'
-    GolemError_GolemErrorInterrupted:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Interrupted
-            type: string
-            enum:
-            - Interrupted
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorInterrupted'
-    GolemError_GolemErrorInvalidAccount:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: InvalidAccount
-            type: string
-            enum:
-            - InvalidAccount
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorInvalidAccount'
-    GolemError_GolemErrorInvalidRequest:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: InvalidRequest
-            type: string
-            enum:
-            - InvalidRequest
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorInvalidRequest'
-    GolemError_GolemErrorInvalidShardId:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: InvalidShardId
-            type: string
-            enum:
-            - InvalidShardId
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorInvalidShardId'
-    GolemError_GolemErrorNoValueInMessage:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: NoValueInMessage
-            type: string
-            enum:
-            - NoValueInMessage
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorNoValueInMessage'
-    GolemError_GolemErrorParamTypeMismatch:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ParamTypeMismatch
-            type: string
-            enum:
-            - ParamTypeMismatch
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorParamTypeMismatch'
-    GolemError_GolemErrorPreviousInvocationExited:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: PreviousInvocationExited
-            type: string
-            enum:
-            - PreviousInvocationExited
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorPreviousInvocationExited'
-    GolemError_GolemErrorPreviousInvocationFailed:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: PreviousInvocationFailed
-            type: string
-            enum:
-            - PreviousInvocationFailed
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorPreviousInvocationFailed'
-    GolemError_GolemErrorPromiseAlreadyCompleted:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: PromiseAlreadyCompleted
-            type: string
-            enum:
-            - PromiseAlreadyCompleted
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorPromiseAlreadyCompleted'
-    GolemError_GolemErrorPromiseDropped:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: PromiseDropped
-            type: string
-            enum:
-            - PromiseDropped
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorPromiseDropped'
-    GolemError_GolemErrorPromiseNotFound:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: PromiseNotFound
-            type: string
-            enum:
-            - PromiseNotFound
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorPromiseNotFound'
-    GolemError_GolemErrorRuntimeError:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: RuntimeError
-            type: string
-            enum:
-            - RuntimeError
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorRuntimeError'
-    GolemError_GolemErrorShardingNotReady:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ShardingNotReady
-            type: string
-            enum:
-            - ShardingNotReady
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorShardingNotReady'
-    GolemError_GolemErrorUnexpectedOplogEntry:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: UnexpectedOplogEntry
-            type: string
-            enum:
-            - UnexpectedOplogEntry
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorUnexpectedOplogEntry'
-    GolemError_GolemErrorUnknown:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Unknown
-            type: string
-            enum:
-            - Unknown
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorUnknown'
-    GolemError_GolemErrorValueMismatch:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ValueMismatch
-            type: string
-            enum:
-            - ValueMismatch
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorValueMismatch'
-    GolemError_GolemErrorWorkerAlreadyExists:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WorkerAlreadyExists
-            type: string
-            enum:
-            - WorkerAlreadyExists
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorWorkerAlreadyExists'
-    GolemError_GolemErrorWorkerCreationFailed:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WorkerCreationFailed
-            type: string
-            enum:
-            - WorkerCreationFailed
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorWorkerCreationFailed'
-    GolemError_GolemErrorWorkerNotFound:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WorkerNotFound
-            type: string
-            enum:
-            - WorkerNotFound
-        required:
-        - type
-      - $ref: '#/components/schemas/GolemErrorWorkerNotFound'
     GrowMemoryParameters:
       title: GrowMemoryParameters
       type: object
@@ -9994,14 +9420,6 @@ components:
           format: uint64
       required:
       - targetVersion
-    MessageBody:
-      title: MessageBody
-      type: object
-      properties:
-        message:
-          type: string
-      required:
-      - message
     MethodPattern:
       type: string
       enum:
@@ -10110,18 +9528,6 @@ components:
       - pluginVersion
       - registered
       - parameters
-    PromiseId:
-      title: PromiseId
-      type: object
-      properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-        oplogIdx:
-          type: integer
-          format: uint64
-      required:
-      - workerId
-      - oplogIdx
     Provider:
       type: string
       enum:
@@ -11189,15 +10595,6 @@ components:
       - spanId
       - key
       - value
-    ShardId:
-      title: ShardId
-      type: object
-      properties:
-        value:
-          type: integer
-          format: int64
-      required:
-      - value
     SnapshotBasedUpdateParameters:
       title: SnapshotBasedUpdateParameters
       type: object
@@ -11669,28 +11066,6 @@ components:
             $ref: '#/components/schemas/WorkerFilter'
       required:
       - filters
-    WorkerServiceErrorsBody:
-      discriminator:
-        propertyName: type
-        mapping:
-          Messages: '#/components/schemas/WorkerServiceErrorsBody_ErrorsBody'
-          Validation: '#/components/schemas/WorkerServiceErrorsBody_ErrorsBody'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/WorkerServiceErrorsBody_ErrorsBody'
-      - $ref: '#/components/schemas/WorkerServiceErrorsBody_ErrorsBody'
-    WorkerServiceErrorsBody_ErrorsBody:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Validation
-            type: string
-            enum:
-            - Validation
-        required:
-        - type
-      - $ref: '#/components/schemas/ErrorsBody'
     WorkerStatus:
       description: |-
         Represents last known status of a worker

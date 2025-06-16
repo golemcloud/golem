@@ -17,10 +17,29 @@ pub mod app;
 pub mod aws_config;
 pub mod aws_load_balancer;
 pub mod config;
+pub mod gateway_api_definition;
+pub mod gateway_api_definition_transformer;
+pub mod gateway_api_deployment;
+pub mod gateway_binding;
+pub mod gateway_execution;
+pub mod gateway_middleware;
+pub mod gateway_request;
+pub mod gateway_rib_compiler;
+pub mod gateway_rib_interpreter;
+pub mod gateway_security;
+pub mod getter;
 pub mod grpcapi;
+pub mod headers;
+pub mod http_invocation_context;
+pub mod metrics;
 pub mod model;
+pub mod path;
 pub mod repo;
 pub mod service;
 
+use golem_common::golem_version;
+
 #[cfg(test)]
 test_r::enable!();
+
+const VERSION: &str = golem_version!();

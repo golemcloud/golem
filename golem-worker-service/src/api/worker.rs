@@ -12,32 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::common::ApiEndpointError;
 use crate::api::common::ApiTags;
 use crate::model;
 use crate::service::auth::AuthService;
-use crate::service::worker::{
-    ConnectWorkerStream, WorkerError as WorkerServiceError, WorkerService,
-};
+use crate::service::component::ComponentService;
+use crate::service::worker::{proxy_worker_connection, InvocationParameters};
+use crate::service::worker::{ConnectWorkerStream, WorkerService};
 use futures::StreamExt;
 use futures_util::TryStreamExt;
-use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::auth::{AuthCtx, Namespace};
+use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::{ProjectAction, TokenSecret};
-use golem_common::model::error::{
-    ErrorBody, ErrorsBody, GolemError, GolemErrorBody, GolemErrorUnknown,
-};
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
     ComponentFilePath, ComponentId, IdempotencyKey, PluginInstallationId, ScanCursor,
     TargetWorkerId, WorkerFilter, WorkerId,
 };
-use golem_common::{recorded_http_api_request, SafeDisplay};
-use golem_service_base::clients::auth::AuthServiceError;
+use golem_common::recorded_http_api_request;
 use golem_service_base::model::auth::{GolemSecurityScheme, WrappedGolemSecuritySchema};
 use golem_service_base::model::*;
-use golem_worker_service_base::service::component::{ComponentService, ComponentServiceError};
-use golem_worker_service_base::service::worker::{proxy_worker_connection, InvocationParameters};
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem::Body;
 use poem_openapi::param::{Header, Path, Query};
@@ -47,224 +42,25 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tap::TapFallible;
-use tonic::Status;
 use tracing::Instrument;
 
 const WORKER_CONNECT_PING_INTERVAL: Duration = Duration::from_secs(30);
 const WORKER_CONNECT_PING_TIMEOUT: Duration = Duration::from_secs(15);
 
-#[derive(ApiResponse, Debug, Clone)]
-pub enum WorkerError {
-    /// Invalid request, returning with a list of issues detected in the request
-    #[oai(status = 400)]
-    BadRequest(Json<ErrorsBody>),
-    /// Unauthorized
-    #[oai(status = 401)]
-    Unauthorized(Json<ErrorBody>),
-    /// Maximum number of workers exceeded
-    #[oai(status = 403)]
-    LimitExceeded(Json<ErrorBody>),
-    /// Component / Worker / Promise not found
-    #[oai(status = 404)]
-    NotFound(Json<ErrorBody>),
-    /// Worker already exists
-    #[oai(status = 409)]
-    AlreadyExists(Json<ErrorBody>),
-    /// Internal server error
-    #[oai(status = 500)]
-    InternalError(Json<GolemErrorBody>),
-}
-
-impl TraceErrorKind for WorkerError {
-    fn trace_error_kind(&self) -> &'static str {
-        match &self {
-            WorkerError::BadRequest(_) => "BadRequest",
-            WorkerError::NotFound(_) => "NotFound",
-            WorkerError::AlreadyExists(_) => "AlreadyExists",
-            WorkerError::LimitExceeded(_) => "LimitExceeded",
-            WorkerError::Unauthorized(_) => "Unauthorized",
-            WorkerError::InternalError(_) => "InternalError",
-        }
-    }
-
-    fn is_expected(&self) -> bool {
-        match &self {
-            WorkerError::BadRequest(_) => true,
-            WorkerError::NotFound(_) => true,
-            WorkerError::AlreadyExists(_) => true,
-            WorkerError::LimitExceeded(_) => true,
-            WorkerError::Unauthorized(_) => true,
-            WorkerError::InternalError(_) => false,
-        }
-    }
-}
-
-impl WorkerError {
-    fn bad_request(error: String) -> WorkerError {
-        WorkerError::BadRequest(Json(ErrorsBody {
-            errors: vec![error],
-        }))
-    }
-}
-
-type Result<T> = std::result::Result<T, WorkerError>;
-
-impl From<tonic::transport::Error> for WorkerError {
-    fn from(value: tonic::transport::Error) -> Self {
-        WorkerError::InternalError(Json(GolemErrorBody {
-            golem_error: GolemError::Unknown(GolemErrorUnknown {
-                details: value.to_string(),
-            }),
-        }))
-    }
-}
-
-impl From<Status> for WorkerError {
-    fn from(value: Status) -> Self {
-        WorkerError::InternalError(Json(GolemErrorBody {
-            golem_error: GolemError::Unknown(GolemErrorUnknown {
-                details: value.to_string(),
-            }),
-        }))
-    }
-}
-
-impl From<ComponentServiceError> for WorkerError {
-    fn from(value: ComponentServiceError) -> Self {
-        match value {
-            ComponentServiceError::BadRequest(errors) => {
-                WorkerError::BadRequest(Json(ErrorsBody { errors }))
-            }
-            ComponentServiceError::AlreadyExists(error) => {
-                WorkerError::AlreadyExists(Json(ErrorBody { error }))
-            }
-            ComponentServiceError::Internal(error) => {
-                WorkerError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown {
-                        details: error.to_string(),
-                    }),
-                }))
-            }
-            ComponentServiceError::Unauthorized(error) => {
-                WorkerError::Unauthorized(Json(ErrorBody { error }))
-            }
-            ComponentServiceError::Forbidden(error) => {
-                WorkerError::LimitExceeded(Json(ErrorBody { error }))
-            }
-            ComponentServiceError::NotFound(error) => {
-                WorkerError::NotFound(Json(ErrorBody { error }))
-            }
-            ComponentServiceError::FailedGrpcStatus(_) => {
-                WorkerError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown {
-                        details: value.to_safe_string(),
-                    }),
-                }))
-            }
-            ComponentServiceError::FailedTransport(_) => {
-                WorkerError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown {
-                        details: value.to_safe_string(),
-                    }),
-                }))
-            }
-        }
-    }
-}
-
-impl From<WorkerServiceError> for WorkerError {
-    fn from(value: WorkerServiceError) -> Self {
-        use golem_worker_service_base::service::worker::WorkerServiceError as BaseServiceError;
-
-        match value {
-            WorkerServiceError::Forbidden(error) => WorkerError::LimitExceeded(Json(ErrorBody {
-                error: error.clone(),
-            })),
-            WorkerServiceError::Unauthorized(error) => WorkerError::Unauthorized(Json(ErrorBody {
-                error: error.clone(),
-            })),
-            WorkerServiceError::ProjectNotFound(_) => WorkerError::NotFound(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-            WorkerServiceError::Base(error) => match error {
-                BaseServiceError::VersionedComponentIdNotFound(_)
-                | BaseServiceError::ComponentNotFound(_)
-                | BaseServiceError::AccountIdNotFound(_)
-                | BaseServiceError::WorkerNotFound(_) => WorkerError::NotFound(Json(ErrorBody {
-                    error: error.to_string(),
-                })),
-                BaseServiceError::TypeChecker(error) => WorkerError::bad_request(error.clone()),
-                BaseServiceError::Component(error) => error.into(),
-                BaseServiceError::Internal(error) => {
-                    WorkerError::InternalError(Json(GolemErrorBody {
-                        golem_error: GolemError::Unknown(GolemErrorUnknown {
-                            details: error.to_string(),
-                        }),
-                    }))
-                }
-                BaseServiceError::Golem(golem_error) => match golem_error {
-                    GolemError::WorkerNotFound(error) => WorkerError::NotFound(Json(ErrorBody {
-                        error: error.to_safe_string(),
-                    })),
-                    _ => WorkerError::InternalError(Json(GolemErrorBody {
-                        golem_error: golem_error.clone(),
-                    })),
-                },
-                BaseServiceError::InternalCallError(inner) => {
-                    WorkerError::InternalError(Json(GolemErrorBody {
-                        golem_error: GolemError::Unknown(GolemErrorUnknown {
-                            details: inner.to_safe_string(),
-                        }),
-                    }))
-                }
-                BaseServiceError::FileNotFound(_) => WorkerError::BadRequest(Json(ErrorsBody {
-                    errors: vec![error.to_safe_string()],
-                })),
-                BaseServiceError::BadFileType(_) => WorkerError::BadRequest(Json(ErrorsBody {
-                    errors: vec![error.to_safe_string()],
-                })),
-            },
-            WorkerServiceError::InternalAuthServiceError(_) => {
-                WorkerError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown {
-                        details: value.to_safe_string(),
-                    }),
-                }))
-            }
-        }
-    }
-}
-
-impl From<AuthServiceError> for WorkerError {
-    fn from(value: AuthServiceError) -> Self {
-        match value {
-            AuthServiceError::Unauthorized(error) => {
-                WorkerError::Unauthorized(Json(ErrorBody { error }))
-            }
-            AuthServiceError::Forbidden(error) => {
-                WorkerError::Unauthorized(Json(ErrorBody { error }))
-            }
-            AuthServiceError::InternalClientError(error) => {
-                WorkerError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
-                }))
-            }
-        }
-    }
-}
+type Result<T> = std::result::Result<T, ApiEndpointError>;
 
 pub struct WorkerApi {
-    component_service: Arc<dyn ComponentService<Namespace, AuthCtx>>,
-    worker_service: Arc<dyn WorkerService + Send + Sync>,
-    worker_auth_service: Arc<dyn AuthService + Send + Sync>,
+    component_service: Arc<dyn ComponentService>,
+    worker_service: Arc<dyn WorkerService>,
+    worker_auth_service: Arc<dyn AuthService>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
 impl WorkerApi {
     pub fn new(
-        component_service: Arc<dyn ComponentService<Namespace, AuthCtx>>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
-        auth_service: Arc<dyn AuthService + Send + Sync>,
+        component_service: Arc<dyn ComponentService>,
+        worker_service: Arc<dyn WorkerService>,
+        auth_service: Arc<dyn AuthService>,
     ) -> Self {
         Self {
             component_service,
@@ -319,7 +115,7 @@ impl WorkerApi {
             .await
             .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
             .map_err(|error| {
-                WorkerError::NotFound(Json(ErrorBody {
+                ApiEndpointError::NotFound(Json(ErrorBody {
                     error: format!(
                         "Couldn't retrieve the component: {}. error: {}",
                         &component_id, error
@@ -455,7 +251,7 @@ impl WorkerApi {
 
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
-                .map_err(|errors| WorkerError::BadRequest(Json(ErrorsBody { errors })))?;
+                .map_err(|errors| ApiEndpointError::BadRequest(Json(ErrorsBody { errors })))?;
 
         let result = match params {
             InvocationParameters::TypedProtoVals(vals) => {
@@ -585,7 +381,7 @@ impl WorkerApi {
 
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
-                .map_err(|errors| WorkerError::BadRequest(Json(ErrorsBody { errors })))?;
+                .map_err(|errors| ApiEndpointError::BadRequest(Json(ErrorsBody { errors })))?;
 
         match params {
             InvocationParameters::TypedProtoVals(vals) => self.worker_service.validate_and_invoke(
@@ -886,20 +682,21 @@ impl WorkerApi {
             .await?;
 
         let filter = match filter {
-            Some(filters) if !filters.is_empty() => Some(
-                WorkerFilter::from(filters)
-                    .map_err(|e| WorkerError::BadRequest(Json(ErrorsBody { errors: vec![e] })))?,
-            ),
+            Some(filters) if !filters.is_empty() => {
+                Some(WorkerFilter::from(filters).map_err(|e| {
+                    ApiEndpointError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+                })?)
+            }
             _ => None,
         };
 
-        let cursor = match cursor {
-            Some(cursor) => Some(
-                ScanCursor::from_str(&cursor)
-                    .map_err(|e| WorkerError::BadRequest(Json(ErrorsBody { errors: vec![e] })))?,
-            ),
-            None => None,
-        };
+        let cursor =
+            match cursor {
+                Some(cursor) => Some(ScanCursor::from_str(&cursor).map_err(|e| {
+                    ApiEndpointError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+                })?),
+                None => None,
+            };
 
         let (cursor, workers) = self
             .worker_service
@@ -1126,7 +923,7 @@ impl WorkerApi {
             .await?;
 
         match (from, query) {
-            (Some(_), Some(_)) => Err(WorkerError::BadRequest(Json(ErrorsBody {
+            (Some(_), Some(_)) => Err(ApiEndpointError::BadRequest(Json(ErrorsBody {
                 errors: vec![
                     "Cannot specify both the 'from' and the 'query' parameters".to_string()
                 ],
@@ -1522,12 +1319,7 @@ impl WorkerApi {
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
-            .await
-            .map_err(|e| {
-                WorkerError::Unauthorized(Json(ErrorBody {
-                    error: format!("Unauthorized: {e}"),
-                }))
-            })?;
+            .await?;
 
         let stream = self.worker_service.connect(&worker_id, namespace).await?;
         Ok(stream)
@@ -1535,12 +1327,12 @@ impl WorkerApi {
 }
 
 // TODO: should be in a base library
-fn validated_worker_id(
-    component_id: ComponentId,
-    worker_name: String,
-) -> std::result::Result<WorkerId, WorkerError> {
-    WorkerId::validate_worker_name(&worker_name)
-        .map_err(|error| WorkerError::bad_request(format!("Invalid worker name: {error}")))?;
+fn validated_worker_id(component_id: ComponentId, worker_name: String) -> Result<WorkerId> {
+    WorkerId::validate_worker_name(&worker_name).map_err(|error| {
+        ApiEndpointError::BadRequest(Json(ErrorsBody {
+            errors: vec![format!("Invalid worker name: {error}")],
+        }))
+    })?;
     Ok(WorkerId {
         component_id,
         worker_name,
@@ -1551,10 +1343,10 @@ fn validated_worker_id(
 fn make_target_worker_id(
     component_id: ComponentId,
     worker_name: Option<String>,
-) -> std::result::Result<TargetWorkerId, WorkerError> {
+) -> Result<TargetWorkerId> {
     if let Some(worker_name) = &worker_name {
         WorkerId::validate_worker_name(worker_name).map_err(|error| {
-            WorkerError::BadRequest(Json(ErrorsBody {
+            ApiEndpointError::BadRequest(Json(ErrorsBody {
                 errors: vec![format!("Invalid worker name: {error}")],
             }))
         })?;
@@ -1567,9 +1359,9 @@ fn make_target_worker_id(
 }
 
 // TODO: should be in a base library
-fn make_component_file_path(name: String) -> std::result::Result<ComponentFilePath, WorkerError> {
+fn make_component_file_path(name: String) -> Result<ComponentFilePath> {
     ComponentFilePath::from_rel_str(&name).map_err(|error| {
-        WorkerError::BadRequest(Json(ErrorsBody {
+        ApiEndpointError::BadRequest(Json(ErrorsBody {
             errors: vec![format!("Invalid file name: {error}")],
         }))
     })

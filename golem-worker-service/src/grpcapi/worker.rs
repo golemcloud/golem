@@ -12,11 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::error::WorkerTraceErrorKind;
+use super::{
+    bad_request_error, bad_request_errors, error_to_status, parse_json_invoke_parameters,
+    validate_component_file_path, validate_protobuf_plugin_installation_id,
+    validate_protobuf_target_worker_id, validate_protobuf_worker_id, validated_worker_id,
+};
 use crate::service::auth::AuthService;
-use crate::service::worker::{self, ConnectWorkerStream, WorkerService};
+use crate::service::component::ComponentService;
+use crate::service::worker::InvocationParameters;
+use crate::service::worker::{ConnectWorkerStream, WorkerService};
 use futures::Stream;
 use futures::StreamExt;
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
     activate_plugin_response, cancel_invocation_response, complete_promise_response,
@@ -47,21 +55,12 @@ use golem_common::grpc::{
     proto_invocation_context_parent_worker_id_string, proto_plugin_installation_id_string,
     proto_target_worker_id_string, proto_worker_id_string,
 };
+use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
-use golem_common::SafeDisplay;
 use golem_service_base::clients::get_authorisation_token;
-use golem_worker_service_base::api::WorkerTraceErrorKind;
-use golem_worker_service_base::grpcapi::{
-    bad_request_error, bad_request_errors, error_to_status, parse_json_invoke_parameters,
-    validate_component_file_path, validate_protobuf_plugin_installation_id,
-    validate_protobuf_target_worker_id, validate_protobuf_worker_id, validated_worker_id,
-};
-use golem_worker_service_base::service::component::ComponentService;
-use golem_worker_service_base::service::worker::{InvocationParameters, WorkerServiceError};
 use std::pin::Pin;
 use std::sync::Arc;
 use tap::TapFallible;
@@ -70,9 +69,9 @@ use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
 pub struct WorkerGrpcApi {
-    component_service: Arc<dyn ComponentService<Namespace, AuthCtx>>,
-    worker_service: Arc<dyn WorkerService + Send + Sync>,
-    auth_service: Arc<dyn AuthService + Send + Sync>,
+    component_service: Arc<dyn ComponentService>,
+    worker_service: Arc<dyn WorkerService>,
+    auth_service: Arc<dyn AuthService>,
 }
 
 #[async_trait::async_trait]
@@ -728,9 +727,9 @@ impl GrpcWorkerService for WorkerGrpcApi {
 
 impl WorkerGrpcApi {
     pub fn new(
-        component_service: Arc<dyn ComponentService<Namespace, AuthCtx>>,
-        worker_service: Arc<dyn WorkerService + Send + Sync>,
-        auth_service: Arc<dyn AuthService + Send + Sync>,
+        component_service: Arc<dyn ComponentService>,
+        worker_service: Arc<dyn WorkerService>,
+        auth_service: Arc<dyn AuthService>,
     ) -> Self {
         Self {
             component_service,
@@ -1469,77 +1468,5 @@ impl WorkerGrpcApi {
             .await?;
 
         Ok(result)
-    }
-}
-
-impl From<worker::WorkerError> for GrpcWorkerError {
-    fn from(error: worker::WorkerError) -> Self {
-        GrpcWorkerError {
-            error: Some(error.into()),
-        }
-    }
-}
-
-impl From<worker::WorkerError> for worker_error::Error {
-    fn from(value: worker::WorkerError) -> Self {
-        match value {
-            worker::WorkerError::Base(error) => match error {
-                WorkerServiceError::Component(error) => error.into(),
-                WorkerServiceError::TypeChecker(error) => {
-                    worker_error::Error::BadRequest(ErrorsBody {
-                        errors: vec![error],
-                    })
-                }
-                WorkerServiceError::VersionedComponentIdNotFound(_)
-                | WorkerServiceError::ComponentNotFound(_)
-                | WorkerServiceError::AccountIdNotFound(_)
-                | WorkerServiceError::WorkerNotFound(_) => {
-                    worker_error::Error::NotFound(ErrorBody {
-                        error: error.to_safe_string(),
-                    })
-                }
-                WorkerServiceError::Golem(golem) => {
-                    worker_error::Error::InternalError(golem.into())
-                }
-                WorkerServiceError::Internal(error) => {
-                    worker_error::Error::InternalError(WorkerExecutionError {
-                        error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                            details: error,
-                        })),
-                    })
-                }
-                WorkerServiceError::InternalCallError(_) => {
-                    worker_error::Error::InternalError(WorkerExecutionError {
-                        error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                            details: error.to_safe_string(),
-                        })),
-                    })
-                }
-                WorkerServiceError::FileNotFound(_) => {
-                    worker_error::Error::BadRequest(ErrorsBody {
-                        errors: vec![error.to_safe_string()],
-                    })
-                }
-                WorkerServiceError::BadFileType(_) => worker_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![error.to_safe_string()],
-                }),
-            },
-            worker::WorkerError::Forbidden(error) => {
-                worker_error::Error::LimitExceeded(ErrorBody { error })
-            }
-            worker::WorkerError::Unauthorized(error) => {
-                worker_error::Error::Unauthorized(ErrorBody { error })
-            }
-            worker::WorkerError::InternalAuthServiceError(error) => {
-                worker_error::Error::InternalError(WorkerExecutionError {
-                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: error.to_safe_string(),
-                    })),
-                })
-            }
-            worker::WorkerError::ProjectNotFound(_) => worker_error::Error::NotFound(ErrorBody {
-                error: value.to_safe_string(),
-            }),
-        }
     }
 }
