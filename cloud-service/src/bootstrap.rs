@@ -189,7 +189,6 @@ impl Services {
 
         let account_grant_service: Arc<dyn service::account_grant::AccountGrantService> =
             Arc::new(service::account_grant::AccountGrantServiceDefault::new(
-                auth_service.clone(),
                 account_grant_repo.clone(),
                 account_repo.clone(),
             ));
