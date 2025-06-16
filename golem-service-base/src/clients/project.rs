@@ -33,7 +33,7 @@ use tonic::transport::Channel;
 use tonic::Status;
 
 #[async_trait]
-pub trait ProjectService {
+pub trait ProjectService: Send + Sync {
     async fn get(
         &self,
         project_id: &ProjectId,

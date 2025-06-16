@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::dto::HttpApiDefinitionRequest;
+use super::dto::HttpApiDefinitionResponseData;
 use crate::api::common::{ApiEndpointError, ApiTags};
+use crate::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
+use crate::gateway_api_definition::http::OpenApiHttpApiDefinition;
+use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::service::auth::AuthService;
+use crate::service::gateway::api_definition::ApiDefinitionService;
 use futures_util::future::try_join_all;
 use golem_common::json_yaml::JsonOrYaml;
+use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::model::auth::GolemSecurityScheme;
-use golem_worker_service_base::api::HttpApiDefinitionRequest;
-use golem_worker_service_base::api::HttpApiDefinitionResponseData;
-use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
-use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinition;
-use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
-use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionService;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -35,15 +35,15 @@ use std::sync::Arc;
 use tracing::{error, Instrument};
 
 pub struct ApiDefinitionApi {
-    definition_service: Arc<dyn ApiDefinitionService<AuthCtx, Namespace> + Send + Sync>,
-    auth_service: Arc<dyn AuthService + Sync + Send>,
+    definition_service: Arc<dyn ApiDefinitionService>,
+    auth_service: Arc<dyn AuthService>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl ApiDefinitionApi {
     pub fn new(
-        definition_service: Arc<dyn ApiDefinitionService<AuthCtx, Namespace> + Send + Sync>,
-        auth_service: Arc<dyn AuthService + Sync + Send>,
+        definition_service: Arc<dyn ApiDefinitionService>,
+        auth_service: Arc<dyn AuthService>,
     ) -> Self {
         Self {
             definition_service,

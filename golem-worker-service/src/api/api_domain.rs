@@ -26,12 +26,12 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct ApiDomainApi {
-    domain_service: Arc<dyn ApiDomainService + Sync + Send>,
+    domain_service: Arc<dyn ApiDomainService>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/domains", tag = ApiTags::ApiDomain)]
 impl ApiDomainApi {
-    pub fn new(domain_service: Arc<dyn ApiDomainService + Sync + Send>) -> Self {
+    pub fn new(domain_service: Arc<dyn ApiDomainService>) -> Self {
         Self { domain_service }
     }
 

@@ -12,30 +12,73 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::service::gateway::api_definition::ApiDefinitionServiceConfig;
+use golem_common::config::RedisConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
+use golem_common::config::{DbConfig, DbSqliteConfig};
+use golem_common::model::RetryConfig;
+use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::RemoteCloudServiceConfig;
-use golem_service_base::config::MergedConfigLoaderOrDumper;
-use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
+use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::service::routing_table::RoutingTableConfig;
+use http::Uri;
 use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 use std::path::PathBuf;
-
-#[derive(Clone, Debug, Deserialize, Default)]
-pub struct WorkerServiceCloudConfig {
-    pub base_config: WorkerServiceBaseConfig,
-    pub cloud_specific_config: CloudSpecificWorkerServiceConfig,
-}
+use std::time::Duration;
+use url::Url;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CloudSpecificWorkerServiceConfig {
+pub struct WorkerServiceConfig {
+    pub environment: String,
+    pub tracing: TracingConfig,
+    pub gateway_session_storage: GatewaySessionStorageConfig,
+    pub db: DbConfig,
+    pub component_service: ComponentServiceConfig,
+    pub port: u16,
+    pub custom_request_port: u16,
+    pub worker_grpc_port: u16,
+    pub routing_table: RoutingTableConfig,
+    pub worker_executor_retries: RetryConfig,
+    pub blob_storage: BlobStorageConfig,
+    pub api_definition: ApiDefinitionServiceConfig,
     pub workspace: String,
     pub domain_records: DomainRecordsConfig,
     pub cloud_service: RemoteCloudServiceConfig,
     pub cors_origin_regex: String,
 }
 
-impl Default for CloudSpecificWorkerServiceConfig {
+impl WorkerServiceConfig {
+    pub fn is_local_env(&self) -> bool {
+        self.environment.to_lowercase() == "local"
+    }
+}
+
+impl Default for WorkerServiceConfig {
     fn default() -> Self {
         Self {
+            environment: "local".to_string(),
+            db: DbConfig::Sqlite(DbSqliteConfig {
+                database: "../data/golem_worker.sqlite".to_string(),
+                max_connections: 10,
+            }),
+            gateway_session_storage: GatewaySessionStorageConfig::default_redis(),
+            component_service: ComponentServiceConfig::default(),
+            tracing: TracingConfig::local_dev("worker-service"),
+            port: 9005,
+            custom_request_port: 9006,
+            worker_grpc_port: 9007,
+            routing_table: RoutingTableConfig::default(),
+            worker_executor_retries: RetryConfig {
+                max_attempts: 5,
+                min_delay: Duration::from_millis(10),
+                max_delay: Duration::from_secs(3),
+                multiplier: 10.0,
+                max_jitter_factor: Some(0.15),
+            },
+            blob_storage: BlobStorageConfig::default(),
+            api_definition: ApiDefinitionServiceConfig::default(),
             workspace: "release".to_string(),
             domain_records: DomainRecordsConfig::default(),
             cloud_service: RemoteCloudServiceConfig::default(),
@@ -44,15 +87,82 @@ impl Default for CloudSpecificWorkerServiceConfig {
     }
 }
 
-impl HasConfigExamples<CloudSpecificWorkerServiceConfig> for CloudSpecificWorkerServiceConfig {
-    fn examples() -> Vec<ConfigExample<CloudSpecificWorkerServiceConfig>> {
-        vec![]
+impl HasConfigExamples<WorkerServiceConfig> for WorkerServiceConfig {
+    fn examples() -> Vec<ConfigExample<WorkerServiceConfig>> {
+        vec![
+            (
+                "with postgres",
+                Self {
+                    db: DbConfig::postgres_example(),
+                    ..Self::default()
+                },
+            ),
+            (
+                "with postgres and s3",
+                Self {
+                    db: DbConfig::postgres_example(),
+                    blob_storage: BlobStorageConfig::default_s3(),
+                    ..Self::default()
+                },
+            ),
+        ]
     }
 }
 
-impl WorkerServiceCloudConfig {
-    pub fn is_local_env(&self) -> bool {
-        self.base_config.environment.to_lowercase() == "local"
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum GatewaySessionStorageConfig {
+    Redis(RedisConfig),
+    Sqlite(DbSqliteConfig),
+}
+
+impl Default for GatewaySessionStorageConfig {
+    fn default() -> Self {
+        Self::default_redis()
+    }
+}
+
+impl GatewaySessionStorageConfig {
+    pub fn default_redis() -> Self {
+        Self::Redis(RedisConfig::default())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ComponentServiceConfig {
+    pub host: String,
+    pub port: u16,
+    pub access_token: Uuid,
+    pub retries: RetryConfig,
+    pub connect_timeout: Duration,
+}
+
+impl ComponentServiceConfig {
+    pub fn url(&self) -> Url {
+        Url::parse(&format!("http://{}:{}", self.host, self.port))
+            .expect("Failed to parse ComponentService URL")
+    }
+
+    pub fn uri(&self) -> Uri {
+        Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build ComponentService URI")
+    }
+}
+
+impl Default for ComponentServiceConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_string(),
+            port: 9090,
+            access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
+                .expect("invalid UUID"),
+            retries: RetryConfig::max_attempts_3(),
+            connect_timeout: Duration::from_secs(10),
+        }
     }
 }
 
@@ -135,39 +245,22 @@ fn domain_match(domain: &str, domain_cfg: &str) -> bool {
 
 const CONFIG_FILE_NAME: &str = "config/worker-service.toml";
 
-pub fn make_worker_service_base_config_loader() -> ConfigLoader<WorkerServiceBaseConfig> {
+pub fn make_worker_service_config_loader() -> ConfigLoader<WorkerServiceConfig> {
     ConfigLoader::new_with_examples(&PathBuf::from(CONFIG_FILE_NAME))
-}
-
-pub fn make_cloud_specific_config_loader() -> ConfigLoader<CloudSpecificWorkerServiceConfig> {
-    ConfigLoader::new_with_examples(&PathBuf::from(CONFIG_FILE_NAME))
-}
-
-pub fn load_or_dump_config() -> Option<WorkerServiceCloudConfig> {
-    MergedConfigLoaderOrDumper::new(
-        "worker_service_base_config",
-        make_worker_service_base_config_loader(),
-    )
-    .add(
-        "cloud_specific_worker_service_config",
-        make_cloud_specific_config_loader(),
-        |base, specific| WorkerServiceCloudConfig {
-            base_config: base,
-            cloud_specific_config: specific,
-        },
-    )
-    .finish()
 }
 
 #[cfg(test)]
 mod tests {
     use test_r::test;
 
-    use crate::config::{domain_match, load_or_dump_config, DomainRecordsConfig};
+    use super::make_worker_service_config_loader;
+    use crate::config::{domain_match, DomainRecordsConfig};
 
     #[test]
     pub fn config_is_loadable() {
-        load_or_dump_config().expect("Failed to load config");
+        make_worker_service_config_loader()
+            .load_or_dump_config()
+            .expect("Failed to load config");
     }
 
     #[test]

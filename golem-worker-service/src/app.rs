@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::WorkerServiceCloudConfig;
+use crate::config::WorkerServiceConfig;
 use crate::service::ApiServices;
 use crate::{api, grpcapi};
 use opentelemetry::global;
@@ -24,12 +24,12 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::select;
 
 pub async fn dump_openapi_yaml() -> Result<String, String> {
-    let config = WorkerServiceCloudConfig::default();
+    let config = WorkerServiceConfig::default();
     let services = ApiServices::new(&config).await?;
     Ok(api::make_open_api_service(services).spec_yaml())
 }
 
-pub async fn app(config: &WorkerServiceCloudConfig) -> std::io::Result<()> {
+pub async fn app(config: WorkerServiceConfig) -> std::io::Result<()> {
     let prometheus_registry = prometheus::Registry::new();
 
     let exporter = opentelemetry_prometheus::exporter()
@@ -43,12 +43,9 @@ pub async fn app(config: &WorkerServiceCloudConfig) -> std::io::Result<()> {
             .build(),
     );
 
-    let services: ApiServices = ApiServices::new(config)
+    let services: ApiServices = ApiServices::new(&config)
         .await
         .map_err(std::io::Error::other)?;
-
-    let cloud_specific_config = config.cloud_specific_config.clone();
-    let config = config.base_config.clone();
 
     let http_service1 = services.clone();
     let http_service2 = services.clone();
@@ -71,7 +68,7 @@ pub async fn app(config: &WorkerServiceCloudConfig) -> std::io::Result<()> {
 
     let worker_server = tokio::spawn(async move {
         let cors = Cors::new()
-            .allow_origin_regex(&cloud_specific_config.cors_origin_regex)
+            .allow_origin_regex(&config.cors_origin_regex)
             .allow_credentials(true);
 
         let app = Route::new()

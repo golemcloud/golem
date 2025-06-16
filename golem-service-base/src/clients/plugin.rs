@@ -28,7 +28,7 @@ use tonic::transport::Channel;
 use tonic::Status;
 
 #[async_trait]
-pub trait PluginServiceClient {
+pub trait PluginServiceClient: Send + Sync {
     async fn get(
         &self,
         name: &str,

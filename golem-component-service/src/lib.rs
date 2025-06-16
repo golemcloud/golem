@@ -12,14 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::golem_version;
-
 pub mod api;
+pub mod authed;
+pub mod bootstrap;
 pub mod config;
+pub mod error;
 pub mod grpcapi;
 pub mod metrics;
 pub mod model;
+pub mod repo;
 pub mod service;
+
+use golem_common::golem_version;
 
 #[cfg(test)]
 test_r::enable!();

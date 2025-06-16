@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::api::common::ComponentTraceErrorKind;
+use crate::authed::plugin::AuthedPluginService;
 use crate::grpcapi::{auth, bad_request_error};
-use crate::service::plugin::CloudPluginService;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::component::v1::plugin_service_server::PluginService;
@@ -29,19 +30,17 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_api_grpc::proto::golem::component::PluginDefinition;
 use golem_common::recorded_grpc_api_request;
-use golem_component_service_base::api::common::ComponentTraceErrorKind;
-use golem_component_service_base::model::plugin::PluginDefinitionCreation;
 use std::sync::Arc;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
 pub struct PluginGrpcApi {
-    plugin_service: Arc<CloudPluginService>,
+    plugin_service: Arc<AuthedPluginService>,
 }
 
 impl PluginGrpcApi {
-    pub fn new(plugin_service: Arc<CloudPluginService>) -> Self {
+    pub fn new(plugin_service: Arc<AuthedPluginService>) -> Self {
         Self { plugin_service }
     }
 
@@ -90,7 +89,9 @@ impl PluginGrpcApi {
     ) -> Result<(), ComponentError> {
         let auth = auth(metadata)?;
 
-        let plugin = grpc_to_plugin_creation(request.clone())
+        let plugin = request
+            .clone()
+            .try_into()
             .map_err(|err| bad_request_error(&format!("Invalid plugin specification: {err}")))?;
 
         self.plugin_service.create_plugin(&auth, plugin).await?;
@@ -325,22 +326,4 @@ impl PluginService for PluginGrpcApi {
 
         Ok(Response::new(response))
     }
-}
-
-pub fn grpc_to_plugin_creation(
-    value: golem_api_grpc::proto::golem::component::v1::CreatePluginRequest,
-) -> Result<PluginDefinitionCreation, String> {
-    let plugin = value.plugin.ok_or("missing plugin definition")?;
-
-    let converted = PluginDefinitionCreation {
-        name: plugin.name,
-        version: plugin.version,
-        description: plugin.description,
-        icon: plugin.icon,
-        homepage: plugin.homepage,
-        specs: plugin.specs.ok_or("missing specs")?.try_into()?,
-        scope: plugin.scope.ok_or("missing scope")?.try_into()?,
-    };
-
-    Ok(converted)
 }
