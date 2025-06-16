@@ -268,7 +268,6 @@ message CallType {
        string enum_constructor = 3;
        golem.rib.InstanceCreationType instance_creation = 4;
      }
-   optional golem.rib.Expr worker_name = 5;
 }
 
 message ComponentDependencyKey {

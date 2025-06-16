@@ -1325,7 +1325,7 @@ mod internal {
 
         let function_name_cloned = function_name.clone();
 
-        let mut last_n_elements = interpreter_stack
+        let last_n_elements = interpreter_stack
             .pop_n(arg_size)
             .ok_or_else(|| insufficient_stack_items(arg_size))?;
 
@@ -1441,10 +1441,7 @@ mod internal {
                 };
 
 
-                let handle = &handle;
-                let value = &handle.value;
-
-                match value {
+                match  &handle.value {
                     Value::Handle { uri, .. } => {
                         let worker_name = uri.rsplit_once('/').map(|(_, last)| last).unwrap_or(uri);
 

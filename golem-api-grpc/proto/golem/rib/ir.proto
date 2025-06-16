@@ -31,7 +31,7 @@ message RibIR {
         JumpInstruction jump = 19;
         JumpInstruction label = 20;
         wasm.ast.Type deconstruct = 21;
-        CallInstruction call = 22;
+        InvokeFunctionInstruction invoke_function = 22;
         string throw = 23;
         wasm.rpc.TypeAnnotatedValue push_flag = 24;
         GetTag get_tag = 25;
@@ -124,11 +124,27 @@ message JumpInstruction {
     uint64 instruction_id = 1;
 }
 
-message CallInstruction {
+message InvokeFunctionInstruction {
     golem.rib.ComponentDependencyKey component = 1;
     uint64 argument_count = 2;
     wasm.ast.Type return_type = 3;
-    optional WorkerNamePresence worker_name_presence = 4;
+    InstanceVariable instance_variable = 4;
+
+}
+
+message InstanceVariable {
+    oneof kind {
+        WitWorker worker = 1;
+        WitResource resource = 2;
+    }
+}
+
+message WitWorker {
+  optional golem.rib.VariableId variable_id = 1;
+}
+
+message WitResource {
+  optional golem.rib.VariableId variable_id = 1;
 }
 
 enum WorkerNamePresence {

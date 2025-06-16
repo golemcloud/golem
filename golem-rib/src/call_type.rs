@@ -274,11 +274,6 @@ mod protobuf {
             value: golem_api_grpc::proto::golem::rib::CallType,
         ) -> Result<Self, Self::Error> {
             let invocation = value.name.ok_or("Missing name of invocation")?;
-            let worker = value
-                .worker_name
-                .map(|w| Expr::try_from(*w))
-                .transpose()?
-                .map(Box::new);
             match invocation {
                 golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(name) => {
                     Ok(CallType::Function {
@@ -308,17 +303,14 @@ mod protobuf {
         fn from(value: CallType) -> Self {
             match value {
                 CallType::Function {
-                    instance_identifier: module,
                     function_name,
                     ..
                 } => golem_api_grpc::proto::golem::rib::CallType {
-                    worker_name: None,
                     name: Some(golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(
                         function_name.into(),
                     )),
                 },
                 CallType::VariantConstructor(name) => golem_api_grpc::proto::golem::rib::CallType {
-                    worker_name: None,
                     name: Some(
                         golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(
                             name,
@@ -326,7 +318,6 @@ mod protobuf {
                     ),
                 },
                 CallType::EnumConstructor(name) => golem_api_grpc::proto::golem::rib::CallType {
-                    worker_name: None,
                     name: Some(
                         golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(name),
                     ),
@@ -335,7 +326,6 @@ mod protobuf {
                     match instance_creation {
                         InstanceCreationType::WitWorker { worker_name , component_info} => {
                             golem_api_grpc::proto::golem::rib::CallType {
-                                worker_name: worker_name.clone().map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
                                 name:  Some(golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
                                     Box::new(golem_api_grpc::proto::golem::rib::InstanceCreationType {
                                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Worker(Box::new(WorkerInstance {
@@ -348,7 +338,6 @@ mod protobuf {
                         }
                         InstanceCreationType::WitResource { module: worker_name, resource_name, component_info } => {
                             golem_api_grpc::proto::golem::rib::CallType {
-                                worker_name: None,
                                 name:  Some(golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
                                     Box::new(golem_api_grpc::proto::golem::rib::InstanceCreationType {
                                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(golem_api_grpc::proto::golem::rib::ResourceInstanceWithWorkerName {
