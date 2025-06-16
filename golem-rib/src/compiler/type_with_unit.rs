@@ -68,22 +68,12 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
     fn try_from(inferred_type: &InferredType) -> Result<Self, Self::Error> {
         match inferred_type.internal_type() {
             TypeInternal::Instance { instance_type } => match instance_type.as_ref() {
-                InstanceType::Resource { resource_args, .. } => {
-                    Ok(AnalysedTypeWithUnit::analysed_type(record(vec![
-                        NameTypePair {
-                            name: "resource".to_string(),
-                            typ: str(),
-                        },
-                        NameTypePair {
-                            name: "worker".to_string(),
-                            typ: str(),
-                        },
-                        NameTypePair {
-                            name: "args".to_string(),
-                            typ: tuple(vec![str(); resource_args.len()]),
-                        },
-                    ])))
-                }
+                InstanceType::Resource { .. } => Ok(AnalysedTypeWithUnit::analysed_type(
+                    AnalysedType::Handle(TypeHandle {
+                        resource_id: AnalysedResourceId(0),
+                        mode: AnalysedResourceMode::Owned,
+                    }),
+                )),
 
                 _ => Ok(AnalysedTypeWithUnit::analysed_type(record(vec![
                     NameTypePair {

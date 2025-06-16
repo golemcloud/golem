@@ -34,8 +34,6 @@ pub fn infer_function_call_types(
             ..
         } = expr
         {
-            dbg!(call_type.clone());
-            dbg!(args.clone());
             internal::resolve_call_argument_types(
                 &expr_copied,
                 call_type,
@@ -105,7 +103,6 @@ mod internal {
                             args,
                             function_result_inferred_type,
                         )
-
                     }
                     _ => {
                         let registry_key = FunctionName::from_call_type(&cloned).ok_or(
@@ -281,7 +278,6 @@ mod internal {
 
                     Ok(())
                 } else {
-                    dbg!("is it here?");
                     Err(FunctionCallError::ArgumentSizeMisMatch {
                         function_name: function_name.name(),
                         expr: original_expr.clone(),
@@ -313,7 +309,6 @@ mod internal {
 
                     Ok(())
                 } else {
-                    dbg!("or is it here?");
                     Err(FunctionCallError::ArgumentSizeMisMatch {
                         function_name: function_name.name(),
                         expr: original_expr.clone(),

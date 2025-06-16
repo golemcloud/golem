@@ -27,7 +27,10 @@ pub fn check_invalid_worker_name(expr: &mut Expr) -> Result<(), InvalidWorkerNam
                 }) => {
                     internal::check_worker_name(worker_name)?;
                 }
-                CallType::Function { instance_identifier: module, .. } => {
+                CallType::Function {
+                    instance_identifier: module,
+                    ..
+                } => {
                     let worker_name_opt =
                         module.as_ref().and_then(|x| x.instance_type.worker_name());
 
@@ -38,9 +41,8 @@ pub fn check_invalid_worker_name(expr: &mut Expr) -> Result<(), InvalidWorkerNam
                 CallType::InstanceCreation(InstanceCreationType::WitResource {
                     module, ..
                 }) => {
-                    let worker_name_opt = module
-                        .as_ref()
-                        .and_then(|x| x.instance_type.worker_name());
+                    let worker_name_opt =
+                        module.as_ref().and_then(|x| x.instance_type.worker_name());
 
                     internal::check_worker_name(&worker_name_opt)?;
                 }
@@ -54,13 +56,12 @@ pub fn check_invalid_worker_name(expr: &mut Expr) -> Result<(), InvalidWorkerNam
 mod internal {
     use crate::type_refinement::precise_types::StringType;
     use crate::type_refinement::TypeRefinement;
-    use crate::{Expr, InvalidWorkerName, InstanceIdentifier, TypeName};
+    use crate::{Expr, InstanceIdentifier, InvalidWorkerName, TypeName};
     use std::ops::Deref;
 
     pub(crate) fn check_worker_name(
         worker_name_opt: &Option<Box<Expr>>,
     ) -> Result<(), InvalidWorkerName> {
-
         match worker_name_opt {
             None => {}
             Some(expr) => {

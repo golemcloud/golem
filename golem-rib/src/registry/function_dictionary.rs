@@ -14,7 +14,11 @@
 
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
-use crate::{CallType, ComponentDependencies, ComponentDependencyKey, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionTypeRegistry, InferredType, ParsedFunctionSite, RegistryKey, RegistryValue, SemVer};
+use crate::{
+    CallType, ComponentDependencies, ComponentDependencyKey, DynamicParsedFunctionName,
+    DynamicParsedFunctionReference, Expr, FunctionTypeRegistry, InferredType, ParsedFunctionSite,
+    RegistryKey, RegistryValue, SemVer,
+};
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, TypeEnum, TypeVariant};
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
@@ -481,17 +485,19 @@ pub struct FullyQualifiedResourceConstructor {
 
 impl FullyQualifiedResourceConstructor {
     pub fn parsed_function_site(&self) -> ParsedFunctionSite {
-       if let Some(package_name) = &self.package_name {
+        if let Some(package_name) = &self.package_name {
             let interface_name = self.interface_name.clone().unwrap();
 
             ParsedFunctionSite::PackagedInterface {
                 namespace: package_name.namespace.clone(),
                 package: package_name.package_name.clone(),
-                interface: self.interface_name.as_ref().map_or_else(
-                    || "".to_string(),
-                    |i| i.name.clone(),
-                ),
-                version: interface_name.version.map(|x| SemVer(semver::Version::parse(&x).unwrap()))
+                interface: self
+                    .interface_name
+                    .as_ref()
+                    .map_or_else(|| "".to_string(), |i| i.name.clone()),
+                version: interface_name
+                    .version
+                    .map(|x| SemVer(semver::Version::parse(&x).unwrap())),
             }
         } else if let Some(interface_name) = &self.interface_name {
             ParsedFunctionSite::Interface {
@@ -528,9 +534,7 @@ impl FullyQualifiedResourceMethod {
     }
 
     // We rely on the fully parsed function name itself to retrieve the original function name
-    pub fn dynamic_parsed_function_name(
-        &self,
-    ) -> Result<DynamicParsedFunctionName, String> {
+    pub fn dynamic_parsed_function_name(&self) -> Result<DynamicParsedFunctionName, String> {
         let mut dynamic_parsed_str = String::new();
 
         // Construct the package/interface prefix

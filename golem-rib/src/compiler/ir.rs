@@ -77,7 +77,7 @@ pub enum RibIR {
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum InstanceVariable {
     WitResource(VariableId),
-    WitWorker(VariableId)
+    WitWorker(VariableId),
 }
 
 impl RibIR {
@@ -161,7 +161,10 @@ impl InstructionId {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use crate::{AnalysedTypeWithUnit, ComponentDependencyKey, FunctionReferenceType, InstanceVariable, InstructionId, ParsedFunctionSite, RibIR, VariableId};
+    use crate::{
+        AnalysedTypeWithUnit, ComponentDependencyKey, FunctionReferenceType, InstanceVariable,
+        InstructionId, ParsedFunctionSite, RibIR, VariableId,
+    };
     use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
     use golem_api_grpc::proto::golem::rib::{
         And, CallInstruction, ConcatInstruction, CreateFunctionNameInstruction, EqualTo, GetTag,
@@ -422,7 +425,8 @@ mod protobuf {
 
                     // TODO; fix instruction to use InstanceVariable
                     // Default is absent because old rib scripts don't have worker name in it
-                    let worker_name_presence = InstanceVariable::WitWorker(VariableId::Global("something".to_string()));
+                    let worker_name_presence =
+                        InstanceVariable::WitWorker(VariableId::Global("something".to_string()));
 
                     let component_dependency_key_proto = call_instruction
                         .component
@@ -615,7 +619,6 @@ mod protobuf {
 
                     // TODO; make it instance variable
 
-
                     let component_dependency_key =
                         golem_api_grpc::proto::golem::rib::ComponentDependencyKey::from(
                             component_dependency_key,
@@ -625,7 +628,7 @@ mod protobuf {
                         component: Some(component_dependency_key),
                         argument_count: arg_count as u64,
                         return_type: typ,
-                        worker_name_presence: None // TODO; Fix grpc for instruction byte code
+                        worker_name_presence: None, // TODO; Fix grpc for instruction byte code
                     })
                 }
                 RibIR::PushVariant(name, return_type) => {

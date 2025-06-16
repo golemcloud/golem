@@ -19,7 +19,8 @@ pub fn ensure_stateful_instance(expr: &mut Expr) {
 
     while let Some(expr) = visitor.pop_back() {
         if let Expr::Call {
-            call_type: CallType::InstanceCreation(InstanceCreationType::WitWorker { worker_name, .. }),
+            call_type:
+                CallType::InstanceCreation(InstanceCreationType::WitWorker { worker_name, .. }),
             inferred_type,
             ..
         } = expr

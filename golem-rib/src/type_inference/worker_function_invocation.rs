@@ -113,8 +113,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                             // This implies the CallType::Function should take a variable-id representing the instance
                             // such that it can lookup or it can use InstanceType
                             // x.add("item");
-                            let module =
-                                get_module_identifier(instance_type, lhs);
+                            let module = get_module_identifier(instance_type, lhs);
 
                             let new_call = Expr::call_worker_function(
                                 dynamic_parsed_function_name,
@@ -140,8 +139,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 TypeOrigin::NoOrigin,
                             );
 
-                            let module =
-                                get_module_identifier(instance_type, lhs);
+                            let module = get_module_identifier(instance_type, lhs);
 
                             let new_call_type =
                                 CallType::InstanceCreation(InstanceCreationType::WitResource {
@@ -227,10 +225,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                             )
                                         })?;
 
-                                    let module = get_module_identifier(
-                                        instance_type,
-                                        lhs,
-                                    );
+                                    let module = get_module_identifier(instance_type, lhs);
 
                                     let new_call = Expr::call_worker_function(
                                         dynamic_parsed_function_name,
@@ -290,22 +285,14 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
     Ok(())
 }
 
-fn get_module_identifier(
-    instance_type: &InstanceType,
-    lhs: &Expr,
-) -> InstanceIdentifier {
-
-   let variable_id =  match lhs {
-        Expr::Identifier { variable_id, .. } => {
-            Some(variable_id)
-        }
+fn get_module_identifier(instance_type: &InstanceType, lhs: &Expr) -> InstanceIdentifier {
+    let variable_id = match lhs {
+        Expr::Identifier { variable_id, .. } => Some(variable_id),
         _ => None,
     };
-
 
     InstanceIdentifier {
         variable_id: variable_id.cloned(),
         instance_type: Box::new(instance_type.clone()),
     }
-
 }

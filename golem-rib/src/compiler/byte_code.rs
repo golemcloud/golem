@@ -37,7 +37,7 @@ pub enum RibByteCodeGenerationError {
     UnresolvedWasmComponent {
         function: String,
     },
-    UnresolvedWorkerName
+    UnresolvedWorkerName,
 }
 
 impl std::error::Error for RibByteCodeGenerationError {}
@@ -152,7 +152,11 @@ mod protobuf {
 
 mod internal {
     use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
-    use crate::{AnalysedTypeWithUnit, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionReferenceType, InferredType, InstanceType, InstanceVariable, InstructionId, Range, RibByteCodeGenerationError, RibIR, TypeInternal, VariableId};
+    use crate::{
+        AnalysedTypeWithUnit, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr,
+        FunctionReferenceType, InferredType, InstanceType, InstanceVariable, InstructionId, Range,
+        RibByteCodeGenerationError, RibIR, TypeInternal, VariableId,
+    };
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeFlags};
     use std::collections::HashSet;
 
@@ -456,11 +460,14 @@ mod internal {
                             )?)
                         };
 
-                        let module =
-                            module.as_ref().expect("Module should be present for function calls");
+                        let module = module
+                            .as_ref()
+                            .expect("Module should be present for function calls");
 
                         let instance_variable = match module.instance_type.as_ref() {
-                            InstanceType::Resource {..} => InstanceVariable::WitResource(module.variable_id.clone().unwrap()),
+                            InstanceType::Resource { .. } => {
+                                InstanceVariable::WitResource(module.variable_id.clone().unwrap())
+                            }
                             _ => InstanceVariable::WitWorker(module.variable_id.clone().unwrap()),
                         };
 
@@ -609,7 +616,9 @@ mod internal {
                                         stack.push(ExprState::from_expr(worker.deref()));
                                     }
                                     None => {
-                                        return Err(RibByteCodeGenerationError::UnresolvedWorkerName);
+                                        return Err(
+                                            RibByteCodeGenerationError::UnresolvedWorkerName,
+                                        );
                                     }
                                 }
                             }
@@ -617,18 +626,23 @@ mod internal {
                             InstanceCreationType::WitResource {
                                 module,
                                 resource_name,
-                                component_info
+                                component_info,
                             } => {
                                 for expr in args.iter().rev() {
                                     stack.push(ExprState::from_expr(expr));
                                 }
 
-                                let module =
-                                    module.as_ref().expect("Module should be present for resource calls");
+                                let module = module
+                                    .as_ref()
+                                    .expect("Module should be present for resource calls");
 
                                 let instance_variable = match module.instance_type.as_ref() {
-                                    InstanceType::Resource {..} => InstanceVariable::WitResource(module.variable_id.clone().unwrap()),
-                                    _ => InstanceVariable::WitWorker(module.variable_id.clone().unwrap()),
+                                    InstanceType::Resource { .. } => InstanceVariable::WitResource(
+                                        module.variable_id.clone().unwrap(),
+                                    ),
+                                    _ => InstanceVariable::WitWorker(
+                                        module.variable_id.clone().unwrap(),
+                                    ),
                                 };
 
                                 let site = resource_name.parsed_function_site();
@@ -652,7 +666,7 @@ mod internal {
                                     component_info.clone(),
                                     instance_variable,
                                     args.len(),
-                                    function_result_type
+                                    function_result_type,
                                 ));
 
                                 instructions.push(RibIR::CreateFunctionName(
@@ -661,7 +675,6 @@ mod internal {
                                         resource: resource_name.resource_name.clone(),
                                     },
                                 ));
-
                             }
                         }
                     }

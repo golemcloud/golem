@@ -631,15 +631,20 @@ mod internal {
                 ..
             } => (
                 function_name.function.raw_resource_params_mut(),
-                module.as_mut().and_then(|m| (&mut *m.instance_type).worker_mut()),
+                module
+                    .as_mut()
+                    .and_then(|m| (&mut *m.instance_type).worker_mut()),
             ),
 
             CallType::InstanceCreation(instance_creation) => match instance_creation {
                 InstanceCreationType::WitWorker { worker_name, .. } => (None, worker_name.as_mut()),
 
-                InstanceCreationType::WitResource { module, .. } => {
-                    (None,  module.as_mut().and_then(|m| (&mut *m.instance_type).worker_mut()))
-                },
+                InstanceCreationType::WitResource { module, .. } => (
+                    None,
+                    module
+                        .as_mut()
+                        .and_then(|m| (&mut *m.instance_type).worker_mut()),
+                ),
             },
 
             CallType::VariantConstructor(_) => (None, None),

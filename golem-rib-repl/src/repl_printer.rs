@@ -14,7 +14,9 @@
 
 use crate::ReplBootstrapError;
 use colored::Colorize;
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::analysed_type::{record, str, u64};
+use golem_wasm_ast::analysis::{AnalysedType, NameTypePair};
+use golem_wasm_rpc::{Value, ValueAndType};
 use rib::*;
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -82,7 +84,41 @@ pub trait ReplPrinter {
     }
 
     fn print_rib_result(&self, result: &RibResult) {
-        println!("{}", result.to_string().yellow());
+        match result {
+            RibResult::Unit => {
+                println!("{}", "()".yellow());
+            }
+
+            RibResult::Val(value_and_type) => match &value_and_type.value {
+                Value::Handle { uri, resource_id } => {
+                    println!("{} {}", "[info]".green(), "the result is a resource handle, presented in record form solely for display purposes".to_string().white());
+
+                    println!();
+
+                    let resource = Value::Record(vec![
+                        Value::String(uri.to_string()),
+                        Value::U64(*resource_id),
+                    ]);
+
+                    let analysed_type = record(vec![
+                        NameTypePair {
+                            name: "uri".to_string(),
+                            typ: str(),
+                        },
+                        NameTypePair {
+                            name: "resource-id".to_string(),
+                            typ: u64(),
+                        },
+                    ]);
+
+                    let result = ValueAndType::new(resource, analysed_type);
+
+                    println!("{}", result.to_string().yellow());
+                }
+
+                _ => println!("{}", result.to_string().yellow()),
+            },
+        }
     }
 
     fn print_rib_runtime_error(&self, error: &RibRuntimeError) {

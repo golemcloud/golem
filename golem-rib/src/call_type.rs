@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{FullyQualifiedResourceConstructor, InstanceType, VariableId};
 use crate::{ComponentDependencyKey, DynamicParsedFunctionName, Expr};
+use crate::{FullyQualifiedResourceConstructor, InstanceType, VariableId};
 use std::fmt::Display;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
@@ -37,8 +37,8 @@ pub struct InstanceIdentifier {
     // The variable-id of the worker instance or the resource instance,
     // `let x = instance(); x.foo()`.
     // module identifier here is variable-id x, with instance type being a worker
-   pub variable_id: Option<VariableId>,
-   pub instance_type: Box<InstanceType>
+    pub variable_id: Option<VariableId>,
+    pub instance_type: Box<InstanceType>,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
@@ -65,8 +65,10 @@ impl InstanceCreationType {
     pub fn worker_name(&self) -> Option<Expr> {
         match self {
             InstanceCreationType::WitWorker { worker_name, .. } => worker_name.as_deref().cloned(),
-            InstanceCreationType::WitResource { module, .. } =>
-                { let r = module.as_ref().and_then(|m | m.instance_type.worker_name()); r.as_deref().cloned() },
+            InstanceCreationType::WitResource { module, .. } => {
+                let r = module.as_ref().and_then(|m| m.instance_type.worker_name());
+                r.as_deref().cloned()
+            }
         }
     }
 }
@@ -80,7 +82,10 @@ impl CallType {
     }
     pub fn worker_expr(&self) -> Option<&Expr> {
         match self {
-            CallType::Function { instance_identifier: worker, .. } => {
+            CallType::Function {
+                instance_identifier: worker,
+                ..
+            } => {
                 let module = worker.as_ref()?;
                 let instance = &module.instance_type;
                 instance.worker()
@@ -91,7 +96,10 @@ impl CallType {
 
     pub fn worker_expr_mut(&mut self) -> Option<&mut Box<Expr>> {
         match self {
-            CallType::Function { instance_identifier: module, .. } => {
+            CallType::Function {
+                instance_identifier: module,
+                ..
+            } => {
                 let module = module.as_mut()?;
                 let instance = &mut *module.instance_type;
                 instance.worker_mut()
@@ -215,8 +223,6 @@ mod protobuf {
                 golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(
                     resource_instance,
                 ) => {
-
-
                     let resource_constructor_proto = resource_instance
                         .resource_name
                         .ok_or("Missing resource name")?;
