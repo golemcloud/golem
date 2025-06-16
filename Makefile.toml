@@ -18,6 +18,7 @@
 # - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
 # - `cargo make publish`: publishes packages to crates.io
 # - `cargo make run`: runs all services locally, requires redis, lnav and nginx
+# - `cargo make run-with-login-enabled`: runs all services locally with login enabled, requires redis, lnav and nginx. Also requires oauth2 configuration to be provided.
 # - `cargo make check-configs`: generates configs from code deafults and checks if it is up-to-date
 # - `cargo make generate-configs`: generates configs from code defaults
 # - `cargo make elastic-up`: starts elastic, kibana, filebeat (in detached mode) and loads logs into elastic

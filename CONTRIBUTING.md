@@ -142,10 +142,15 @@ There are two ways now to run Golem locally:
 
 ### Using cargo make run
 
-To run the project locally using `cargo make run` you'll need to configure the `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`.
-To do so you'll need to create a new GitHub OAuth application.
+By running `cargo make run` all services are going to be built and started as individual native processes.
+Ensure that `lnav`, `nginx` and `redis` commands are available in your PATH.
 
-1. Go to github.com
+### Using cargo make run-with-login-enabled
+
+By running `cargo make run-with-login-enabled`, all services are started as individual native processes
+and the login system is enabled. In addition to the [requirements for regular run](#using-cargo-make-run), you'll need to set up GitHub OAuth.
+
+1. Go to https://github.com
 2. Navigate to `Settings > Developer settings > OAuth Apps`
 3. Create a new OAuth App. Use the following settings:
 
@@ -156,9 +161,6 @@ To do so you'll need to create a new GitHub OAuth application.
     GITHUB_CLIENT_ID: Client ID of the OAuth application created in step (3)
 
     GITHUB_CLIENT_SECRET: Client secret created in step (4)
-
-Ensure that `lnav`, `nginx` and `redis` commands are available in your PATH.
-You can now start golem-cloud locally using `cargo make run`.
 
 After it is started you can configure the cli to use the local instance using `golem profile new --component-url http://localhost:9881/  cloud cloud-local`.
 
