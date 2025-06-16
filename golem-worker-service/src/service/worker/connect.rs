@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::WorkerStream;
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::auth::Namespace;
 use golem_common::model::WorkerId;
 use golem_service_base::clients::limit::LimitService;
-use golem_worker_service_base::service::worker::WorkerStream;
 use std::sync::Arc;
 use tonic::Status;
 

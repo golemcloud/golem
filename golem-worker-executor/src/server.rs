@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[allow(unused_imports)]
-use std::sync::Arc;
-
 use golem_common::tracing::init_tracing_with_default_env_filter;
-use golem_worker_executor::cloud;
+use golem_worker_executor::bootstrap;
 use golem_worker_executor::metrics;
 use golem_worker_executor::services::golem_config::{make_config_loader, GolemConfig};
+use std::sync::Arc;
 use tokio::task::JoinSet;
 
 fn main() -> Result<(), anyhow::Error> {
@@ -48,7 +46,7 @@ async fn async_main(
 ) -> Result<(), anyhow::Error> {
     let mut join_set = JoinSet::new();
 
-    cloud::run(config, prometheus, runtime.handle().clone(), &mut join_set).await?;
+    bootstrap::run(config, prometheus, runtime.handle().clone(), &mut join_set).await?;
 
     while let Some(res) = join_set.join_next().await {
         res??

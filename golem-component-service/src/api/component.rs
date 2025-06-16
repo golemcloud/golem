@@ -13,10 +13,13 @@
 // limitations under the License.
 
 use super::dto;
-use super::dto::CloudApiMapper;
+use super::dto::ApiMapper;
 use crate::api::{ApiTags, ComponentError, Result};
+use crate::authed::component::AuthedComponentService;
+use crate::model::{
+    ComponentEnv, DynamicLinking, InitialComponentFilesArchiveAndPermissions, UpdatePayload,
+};
 use crate::model::{ComponentQuery, ComponentSearch};
-use crate::service::component::CloudComponentService;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::component::VersionedComponentId;
@@ -27,12 +30,8 @@ use golem_common::model::{
 };
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_http_api_request;
-use golem_component_service_base::model::{
-    BatchPluginInstallationUpdates, ComponentEnv, DynamicLinking,
-    InitialComponentFilesArchiveAndPermissions, UpdatePayload,
-};
 use golem_service_base::model::auth::GolemSecurityScheme;
-use golem_service_base::model::ComponentName;
+use golem_service_base::model::{BatchPluginInstallationUpdates, ComponentName};
 use golem_service_base::poem::TempFileUpload;
 use poem::Body;
 use poem_openapi::param::{Path, Query};
@@ -56,16 +55,13 @@ pub struct UploadPayload {
 }
 
 pub struct ComponentApi {
-    component_service: Arc<CloudComponentService>,
-    api_mapper: Arc<dyn CloudApiMapper>,
+    component_service: Arc<AuthedComponentService>,
+    api_mapper: Arc<ApiMapper>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
 impl ComponentApi {
-    pub fn new(
-        component_service: Arc<CloudComponentService>,
-        api_mapper: Arc<dyn CloudApiMapper>,
-    ) -> Self {
+    pub fn new(component_service: Arc<AuthedComponentService>, api_mapper: Arc<ApiMapper>) -> Self {
         Self {
             component_service,
             api_mapper,

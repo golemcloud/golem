@@ -13,4 +13,7 @@
 // limitations under the License.
 
 pub mod api_certificate;
+pub mod api_definition;
+pub mod api_deployment;
 pub mod api_domain;
+pub mod security_scheme;

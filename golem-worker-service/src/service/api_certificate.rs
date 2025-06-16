@@ -115,7 +115,7 @@ impl From<RepoError> for CertificateServiceError {
 }
 
 #[async_trait]
-pub trait CertificateService {
+pub trait CertificateService: Send + Sync {
     async fn create(
         &self,
         request: &CertificateRequest,
@@ -138,16 +138,16 @@ pub trait CertificateService {
 }
 
 pub struct CertificateServiceDefault {
-    auth_service: Arc<dyn AuthService + Sync + Send>,
-    certificate_manager: Arc<dyn CertificateManager + Sync + Send>,
-    certificate_repo: Arc<dyn ApiCertificateRepo + Sync + Send>,
+    auth_service: Arc<dyn AuthService>,
+    certificate_manager: Arc<dyn CertificateManager>,
+    certificate_repo: Arc<dyn ApiCertificateRepo>,
 }
 
 impl CertificateServiceDefault {
     pub fn new(
-        auth_service: Arc<dyn AuthService + Sync + Send>,
-        certificate_manager: Arc<dyn CertificateManager + Sync + Send>,
-        certificate_repo: Arc<dyn ApiCertificateRepo + Sync + Send>,
+        auth_service: Arc<dyn AuthService>,
+        certificate_manager: Arc<dyn CertificateManager>,
+        certificate_repo: Arc<dyn ApiCertificateRepo>,
     ) -> Self {
         Self {
             auth_service,
@@ -335,7 +335,7 @@ impl CertificateManagerError {
 }
 
 #[async_trait]
-pub trait CertificateManager {
+pub trait CertificateManager: Send + Sync {
     async fn import(
         &self,
         account_id: &AccountId,

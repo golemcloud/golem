@@ -44,7 +44,7 @@ impl ComponentCompilationServiceImpl {
 
         engine: Engine,
 
-        compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
+        compiled_component_service: Arc<dyn CompiledComponentService>,
     ) -> Self {
         let (compile_tx, compile_rx) = mpsc::channel(100);
         let (upload_tx, upload_rx) = mpsc::channel(100);
