@@ -56,7 +56,7 @@ pub fn check_invalid_worker_name(expr: &mut Expr) -> Result<(), InvalidWorkerNam
 mod internal {
     use crate::type_refinement::precise_types::StringType;
     use crate::type_refinement::TypeRefinement;
-    use crate::{Expr, InstanceIdentifier, InvalidWorkerName, TypeName};
+    use crate::{Expr, InvalidWorkerName, TypeName};
     use std::ops::Deref;
 
     pub(crate) fn check_worker_name(

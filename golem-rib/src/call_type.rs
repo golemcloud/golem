@@ -255,7 +255,7 @@ mod protobuf {
                         }))),
                     }
                 }
-                InstanceCreationType::WitResource { component_info, module: worker_name, resource_name } => {
+                InstanceCreationType::WitResource { component_info, resource_name, .. } => {
                     golem_api_grpc::proto::golem::rib::InstanceCreationType {
                         kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(golem_api_grpc::proto::golem::rib::ResourceInstanceWithWorkerName {
                             component: component_info.map(golem_api_grpc::proto::golem::rib::ComponentDependencyKey::from),
@@ -336,7 +336,7 @@ mod protobuf {
                                 )),
                             }
                         }
-                        InstanceCreationType::WitResource { module: worker_name, resource_name, component_info } => {
+                        InstanceCreationType::WitResource { resource_name, component_info, .. } => {
                             golem_api_grpc::proto::golem::rib::CallType {
                                 name:  Some(golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
                                     Box::new(golem_api_grpc::proto::golem::rib::InstanceCreationType {

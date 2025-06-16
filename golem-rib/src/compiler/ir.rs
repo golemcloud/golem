@@ -166,7 +166,12 @@ mod protobuf {
         InstructionId, ParsedFunctionSite, RibIR, VariableId,
     };
     use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
-    use golem_api_grpc::proto::golem::rib::{And, ConcatInstruction, CreateFunctionNameInstruction, EqualTo, GetTag, GreaterThan, GreaterThanOrEqualTo, InvokeFunctionInstruction, IsEmpty, JumpInstruction, LessThan, LessThanOrEqualTo, Negate, Or, PushListInstruction, PushNoneInstruction, PushTupleInstruction, RibIr as ProtoRibIR, WitResource};
+    use golem_api_grpc::proto::golem::rib::{
+        And, ConcatInstruction, CreateFunctionNameInstruction, EqualTo, GetTag, GreaterThan,
+        GreaterThanOrEqualTo, InvokeFunctionInstruction, IsEmpty, JumpInstruction, LessThan,
+        LessThanOrEqualTo, Negate, Or, PushListInstruction, PushNoneInstruction,
+        PushTupleInstruction, RibIr as ProtoRibIR, WitResource,
+    };
     use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
     use golem_wasm_rpc::ValueAndType;
 

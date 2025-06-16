@@ -27,7 +27,7 @@ use golem_api_grpc::proto::golem::rib::{
 use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::ops::Deref;
 
 // `InstanceType` will be the type (`InferredType`) of the variable associated with creation of an instance

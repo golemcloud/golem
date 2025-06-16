@@ -16,7 +16,7 @@ use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
 use crate::{
     CallType, ComponentDependencies, ComponentDependencyKey, DynamicParsedFunctionName,
-    DynamicParsedFunctionReference, Expr, FunctionTypeRegistry, InferredType, ParsedFunctionSite,
+    DynamicParsedFunctionReference, FunctionTypeRegistry, InferredType, ParsedFunctionSite,
     RegistryKey, RegistryValue, SemVer,
 };
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, TypeEnum, TypeVariant};

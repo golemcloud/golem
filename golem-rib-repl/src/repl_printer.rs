@@ -133,22 +133,16 @@ pub trait ReplPrinter {
 
                 println!();
 
-                println!(
-                    "{}",
-                    text
-                        .yellow()
-                );
-
+                println!("{}", text.yellow());
             }
 
-            _ =>  println!(
+            _ => println!(
                 "{}",
                 wasm_wave::wasm::DisplayType(analysed_type)
                     .to_string()
                     .yellow()
-            )
+            ),
         }
-
     }
 }
 

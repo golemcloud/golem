@@ -16,8 +16,8 @@ use crate::call_type::{CallType, InstanceCreationType, InstanceIdentifier};
 use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
 use crate::{
-    DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionCallError,
-    InferredType, TypeInternal, TypeName, TypeOrigin,
+    DynamicParsedFunctionName, Expr, FunctionCallError, InferredType, TypeInternal, TypeName,
+    TypeOrigin,
 };
 use crate::{FunctionName, InstanceType};
 use std::collections::VecDeque;

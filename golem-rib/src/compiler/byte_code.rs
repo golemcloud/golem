@@ -156,16 +156,19 @@ mod protobuf {
 
 mod internal {
     use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
-    use crate::{AnalysedTypeWithUnit, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FullyQualifiedResourceConstructor, FunctionReferenceType, InferredType, InstanceType, InstanceVariable, InstructionId, Range, RibByteCodeGenerationError, RibIR, TypeInternal, VariableId};
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeFlags};
+    use crate::{
+        AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
+        InferredType, InstanceType, InstanceVariable, InstructionId, Range,
+        RibByteCodeGenerationError, RibIR, TypeInternal, VariableId,
+    };
+    use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
     use std::collections::HashSet;
 
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::type_inference::{GetTypeHint, TypeHint};
-    use golem_wasm_ast::analysis::analysed_type::{bool, record, str, tuple};
+    use golem_wasm_ast::analysis::analysed_type::bool;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
-    use crate::rib_source_span::SourceSpan;
 
     pub(crate) fn process_expr(
         expr: &Expr,
@@ -465,16 +468,16 @@ mod internal {
                             .as_ref()
                             .expect("Module should be present for function calls");
 
-
                         let instance_variable = match module.instance_type.as_ref() {
-                            InstanceType::Resource {..} => {
-
+                            InstanceType::Resource { .. } => {
                                 if let None = module.variable_id {
-                                    return Err(RibByteCodeGenerationError::UnresolvedResourceVariable);
+                                    return Err(
+                                        RibByteCodeGenerationError::UnresolvedResourceVariable,
+                                    );
                                 }
 
                                 InstanceVariable::WitResource(module.variable_id.clone())
-                            },
+                            }
                             instance_type => {
                                 if let None = module.variable_id {
                                     let worker_name = instance_type.worker_name();
@@ -485,7 +488,7 @@ mod internal {
                                 }
 
                                 InstanceVariable::WitWorker(module.variable_id.clone())
-                            },
+                            }
                         };
 
                         let component_info = component_info.as_ref().ok_or(
@@ -643,12 +646,10 @@ mod internal {
                                     .expect("Module should be present for resource calls");
 
                                 let instance_variable = match module.instance_type.as_ref() {
-                                    InstanceType::Resource { .. } => InstanceVariable::WitResource(
-                                        module.variable_id.clone(),
-                                    ),
-                                    _ => InstanceVariable::WitWorker(
-                                        module.variable_id.clone(),
-                                    ),
+                                    InstanceType::Resource { .. } => {
+                                        InstanceVariable::WitResource(module.variable_id.clone())
+                                    }
+                                    _ => InstanceVariable::WitWorker(module.variable_id.clone()),
                                 };
 
                                 let site = resource_name.parsed_function_site();

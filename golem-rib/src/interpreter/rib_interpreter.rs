@@ -1345,34 +1345,31 @@ mod internal {
 
         match instance_variable_type {
             InstanceVariable::WitWorker(variable_id) => {
-
-
                 let worker_id = {
                     match variable_id {
-                        None => {
-                            interpreter_stack.pop_val().ok_or_else(|| {
-                                internal_corrupted_state!(
-                                    "failed to get a worker variable id for function {}",
-                                    function_name
-                                )
-                            })?
-                        }
-                        Some(variable_id) => {
-                            interpreter_env
-                                .lookup(&EnvironmentKey::from(variable_id.clone()))
-                                .map(|x| x.get_val().ok_or_else(|| {
+                        None => interpreter_stack.pop_val().ok_or_else(|| {
+                            internal_corrupted_state!(
+                                "failed to get a worker variable id for function {}",
+                                function_name
+                            )
+                        })?,
+                        Some(variable_id) => interpreter_env
+                            .lookup(&EnvironmentKey::from(variable_id.clone()))
+                            .map(|x| {
+                                x.get_val().ok_or_else(|| {
                                     internal_corrupted_state!(
                                         "failed to get a worker variable id for function {}",
                                         function_name
                                     )
-                                })).transpose()?
-                                .ok_or_else(|| {
-                                    internal_corrupted_state!(
-                            "failed to find a worker with id {}",
-                            variable_id.name()
-                        )
-                                })?
-                        }
+                                })
+                            })
+                            .transpose()?
+                            .ok_or_else(|| {
+                                internal_corrupted_state!(
+                                    "failed to find a worker with id {}",
+                                    variable_id.name()
+                                )
+                            })?,
                     }
                 };
 
@@ -1381,9 +1378,7 @@ mod internal {
                         .get_literal()
                         .map(|v| v.as_string())
                         .ok_or_else(|| {
-                            internal_corrupted_state!(
-                                "failed to get a worker name for variable"
-                            )
+                            internal_corrupted_state!("failed to get a worker name for variable")
                         })?;
 
                 let result = interpreter_env
@@ -1419,29 +1414,27 @@ mod internal {
                                 function_name
                             )
                         }
-                        Some(variable_id) => {
-                            interpreter_env
-                                .lookup(&EnvironmentKey::from(variable_id.clone()))
-                                .map(|x| {
-                                    x.get_val().ok_or_else(|| {
-                                        internal_corrupted_state!(
-                                            "failed to get a resource with id {}",
-                                            variable_id.name()
-                                        )
-                                    })
-                                }).transpose()?
-                                .ok_or_else(|| {
+                        Some(variable_id) => interpreter_env
+                            .lookup(&EnvironmentKey::from(variable_id.clone()))
+                            .map(|x| {
+                                x.get_val().ok_or_else(|| {
                                     internal_corrupted_state!(
-                            "failed to find a resource with id {}",
-                            variable_id.name()
-                        )
-                                })?
-                        }
+                                        "failed to get a resource with id {}",
+                                        variable_id.name()
+                                    )
+                                })
+                            })
+                            .transpose()?
+                            .ok_or_else(|| {
+                                internal_corrupted_state!(
+                                    "failed to find a resource with id {}",
+                                    variable_id.name()
+                                )
+                            })?,
                     }
                 };
 
-
-                match  &handle.value {
+                match &handle.value {
                     Value::Handle { uri, .. } => {
                         let worker_name = uri.rsplit_once('/').map(|(_, last)| last).unwrap_or(uri);
 
