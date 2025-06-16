@@ -226,7 +226,7 @@ impl Interpreter {
 
                 RibIR::InvokeFunction(
                     component_info,
-                    worker_type,
+                    instance_variable,
                     arg_size,
                     expected_result_type,
                 ) => {
@@ -234,7 +234,7 @@ impl Interpreter {
                         component_info,
                         &byte_code_cursor.position(),
                         arg_size,
-                        worker_type,
+                        instance_variable,
                         &mut stack,
                         &mut interpreter_env,
                         expected_result_type,
@@ -350,13 +350,7 @@ mod internal {
     use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::stack::InterpreterStack;
-    use crate::{
-        bail_corrupted_state, internal_corrupted_state, AnalysedTypeWithUnit, CoercedNumericValue,
-        ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName,
-        FunctionReferenceType, InstructionId, Interpreter, ParsedFunctionName,
-        ParsedFunctionReference, ParsedFunctionSite, RibComponentFunctionInvoke,
-        RibFunctionInvokeResult, RibInterpreterResult, TypeHint, VariableId, WorkerNamePresence,
-    };
+    use crate::{bail_corrupted_state, internal_corrupted_state, AnalysedTypeWithUnit, CoercedNumericValue, ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, FunctionReferenceType, GetLiteralValue, InstanceVariable, InstructionId, Interpreter, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, RibComponentFunctionInvoke, RibFunctionInvokeResult, RibInterpreterResult, TypeHint, VariableId};
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
@@ -1321,7 +1315,7 @@ mod internal {
         component_info: ComponentDependencyKey,
         instruction_id: &InstructionId,
         arg_size: usize,
-        worker_type: WorkerNamePresence,
+        worker_type: InstanceVariable,
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
         expected_result_type: AnalysedTypeWithUnit,
@@ -1332,20 +1326,14 @@ mod internal {
 
         let function_name_cloned = function_name.clone();
 
-        let worker_name = match worker_type {
-            WorkerNamePresence::Present => {
-                let worker_name = interpreter_stack.pop_str().ok_or_else(|| {
-                    internal_corrupted_state!("internal error: failed to get the worker name")
-                })?;
-
-                Some(worker_name.clone())
-            }
-            WorkerNamePresence::Absent => None,
-        };
-
-        let last_n_elements = interpreter_stack
+        let mut last_n_elements = interpreter_stack
             .pop_n(arg_size)
             .ok_or_else(|| insufficient_stack_items(arg_size))?;
+
+        let expected_result_type = match expected_result_type {
+            AnalysedTypeWithUnit::Type(analysed_type) => Some(analysed_type),
+            AnalysedTypeWithUnit::Unit => None,
+        };
 
         let parameter_values = last_n_elements
             .iter()
@@ -1356,32 +1344,82 @@ mod internal {
             })
             .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
-        let expected_result_type = match expected_result_type {
-            AnalysedTypeWithUnit::Type(analysed_type) => Some(analysed_type),
-            AnalysedTypeWithUnit::Unit => None,
+        let result = match worker_type {
+            InstanceVariable::WitWorker(variable_id) => {
+                let worker = interpreter_env.lookup(&EnvironmentKey::from(variable_id.clone()))
+                    .ok_or_else(|| internal_corrupted_state!(
+                        "failed to find a worker with id {}",
+                        variable_id.name()
+                    ))?;
+
+                let worker_id = worker.get_val().ok_or_else(|| {
+                    internal_corrupted_state!(
+                        "failed to get a worker with id {}",
+                        variable_id.name()
+                    )
+                })?;
+
+                dbg!(&worker_id);
+
+                let worker_id_string = worker_id.get_literal().map(|v| v.as_string())
+                    .ok_or_else(|| internal_corrupted_state!(
+                        "failed to get a worker name for variable {}",
+                        variable_id.name()
+                    ))?;
+
+                interpreter_env
+                    .invoke_worker_function_async(
+                        component_info,
+                        instruction_id,
+                        Some(worker_id_string),
+                        function_name_cloned,
+                        parameter_values,
+                        expected_result_type.clone(),
+                    )
+                    .await
+                    .map_err(|err| function_invoke_fail(function_name.as_str(), err))?
+            }
+
+            InstanceVariable::WitResource(variable_id) => {
+                let mut final_args = vec![];
+
+                let resource = interpreter_env.lookup(&EnvironmentKey::from(variable_id.clone()))
+                    .ok_or_else(|| internal_corrupted_state!(
+                        "failed to find a resource with id {}",
+                        variable_id.name()
+                    ))?;
+
+                let handle = resource.as_resource_handle().expect("Expecting a resource handle");
+
+                final_args.push(handle.clone());
+                final_args.extend(parameter_values);
+
+                interpreter_env
+                    .invoke_worker_function_async(
+                        component_info,
+                        instruction_id,
+                        None, // Make sure we don't pass a worker id for resource methods
+                        function_name_cloned,
+                        final_args,
+                        expected_result_type.clone(),
+                    )
+                    .await
+                    .map_err(|err| function_invoke_fail(function_name.as_str(), err))?
+            }
         };
 
-        let value_and_type_opt = interpreter_env
-            .invoke_worker_function_async(
-                component_info,
-                instruction_id,
-                worker_name,
-                function_name_cloned,
-                parameter_values,
-                expected_result_type,
-            )
-            .await
-            .map_err(|err| function_invoke_fail(function_name.as_str(), err))?;
-
-        let interpreter_result = match value_and_type_opt {
-            Some(value_and_type) => RibInterpreterStackValue::Val(value_and_type),
-            None => RibInterpreterStackValue::Unit,
-        };
-
-        interpreter_stack.push(interpreter_result);
+        match expected_result_type {
+            None => {
+                interpreter_stack.push(RibInterpreterStackValue::Unit);
+            }
+            Some(_) => {
+                interpreter_stack.push(RibInterpreterStackValue::Val(result.unwrap()));
+            }
+        }
 
         Ok(())
     }
+
     pub(crate) fn run_deconstruct_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> RibInterpreterResult<()> {

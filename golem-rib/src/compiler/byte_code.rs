@@ -37,6 +37,7 @@ pub enum RibByteCodeGenerationError {
     UnresolvedWasmComponent {
         function: String,
     },
+    UnresolvedWorkerName
 }
 
 impl std::error::Error for RibByteCodeGenerationError {}
@@ -64,6 +65,9 @@ impl Display for RibByteCodeGenerationError {
             }
             RibByteCodeGenerationError::UnresolvedWasmComponent { function } => {
                 write!(f, "Unresolved wasm component for function: {}", function)
+            }
+            RibByteCodeGenerationError::UnresolvedWorkerName => {
+                write!(f, "Unresolved worker name in instance creation")
             }
         }
     }
@@ -148,11 +152,7 @@ mod protobuf {
 
 mod internal {
     use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
-    use crate::{
-        AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstructionId, Range, RibByteCodeGenerationError, RibIR, TypeInternal,
-        VariableId, WorkerNamePresence,
-    };
+    use crate::{AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType, InferredType, InstanceType, InstanceVariable, InstructionId, Range, RibByteCodeGenerationError, RibIR, TypeInternal, VariableId};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeFlags};
     use std::collections::HashSet;
 
@@ -440,7 +440,7 @@ mod internal {
                 match call_type {
                     CallType::Function {
                         function_name,
-                        module: worker,
+                        module,
                         component_info,
                     } => {
                         for expr in args.iter().rev() {
@@ -456,10 +456,12 @@ mod internal {
                             )?)
                         };
 
-                        // To be pushed to interpreter stack later
-                        let worker_name = match worker {
-                            Some(_) => WorkerNamePresence::Present,
-                            None => WorkerNamePresence::Absent,
+                        let module =
+                            module.as_ref().expect("Module should be present for function calls");
+
+                        let instance_variable = match module.instance_type.as_ref() {
+                            InstanceType::Resource {..} => InstanceVariable::WitResource(module.variable_id.clone().unwrap()),
+                            _ => InstanceVariable::WitWorker(module.variable_id.clone().unwrap()),
                         };
 
                         let component_info = component_info.as_ref().ok_or(
@@ -470,14 +472,10 @@ mod internal {
 
                         instructions.push(RibIR::InvokeFunction(
                             component_info.clone(),
-                            worker_name,
+                            instance_variable,
                             args.len(),
                             function_result_type,
                         ));
-
-                        if let Some(worker_expr) = worker {
-                            stack.push(ExprState::from_expr(worker_expr));
-                        }
 
                         let site = function_name.site.clone();
 
@@ -607,36 +605,11 @@ mod internal {
                                 }
 
                                 match worker_name {
-                                    // worker name is already in stack due to args
                                     Some(worker) => {
-                                        stack.push(ExprState::from_ir(RibIR::PushLit(
-                                            ValueAndType::new(
-                                                Value::Record(vec![Value::String(
-                                                    worker.to_string(),
-                                                )]),
-                                                record(vec![NameTypePair {
-                                                    name: "worker".to_string(),
-                                                    typ: str(),
-                                                }]),
-                                            ),
-                                        )));
+                                        stack.push(ExprState::from_expr(worker.deref()));
                                     }
                                     None => {
-                                        // This would imply returning a instance representing ephemeral
-                                        // worker it simply returns an empty tuple. This is a corner case
-                                        // that a rib script hardly achieves anything from it,
-                                        // but we need to handle it
-                                        stack.push(ExprState::from_ir(RibIR::PushLit(
-                                            ValueAndType::new(
-                                                Value::Record(vec![Value::String(
-                                                    "<ephemeral>".to_string(),
-                                                )]),
-                                                record(vec![NameTypePair {
-                                                    name: "worker".to_string(),
-                                                    typ: str(),
-                                                }]),
-                                            ),
-                                        )));
+                                        return Err(RibByteCodeGenerationError::UnresolvedWorkerName);
                                     }
                                 }
                             }
@@ -660,7 +633,7 @@ mod internal {
                                         Value::String(resource_name.resource_name.clone()),
                                         worker_name.as_ref().map_or(
                                             Value::String("<ephemeral>".to_string()),
-                                            |w| Value::String(w.to_string()),
+                                            |w| Value::String(w.variable_id.clone().map_or("".to_string(), |v| v.name())),
                                         ),
                                         Value::Tuple(arg_exprs),
                                     ]),

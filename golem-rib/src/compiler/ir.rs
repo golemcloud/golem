@@ -51,7 +51,7 @@ pub enum RibIR {
     CreateFunctionName(ParsedFunctionSite, FunctionReferenceType),
     InvokeFunction(
         ComponentDependencyKey,
-        WorkerNamePresence,
+        InstanceVariable,
         usize,
         AnalysedTypeWithUnit,
     ),
@@ -75,35 +75,9 @@ pub enum RibIR {
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
-pub enum WorkerNamePresence {
-    Present,
-    Absent,
-}
-
-impl From<golem_api_grpc::proto::golem::rib::WorkerNamePresence> for WorkerNamePresence {
-    fn from(value: golem_api_grpc::proto::golem::rib::WorkerNamePresence) -> Self {
-        match value {
-            golem_api_grpc::proto::golem::rib::WorkerNamePresence::Present => {
-                WorkerNamePresence::Present
-            }
-            golem_api_grpc::proto::golem::rib::WorkerNamePresence::Absent => {
-                WorkerNamePresence::Absent
-            }
-        }
-    }
-}
-
-impl From<WorkerNamePresence> for golem_api_grpc::proto::golem::rib::WorkerNamePresence {
-    fn from(value: WorkerNamePresence) -> Self {
-        match value {
-            WorkerNamePresence::Present => {
-                golem_api_grpc::proto::golem::rib::WorkerNamePresence::Present
-            }
-            WorkerNamePresence::Absent => {
-                golem_api_grpc::proto::golem::rib::WorkerNamePresence::Absent
-            }
-        }
-    }
+pub enum InstanceVariable {
+    WitResource(VariableId),
+    WitWorker(VariableId)
 }
 
 impl RibIR {
@@ -187,10 +161,7 @@ impl InstructionId {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use crate::{
-        AnalysedTypeWithUnit, ComponentDependencyKey, FunctionReferenceType, InstructionId,
-        ParsedFunctionSite, RibIR, VariableId, WorkerNamePresence,
-    };
+    use crate::{AnalysedTypeWithUnit, ComponentDependencyKey, FunctionReferenceType, InstanceVariable, InstructionId, ParsedFunctionSite, RibIR, VariableId};
     use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
     use golem_api_grpc::proto::golem::rib::{
         And, CallInstruction, ConcatInstruction, CreateFunctionNameInstruction, EqualTo, GetTag,
@@ -449,10 +420,9 @@ mod protobuf {
                         })
                         .transpose()?;
 
+                    // TODO; fix instruction to use InstanceVariable
                     // Default is absent because old rib scripts don't have worker name in it
-                    let worker_name_presence = worker_name_presence
-                        .map(|x| x.into())
-                        .unwrap_or(WorkerNamePresence::Absent);
+                    let worker_name_presence = InstanceVariable::WitWorker(VariableId::Global("something".to_string()));
 
                     let component_dependency_key_proto = call_instruction
                         .component
@@ -643,8 +613,8 @@ mod protobuf {
                         }
                     };
 
-                    let worker_name_presence: golem_api_grpc::proto::golem::rib::WorkerNamePresence =
-                        worker_name_presence.into();
+                    // TODO; make it instance variable
+
 
                     let component_dependency_key =
                         golem_api_grpc::proto::golem::rib::ComponentDependencyKey::from(
@@ -655,7 +625,7 @@ mod protobuf {
                         component: Some(component_dependency_key),
                         argument_count: arg_count as u64,
                         return_type: typ,
-                        worker_name_presence: Some(worker_name_presence.into()),
+                        worker_name_presence: None // TODO; Fix grpc for instruction byte code
                     })
                 }
                 RibIR::PushVariant(name, return_type) => {

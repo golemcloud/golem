@@ -46,6 +46,9 @@ impl TryFrom<RibInterpreterStackValue> for String {
 }
 
 impl RibInterpreterStackValue {
+    pub fn as_resource_handle(&self) -> Option<ValueAndType> {
+        todo!("Implement as_resource_handle for RibInterpreterStackValue")
+    }
     pub fn is_sink(&self) -> bool {
         matches!(self, RibInterpreterStackValue::Sink(_, _))
     }

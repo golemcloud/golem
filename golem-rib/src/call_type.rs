@@ -53,11 +53,11 @@ pub enum InstanceCreationType {
 }
 
 impl InstanceCreationType {
-    pub fn worker_name(&self) -> Option<&Expr> {
+    pub fn worker_name(&self) -> Option<Expr> {
         match self {
-            InstanceCreationType::WitWorker { worker_name, .. } => worker_name.as_deref(),
+            InstanceCreationType::WitWorker { worker_name, .. } => worker_name.as_deref().cloned(),
             InstanceCreationType::WitResource { module, .. } =>
-                module.as_ref().and_then(|m | m.instance_type.worker_name().as_deref())
+                { let r = module.as_ref().and_then(|m | m.instance_type.worker_name()); r.as_deref().cloned() },
         }
     }
 }
@@ -71,8 +71,11 @@ impl CallType {
     }
     pub fn worker_expr(&self) -> Option<&Expr> {
         match self {
-            CallType::Function { module: worker, .. } =>
-                worker.as_ref().and_then(|w| w.instance_type.worker_name().as_deref()),
+            CallType::Function { module: worker, .. } => {
+                let module = worker.as_ref()?;
+                let instance = &module.instance_type;
+                instance.worker()
+            }
             _ => None,
         }
     }

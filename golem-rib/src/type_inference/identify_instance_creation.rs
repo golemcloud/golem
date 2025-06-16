@@ -116,7 +116,7 @@ mod internal {
                 )?;
 
                 if let Some(instance_creation_type) = instance_creation_type {
-                    let worker_name = instance_creation_type.worker_name().cloned();
+                    let worker_name = instance_creation_type.worker_name();
 
                     *call_type = CallType::InstanceCreation(instance_creation_type);
 

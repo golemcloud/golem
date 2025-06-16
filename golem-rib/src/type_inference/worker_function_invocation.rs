@@ -226,7 +226,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                                 format!("Invalid function name: {}", err),
                                             )
                                         })?;
-                                    
+
                                     let module = get_module_identifier(
                                         instance_type,
                                         lhs,
