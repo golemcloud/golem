@@ -19,7 +19,7 @@ use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeError;
-use crate::{from_string, text, type_checker, type_inference, ComponentDependencies, ComponentDependencyKey, DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType, ModuleIdentifier, ParsedFunctionName, VariableId};
+use crate::{from_string, text, type_checker, type_inference, ComponentDependencies, ComponentDependencyKey, DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType, InstanceIdentifier, ParsedFunctionName, VariableId};
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
 use combine::stream::position;
@@ -566,14 +566,14 @@ impl Expr {
     pub fn call_worker_function(
         dynamic_parsed_fn_name: DynamicParsedFunctionName,
         generic_type_parameter: Option<GenericTypeParameter>,
-        module_identifier: Option<ModuleIdentifier>,
+        module_identifier: Option<InstanceIdentifier>,
         args: Vec<Expr>,
         component_info: Option<ComponentDependencyKey>,
     ) -> Self {
         Expr::Call {
             call_type: CallType::Function {
                 function_name: dynamic_parsed_fn_name,
-                module: module_identifier,
+                instance_identifier: module_identifier,
                 component_info,
             },
             generic_type_parameter,
@@ -1114,7 +1114,6 @@ impl Expr {
         self.set_origin();
         self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
-        // self.bind_default_types_to_index_expressions();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();
         self.bind_variables_of_pattern_match();
@@ -1158,10 +1157,6 @@ impl Expr {
 
     pub fn infer_worker_function_invokes(&mut self) -> Result<(), RibTypeError> {
         type_inference::infer_worker_function_invokes(self)
-    }
-
-    pub fn bind_default_types_to_index_expressions(&mut self) {
-        type_inference::bind_default_types_to_index_expressions(self);
     }
 
     // Make sure the bindings in the arm pattern of a pattern match are given variable-ids.

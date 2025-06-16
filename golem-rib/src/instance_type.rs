@@ -27,7 +27,7 @@ use golem_api_grpc::proto::golem::rib::{
 use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 
 // `InstanceType` will be the type (`InferredType`) of the variable associated with creation of an instance
@@ -37,7 +37,7 @@ use std::ops::Deref;
 //
 // Please look at `InstanceCreationType`
 // for a tangible view on the fact that an instance can be either worker or a resource.
-#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum InstanceType {
     // Holds functions across every package and interface in every component
     Global {
@@ -78,6 +78,12 @@ pub enum InstanceType {
         resource_args: Vec<Expr>,
         resource_method_dictionary: ResourceMethodDictionary,
     },
+}
+
+impl Debug for InstanceType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<InstanceType>")
+    }
 }
 
 impl InstanceType {

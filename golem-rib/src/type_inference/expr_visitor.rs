@@ -627,7 +627,7 @@ mod internal {
         match call_type {
             CallType::Function {
                 function_name,
-                module,
+                instance_identifier: module,
                 ..
             } => (
                 function_name.function.raw_resource_params_mut(),

@@ -20,7 +20,11 @@ use std::fmt::Display;
 pub enum CallType {
     Function {
         component_info: Option<ComponentDependencyKey>,
-        module: Option<ModuleIdentifier>,
+        // as compilation progress the function call is expected to a instance_identifier
+        // and will be always `Some`.
+        instance_identifier: Option<InstanceIdentifier>,
+        // TODO; a dynamic-parsed-function-name can be replaced by ParsedFunctionName
+        // after the introduction of non-lazy resource constructor.
         function_name: DynamicParsedFunctionName,
     },
     VariantConstructor(String),
@@ -29,8 +33,11 @@ pub enum CallType {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
-pub struct ModuleIdentifier {
-   pub variable_id: Option<VariableId>, // The variable-id of the worker instance, `let x = instance(); x.foo()`. The variable-id can either represent a worker
+pub struct InstanceIdentifier {
+    // The variable-id of the worker instance or the resource instance,
+    // `let x = instance(); x.foo()`.
+    // module identifier here is variable-id x, with instance type being a worker
+   pub variable_id: Option<VariableId>,
    pub instance_type: Box<InstanceType>
 }
 
@@ -41,13 +48,15 @@ pub enum InstanceCreationType {
         component_info: Option<ComponentDependencyKey>,
         worker_name: Option<Box<Expr>>,
     },
-    // an instance type of the type wit resource can only be part of
+    // an instance type of the type wit-resource can only be part of
     // another instance (we call it module), which can be theoretically only be
     // a worker, but we don't restrict this in types, such that it will easily
     // handle nested wit resources
     WitResource {
         component_info: Option<ComponentDependencyKey>,
-        module: Option<ModuleIdentifier>,
+        // this module identifier during resource creation will be always a worker module, but we don't necessarily restrict
+        // i.e, we do allow nested resource construction
+        module: Option<InstanceIdentifier>,
         resource_name: FullyQualifiedResourceConstructor,
     },
 }
@@ -71,7 +80,7 @@ impl CallType {
     }
     pub fn worker_expr(&self) -> Option<&Expr> {
         match self {
-            CallType::Function { module: worker, .. } => {
+            CallType::Function { instance_identifier: worker, .. } => {
                 let module = worker.as_ref()?;
                 let instance = &module.instance_type;
                 instance.worker()
@@ -82,7 +91,7 @@ impl CallType {
 
     pub fn worker_expr_mut(&mut self) -> Option<&mut Box<Expr>> {
         match self {
-            CallType::Function { module, .. } => {
+            CallType::Function { instance_identifier: module, .. } => {
                 let module = module.as_mut()?;
                 let instance = &mut *module.instance_type;
                 instance.worker_mut()
@@ -95,19 +104,19 @@ impl CallType {
         component_info: Option<ComponentDependencyKey>,
     ) -> CallType {
         CallType::Function {
-            module: None,
+            instance_identifier: None,
             function_name: function,
             component_info,
         }
     }
 
     pub fn function_call_with_worker(
-        module: ModuleIdentifier,
+        module: InstanceIdentifier,
         function: DynamicParsedFunctionName,
         component_info: Option<ComponentDependencyKey>,
     ) -> CallType {
         CallType::Function {
-            module: Some(module),
+            instance_identifier: Some(module),
             function_name: function,
             component_info,
         }
@@ -269,7 +278,7 @@ mod protobuf {
                     Ok(CallType::Function {
                         component_info: None,
                         function_name: DynamicParsedFunctionName::try_from(name)?,
-                        module: None,
+                        instance_identifier: None,
                     })
                 }
                 golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(name) => {
@@ -293,7 +302,7 @@ mod protobuf {
         fn from(value: CallType) -> Self {
             match value {
                 CallType::Function {
-                    module,
+                    instance_identifier: module,
                     function_name,
                     ..
                 } => golem_api_grpc::proto::golem::rib::CallType {
@@ -365,7 +374,7 @@ mod protobuf {
                 golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => {
                     Ok(CallType::Function {
                         component_info: None,
-                        module: None,
+                        instance_identifier: None,
                         function_name: DynamicParsedFunctionName::parse(
                             ParsedFunctionName::try_from(name)?.to_string(),
                         )?,

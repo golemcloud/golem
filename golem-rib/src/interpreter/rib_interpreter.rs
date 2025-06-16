@@ -1387,7 +1387,12 @@ mod internal {
                         variable_id.name()
                     ))?;
 
-                let handle = resource.as_resource_handle().expect("Expecting a resource handle");
+                let handle = resource.get_val().ok_or_else(|| {
+                    internal_corrupted_state!(
+                        "failed to get a resource with id {}",
+                        variable_id.name()
+                    )
+                })?;
 
                 final_args.push(handle.clone());
                 final_args.extend(parameter_values);

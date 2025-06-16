@@ -46,9 +46,6 @@ impl TryFrom<RibInterpreterStackValue> for String {
 }
 
 impl RibInterpreterStackValue {
-    pub fn as_resource_handle(&self) -> Option<ValueAndType> {
-        todo!("Implement as_resource_handle for RibInterpreterStackValue")
-    }
     pub fn is_sink(&self) -> bool {
         matches!(self, RibInterpreterStackValue::Sink(_, _))
     }
@@ -220,7 +217,24 @@ impl Display for RibInterpreterStackValue {
 
 impl fmt::Debug for RibInterpreterStackValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{}", match self {
+            RibInterpreterStackValue::Unit => "unit".to_string(),
+            RibInterpreterStackValue::Val(value) =>  {
+                match &value.value {
+                    Value::Handle {
+                        uri,
+                        resource_id,
+                    } => {
+                        // wasm-wave don't support resource handles yet
+                        format!("handle:{{uri:{}, resource-id:{}}}", uri, resource_id)
+                    }
+
+                    _ => value.to_string()
+                }
+            },
+            RibInterpreterStackValue::Iterator(_) => "iterator:(...)".to_string(),
+            RibInterpreterStackValue::Sink(value, _) => format!("sink:{}", value.len()),
+        })
     }
 }
 

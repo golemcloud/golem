@@ -34,6 +34,8 @@ pub fn infer_function_call_types(
             ..
         } = expr
         {
+            dbg!(call_type.clone());
+            dbg!(args.clone());
             internal::resolve_call_argument_types(
                 &expr_copied,
                 call_type,
@@ -95,14 +97,15 @@ mod internal {
 
                 match function_name0 {
                     FunctionName::ResourceMethod(fqn_resource_method) => {
-                        handle_function_with_resource(
+                        infer_resource_method_arguments(
                             original_expr,
                             &fqn_resource_method,
                             function_name,
                             component_dependency,
-                            function_result_inferred_type,
                             args,
+                            function_result_inferred_type,
                         )
+
                     }
                     _ => {
                         let registry_key = FunctionName::from_call_type(&cloned).ok_or(
@@ -150,34 +153,6 @@ mod internal {
                 )
             }
         }
-    }
-
-    fn handle_function_with_resource(
-        original_expr: &Expr,
-        fqn_resource_method: &FullyQualifiedResourceMethod,
-        dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
-        function_type_registry: &ComponentDependencies,
-        function_result_inferred_type: &mut InferredType,
-        resource_method_args: &mut [Expr],
-    ) -> Result<(), FunctionCallError> {
-        let constructor = fqn_resource_method.get_constructor();
-        // Infer the resource constructors
-        infer_resource_constructor_arguments(
-            original_expr,
-            &constructor,
-            dynamic_parsed_function_name.raw_resource_params_mut(),
-            function_type_registry,
-        )?;
-
-        // Infer the resource arguments
-        infer_resource_method_arguments(
-            original_expr,
-            fqn_resource_method,
-            dynamic_parsed_function_name,
-            function_type_registry,
-            resource_method_args,
-            function_result_inferred_type,
-        )
     }
 
     fn infer_resource_method_arguments(
@@ -306,6 +281,7 @@ mod internal {
 
                     Ok(())
                 } else {
+                    dbg!("is it here?");
                     Err(FunctionCallError::ArgumentSizeMisMatch {
                         function_name: function_name.name(),
                         expr: original_expr.clone(),
@@ -337,6 +313,7 @@ mod internal {
 
                     Ok(())
                 } else {
+                    dbg!("or is it here?");
                     Err(FunctionCallError::ArgumentSizeMisMatch {
                         function_name: function_name.name(),
                         expr: original_expr.clone(),

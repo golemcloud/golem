@@ -152,7 +152,7 @@ mod protobuf {
 
 mod internal {
     use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
-    use crate::{AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType, InferredType, InstanceType, InstanceVariable, InstructionId, Range, RibByteCodeGenerationError, RibIR, TypeInternal, VariableId};
+    use crate::{AnalysedTypeWithUnit, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionReferenceType, InferredType, InstanceType, InstanceVariable, InstructionId, Range, RibByteCodeGenerationError, RibIR, TypeInternal, VariableId};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeFlags};
     use std::collections::HashSet;
 
@@ -440,7 +440,7 @@ mod internal {
                 match call_type {
                     CallType::Function {
                         function_name,
-                        module,
+                        instance_identifier: module,
                         component_info,
                     } => {
                         for expr in args.iter().rev() {
@@ -615,43 +615,53 @@ mod internal {
                             }
 
                             InstanceCreationType::WitResource {
-                                module: worker_name,
+                                module,
                                 resource_name,
-                                ..
+                                component_info
                             } => {
                                 for expr in args.iter().rev() {
                                     stack.push(ExprState::from_expr(expr));
                                 }
 
-                                let arg_exprs = args
-                                    .iter()
-                                    .map(|x| Value::String(x.to_string()))
-                                    .collect::<Vec<_>>();
+                                let module =
+                                    module.as_ref().expect("Module should be present for resource calls");
 
-                                stack.push(ExprState::from_ir(RibIR::PushLit(ValueAndType::new(
-                                    Value::Record(vec![
-                                        Value::String(resource_name.resource_name.clone()),
-                                        worker_name.as_ref().map_or(
-                                            Value::String("<ephemeral>".to_string()),
-                                            |w| Value::String(w.variable_id.clone().map_or("".to_string(), |v| v.name())),
-                                        ),
-                                        Value::Tuple(arg_exprs),
-                                    ]),
-                                    record(vec![
-                                        NameTypePair {
-                                            name: "resource".to_string(),
-                                            typ: str(),
-                                        },
-                                        NameTypePair {
-                                            name: "worker".to_string(),
-                                            typ: str(),
-                                        },
-                                        NameTypePair {
-                                            name: "args".to_string(),
-                                            typ: tuple(vec![str(); args.len()]),
-                                        },
-                                    ]),
-                                ))));
+                                let instance_variable = match module.instance_type.as_ref() {
+                                    InstanceType::Resource {..} => InstanceVariable::WitResource(module.variable_id.clone().unwrap()),
+                                    _ => InstanceVariable::WitWorker(module.variable_id.clone().unwrap()),
+                                };
+
+                                let site = resource_name.parsed_function_site();
+
+                                let component_info = component_info.as_ref().ok_or(
+                                    RibByteCodeGenerationError::UnresolvedWasmComponent {
+                                        function: resource_name.resource_name.clone(),
+                                    },
+                                )?;
+
+                                let function_result_type = if inferred_type.is_unit() {
+                                    AnalysedTypeWithUnit::Unit
+                                } else {
+                                    AnalysedTypeWithUnit::Type(convert_to_analysed_type(
+                                        expr,
+                                        inferred_type,
+                                    )?)
+                                };
+
+                                instructions.push(RibIR::InvokeFunction(
+                                    component_info.clone(),
+                                    instance_variable,
+                                    args.len(),
+                                    function_result_type
+                                ));
+
+                                instructions.push(RibIR::CreateFunctionName(
+                                    site,
+                                    FunctionReferenceType::RawResourceConstructor {
+                                        resource: resource_name.resource_name.clone(),
+                                    },
+                                ));
+
                             }
                         }
                     }

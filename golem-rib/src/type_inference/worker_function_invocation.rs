@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::call_type::{CallType, InstanceCreationType, ModuleIdentifier};
+use crate::call_type::{CallType, InstanceCreationType, InstanceIdentifier};
 use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
 use crate::{
@@ -293,7 +293,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
 fn get_module_identifier(
     instance_type: &InstanceType,
     lhs: &Expr,
-) -> ModuleIdentifier {
+) -> InstanceIdentifier {
 
    let variable_id =  match lhs {
         Expr::Identifier { variable_id, .. } => {
@@ -303,7 +303,7 @@ fn get_module_identifier(
     };
 
 
-    ModuleIdentifier {
+    InstanceIdentifier {
         variable_id: variable_id.cloned(),
         instance_type: Box::new(instance_type.clone()),
     }
