@@ -37,7 +37,7 @@ use std::ops::Deref;
 //
 // Please look at `InstanceCreationType`
 // for a tangible view on the fact that an instance can be either worker or a resource.
-#[derive(Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum InstanceType {
     // Holds functions across every package and interface in every component
     Global {
@@ -78,12 +78,6 @@ pub enum InstanceType {
         resource_args: Vec<Expr>,
         resource_method_dictionary: ResourceMethodDictionary,
     },
-}
-
-impl Debug for InstanceType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<InstanceType>")
-    }
 }
 
 impl InstanceType {

@@ -22,6 +22,7 @@ pub fn ensure_stateful_instance(expr: &mut Expr) {
             call_type:
                 CallType::InstanceCreation(InstanceCreationType::WitWorker { worker_name, .. }),
             inferred_type,
+            args,
             ..
         } = expr
         {
@@ -29,6 +30,8 @@ pub fn ensure_stateful_instance(expr: &mut Expr) {
                 *worker_name = Some(Box::new(Expr::generate_worker_name(None)));
 
                 let type_internal = &mut *inferred_type.inner;
+
+                *args = vec![Expr::generate_worker_name(None)];
 
                 if let TypeInternal::Instance { instance_type } = type_internal {
                     instance_type.set_worker_name(Expr::generate_worker_name(None))

@@ -38,6 +38,7 @@ pub enum RibByteCodeGenerationError {
         function: String,
     },
     UnresolvedWorkerName,
+    UnresolvedResourceVariable,
 }
 
 impl std::error::Error for RibByteCodeGenerationError {}
@@ -68,6 +69,9 @@ impl Display for RibByteCodeGenerationError {
             }
             RibByteCodeGenerationError::UnresolvedWorkerName => {
                 write!(f, "Unresolved worker name in instance creation")
+            }
+            _ => {
+                write!(f, "inline invocation of methods on resource constructor is currently not supported")
             }
         }
     }
@@ -152,11 +156,7 @@ mod protobuf {
 
 mod internal {
     use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
-    use crate::{
-        AnalysedTypeWithUnit, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr,
-        FunctionReferenceType, InferredType, InstanceType, InstanceVariable, InstructionId, Range,
-        RibByteCodeGenerationError, RibIR, TypeInternal, VariableId,
-    };
+    use crate::{AnalysedTypeWithUnit, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FullyQualifiedResourceConstructor, FunctionReferenceType, InferredType, InstanceType, InstanceVariable, InstructionId, Range, RibByteCodeGenerationError, RibIR, TypeInternal, VariableId};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeFlags};
     use std::collections::HashSet;
 
@@ -165,6 +165,7 @@ mod internal {
     use golem_wasm_ast::analysis::analysed_type::{bool, record, str, tuple};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
+    use crate::rib_source_span::SourceSpan;
 
     pub(crate) fn process_expr(
         expr: &Expr,
@@ -464,11 +465,27 @@ mod internal {
                             .as_ref()
                             .expect("Module should be present for function calls");
 
+
                         let instance_variable = match module.instance_type.as_ref() {
-                            InstanceType::Resource { .. } => {
-                                InstanceVariable::WitResource(module.variable_id.clone().unwrap())
-                            }
-                            _ => InstanceVariable::WitWorker(module.variable_id.clone().unwrap()),
+                            InstanceType::Resource {..} => {
+
+                                if let None = module.variable_id {
+                                    return Err(RibByteCodeGenerationError::UnresolvedResourceVariable);
+                                }
+
+                                InstanceVariable::WitResource(module.variable_id.clone())
+                            },
+                            instance_type => {
+                                if let None = module.variable_id {
+                                    let worker_name = instance_type.worker_name();
+
+                                    if let Some(worker_name) = worker_name {
+                                        stack.push(ExprState::from_expr(worker_name.as_ref()));
+                                    }
+                                }
+
+                                InstanceVariable::WitWorker(module.variable_id.clone())
+                            },
                         };
 
                         let component_info = component_info.as_ref().ok_or(
@@ -606,20 +623,9 @@ mod internal {
                     // we need to push a place holder in the stack that does nothing
                     CallType::InstanceCreation(instance_creation_type) => {
                         match instance_creation_type {
-                            InstanceCreationType::WitWorker { worker_name, .. } => {
+                            InstanceCreationType::WitWorker { .. } => {
                                 for expr in args.iter().rev() {
                                     stack.push(ExprState::from_expr(expr));
-                                }
-
-                                match worker_name {
-                                    Some(worker) => {
-                                        stack.push(ExprState::from_expr(worker.deref()));
-                                    }
-                                    None => {
-                                        return Err(
-                                            RibByteCodeGenerationError::UnresolvedWorkerName,
-                                        );
-                                    }
                                 }
                             }
 
@@ -638,10 +644,10 @@ mod internal {
 
                                 let instance_variable = match module.instance_type.as_ref() {
                                     InstanceType::Resource { .. } => InstanceVariable::WitResource(
-                                        module.variable_id.clone().unwrap(),
+                                        module.variable_id.clone(),
                                     ),
                                     _ => InstanceVariable::WitWorker(
-                                        module.variable_id.clone().unwrap(),
+                                        module.variable_id.clone(),
                                     ),
                                 };
 

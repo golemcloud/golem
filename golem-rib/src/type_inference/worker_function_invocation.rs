@@ -158,7 +158,6 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                         FunctionName::ResourceMethod(resource_method) => {
                             match instance_type.deref() {
                                 InstanceType::Resource {
-                                    resource_args,
                                     resource_method_dictionary: resource_method_dict,
                                     resource_constructor,
                                     ..

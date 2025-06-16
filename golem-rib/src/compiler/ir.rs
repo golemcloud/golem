@@ -76,8 +76,8 @@ pub enum RibIR {
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum InstanceVariable {
-    WitResource(VariableId),
-    WitWorker(VariableId),
+    WitResource(Option<VariableId>),
+    WitWorker(Option<VariableId>),
 }
 
 impl RibIR {
@@ -426,7 +426,7 @@ mod protobuf {
                     // TODO; fix instruction to use InstanceVariable
                     // Default is absent because old rib scripts don't have worker name in it
                     let worker_name_presence =
-                        InstanceVariable::WitWorker(VariableId::Global("something".to_string()));
+                        InstanceVariable::WitWorker(None);
 
                     let component_dependency_key_proto = call_instruction
                         .component

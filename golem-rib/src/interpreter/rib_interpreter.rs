@@ -757,14 +757,6 @@ mod internal {
                     None => {
                         let worker_name = interpreter.generate_worker_name.generate_worker_name();
 
-                        interpreter_env.insert(
-                            env_key,
-                            RibInterpreterStackValue::Val(ValueAndType::new(
-                                Value::String(worker_name.clone()),
-                                str(),
-                            )),
-                        );
-
                         interpreter_stack
                             .push_val(ValueAndType::new(Value::String(worker_name.clone()), str()));
                     }
@@ -1322,7 +1314,7 @@ mod internal {
         component_info: ComponentDependencyKey,
         instruction_id: &InstructionId,
         arg_size: usize,
-        worker_type: InstanceVariable,
+        instance_variable_type: InstanceVariable,
         interpreter_stack: &mut InterpreterStack,
         interpreter_env: &mut InterpreterEnv,
         expected_result_type: AnalysedTypeWithUnit,
@@ -1351,23 +1343,38 @@ mod internal {
             })
             .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
 
-        let result = match worker_type {
+        match instance_variable_type {
             InstanceVariable::WitWorker(variable_id) => {
-                let worker = interpreter_env
-                    .lookup(&EnvironmentKey::from(variable_id.clone()))
-                    .ok_or_else(|| {
-                        internal_corrupted_state!(
+
+
+                let worker_id = {
+                    match variable_id {
+                        None => {
+                            interpreter_stack.pop_val().ok_or_else(|| {
+                                internal_corrupted_state!(
+                                    "failed to get a worker variable id for function {}",
+                                    function_name
+                                )
+                            })?
+                        }
+                        Some(variable_id) => {
+                            interpreter_env
+                                .lookup(&EnvironmentKey::from(variable_id.clone()))
+                                .map(|x| x.get_val().ok_or_else(|| {
+                                    internal_corrupted_state!(
+                                        "failed to get a worker variable id for function {}",
+                                        function_name
+                                    )
+                                })).transpose()?
+                                .ok_or_else(|| {
+                                    internal_corrupted_state!(
                             "failed to find a worker with id {}",
                             variable_id.name()
                         )
-                    })?;
-
-                let worker_id = worker.get_val().ok_or_else(|| {
-                    internal_corrupted_state!(
-                        "failed to get a worker with id {}",
-                        variable_id.name()
-                    )
-                })?;
+                                })?
+                        }
+                    }
+                };
 
                 let worker_id_string =
                     worker_id
@@ -1375,8 +1382,7 @@ mod internal {
                         .map(|v| v.as_string())
                         .ok_or_else(|| {
                             internal_corrupted_state!(
-                                "failed to get a worker name for variable {}",
-                                variable_id.name()
+                                "failed to get a worker name for variable"
                             )
                         })?;
 
@@ -1405,21 +1411,35 @@ mod internal {
             InstanceVariable::WitResource(variable_id) => {
                 let mut final_args = vec![];
 
-                let resource = interpreter_env
-                    .lookup(&EnvironmentKey::from(variable_id.clone()))
-                    .ok_or_else(|| {
-                        internal_corrupted_state!(
+                let handle = {
+                    match variable_id {
+                        None => {
+                            bail_corrupted_state!(
+                                "identified inline method on resource constructor which is currently not supported {}",
+                                function_name
+                            )
+                        }
+                        Some(variable_id) => {
+                            interpreter_env
+                                .lookup(&EnvironmentKey::from(variable_id.clone()))
+                                .map(|x| {
+                                    x.get_val().ok_or_else(|| {
+                                        internal_corrupted_state!(
+                                            "failed to get a resource with id {}",
+                                            variable_id.name()
+                                        )
+                                    })
+                                }).transpose()?
+                                .ok_or_else(|| {
+                                    internal_corrupted_state!(
                             "failed to find a resource with id {}",
                             variable_id.name()
                         )
-                    })?;
+                                })?
+                        }
+                    }
+                };
 
-                let handle = resource.get_val().ok_or_else(|| {
-                    internal_corrupted_state!(
-                        "failed to get a resource with id {}",
-                        variable_id.name()
-                    )
-                })?;
 
                 let handle = &handle;
                 let value = &handle.value;
