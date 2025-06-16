@@ -31,7 +31,6 @@ pub fn compile_rib_script(
     repl_state.reset_instance_count();
 
     let inferred_expr = compiler.infer_types(expr)?;
-    dbg!(&inferred_expr);
 
     let instance_variables = fetch_instance_variables(&inferred_expr);
 
@@ -43,8 +42,6 @@ pub fn compile_rib_script(
 
     let byte_code = RibByteCode::from_expr(&inferred_expr)
         .map_err(RibCompilationError::ByteCodeGenerationFail)?;
-
-    dbg!(byte_code.clone());
 
     Ok(ReplCompilerOutput {
         rib_byte_code: byte_code,

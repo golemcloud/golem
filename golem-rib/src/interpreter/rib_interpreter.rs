@@ -1359,8 +1359,6 @@ mod internal {
                     )
                 })?;
 
-                dbg!(&worker_id);
-
                 let worker_id_string = worker_id.get_literal().map(|v| v.as_string())
                     .ok_or_else(|| internal_corrupted_state!(
                         "failed to get a worker name for variable {}",
