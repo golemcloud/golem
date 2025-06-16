@@ -15,7 +15,7 @@
 use crate::ReplBootstrapError;
 use colored::Colorize;
 use golem_wasm_ast::analysis::analysed_type::{record, str, u64};
-use golem_wasm_ast::analysis::{AnalysedType, NameTypePair};
+use golem_wasm_ast::analysis::{AnalysedResourceMode, AnalysedType, NameTypePair, TypeHandle};
 use golem_wasm_rpc::{Value, ValueAndType};
 use rib::*;
 use std::collections::BTreeMap;
@@ -91,7 +91,7 @@ pub trait ReplPrinter {
 
             RibResult::Val(value_and_type) => match &value_and_type.value {
                 Value::Handle { uri, resource_id } => {
-                    println!("{} {}", "[info]".green(), "the result is a resource handle, presented in record form solely for display purposes".to_string().white());
+                    println!("{} {}", "[warn]".bright_yellow(), "the syntax below to show the resource-handle value is only used for display purposes".to_string().white());
 
                     println!();
 
@@ -126,12 +126,29 @@ pub trait ReplPrinter {
     }
 
     fn print_wasm_value_type(&self, analysed_type: &AnalysedType) {
-        println!(
-            "{}",
-            wasm_wave::wasm::DisplayType(analysed_type)
-                .to_string()
-                .yellow()
-        );
+        match analysed_type {
+            AnalysedType::Handle(type_handle) => {
+                let text = display_for_resource_handle(type_handle);
+                println!("{} {}", "[warn]".bright_yellow(), "the syntax below to show the resource-handle type is only used for display purposes".to_string().white());
+
+                println!();
+
+                println!(
+                    "{}",
+                    text
+                        .yellow()
+                );
+
+            }
+
+            _ =>  println!(
+                "{}",
+                wasm_wave::wasm::DisplayType(analysed_type)
+                    .to_string()
+                    .yellow()
+            )
+        }
+
     }
 }
 
@@ -427,6 +444,19 @@ fn print_bootstrap_error(error: &ReplBootstrapError) {
             );
         }
     }
+}
+
+// Only used for displaying since Wasm Wave is yet to support resource handle types
+fn display_for_resource_handle(type_handle: &TypeHandle) -> String {
+    let resource_id = &type_handle.resource_id.0;
+    let uri = &type_handle.mode;
+
+    let mode = match uri {
+        AnalysedResourceMode::Owned => "owned",
+        AnalysedResourceMode::Borrowed => "borrowed",
+    };
+
+    format!("handle<resource-id:{}, mode:{}>", resource_id, mode)
 }
 
 pub struct Indent {
