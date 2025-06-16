@@ -22,7 +22,7 @@ pub enum CallType {
         component_info: Option<ComponentDependencyKey>,
         // as compilation progress the function call is expected to a instance_identifier
         // and will be always `Some`.
-        instance_identifier: Option<InstanceIdentifier>,
+        instance_identifier: Option<Box<InstanceIdentifier>>,
         // TODO; a dynamic-parsed-function-name can be replaced by ParsedFunctionName
         // after the introduction of non-lazy resource constructor.
         function_name: DynamicParsedFunctionName,
@@ -124,7 +124,7 @@ impl CallType {
         component_info: Option<ComponentDependencyKey>,
     ) -> CallType {
         CallType::Function {
-            instance_identifier: Some(module),
+            instance_identifier: Some(Box::new(module)),
             function_name: function,
             component_info,
         }

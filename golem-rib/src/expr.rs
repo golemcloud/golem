@@ -577,7 +577,7 @@ impl Expr {
         Expr::Call {
             call_type: CallType::Function {
                 function_name: dynamic_parsed_fn_name,
-                instance_identifier: module_identifier,
+                instance_identifier: module_identifier.map(Box::new),
                 component_info,
             },
             generic_type_parameter,

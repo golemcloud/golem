@@ -436,7 +436,7 @@ mod compiler_error_tests {
         }
 
         #[test]
-        fn test_invalid_function_call1() {
+        fn test_invalid_function_call1asdasd() {
             let expr = r#"
           let worker = instance("my-worker");
           let result = worker.foo({a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}});

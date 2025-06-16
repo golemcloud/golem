@@ -74,11 +74,7 @@ mod tests {
         number, option, pattern_match, plus, record, result, select_dynamic, select_field,
         sequence, tuple,
     };
-    use crate::{
-        ArmPattern, ComponentDependencies, DynamicParsedFunctionName,
-        DynamicParsedFunctionReference, Expr, InferredType, InstanceCreationType, InstanceType,
-        MatchArm, Number, ParsedFunctionSite, RibCompiler, RibCompilerConfig, TypeName, VariableId,
-    };
+    use crate::{ArmPattern, ComponentDependencies, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, InferredType, InstanceCreationType, InstanceIdentifier, InstanceType, MatchArm, Number, ParsedFunctionSite, RibCompiler, RibCompilerConfig, TypeName, VariableId};
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
 
@@ -449,7 +445,7 @@ mod tests {
             VariableId::local("worker", 0),
             None,
             Expr::call(
-                CallType::InstanceCreation(InstanceCreationType::Worker {
+                CallType::InstanceCreation(InstanceCreationType::WitWorker {
                     component_info: None,
                     worker_name: Some(Box::new(Expr::literal("foo"))),
                 }),
@@ -464,7 +460,13 @@ mod tests {
 
         let call_expr = call(
             CallType::function_call_with_worker(
-                Expr::literal("foo"),
+                InstanceIdentifier {
+                    variable_id: None,
+                    instance_type: Box::new(InstanceType::Global {
+                        worker_name: Some(Box::new(Expr::literal("foo"))),
+                        component_dependency: rib_compiler.get_component_dependencies().clone(),
+                    }),
+                },
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -542,7 +544,7 @@ mod tests {
             VariableId::local("worker", 0),
             None,
             Expr::call(
-                CallType::InstanceCreation(InstanceCreationType::Worker {
+                CallType::InstanceCreation(InstanceCreationType::WitWorker {
                     component_info: None,
                     worker_name: Some(Box::new(Expr::literal("foo"))),
                 }),
@@ -557,7 +559,13 @@ mod tests {
 
         let call_expr1 = call(
             CallType::function_call_with_worker(
-                Expr::literal("foo"),
+                InstanceIdentifier {
+                    variable_id: None,
+                    instance_type: Box::new(InstanceType::Global {
+                        worker_name: Some(Box::new(Expr::literal("foo"))),
+                        component_dependency: rib_compiler.get_component_dependencies().clone(),
+                    }),
+                },
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -577,7 +585,13 @@ mod tests {
 
         let call_expr2 = call(
             CallType::function_call_with_worker(
-                Expr::literal("foo"),
+                InstanceIdentifier {
+                    variable_id: None,
+                    instance_type: Box::new(InstanceType::Global {
+                        worker_name: Some(Box::new(Expr::literal("foo"))),
+                        component_dependency: rib_compiler.get_component_dependencies().clone(),
+                    }),
+                },
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: DynamicParsedFunctionReference::Function {
@@ -1397,7 +1411,7 @@ mod tests {
             VariableId::local("worker", 0),
             None,
             Expr::call(
-                CallType::InstanceCreation(InstanceCreationType::Worker {
+                CallType::InstanceCreation(InstanceCreationType::WitWorker {
                     component_info: None,
                     worker_name: Some(Box::new(Expr::literal("foo"))),
                 }),
@@ -1423,7 +1437,13 @@ mod tests {
                     ))),
                     call(
                         CallType::function_call_with_worker(
-                            Expr::literal("foo"),
+                            InstanceIdentifier {
+                                variable_id: None,
+                                instance_type: Box::new(InstanceType::Global {
+                                    worker_name: Some(Box::new(Expr::literal("foo"))),
+                                    component_dependency: rib_compiler.get_component_dependencies().clone(),
+                                }),
+                            },
                             DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
@@ -1451,7 +1471,13 @@ mod tests {
                     ))),
                     call(
                         CallType::function_call_with_worker(
-                            Expr::literal("foo"),
+                            InstanceIdentifier {
+                                variable_id: None,
+                                instance_type: Box::new(InstanceType::Global {
+                                    worker_name: Some(Box::new(Expr::literal("foo"))),
+                                    component_dependency: rib_compiler.get_component_dependencies().clone(),
+                                }),
+                            },
                             DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: DynamicParsedFunctionReference::Function {
@@ -2444,11 +2470,7 @@ mod tests {
         use crate::generic_type_parameter::GenericTypeParameter;
         use crate::parser::type_name::TypeName;
         use crate::rib_source_span::SourceSpan;
-        use crate::{
-            ArmPattern, ComponentDependencies, ComponentDependency, ComponentDependencyKey, Expr,
-            InferredType, InstanceCreationType, InstanceType, MatchArm, MatchIdentifier, Number,
-            ParsedFunctionSite, RibCompiler, RibCompilerConfig, VariableId,
-        };
+        use crate::{ArmPattern, ComponentDependencies, ComponentDependency, ComponentDependencyKey, Expr, InferredType, InstanceCreationType, InstanceIdentifier, InstanceType, MatchArm, MatchIdentifier, Number, ParsedFunctionSite, RibCompiler, RibCompilerConfig, VariableId};
         use bigdecimal::BigDecimal;
         use golem_wasm_ast::analysis::analysed_type::u64;
         use golem_wasm_ast::analysis::TypeVariant;
@@ -2918,7 +2940,7 @@ mod tests {
                         VariableId::local("worker", 0),
                         None,
                         Expr::call(
-                            CallType::InstanceCreation(InstanceCreationType::Worker {
+                            CallType::InstanceCreation(InstanceCreationType::WitWorker {
                                 component_info: None,
                                 worker_name: Some(Box::new(Expr::literal("foo"))),
                             }),
@@ -2937,7 +2959,13 @@ mod tests {
                         None,
                         call(
                             CallType::function_call_with_worker(
-                                Expr::literal("foo"),
+                                InstanceIdentifier {
+                                    variable_id: None,
+                                    instance_type: Box::new(InstanceType::Global {
+                                        worker_name: Some(Box::new(Expr::literal("foo"))),
+                                        component_dependency:component_dependencies.clone()
+                                    }),
+                                },
                                 DynamicParsedFunctionName {
                                     site: ParsedFunctionSite::Global,
                                     function: DynamicParsedFunctionReference::Function {
@@ -3448,7 +3476,7 @@ mod tests {
                         VariableId::local("worker", 0),
                         None,
                         Expr::call(
-                            CallType::InstanceCreation(InstanceCreationType::Worker {
+                            CallType::InstanceCreation(InstanceCreationType::WitWorker {
                                 component_info: None,
                                 worker_name: Some(Box::new(Expr::literal("foo"))),
                             }),
@@ -3467,7 +3495,13 @@ mod tests {
                         None,
                         call(
                             CallType::function_call_with_worker(
-                                Expr::literal("foo"),
+                                InstanceIdentifier {
+                                    variable_id: None,
+                                    instance_type: Box::new(InstanceType::Global {
+                                        worker_name: Some(Box::new(Expr::literal("foo"))),
+                                        component_dependency: component_dependencies.clone(),
+                                    }),
+                                },
                                 DynamicParsedFunctionName {
                                     site: ParsedFunctionSite::Global,
                                     function: DynamicParsedFunctionReference::Function {
