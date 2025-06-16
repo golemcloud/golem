@@ -18,7 +18,7 @@ use golem_common::SafeDisplay;
 use std::fmt::Debug;
 
 #[async_trait]
-pub trait OAuth2ProviderClient {
+pub trait OAuth2ProviderClient: Send + Sync {
     async fn external_user_id(
         &self,
         provider: &OAuth2Provider,

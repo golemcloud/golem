@@ -55,7 +55,7 @@ impl SafeDisplay for ProjectGrantError {
 }
 
 #[async_trait]
-pub trait ProjectGrantService {
+pub trait ProjectGrantService: Send + Sync {
     async fn create(
         &self,
         project_grant: &ProjectGrant,

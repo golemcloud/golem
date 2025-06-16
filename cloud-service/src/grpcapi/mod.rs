@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bootstrap::Services;
 use crate::grpcapi::account::AccountGrpcApi;
 use crate::grpcapi::account_summary::AccountSummaryGrpcApi;
 use crate::grpcapi::limits::LimitsGrpcApi;
 use crate::grpcapi::login::LoginGrpcApi;
 use crate::grpcapi::project::ProjectGrpcApi;
 use crate::grpcapi::token::TokenGrpcApi;
-use crate::service::Services;
 use auth::AuthGrpcApi;
 use golem_api_grpc::proto::golem::account::v1::cloud_account_service_server::CloudAccountServiceServer;
 use golem_api_grpc::proto::golem::accountsummary::v1::cloud_account_summary_service_server::CloudAccountSummaryServiceServer;
@@ -123,8 +123,7 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
         .add_service(
             CloudLoginServiceServer::new(LoginGrpcApi {
                 auth_service: services.auth_service.clone(),
-                login_service: services.login_service.clone(),
-                oauth2_service: services.oauth2_service.clone(),
+                login_system: services.login_system.clone(),
             })
             .send_compressed(CompressionEncoding::Gzip)
             .accept_compressed(CompressionEncoding::Gzip),
@@ -141,6 +140,7 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
             CloudTokenServiceServer::new(TokenGrpcApi {
                 auth_service: services.auth_service.clone(),
                 token_service: services.token_service.clone(),
+                login_system: services.login_system.clone(),
             })
             .send_compressed(CompressionEncoding::Gzip)
             .accept_compressed(CompressionEncoding::Gzip),

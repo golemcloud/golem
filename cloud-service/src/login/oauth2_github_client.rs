@@ -21,7 +21,7 @@ use std::time::Duration;
 use url::Url;
 
 #[async_trait]
-pub trait OAuth2GithubClient {
+pub trait OAuth2GithubClient: Send + Sync {
     async fn initiate_device_workflow(&self)
         -> Result<DeviceWorkflowData, OAuth2GithubClientError>;
     async fn get_access_token(
@@ -83,7 +83,7 @@ impl SafeDisplay for OAuth2GithubClientError {
 }
 
 pub struct OAuth2GithubClientDefault {
-    pub config: crate::config::OAuth2Config,
+    pub config: crate::config::GitHubOAuth2Config,
 }
 
 #[async_trait]
@@ -96,7 +96,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
         let res = client
             .post("https://github.com/login/device/code")
             .query(&[
-                ("client_id", &self.config.github_client_id),
+                ("client_id", &self.config.client_id),
                 ("scope", &String::from("user:email")),
             ])
             .header("Accept", "application/json")
@@ -143,8 +143,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
             }
 
             let response =
-                execute_access_token_request(&self.config.github_client_id, &client, device_code)
-                    .await?;
+                execute_access_token_request(&self.config.client_id, &client, device_code).await?;
 
             match response {
                 AccessTokenResponse::AccessToken(token) => {
@@ -175,8 +174,8 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
         Url::parse_with_params(
             "https://github.com/login/oauth/authorize",
             &[
-                ("client_id", self.config.github_client_id.as_str()),
-                ("redirect_uri", self.config.github_redirect_uri.as_str()),
+                ("client_id", self.config.client_id.as_str()),
+                ("redirect_uri", self.config.redirect_uri.as_str()),
                 ("state", state),
                 ("scope", "user:email"),
             ],
@@ -195,8 +194,8 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
         let res = client
             .post("https://github.com/login/oauth/access_token")
             .query(&[
-                ("client_id", &self.config.github_client_id),
-                ("client_secret", &self.config.github_client_secret),
+                ("client_id", &self.config.client_id),
+                ("client_secret", &self.config.client_secret),
                 ("code", &String::from(code)),
                 ("state", &String::from(state)),
             ])
@@ -452,10 +451,10 @@ mod tests {
     #[test]
     async fn test_device_flow() {
         let client = OAuth2GithubClientDefault {
-            config: crate::config::OAuth2Config {
-                github_client_id: CLIENT_ID.into(),
-                github_client_secret: "".into(),
-                github_redirect_uri: Url::parse(
+            config: crate::config::GitHubOAuth2Config {
+                client_id: CLIENT_ID.into(),
+                client_secret: "".into(),
+                redirect_uri: Url::parse(
                     "http://localhost:8085/v1/login/oauth2/web/callback/github",
                 )
                 .unwrap(),

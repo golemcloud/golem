@@ -12,20 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::golem_version;
-
-pub mod api;
-pub mod auth;
-pub mod bootstrap;
-pub mod config;
-pub mod grpcapi;
-pub mod login;
-pub mod metrics;
-pub mod model;
-pub mod repo;
-pub mod service;
-
-#[cfg(test)]
-test_r::enable!();
-
-const VERSION: &str = golem_version!();
+pub mod account;
+pub mod account_components;
+pub mod account_connections;
+pub mod account_fuel;
+pub mod account_grant;
+pub mod account_summary;
+pub mod account_uploads;
+pub mod account_used_storage;
+pub mod account_workers;
+pub mod plan;
+pub mod plugin_installation;
+pub mod project;
+pub mod project_grant;
+pub mod project_policy;
+pub mod token;

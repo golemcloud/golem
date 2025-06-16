@@ -173,6 +173,7 @@ async fn env_vars(
         .with("GOLEM__ACCOUNTS__ROOT__TOKEN", ADMIN_TOKEN.to_string())
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with("GOLEM__LOGIN__TYPE", "Disabled".to_string())
         .with_all(rdb.info().env("cloud_service", private_rdb_connection))
         .build()
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::token::TokenRecord;
+use crate::repo::token::TokenRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_service_base::db::{Pool, PoolApi};
@@ -89,7 +89,7 @@ impl From<Option<MaybeToken>> for LinkedTokenState {
 }
 
 #[async_trait]
-pub trait OAuth2WebFlowStateRepo {
+pub trait OAuth2WebFlowStateRepo: Send + Sync {
     async fn generate_temp_token_state(&self, metadata: &[u8]) -> Result<String, RepoError>;
     async fn valid_temp_token(&self, state: &str) -> Result<bool, RepoError>;
     async fn link_temp_token(

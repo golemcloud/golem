@@ -21,7 +21,7 @@ use golem_service_base::repo::RepoError;
 use std::str::FromStr;
 
 #[async_trait]
-pub trait AccountGrantRepo {
+pub trait AccountGrantRepo: Send + Sync {
     async fn get(&self, account_id: &AccountId) -> Result<Vec<Role>, RepoError>;
     async fn add(&self, account_id: &AccountId, role: &Role) -> Result<(), RepoError>;
     async fn remove(&self, account_id: &AccountId, role: &Role) -> Result<(), RepoError>;
