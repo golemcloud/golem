@@ -24,7 +24,7 @@ use golem_api_grpc::proto::golem::rib::{
     FunctionType as ProtoFunctionType, InterfaceName as ProtoInterfaceName,
     PackageName as ProtoPackageName,
 };
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::{AnalysedType};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::Debug;
@@ -71,6 +71,8 @@ pub enum InstanceType {
     // Holds the resource creation and the functions in the resource
     // that may or may not be addressed
     Resource {
+        analysed_resource_id: u64,
+        analysed_resource_mode: u8,
         worker_name: Option<Box<Expr>>,
         package_name: Option<PackageName>,
         interface_name: Option<InterfaceName>,
@@ -140,6 +142,8 @@ impl InstanceType {
         fully_qualified_resource_constructor: FullyQualifiedResourceConstructor,
         resource_args: Vec<Expr>,
         worker_name: Option<Box<Expr>>,
+        analysed_resource_id: u64,
+        analysed_resource_mode: u8,
     ) -> InstanceType {
         let interface_name = fully_qualified_resource_constructor.interface_name.clone();
         let package_name = fully_qualified_resource_constructor.package_name.clone();
@@ -172,6 +176,8 @@ impl InstanceType {
             resource_constructor: resource_constructor_name,
             resource_args,
             resource_method_dictionary: resource_method_dict,
+            analysed_resource_id,
+            analysed_resource_mode,
         }
     }
 

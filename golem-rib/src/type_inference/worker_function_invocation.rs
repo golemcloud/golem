@@ -15,10 +15,7 @@
 use crate::call_type::{CallType, InstanceCreationType, InstanceIdentifier};
 use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
-use crate::{
-    DynamicParsedFunctionName, Expr, FunctionCallError, InferredType, TypeInternal, TypeName,
-    TypeOrigin,
-};
+use crate::{CustomError, DynamicParsedFunctionName, Expr, FunctionCallError, InferredType, TypeInternal, TypeName, TypeOrigin};
 use crate::{FunctionName, InstanceType};
 use std::collections::VecDeque;
 use std::ops::Deref;
@@ -126,10 +123,28 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                             *expr = new_call;
                         }
                         FunctionName::ResourceConstructor(fully_qualified_resource_constructor) => {
+                            let (resource_id, resource_mode) = match function.function_type.return_type {
+                                Some(return_type) => match return_type.internal_type()  {
+                                    TypeInternal::Resource {resource_id, resource_mode} =>  {
+                                        (*resource_id, *resource_mode)
+                                    }
+                                    _ => return Err(RibTypeError::from(CustomError::new(expr, "Expected resource type as return type of resource constructor"))),
+                                }
+
+                                None => {
+                                    return Err(RibTypeError::from(CustomError::new(
+                                        expr,
+                                        "Resource constructor must have a return type",
+                                    )));
+                                }
+                            };
+
                             let resource_instance_type = instance_type.get_resource_instance_type(
                                 fully_qualified_resource_constructor.clone(),
                                 args.clone(),
                                 instance_type.worker_name(),
+                                resource_id,
+                                resource_mode
                             );
 
                             let new_inferred_type = InferredType::new(
