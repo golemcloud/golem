@@ -470,13 +470,13 @@ mod internal {
 
                         let instance_variable = match module.instance_type {
                             InstanceType::Resource { .. } => {
-                                let variable_id = module.variable_id.clone().ok_or_else(|| {
+                                let variable_id = module.variable_id.clone().ok_or({
                                     RibByteCodeGenerationError::UnresolvedResourceVariable
                                 })?;
                                 InstanceVariable::WitResource(variable_id)
                             }
                             _ => {
-                                let variable_id = module.variable_id.clone().ok_or_else(|| {
+                                let variable_id = module.variable_id.clone().ok_or({
                                     RibByteCodeGenerationError::UnresolvedWorkerName
                                 })?;
 
@@ -640,7 +640,7 @@ mod internal {
 
                                 let instance_variable = match module.instance_type {
                                     InstanceType::Resource { .. } => {
-                                        let variable_id = module.variable_id.as_ref().ok_or_else(|| {
+                                        let variable_id = module.variable_id.as_ref().ok_or({
                                             RibByteCodeGenerationError::UnresolvedResourceVariable
                                         })?;
 
@@ -648,7 +648,7 @@ mod internal {
                                     }
                                     _ => {
                                         let variable_id =
-                                            module.variable_id.as_ref().ok_or_else(|| {
+                                            module.variable_id.as_ref().ok_or({
                                                 RibByteCodeGenerationError::UnresolvedWorkerName
                                             })?;
 

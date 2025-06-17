@@ -1632,10 +1632,10 @@ mod tests {
         RibCompilerConfig, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{
-        bool, case, f32, field, list, option, r#enum, record, result, s32, s8, str, tuple, u32,
-        u64, u8, variant,
+        bool, f32, field, list, r#enum, record, result, s32, str, tuple, u32,
+        u64, u8,
     };
-    use golem_wasm_rpc::{parse_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType};
+    use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType};
 
     #[test]
     async fn test_interpreter_for_literal() {

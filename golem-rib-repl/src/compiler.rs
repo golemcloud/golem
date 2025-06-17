@@ -41,7 +41,7 @@ pub fn compile_rib_script(
     let enums = compiler.get_enums();
 
     let byte_code = RibByteCode::from_expr(&inferred_expr)
-        .map_err(RibCompilationError::ByteCodeGenerationFail)?;
+        .map_err(|err| RibCompilationError::ByteCodeGenerationFail(Box::new(err)))?;
 
     Ok(ReplCompilerOutput {
         rib_byte_code: byte_code,

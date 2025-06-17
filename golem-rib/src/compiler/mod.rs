@@ -190,7 +190,7 @@ pub enum RibCompilationError {
     // Bytecode generation errors should ideally never occur.
     // They are considered programming errors that indicate some part of type checking
     // or inference needs to be fixed.
-    ByteCodeGenerationFail(RibByteCodeGenerationError),
+    ByteCodeGenerationFail(Box<RibByteCodeGenerationError>),
 
     // RibTypeError is a type error that occurs during type inference.
     // This is a typical compilation error, such as: expected u32, found str.
@@ -220,7 +220,7 @@ pub enum RibCompilationError {
 
 impl From<RibByteCodeGenerationError> for RibCompilationError {
     fn from(err: RibByteCodeGenerationError) -> Self {
-        RibCompilationError::ByteCodeGenerationFail(err)
+        RibCompilationError::ByteCodeGenerationFail(Box::new(err))
     }
 }
 
