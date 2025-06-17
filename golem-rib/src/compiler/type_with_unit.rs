@@ -89,12 +89,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                     )))
                 }
 
-                _ => Ok(AnalysedTypeWithUnit::analysed_type(record(vec![
-                    NameTypePair {
-                        name: "worker".to_string(),
-                        typ: str(),
-                    },
-                ]))),
+                _ => Ok(AnalysedTypeWithUnit::analysed_type(str())),
             },
             TypeInternal::Range { from, to } => {
                 let from: AnalysedType = AnalysedType::try_from(from)?;
