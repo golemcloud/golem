@@ -68,10 +68,10 @@ impl Display for RibByteCodeGenerationError {
                 write!(f, "Unresolved wasm component for function: {}", function)
             }
             RibByteCodeGenerationError::UnresolvedWorkerName => {
-                write!(f, "Unresolved worker name in instance creation")
+                write!(f, "inline invocation of functions on a worker instance is currently not supported")
             }
             _ => {
-                write!(f, "inline invocation of methods on resource constructor is currently not supported")
+                write!(f, "inline invocation of methods on resource constructor instance is currently not supported")
             }
         }
     }
@@ -470,24 +470,17 @@ mod internal {
 
                         let instance_variable = match module.instance_type.as_ref() {
                             InstanceType::Resource { .. } => {
-                                if let None = module.variable_id {
-                                    return Err(
-                                        RibByteCodeGenerationError::UnresolvedResourceVariable,
-                                    );
-                                }
-
-                                InstanceVariable::WitResource(module.variable_id.clone())
+                                let variable_id = module.variable_id.clone().ok_or_else(|| {
+                                    RibByteCodeGenerationError::UnresolvedResourceVariable
+                                })?;
+                                InstanceVariable::WitResource(variable_id)
                             }
-                            instance_type => {
-                                if let None = module.variable_id {
-                                    let worker_name = instance_type.worker_name();
+                            _ => {
+                                let variable_id = module.variable_id.clone().ok_or_else(|| {
+                                    RibByteCodeGenerationError::UnresolvedWorkerName
+                                })?;
 
-                                    if let Some(worker_name) = worker_name {
-                                        stack.push(ExprState::from_expr(worker_name.as_ref()));
-                                    }
-                                }
-
-                                InstanceVariable::WitWorker(module.variable_id.clone())
+                                InstanceVariable::WitWorker(variable_id)
                             }
                         };
 
@@ -647,9 +640,20 @@ mod internal {
 
                                 let instance_variable = match module.instance_type.as_ref() {
                                     InstanceType::Resource { .. } => {
-                                        InstanceVariable::WitResource(module.variable_id.clone())
+                                        let variable_id = module.variable_id.as_ref().ok_or_else(|| {
+                                            RibByteCodeGenerationError::UnresolvedResourceVariable
+                                        })?;
+
+                                        InstanceVariable::WitResource(variable_id.clone())
                                     }
-                                    _ => InstanceVariable::WitWorker(module.variable_id.clone()),
+                                    _ => {
+                                        let variable_id =
+                                            module.variable_id.as_ref().ok_or_else(|| {
+                                                RibByteCodeGenerationError::UnresolvedWorkerName
+                                            })?;
+
+                                        InstanceVariable::WitWorker(variable_id.clone())
+                                    }
                                 };
 
                                 let site = resource_name.parsed_function_site();
@@ -1555,28 +1559,6 @@ mod compiler_tests {
         }
 
         #[test]
-        fn test_unknown_resource_constructor() {
-            let metadata = internal::metadata_with_resource_methods();
-            let expr = r#"
-               let user_id = "user";
-               golem:it/api.{cart(user_id).add-item}("apple");
-               golem:it/api.{cart0(user_id).add-item}("apple");
-                "success"
-            "#;
-
-            let expr = Expr::from_text(expr).unwrap();
-
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
-
-            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
-
-            assert_eq!(
-                compiler_error,
-                "error in the following rib found at line 4, column 16\n`add-item(\"apple\")`\ncause: invalid function call `cart0`\nunknown function\n"
-            );
-        }
-
-        #[test]
         fn test_unknown_resource_method() {
             let metadata = internal::metadata_with_resource_methods();
             let expr = r#"
@@ -1623,28 +1605,6 @@ mod compiler_tests {
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 3, column 29\n`foo(user_id, user_id)`\ncause: invalid argument size for function `foo`. expected 1 arguments, found 2\n"
-            );
-        }
-
-        #[test]
-        fn test_invalid_arg_size_resource_constructor() {
-            let metadata = internal::metadata_with_resource_methods();
-            let expr = r#"
-               let user_id = "user";
-               golem:it/api.{cart(user_id, user_id).add-item}("apple");
-                "success"
-            "#;
-
-            let expr = Expr::from_text(expr).unwrap();
-
-            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
-
-            let compiler = RibCompiler::new(compiler_config);
-
-            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
-            assert_eq!(
-                compiler_error,
-                "error in the following rib found at line 3, column 16\n`add-item(\"apple\")`\ncause: invalid argument size for function `cart`. expected 1 arguments, found 2\n"
             );
         }
 
@@ -1738,27 +1698,6 @@ mod compiler_tests {
             assert_eq!(
                 compiler_error,
                 "error in the following rib found at line 3, column 54\n`\"apple\"`\nfound within:\n`add-item(\"apple\")`\ncause: type mismatch. expected record { name: string }, found string\ninvalid argument to the function `add-item`\n"
-            );
-        }
-
-        #[test]
-        fn test_invalid_arg_types_resource_constructor() {
-            let metadata = internal::metadata_with_resource_methods();
-            let expr = r#"
-               golem:it/api.{cart({foo : "bar"}).add-item}("apple");
-                "success"
-            "#;
-
-            let expr = Expr::from_text(expr).unwrap();
-
-            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
-
-            let compiler = RibCompiler::new(compiler_config);
-
-            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
-            assert_eq!(
-                compiler_error,
-                "error in the following rib found at line 1, column 1\n`{foo: \"bar\"}`\nfound within:\n`add-item(\"apple\")`\ncause: type mismatch. expected string, found record { foo: string }\ninvalid argument to the function `cart`\n"
             );
         }
 

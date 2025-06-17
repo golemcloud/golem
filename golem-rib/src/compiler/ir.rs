@@ -76,8 +76,8 @@ pub enum RibIR {
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum InstanceVariable {
-    WitResource(Option<VariableId>),
-    WitWorker(Option<VariableId>),
+    WitResource(VariableId),
+    WitWorker(VariableId),
 }
 
 impl RibIR {
@@ -421,11 +421,18 @@ mod protobuf {
                         .and_then(|iv| {
                             match iv.kind.ok_or("Missing instance_variable kind".to_string())? {
                                 golem_api_grpc::proto::golem::rib::instance_variable::Kind::Resource(wit_resource) => {
-                                    let variable_id = wit_resource.variable_id.map(VariableId::try_from).transpose()?;
+                                    let variable_id = wit_resource.variable_id.ok_or(
+                                        "Missing variable_id in WitResource".to_string(),
+                                    )?.try_into()
+                                        .map_err(|_| "Failed to convert VariableId".to_string())?;
                                     Ok(InstanceVariable::WitResource(variable_id))
                                 }
                                 golem_api_grpc::proto::golem::rib::instance_variable::Kind::Worker(wit_worker) => {
-                                    let variable_id = wit_worker.variable_id.map(VariableId::try_from).transpose()?;
+                                    let variable_id = wit_worker.variable_id.ok_or(
+                                        "Missing variable_id in WitWorker".to_string(),
+                                    )?.try_into()
+                                        .map_err(|_| "Failed to convert VariableId".to_string())?;
+
                                     Ok(InstanceVariable::WitWorker(variable_id))
                                 }
                             }
@@ -626,7 +633,7 @@ mod protobuf {
                                 kind: Some(
                                     golem_api_grpc::proto::golem::rib::instance_variable::Kind::Resource(
                                         WitResource {
-                                            variable_id: variable_id.map(VariableId::into),
+                                            variable_id: Some(variable_id.into()),
                                         },
                                     ),
                                 ),
@@ -637,7 +644,7 @@ mod protobuf {
                                 kind: Some(
                                     golem_api_grpc::proto::golem::rib::instance_variable::Kind::Worker(
                                         golem_api_grpc::proto::golem::rib::WitWorker {
-                                            variable_id: variable_id.map(VariableId::into),
+                                            variable_id: Some(variable_id.into()),
                                         },
                                     ),
                                 ),

@@ -414,12 +414,10 @@ fn get_inferred_type_of_selected_field(
             expected_type: ExpectedType::Hint(TypeHint::Record(None)),
             actual_type: ActualType::Inferred(select_from_inferred_type.clone()),
             field_path: Path::default(),
-            additional_error_detail: vec![format!(
-                "cannot select {} from {} since it is not a record type. Found: {}",
-                field,
-                select_from,
-                select_from_inferred_type.get_type_hint()
-            )],
+            additional_error_detail: vec![
+                format!("cannot select `{}` from `{}`", field, select_from,),
+                format!("if `{}` is a function, pass arguments", field),
+            ],
         }
     })?;
 

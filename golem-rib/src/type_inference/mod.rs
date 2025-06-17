@@ -74,7 +74,12 @@ mod tests {
         number, option, pattern_match, plus, record, result, select_dynamic, select_field,
         sequence, tuple,
     };
-    use crate::{ArmPattern, ComponentDependencies, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, InferredType, InstanceCreationType, InstanceIdentifier, InstanceType, MatchArm, Number, ParsedFunctionSite, RibCompiler, RibCompilerConfig, TypeName, VariableId};
+    use crate::{
+        ArmPattern, ComponentDependencies, DynamicParsedFunctionName,
+        DynamicParsedFunctionReference, Expr, InferredType, InstanceCreationType,
+        InstanceIdentifier, InstanceType, MatchArm, Number, ParsedFunctionSite, RibCompiler,
+        RibCompilerConfig, TypeName, VariableId,
+    };
     use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
 
@@ -1441,7 +1446,9 @@ mod tests {
                                 variable_id: None,
                                 instance_type: Box::new(InstanceType::Global {
                                     worker_name: Some(Box::new(Expr::literal("foo"))),
-                                    component_dependency: rib_compiler.get_component_dependencies().clone(),
+                                    component_dependency: rib_compiler
+                                        .get_component_dependencies()
+                                        .clone(),
                                 }),
                             },
                             DynamicParsedFunctionName {
@@ -1475,7 +1482,9 @@ mod tests {
                                 variable_id: None,
                                 instance_type: Box::new(InstanceType::Global {
                                     worker_name: Some(Box::new(Expr::literal("foo"))),
-                                    component_dependency: rib_compiler.get_component_dependencies().clone(),
+                                    component_dependency: rib_compiler
+                                        .get_component_dependencies()
+                                        .clone(),
                                 }),
                             },
                             DynamicParsedFunctionName {
@@ -2470,7 +2479,12 @@ mod tests {
         use crate::generic_type_parameter::GenericTypeParameter;
         use crate::parser::type_name::TypeName;
         use crate::rib_source_span::SourceSpan;
-        use crate::{ArmPattern, ComponentDependencies, ComponentDependency, ComponentDependencyKey, Expr, InferredType, InstanceCreationType, InstanceIdentifier, InstanceType, MatchArm, MatchIdentifier, Number, ParsedFunctionSite, RibCompiler, RibCompilerConfig, VariableId};
+        use crate::{
+            ArmPattern, ComponentDependencies, ComponentDependency, ComponentDependencyKey, Expr,
+            InferredType, InstanceCreationType, InstanceIdentifier, InstanceType, MatchArm,
+            MatchIdentifier, Number, ParsedFunctionSite, RibCompiler, RibCompilerConfig,
+            VariableId,
+        };
         use bigdecimal::BigDecimal;
         use golem_wasm_ast::analysis::analysed_type::u64;
         use golem_wasm_ast::analysis::TypeVariant;
@@ -2963,7 +2977,7 @@ mod tests {
                                     variable_id: None,
                                     instance_type: Box::new(InstanceType::Global {
                                         worker_name: Some(Box::new(Expr::literal("foo"))),
-                                        component_dependency:component_dependencies.clone()
+                                        component_dependency: component_dependencies.clone(),
                                     }),
                                 },
                                 DynamicParsedFunctionName {

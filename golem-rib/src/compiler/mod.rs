@@ -220,7 +220,7 @@ pub enum RibCompilationError {
 
 impl From<RibByteCodeGenerationError> for RibCompilationError {
     fn from(err: RibByteCodeGenerationError) -> Self {
-        RibCompilationError::RibStaticAnalysisError(err.to_string())
+        RibCompilationError::ByteCodeGenerationFail(err)
     }
 }
 
@@ -250,7 +250,7 @@ impl Display for RibCompilationError {
                 )
             }
             RibCompilationError::ByteCodeGenerationFail(e) => {
-                write!(f, "rib byte code generation error: {}", e)
+                write!(f, "{}", e)
             }
         }
     }

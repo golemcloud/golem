@@ -140,11 +140,11 @@ message InstanceVariable {
 }
 
 message WitWorker {
-  optional golem.rib.VariableId variable_id = 1;
+  golem.rib.VariableId variable_id = 1;
 }
 
 message WitResource {
-  optional golem.rib.VariableId variable_id = 1;
+  golem.rib.VariableId variable_id = 1;
 }
 
 enum WorkerNamePresence {

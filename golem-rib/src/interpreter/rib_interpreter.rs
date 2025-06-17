@@ -230,7 +230,7 @@ impl Interpreter {
                     arg_size,
                     expected_result_type,
                 ) => {
-                    internal::run_call_instruction(
+                    internal::run_invoke_function_instruction(
                         component_info,
                         &byte_code_cursor.position(),
                         arg_size,
@@ -1310,7 +1310,7 @@ mod internal {
         Ok(())
     }
 
-    pub(crate) async fn run_call_instruction(
+    pub(crate) async fn run_invoke_function_instruction(
         component_info: ComponentDependencyKey,
         instruction_id: &InstructionId,
         arg_size: usize,
@@ -1345,33 +1345,23 @@ mod internal {
 
         match instance_variable_type {
             InstanceVariable::WitWorker(variable_id) => {
-                let worker_id = {
-                    match variable_id {
-                        None => interpreter_stack.pop_val().ok_or_else(|| {
+                let worker_id = interpreter_env
+                    .lookup(&EnvironmentKey::from(variable_id.clone()))
+                    .map(|x| {
+                        x.get_val().ok_or_else(|| {
                             internal_corrupted_state!(
                                 "failed to get a worker variable id for function {}",
                                 function_name
                             )
-                        })?,
-                        Some(variable_id) => interpreter_env
-                            .lookup(&EnvironmentKey::from(variable_id.clone()))
-                            .map(|x| {
-                                x.get_val().ok_or_else(|| {
-                                    internal_corrupted_state!(
-                                        "failed to get a worker variable id for function {}",
-                                        function_name
-                                    )
-                                })
-                            })
-                            .transpose()?
-                            .ok_or_else(|| {
-                                internal_corrupted_state!(
-                                    "failed to find a worker with id {}",
-                                    variable_id.name()
-                                )
-                            })?,
-                    }
-                };
+                        })
+                    })
+                    .transpose()?
+                    .ok_or_else(|| {
+                        internal_corrupted_state!(
+                            "failed to find a worker with id {}",
+                            variable_id.name()
+                        )
+                    })?;
 
                 let worker_id_string =
                     worker_id
@@ -1406,33 +1396,23 @@ mod internal {
             InstanceVariable::WitResource(variable_id) => {
                 let mut final_args = vec![];
 
-                let handle = {
-                    match variable_id {
-                        None => {
-                            bail_corrupted_state!(
-                                "identified inline method on resource constructor which is currently not supported {}",
-                                function_name
+                let handle = interpreter_env
+                    .lookup(&EnvironmentKey::from(variable_id.clone()))
+                    .map(|x| {
+                        x.get_val().ok_or_else(|| {
+                            internal_corrupted_state!(
+                                "failed to get a resource with id {}",
+                                variable_id.name()
                             )
-                        }
-                        Some(variable_id) => interpreter_env
-                            .lookup(&EnvironmentKey::from(variable_id.clone()))
-                            .map(|x| {
-                                x.get_val().ok_or_else(|| {
-                                    internal_corrupted_state!(
-                                        "failed to get a resource with id {}",
-                                        variable_id.name()
-                                    )
-                                })
-                            })
-                            .transpose()?
-                            .ok_or_else(|| {
-                                internal_corrupted_state!(
-                                    "failed to find a resource with id {}",
-                                    variable_id.name()
-                                )
-                            })?,
-                    }
-                };
+                        })
+                    })
+                    .transpose()?
+                    .ok_or_else(|| {
+                        internal_corrupted_state!(
+                            "failed to find a resource with id {}",
+                            variable_id.name()
+                        )
+                    })?;
 
                 match &handle.value {
                     Value::Handle { uri, .. } => {
@@ -1466,7 +1446,8 @@ mod internal {
                     _ => {
                         return Err(function_invoke_fail(
                             function_name.as_str(),
-                            "expected a resource handle to be of type Value::Handle".into(),
+                            "expected the result of a resource construction to be of type `handle`"
+                                .into(),
                         ))
                     }
                 };
@@ -1644,8 +1625,7 @@ mod tests {
 
     use super::*;
     use crate::interpreter::rib_interpreter::tests::test_utils::{
-        get_analysed_type_variant, get_metadata_with_enum_and_variant, get_value_and_type,
-        strip_spaces,
+        get_analysed_type_variant, get_value_and_type, strip_spaces, RibTestDeps,
     };
     use crate::{
         Expr, GlobalVariableTypeSpec, InferredType, InstructionId, Path, RibCompiler,
@@ -2052,10 +2032,8 @@ mod tests {
 
         rib_input.insert("request".to_string(), value_and_type);
 
-        let mut interpreter = test_utils::interpreter_static_response(
-            &ValueAndType::new(Value::S8(1), s8()),
-            Some(RibInput::new(rib_input)),
-        );
+        let mut interpreter =
+            test_utils::interpreter_with_noop_function_invoke(Some(RibInput::new(rib_input)));
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
@@ -2118,10 +2096,8 @@ mod tests {
 
         rib_input.insert("request".to_string(), value_and_type);
 
-        let mut interpreter = test_utils::interpreter_static_response(
-            &ValueAndType::new(Value::S8(1), s8()),
-            Some(RibInput::new(rib_input)),
-        );
+        let mut interpreter =
+            test_utils::interpreter_with_noop_function_invoke(Some(RibInput::new(rib_input)));
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
@@ -2142,7 +2118,7 @@ mod tests {
 
     #[test]
     async fn test_interpreter_concatenation() {
-        let mut interpreter = test_utils::interpreter_dynamic_response(None);
+        let mut interpreter = Interpreter::default();
 
         let rib_expr = r#"
             let x = "foo";
@@ -2169,7 +2145,14 @@ mod tests {
 
     #[test]
     async fn test_interpreter_with_variant_and_enum() {
-        let mut interpreter = test_utils::interpreter_dynamic_response(None);
+        let test_deps = RibTestDeps::test_deps_with_global_functions();
+
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
+
+        let mut interpreter = test_deps.interpreter;
 
         // This has intentionally got conflicting variable names
         // variable `x` is same as the enum name `x`
@@ -2186,10 +2169,6 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-
-        let metadata = get_metadata_with_enum_and_variant();
-
-        let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
 
         let compiled = compiler.compile(expr);
 
@@ -2221,7 +2200,14 @@ mod tests {
 
     #[test]
     async fn test_interpreter_with_conflicting_variable_names() {
-        let mut interpreter = test_utils::interpreter_dynamic_response(None);
+        let test_deps = RibTestDeps::test_deps_with_global_functions();
+
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
+
+        let mut interpreter = test_deps.interpreter;
 
         // This has intentionally conflicting variable names
         // variable `x` is same as the enum name `x`
@@ -2239,10 +2225,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = RibCompiler::new(RibCompilerConfig::new(
-            get_metadata_with_enum_and_variant(),
-            vec![],
-        ));
+
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
         let expected_value = Value::Record(vec![3u32.into_value(), 7u64.into_value()]);
@@ -2376,11 +2359,12 @@ mod tests {
 
     #[test]
     async fn test_interpreter_with_numbers_1() {
-        let component_metadata =
-            test_utils::get_component_metadata("foo", vec![u32()], Some(u64()));
+        let component_metadata = test_utils::configurable_metadata("foo", vec![u32()], Some(u64()));
 
-        let mut interpreter =
-            test_utils::interpreter_static_response(&ValueAndType::new(Value::U64(2), u64()), None);
+        let mut interpreter = test_utils::interpreter_with_static_function_response(
+            &ValueAndType::new(Value::U64(2), u64()),
+            None,
+        );
 
         // 1 is automatically inferred to be u32
         let rib = r#"
@@ -2404,11 +2388,12 @@ mod tests {
 
     #[test]
     async fn test_interpreter_with_numbers_2() {
-        let component_metadata =
-            test_utils::get_component_metadata("foo", vec![u32()], Some(u64()));
+        let component_metadata = test_utils::configurable_metadata("foo", vec![u32()], Some(u64()));
 
-        let mut interpreter =
-            test_utils::interpreter_static_response(&ValueAndType::new(Value::U64(2), u64()), None);
+        let mut interpreter = test_utils::interpreter_with_static_function_response(
+            &ValueAndType::new(Value::U64(2), u64()),
+            None,
+        );
 
         // 1 and 2 are automatically inferred to be u32
         // since the type of z is inferred to be u32 as that being passed to a function
@@ -2435,8 +2420,7 @@ mod tests {
 
     #[test]
     async fn test_interpreter_with_numbers_3() {
-        let component_metadata =
-            test_utils::get_component_metadata("foo", vec![u32()], Some(u64()));
+        let component_metadata = test_utils::configurable_metadata("foo", vec![u32()], Some(u64()));
 
         // This will cause a type inference error
         // because the operands of the + operator are not of the same type
@@ -2454,8 +2438,7 @@ mod tests {
 
     #[test]
     async fn test_interpreter_with_numbers_4() {
-        let component_metadata =
-            test_utils::get_component_metadata("foo", vec![u32()], Some(u64()));
+        let component_metadata = test_utils::configurable_metadata("foo", vec![u32()], Some(u64()));
 
         // This will cause a type inference error
         // because the operands of the + operator are supposed to be u32
@@ -2678,7 +2661,7 @@ mod tests {
 
         let tuple = test_utils::get_analysed_type_tuple();
 
-        let analysed_exports = test_utils::get_component_metadata("foo", vec![tuple], Some(str()));
+        let analysed_exports = test_utils::configurable_metadata("foo", vec![tuple], Some(str()));
 
         let expr = r#"
            let worker = instance();
@@ -2710,7 +2693,7 @@ mod tests {
         let tuple = test_utils::get_analysed_type_tuple();
 
         let analysed_exports =
-            test_utils::get_component_metadata("my-worker-function", vec![tuple], Some(str()));
+            test_utils::configurable_metadata("my-worker-function", vec![tuple], Some(str()));
 
         let expr = r#"
            let worker = instance();
@@ -2741,9 +2724,10 @@ mod tests {
 
         let result_value = get_value_and_type(&output_analysed_type, r#"ok(1)"#);
 
-        let mut interpreter = test_utils::interpreter_static_response(&result_value, None);
+        let mut interpreter =
+            test_utils::interpreter_with_static_function_response(&result_value, None);
 
-        let analysed_exports = test_utils::get_component_metadata(
+        let analysed_exports = test_utils::configurable_metadata(
             "my-worker-function",
             vec![input_analysed_type],
             Some(output_analysed_type),
@@ -2779,9 +2763,10 @@ mod tests {
 
         let result_value = get_value_and_type(&output_analysed_type, r#"err("failed")"#);
 
-        let mut interpreter = test_utils::interpreter_static_response(&result_value, None);
+        let mut interpreter =
+            test_utils::interpreter_with_static_function_response(&result_value, None);
 
-        let analysed_exports = test_utils::get_component_metadata(
+        let analysed_exports = test_utils::configurable_metadata(
             "my-worker-function",
             vec![input_analysed_type],
             Some(output_analysed_type),
@@ -2823,7 +2808,7 @@ mod tests {
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = Interpreter::default();
+        let mut rib_interpreter = test_utils::interpreter_with_resource_function_invoke_impl(None);
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
@@ -2841,29 +2826,25 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let result_type = variant(vec![
-            case("error", str()),
-            case("success", record(vec![field("order-id", str())])),
-        ]);
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let result_value = test_utils::get_value_and_type(
-            &result_type,
-            r#"
-          success({order-id: "foo"})
-        "#,
-        );
-
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
-
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_executor = test_utils::interpreter_static_response(&result_value, None);
+        let mut rib_executor = test_deps.interpreter;
         let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(result.get_val().unwrap(), result_value);
+        let expected_value = Value::Variant {
+            case_idx: 1,
+            case_value: Some(Box::new(Value::Record(vec![Value::String(
+                "foo".to_string(),
+            )]))),
+        };
+
+        assert_eq!(result.get_val().unwrap().value, expected_value);
     }
 
     #[test]
@@ -2892,14 +2873,16 @@ mod tests {
         "#,
         );
 
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_executor = test_utils::interpreter_static_response(&result_value, None);
+        let mut rib_executor = test_deps.interpreter;
+
         let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(result.get_val().unwrap(), "foo".into_value_and_type());
@@ -2918,14 +2901,15 @@ mod tests {
         "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_executor = Interpreter::default();
+        let mut rib_executor = test_deps.interpreter;
 
         let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
@@ -2949,14 +2933,15 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_executor = Interpreter::default();
+        let mut rib_executor = test_deps.interpreter;
 
         let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
@@ -2980,14 +2965,15 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = test_utils::get_metadata_with_resource_without_params();
+        let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_executor = Interpreter::default();
+        let mut rib_executor = test_deps.interpreter;
 
         let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
@@ -3008,28 +2994,15 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let result_type = list(record(vec![
-            field("product-id", str()),
-            field("name", str()),
-            field("price", f32()),
-            field("quantity", u32()),
-        ]));
+        let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
-        let result_value = test_utils::get_value_and_type(
-            &result_type,
-            r#"
-            [{product-id: "foo", name: "bar", price: 100.0, quantity: 1}, {product-id: "bar", name: "baz", price: 200.0, quantity: 2}]
-        "#,
-        );
-
-        let component_metadata = test_utils::get_metadata_with_resource_without_params();
-
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_executor = test_utils::interpreter_static_response(&result_value, None);
+        let mut rib_executor = test_deps.interpreter;
         let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(result.get_val().unwrap(), "foo".into_value_and_type());
@@ -3047,14 +3020,15 @@ mod tests {
         "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = test_utils::get_metadata_with_resource_without_params();
+        let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_executor = Interpreter::default();
+        let mut rib_executor = test_deps.interpreter;
 
         let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
@@ -3075,29 +3049,27 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let result_type = variant(vec![
-            case("error", str()),
-            case("success", record(vec![field("order-id", str())])),
-        ]);
+        let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
-        let result_value = test_utils::get_value_and_type(
-            &result_type,
-            r#"
-          success({order-id: "foo"})
-        "#,
-        );
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
 
-        let component_metadata = test_utils::get_metadata_with_resource_without_params();
-
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_executor = test_utils::interpreter_static_response(&result_value, None);
-        let result = rib_executor.run(compiled.byte_code).await.unwrap();
+        let mut interpreter = test_deps.interpreter;
 
-        assert_eq!(result.get_val().unwrap(), result_value);
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        let expected_result = Value::Variant {
+            case_idx: 1,
+            case_value: Some(Box::new(Value::Record(vec![Value::String(
+                "foo".to_string(),
+            )]))),
+        };
+
+        assert_eq!(result.get_val().unwrap().value, expected_result);
     }
 
     #[test]
@@ -3109,13 +3081,14 @@ mod tests {
            "success"
         "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_without_params();
+        let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = Interpreter::default();
+        let mut rib_interpreter = test_deps.interpreter;
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
@@ -3609,42 +3582,36 @@ mod tests {
     async fn test_interpreter_ephemeral_worker_0() {
         let expr = r#"
               let x = instance();
-              let result = x.foo("bar");
+              let result = x.pass-through(1, 2);
               result
             "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_for_pass_through_function();
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+        let mut rib_interpreter = test_deps.interpreter;
 
-        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+        let result = rib_interpreter
+            .run(compiled.byte_code)
+            .await
+            .unwrap()
+            .get_val()
+            .unwrap()
+            .value;
 
-        let key_values = result.get_record().unwrap();
+        let expected_value = Value::Record(vec![
+            Value::String("test-worker".to_string()),
+            Value::String("pass-through".to_string()),
+            Value::U64(1),
+            Value::U32(2),
+        ]);
 
-        assert!(key_values.iter().any(|(k, _)| k == "worker-name"));
-
-        assert_eq!(
-            key_values
-                .iter()
-                .find(|(k, _)| k == "function-name")
-                .map(|(_, y)| &y.value),
-            Some(&Value::String(
-                "amazon:shopping-cart/api1.{foo}".to_string()
-            ))
-        );
-
-        assert_eq!(
-            key_values
-                .iter()
-                .find(|(k, _)| k == "args0")
-                .map(|(_, y)| &y.value),
-            Some(&Value::String("bar".to_string()))
-        );
+        assert_eq!(result, expected_value)
     }
 
     #[test]
@@ -3655,9 +3622,12 @@ mod tests {
             "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_global_functions();
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
 
         let compiled = compiler.compile(expr);
 
@@ -3671,9 +3641,12 @@ mod tests {
             "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
 
         let compiled = compiler.compile(expr);
 
@@ -3687,9 +3660,12 @@ mod tests {
             "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
 
         let compiled = compiler.compile(expr);
 
@@ -3699,29 +3675,21 @@ mod tests {
     #[test]
     async fn test_interpreter_ephemeral_worker_4() {
         let expr = r#"
-              instance().foo("bar")
+              let worker = instance().foo("bar")
             "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
-        let compiled = compiler.compile(expr).unwrap();
+        let error = compiler.compile(expr).unwrap_err();
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
-
-        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
-
-        let record = result.get_record().unwrap();
-
-        let worker_name = record
-            .iter()
-            .find(|(k, _)| k == "worker-name")
-            .map(|(_, v)| &v.value)
-            .unwrap();
-
-        assert!(matches!(worker_name, Value::Option(Some(_))))
+        assert_eq!(
+            error.to_string(),
+            "inline invocation of functions on a worker instance is currently not supported"
+        );
     }
 
     #[test]
@@ -3731,9 +3699,12 @@ mod tests {
               result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
 
@@ -3748,9 +3719,12 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
 
         let compilation_error = compiler.compile(expr).unwrap_err().to_string();
 
@@ -3773,14 +3747,14 @@ mod tests {
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter =
-            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -3792,60 +3766,29 @@ mod tests {
     async fn test_interpreter_durable_worker_0() {
         let expr = r#"
                 let worker = instance("my-worker");
-                let result = worker.foo("bar");
+                let result = worker.pass-through(42, 43);
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_for_pass_through_function();
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: some("my-worker"),
-                 function-name: "amazon:shopping-cart/api1.{foo}",
-                 args0: "bar"
-              }
-            "#,
-        );
+        let expected_val = Value::Record(vec![
+            Value::String("my-worker".to_string()),
+            Value::String("pass-through".to_string()),
+            Value::U64(42),
+            Value::U32(43),
+        ]);
 
-        assert_eq!(result.get_val().unwrap(), expected_val);
-    }
-
-    #[test]
-    async fn test_interpreter_durable_worker_1() {
-        let expr = r#"
-                instance("my-worker").foo("bar")
-            "#;
-        let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
-
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
-        let compiler = RibCompiler::new(compiler_config);
-        let compiled = compiler.compile(expr).unwrap();
-
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
-
-        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
-
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: some("my-worker"),
-                 function-name: "amazon:shopping-cart/api1.{foo}",
-                 args0: "bar"
-              }
-            "#,
-        );
-
-        assert_eq!(result.get_val().unwrap(), expected_val);
+        assert_eq!(result.get_val().unwrap().value, expected_val);
     }
 
     #[test]
@@ -3853,69 +3796,47 @@ mod tests {
         let expr = r#"
                 let x = 1;
                 let y = 2;
-                instance("my-worker").foo-number(x, y)
+                let inst = instance("my-worker");
+                inst.foo-number(x, y)
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let analysed_type = record(vec![
-            field("worker-name", option(str())),
-            field("function-name", str()),
-            field("args0", u64()),
-            field("args1", s32()),
-        ]);
-
-        let expected_val = get_value_and_type(
-            &analysed_type,
-            r#"
-              {
-                 worker-name: some("my-worker"),
-                 function-name: "amazon:shopping-cart/api1.{foo-number}",
-                 args0: 1,
-                 args1: 2
-              }
-            "#,
-        );
-
-        assert_eq!(result.get_val().unwrap(), expected_val);
+        assert_eq!(result.get_val().unwrap().value, Value::S32(1));
     }
 
     #[test]
     async fn test_interpreter_durable_worker_2() {
         let expr = r#"
-                let result = instance("my-worker").foo("bar");
+                let inst = instance("my-worker");
+                let result = inst.foo("bar");
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: some("my-worker"),
-                 function-name: "amazon:shopping-cart/api1.{foo}",
-                 args0: "bar"
-              }
-            "#,
+        assert_eq!(
+            result.get_val().unwrap().value,
+            Value::String("foo".to_string())
         );
-
-        assert_eq!(result.get_val().unwrap(), expected_val);
     }
 
     #[test]
@@ -3926,27 +3847,21 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: some("my-worker"),
-                 function-name: "amazon:shopping-cart/api1.{foo}",
-                 args0: "bar"
-              }
-            "#,
+        assert_eq!(
+            result.get_val().unwrap().value,
+            Value::String("foo".to_string())
         );
-
-        assert_eq!(result.get_val().unwrap(), expected_val);
     }
 
     #[test]
@@ -3958,9 +3873,12 @@ mod tests {
             "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies,
+            vec![],
+        ));
 
         let compilation_error = compiler.compile(expr).unwrap_err().to_string();
 
@@ -3978,27 +3896,21 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: some("my-worker"),
-                 function-name: "amazon:shopping-cart/api1.{bar}",
-                 args0: "bar"
-              }
-            "#,
+        assert_eq!(
+            result.get_val().unwrap().value,
+            Value::String("api1-bar".to_string())
         );
-
-        assert_eq!(result.get_val().unwrap(), expected_val);
     }
 
     #[test]
@@ -4009,27 +3921,21 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: some("my-worker"),
-                 function-name: "amazon:shopping-cart/api2.{bar}",
-                 args0: "bar"
-              }
-            "#,
+        assert_eq!(
+            result.get_val().unwrap().value,
+            Value::String("api2-bar".to_string())
         );
-
-        assert_eq!(result.get_val().unwrap(), expected_val);
     }
 
     #[test]
@@ -4040,27 +3946,20 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config = RibCompilerConfig::new(test_deps.component_dependencies, vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: some("my-worker"),
-                 function-name: "wasi:clocks/monotonic-clock.{baz}",
-                 args0: "bar"
-              }
-            "#,
+        assert_eq!(
+            result.get_val().unwrap().value,
+            Value::String("clock-baz".to_string())
         );
-
-        assert_eq!(result.get_val().unwrap(), expected_val);
     }
 
     #[test]
@@ -4071,9 +3970,12 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
 
@@ -4091,27 +3993,21 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: some("my-worker"),
-                 function-name: "amazon:shopping-cart/api1.{qux}",
-                 args0: "bar"
-              }
-            "#,
+        assert_eq!(
+            result.get_val().unwrap().value,
+            Value::String("qux".to_string())
         );
-
-        assert_eq!(result.get_val().unwrap(), expected_val);
     }
 
     #[test]
@@ -4122,27 +4018,21 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: some("my-worker"),
-                 function-name: "wasi:clocks/monotonic-clock.{qux}",
-                 args0: "bar"
-              }
-            "#,
+        assert_eq!(
+            result.get_val().unwrap().value,
+            Value::String("clock-qux".to_string())
         );
-
-        assert_eq!(result.get_val().unwrap(), expected_val);
     }
 
     #[test]
@@ -4158,14 +4048,14 @@ mod tests {
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter =
-            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -4182,14 +4072,14 @@ mod tests {
                 }
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter =
-            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -4206,9 +4096,12 @@ mod tests {
                 worker.cart[golem:it]("bar")
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
 
         let compiled = compiler.compile(expr);
 
@@ -4225,14 +4118,14 @@ mod tests {
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter =
-            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -4248,42 +4141,17 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config = RibCompilerConfig::new(test_deps.component_dependencies, vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let analysed_type = record(vec![
-            field("worker-name", option(str())),
-            field("function-name", str()),
-            field(
-                "args0",
-                record(vec![
-                    field("product-id", str()),
-                    field("name", str()),
-                    field("price", f32()),
-                    field("quantity", u32()),
-                ]),
-            ),
-        ]);
-
-        let expected_val = get_value_and_type(
-            &analysed_type,
-            r#"
-              {
-                 worker-name: some("my-worker"),
-                 function-name: "golem:it/api.{cart(\"bar\").add-item}",
-                 args0: {product-id: "mac", name: "macbook", price: 1.0, quantity: 1}
-              }
-            "#,
-        );
-
-        assert_eq!(result.get_val().unwrap(), expected_val);
+        assert_eq!(result, RibResult::Unit);
     }
 
     #[test]
@@ -4295,9 +4163,12 @@ mod tests {
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
 
@@ -4313,9 +4184,12 @@ mod tests {
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
 
@@ -4335,14 +4209,14 @@ mod tests {
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter =
-            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -4360,9 +4234,12 @@ mod tests {
             "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
 
         let error_message = compiler.compile(expr).unwrap_err().to_string();
 
@@ -4385,14 +4262,14 @@ mod tests {
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter =
-            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -4412,14 +4289,13 @@ mod tests {
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
-
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter =
-            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -4443,18 +4319,24 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
-
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter =
-            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        let expected_value = Value::List(vec![Value::Record(vec![
+            Value::String("foo".to_string()),
+            Value::String("bar".to_string()),
+            Value::F32(10.0),
+            Value::U32(2),
+        ])]);
+
+        assert_eq!(result.get_val().unwrap().value, expected_value);
     }
 
     #[test]
@@ -4475,18 +4357,25 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter =
-            test_utils::interpreter_static_response(&"success".into_value_and_type(), None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        let expected_value = Value::List(vec![Value::Record(vec![
+            Value::String("foo".to_string()),
+            Value::String("bar".to_string()),
+            Value::F32(10.0),
+            Value::U32(2),
+        ])]);
+
+        assert_eq!(result.get_val().unwrap().value, expected_value);
     }
 
     #[test]
@@ -4497,11 +4386,6 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
-
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
-        let compiler = RibCompiler::new(compiler_config);
-        let compiled = compiler.compile(expr).unwrap();
 
         let mut input = HashMap::new();
 
@@ -4516,14 +4400,21 @@ mod tests {
 
         let rib_input = RibInput::new(input);
 
-        let mut rib_interpreter = test_utils::interpreter_static_response(
-            &"success".into_value_and_type(),
-            Some(rib_input),
-        );
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(Some(rib_input));
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+        let compiler = RibCompiler::new(compiler_config);
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+        assert_eq!(
+            result.get_val().unwrap().value,
+            Value::String("qux".to_string())
+        )
     }
 
     #[test]
@@ -4538,17 +4429,11 @@ mod tests {
                 user_id2
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
-
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
-
-        let compiler = RibCompiler::new(compiler_config);
-
-        let compiled = compiler.compile(expr).unwrap();
 
         let mut input = HashMap::new();
 
         let rib_input_key = "request";
+
         let rib_input_value = ValueAndType::new(
             Value::Record(vec![Value::Record(vec![Value::String("user".to_string())])]),
             record(vec![field("path", record(vec![field("user-id", str())]))]),
@@ -4558,10 +4443,16 @@ mod tests {
 
         let rib_input = RibInput::new(input);
 
-        let mut rib_interpreter = test_utils::interpreter_static_response(
-            &"success".into_value_and_type(),
-            Some(rib_input),
-        );
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(Some(rib_input));
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+
+        let compiler = RibCompiler::new(compiler_config);
+
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -4576,9 +4467,13 @@ mod tests {
                 "success"
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
+
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
 
         let error = compiler.compile(expr).unwrap_err().to_string();
 
@@ -4594,9 +4489,12 @@ mod tests {
             "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = test_utils::get_metadata();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+        ));
 
         let error = compiler.compile(expr).unwrap_err().to_string();
 
@@ -4617,29 +4515,23 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata();
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+
         let compiler = RibCompiler::new(compiler_config);
+
         let compiled = compiler.compile(expr).unwrap();
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(None);
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
         let result_val = result.get_val().unwrap();
 
-        let expected_val = test_utils::parse_function_details(
-            r#"
-              {
-                 worker-name: some("my-worker-name"),
-                 function-name: "amazon:shopping-cart/api1.{qux}",
-                 args0: "param1"
-              }
-            "#,
-        );
-
-        assert_eq!(result_val, expected_val);
+        assert_eq!(result_val.value, Value::String("qux".to_string()));
     }
 
     #[test]
@@ -4651,16 +4543,13 @@ mod tests {
                 let result = cart.get-cart-contents();
                 result
             "#;
-        let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
-        let compiler = RibCompiler::new(compiler_config);
-        let compiled = compiler.compile(expr).unwrap();
+        let expr = Expr::from_text(expr).unwrap();
 
         let mut input = HashMap::new();
 
         let rib_input_key = "request";
+
         let rib_input_value = ValueAndType::new(
             Value::Record(vec![Value::Record(vec![Value::String("user".to_string())])]),
             record(vec![field("path", record(vec![field("user-id", str())]))]),
@@ -4670,29 +4559,29 @@ mod tests {
 
         let rib_input = RibInput::new(input);
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(Some(rib_input));
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(Some(rib_input));
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+
+        let compiler = RibCompiler::new(compiler_config);
+
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
         let result_val = result.get_val().unwrap();
 
-        let expected_analysed_type = record(vec![
-            field("worker-name", option(str())),
-            field("function-name", str()),
-        ]);
+        let expected_val = Value::List(vec![Value::Record(vec![
+            Value::String("foo".to_string()),
+            Value::String("bar".to_string()),
+            Value::F32(10.0),
+            Value::U32(2),
+        ])]);
 
-        let expected_val = parse_value_and_type(
-            &expected_analysed_type,
-            r#"
-              {
-                 worker-name: some("user"),
-                 function-name: "golem:it/api.{cart(\"bar\").get-cart-contents}",
-              }
-            "#,
-        )
-        .unwrap();
-
-        assert_eq!(result_val, expected_val)
+        assert_eq!(result_val.value, expected_val)
     }
 
     #[test]
@@ -4709,15 +4598,11 @@ mod tests {
                 result
             "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
-
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
-        let compiler = RibCompiler::new(compiler_config);
-        let compiled = compiler.compile(expr).unwrap();
 
         let mut input = HashMap::new();
 
         let rib_input_key = "request";
+
         let rib_input_value = ValueAndType::new(
             Value::Record(vec![Value::Record(vec![Value::String("user".to_string())])]),
             record(vec![field("path", record(vec![field("user-id", str())]))]),
@@ -4727,24 +4612,35 @@ mod tests {
 
         let rib_input = RibInput::new(input);
 
-        let mut rib_interpreter = test_utils::interpreter_worker_details_response(Some(rib_input));
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(Some(rib_input));
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+
+        let compiler = RibCompiler::new(compiler_config);
+
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
         let result_val = result.get_val().unwrap().value;
 
-        let worker_name = Some("my-worker".to_string()).into_value();
-        let function_name = "golem:it/api.{cart(\"bar\").get-cart-contents}"
-            .to_string()
-            .into_value();
+        let cart_contents = Value::List(vec![Value::Record(vec![
+            Value::String("foo".to_string()),
+            Value::String("bar".to_string()),
+            Value::F32(10.0),
+            Value::U32(2),
+        ])]);
 
-        let expected = Value::List(vec![
-            Value::Record(vec![worker_name.clone(), function_name.clone()]),
-            Value::Record(vec![worker_name.clone(), function_name.clone()]),
-            Value::Record(vec![worker_name.clone(), function_name.clone()]),
+        let expected_val = Value::List(vec![
+            cart_contents.clone(),
+            cart_contents.clone(),
+            cart_contents,
         ]);
 
-        assert_eq!(result_val, expected);
+        assert_eq!(result_val, expected_val);
     }
 
     #[test]
@@ -4764,15 +4660,11 @@ mod tests {
             "success"
         "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
-
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
-        let compiler = RibCompiler::new(compiler_config);
-        let compiled = compiler.compile(expr).unwrap();
 
         let mut input = HashMap::new();
 
         let rib_input_key = "request";
+
         let rib_input_value = ValueAndType::new(
             Value::Record(vec![Value::Record(vec![
                 Value::String("mac-book".to_string()),
@@ -4795,10 +4687,16 @@ mod tests {
 
         let rib_input = RibInput::new(input);
 
-        let mut rib_interpreter = test_utils::interpreter_static_response(
-            &"success".into_value_and_type(),
-            Some(rib_input),
-        );
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(Some(rib_input));
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+
+        let compiler = RibCompiler::new(compiler_config);
+
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -4822,15 +4720,11 @@ mod tests {
             "success"
         "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = test_utils::get_metadata_with_resource_with_params();
-
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
-        let compiler = RibCompiler::new(compiler_config);
-        let compiled = compiler.compile(expr).unwrap();
 
         let mut input = HashMap::new();
 
         let rib_input_key = "request";
+
         let rib_input_value = ValueAndType::new(
             Value::Record(vec![Value::Record(vec![
                 Value::String("mac-book".to_string()),
@@ -4853,10 +4747,16 @@ mod tests {
 
         let rib_input = RibInput::new(input);
 
-        let mut rib_interpreter = test_utils::interpreter_static_response(
-            &"success".into_value_and_type(),
-            Some(rib_input),
-        );
+        let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(Some(rib_input));
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+
+        let compiler = RibCompiler::new(compiler_config);
+
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_interpreter = test_deps.interpreter;
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -4864,11 +4764,13 @@ mod tests {
     }
 
     mod test_utils {
+        use crate::interpreter::rib_interpreter::internal::NoopRibFunctionInvoke;
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::{
             ComponentDependency, ComponentDependencyKey, DefaultWorkerNameGenerator,
-            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GetLiteralValue, InstructionId,
-            RibComponentFunctionInvoke, RibFunctionInvokeResult, RibInput,
+            EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, GenerateWorkerName,
+            GetLiteralValue, InstructionId, RibComponentFunctionInvoke, RibFunctionInvokeResult,
+            RibInput,
         };
         use async_trait::async_trait;
         use golem_wasm_ast::analysis::analysed_type::{
@@ -4955,7 +4857,7 @@ mod tests {
             ])
         }
 
-        pub(crate) fn get_component_metadata(
+        pub(crate) fn configurable_metadata(
             function_name: &str,
             input_types: Vec<AnalysedType>,
             output: Option<AnalysedType>,
@@ -4999,7 +4901,7 @@ mod tests {
             get_metadata_with_resource(vec![])
         }
 
-        pub(crate) fn get_metadata() -> Vec<ComponentDependency> {
+        pub(crate) fn get_metadata_with_multiple_interfaces() -> Vec<ComponentDependency> {
             // Exist in only amazon:shopping-cart/api1
             let analysed_function_in_api1 = AnalysedFunction {
                 name: "foo".to_string(),
@@ -5225,9 +5127,21 @@ mod tests {
             golem_wasm_rpc::parse_value_and_type(analysed_type, wasm_wave_str).unwrap()
         }
 
-        // The interpreter that always returns a static value for every function calls in Rib
-        // regardless of the input arguments
-        pub(crate) fn interpreter_static_response(
+        pub(crate) fn interpreter_with_noop_function_invoke(
+            input: Option<RibInput>,
+        ) -> Interpreter {
+            let invoke: Arc<dyn RibComponentFunctionInvoke + Send + Sync> =
+                Arc::new(NoopRibFunctionInvoke);
+
+            Interpreter {
+                input: input.unwrap_or_default(),
+                invoke,
+                generate_worker_name: Arc::new(DefaultWorkerNameGenerator),
+            }
+        }
+
+        // Interpreter which always returns a specific response
+        pub(crate) fn interpreter_with_static_function_response(
             result_value: &ValueAndType,
             input: Option<RibInput>,
         ) -> Interpreter {
@@ -5247,10 +5161,11 @@ mod tests {
         // Example : `my-instance.qux[amazon:shopping-cart]("bar")` will return a record
         // that contains the actual worker-name of my-instance, the function name `qux` and arguments
         // It helps ensures that interpreter invokes the function at the expected worker.
-        pub(crate) fn interpreter_worker_details_response(
+        pub(crate) fn interpreter_with_resource_function_invoke_impl(
             rib_input: Option<RibInput>,
         ) -> Interpreter {
-            let invoke: Arc<dyn RibComponentFunctionInvoke + Send + Sync> = Arc::new(TestInvoke2);
+            let invoke: Arc<dyn RibComponentFunctionInvoke + Send + Sync> =
+                Arc::new(ResourceFunctionsInvoke);
 
             Interpreter {
                 input: rib_input.unwrap_or_default(),
@@ -5260,7 +5175,7 @@ mod tests {
         }
 
         // A simple interpreter that returns response based on the function
-        pub(crate) fn interpreter_dynamic_response(input: Option<RibInput>) -> Interpreter {
+        pub(crate) fn interpreter_for_global_functions(input: Option<RibInput>) -> Interpreter {
             let invoke = Arc::new(TestInvoke3);
 
             Interpreter {
@@ -5300,10 +5215,41 @@ mod tests {
             }
         }
 
-        struct TestInvoke2;
+        struct PassThroughFunctionInvoke;
 
         #[async_trait]
-        impl RibComponentFunctionInvoke for TestInvoke2 {
+        impl RibComponentFunctionInvoke for PassThroughFunctionInvoke {
+            async fn invoke(
+                &self,
+                component_dependency_key: ComponentDependencyKey,
+                instruction_id: &InstructionId,
+                worker_name: Option<EvaluatedWorkerName>,
+                function_name: EvaluatedFqFn,
+                args: EvaluatedFnArgs,
+                return_type: Option<AnalysedType>,
+            ) -> RibFunctionInvokeResult {
+                let analysed_type = record(vec![
+                    field("worker-name", str()),
+                    field("function-name", str()),
+                    field("args0", u64()),
+                    field("args1", u32()),
+                ]);
+
+                let worker_name = Value::String(worker_name.map(|x| x.0).unwrap_or_default());
+                let function_name = Value::String(function_name.0);
+                let args0 = args.0[0].value.clone();
+                let args1 = args.0[1].value.clone();
+
+                let value = Value::Record(vec![worker_name, function_name, args0, args1]);
+
+                Ok(Some(ValueAndType::new(value, analysed_type)))
+            }
+        }
+
+        struct ResourceFunctionsInvoke;
+
+        #[async_trait]
+        impl RibComponentFunctionInvoke for ResourceFunctionsInvoke {
             async fn invoke(
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
@@ -5313,44 +5259,288 @@ mod tests {
                 args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
-                let worker_name = worker_name.map(|x| x.0);
+                match function_name.0.as_str() {
+                    "golem:it/api.{cart.new}" => {
+                        let worker_name = worker_name.map(|x| x.0).unwrap_or_default();
 
-                let function_name = function_name.0.into_value_and_type();
+                        let uri = format!(
+                            "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
+                            worker_name
+                        );
+                        Ok(ValueAndType::new(
+                            Value::Handle {
+                                uri,
+                                resource_id: 0,
+                            },
+                            handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                        )
+                        .into())
+                    }
 
-                let args = args.0;
+                    "golem:it/api.{cart.checkout}" => {
+                        let result_type = variant(vec![
+                            case("error", str()),
+                            case("success", record(vec![field("order-id", str())])),
+                        ]);
 
-                let mut arg_types = vec![];
+                        let result_value = get_value_and_type(
+                            &result_type,
+                            r#"
+                            success({order-id: "foo"})
+                            "#,
+                        );
 
-                for (index, value_and_type) in args.iter().enumerate() {
-                    let name = format!("args{}", index);
-                    let value = value_and_type.typ.clone();
-                    arg_types.push(field(name.as_str(), value));
+                        Ok(Some(result_value))
+                    }
+
+                    "golem:it/api.{cart.add-item}" => Ok(None),
+
+                    "golem:it/api.{cart.update-item-quantity}" => Ok(None),
+
+                    "golem:it/api.{cart.remove-item}" => Ok(None),
+
+                    "golem:it/api.{cart.drop}" => Ok(None),
+
+                    "golem:it/api.{cart.get-cart-contents}" => {
+                        let typ = list(record(vec![
+                            field("product-id", str()),
+                            field("name", str()),
+                            field("price", f32()),
+                            field("quantity", u32()),
+                        ]));
+
+                        let value = Value::Record(vec![
+                            Value::String("foo".to_string()),
+                            Value::String("bar".to_string()),
+                            Value::F32(10.0),
+                            Value::U32(2),
+                        ]);
+
+                        Ok(Some(ValueAndType::new(Value::List(vec![value]), typ)))
+                    }
+
+                    "golem:it/api.{cart.pass-through}" => {
+                        let worker_name = worker_name.map(|x| x.0);
+                        let function_args = args.0[1..].to_vec();
+
+                        let mut arg_types = vec![];
+
+                        for (index, value_and_type) in function_args.iter().enumerate() {
+                            let name = format!("args{}", index);
+                            let value = value_and_type.typ.clone();
+                            arg_types.push(field(name.as_str(), value));
+                        }
+
+                        let function_name = function_name.0.into_value_and_type();
+
+                        let mut analysed_type_pairs = vec![];
+                        analysed_type_pairs.push(field("worker-name", option(str())));
+                        analysed_type_pairs.push(field("function-name", str()));
+                        analysed_type_pairs.extend(arg_types);
+
+                        let mut values = vec![];
+
+                        values.push(Value::Option(
+                            worker_name.map(|x| Box::new(Value::String(x))),
+                        ));
+                        values.push(function_name.value);
+
+                        for arg_value in function_args {
+                            values.push(arg_value.value);
+                        }
+
+                        let value_and_type =
+                            ValueAndType::new(Value::Record(values), record(analysed_type_pairs));
+
+                        Ok(Some(value_and_type))
+                    }
+
+                    _ => Err(format!("unexpected function name: {}", function_name.0).into()),
                 }
-
-                let mut analysed_type_pairs = vec![];
-                analysed_type_pairs.push(field("worker-name", option(str())));
-                analysed_type_pairs.push(field("function-name", str()));
-                analysed_type_pairs.extend(arg_types);
-
-                let mut values = vec![];
-
-                values.push(Value::Option(
-                    worker_name.map(|x| Box::new(Value::String(x))),
-                ));
-                values.push(function_name.value);
-
-                for arg_value in args {
-                    values.push(arg_value.value);
-                }
-
-                let value_and_type =
-                    ValueAndType::new(Value::Record(values), record(analysed_type_pairs));
-
-                Ok(Some(value_and_type))
             }
         }
 
-        pub(crate) fn get_metadata_with_enum_and_variant() -> Vec<ComponentDependency> {
+        struct MultiplePackageFunctionInvoke;
+
+        #[async_trait]
+        impl RibComponentFunctionInvoke for MultiplePackageFunctionInvoke {
+            async fn invoke(
+                &self,
+                _component_dependency_key: ComponentDependencyKey,
+                _instruction_id: &InstructionId,
+                worker_name: Option<EvaluatedWorkerName>,
+                function_name: EvaluatedFqFn,
+                args: EvaluatedFnArgs,
+                _return_type: Option<AnalysedType>,
+            ) -> RibFunctionInvokeResult {
+                dbg!(function_name.0.as_str());
+                match function_name.0.as_str() {
+                    "amazon:shopping-cart/api1.{foo}" => {
+                        let result_value =
+                            ValueAndType::new(Value::String("foo".to_string()), str());
+
+                        Ok(Some(result_value))
+                    }
+
+                    "amazon:shopping-cart/api1.{foo-number}" => {
+                        let result_value = ValueAndType::new(Value::S32(1), s32());
+
+                        Ok(Some(result_value))
+                    }
+
+                    "amazon:shopping-cart/api1.{bar}" => {
+                        let result_value =
+                            ValueAndType::new(Value::String("api1-bar".to_string()), str());
+
+                        Ok(Some(result_value))
+                    }
+
+                    "amazon:shopping-cart/api1.{qux}" => {
+                        let result_value =
+                            ValueAndType::new(Value::String("qux".to_string()), str());
+
+                        Ok(Some(result_value))
+                    }
+
+                    "amazon:shopping-cart/api2.{bar}" => {
+                        let result_value =
+                            ValueAndType::new(Value::String("api2-bar".to_string()), str());
+
+                        Ok(Some(result_value))
+                    }
+
+                    "wasi:clocks/monotonic-clock.{baz}" => {
+                        let result_value =
+                            ValueAndType::new(Value::String("clock-baz".to_string()), str());
+
+                        Ok(Some(result_value))
+                    }
+
+                    "wasi:clocks/monotonic-clock.{qux}" => {
+                        let result_value =
+                            ValueAndType::new(Value::String("clock-qux".to_string()), str());
+
+                        Ok(Some(result_value))
+                    }
+
+                    _ => Err(format!("unexpected function name: {}", function_name.0).into()),
+                }
+            }
+        }
+
+        pub(crate) struct StaticWorkerNameGenerator;
+
+        impl GenerateWorkerName for StaticWorkerNameGenerator {
+            fn generate_worker_name(&self) -> String {
+                "test-worker".to_string()
+            }
+        }
+
+        pub(crate) struct RibTestDeps {
+            pub(crate) component_dependencies: Vec<ComponentDependency>,
+            pub(crate) interpreter: Interpreter,
+        }
+
+        impl RibTestDeps {
+            pub(crate) fn test_deps_with_global_functions() -> RibTestDeps {
+                let component_dependencies = get_component_dependency_with_global_functions();
+                let interpreter = interpreter_for_global_functions(None);
+
+                RibTestDeps {
+                    component_dependencies,
+                    interpreter,
+                }
+            }
+
+            pub(crate) fn test_deps_with_resource_functions(
+                rib_input: Option<RibInput>,
+            ) -> RibTestDeps {
+                let component_dependencies = get_metadata_with_resource_without_params();
+                let interpreter = interpreter_with_resource_function_invoke_impl(rib_input);
+
+                RibTestDeps {
+                    component_dependencies,
+                    interpreter,
+                }
+            }
+
+            pub(crate) fn test_deps_with_indexed_resource_functions(
+                rib_input: Option<RibInput>,
+            ) -> RibTestDeps {
+                let component_dependencies = get_metadata_with_resource_with_params();
+                let interpreter = interpreter_with_resource_function_invoke_impl(rib_input);
+
+                RibTestDeps {
+                    component_dependencies,
+                    interpreter,
+                }
+            }
+
+            // A pass through function simply pass through the information embedded in a function call
+            // such as function name, the worker name and the arguments used to invoke the call
+            // allowing us to cross verify if the invoke is correct
+            pub(crate) fn test_deps_for_pass_through_function() -> RibTestDeps {
+                let exports = vec![AnalysedExport::Function(AnalysedFunction {
+                    name: "pass-through".to_string(),
+                    parameters: vec![
+                        AnalysedFunctionParameter {
+                            name: "item".to_string(),
+                            typ: u64(),
+                        },
+                        AnalysedFunctionParameter {
+                            name: "item".to_string(),
+                            typ: u32(),
+                        },
+                    ],
+                    result: Some(AnalysedFunctionResult {
+                        typ: record(vec![
+                            field("worker-name", option(str())),
+                            field("function-name", str()),
+                            field("args0", u64()),
+                            field("args1", u32()),
+                        ]),
+                    }),
+                })];
+
+                let component_info = ComponentDependencyKey {
+                    component_name: "foo".to_string(),
+                    component_id: Uuid::new_v4(),
+                    root_package_name: None,
+                    root_package_version: None,
+                };
+
+                let exports = vec![ComponentDependency::new(component_info, exports)];
+
+                let interpreter = Interpreter::new(
+                    RibInput::default(),
+                    Arc::new(PassThroughFunctionInvoke),
+                    Arc::new(StaticWorkerNameGenerator),
+                );
+
+                RibTestDeps {
+                    component_dependencies: exports,
+                    interpreter,
+                }
+            }
+
+            pub(crate) fn test_deps_with_multiple_interfaces(
+                rib_input: Option<RibInput>,
+            ) -> RibTestDeps {
+                let component_dependencies = get_metadata_with_multiple_interfaces();
+                let interpreter = Interpreter::new(
+                    rib_input.unwrap_or_default(),
+                    Arc::new(MultiplePackageFunctionInvoke),
+                    Arc::new(StaticWorkerNameGenerator),
+                );
+
+                RibTestDeps {
+                    component_dependencies,
+                    interpreter,
+                }
+            }
+        }
+
+        fn get_component_dependency_with_global_functions() -> Vec<ComponentDependency> {
             let exports = vec![
                 AnalysedExport::Function(AnalysedFunction {
                     name: "add-u32".to_string(),
