@@ -68,9 +68,12 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
     fn try_from(inferred_type: &InferredType) -> Result<Self, Self::Error> {
         match inferred_type.internal_type() {
             TypeInternal::Instance { instance_type } => match instance_type.as_ref() {
-                InstanceType::Resource { analysed_resource_id, analysed_resource_mode, .. } => {
-                    let analysed_resource_id =
-                        AnalysedResourceId(*analysed_resource_id);
+                InstanceType::Resource {
+                    analysed_resource_id,
+                    analysed_resource_mode,
+                    ..
+                } => {
+                    let analysed_resource_id = AnalysedResourceId(*analysed_resource_id);
 
                     let analysed_resource_mode = if *analysed_resource_mode == 0 {
                         AnalysedResourceMode::Owned
@@ -78,13 +81,13 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                         AnalysedResourceMode::Borrowed
                     };
 
-                    Ok(AnalysedTypeWithUnit::analysed_type(
-                        AnalysedType::Handle(TypeHandle {
+                    Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::Handle(
+                        TypeHandle {
                             resource_id: analysed_resource_id,
                             mode: analysed_resource_mode,
-                        }),
-                    ))
-                },
+                        },
+                    )))
+                }
 
                 _ => Ok(AnalysedTypeWithUnit::analysed_type(record(vec![
                     NameTypePair {

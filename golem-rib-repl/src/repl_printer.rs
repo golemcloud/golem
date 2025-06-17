@@ -91,7 +91,7 @@ pub trait ReplPrinter {
 
             RibResult::Val(value_and_type) => match &value_and_type.value {
                 Value::Handle { uri, resource_id } => {
-                    println!("{} {}", "[warn]".bright_yellow(), "the syntax below to show the resource-handle value is only used for display purposes".to_string().white());
+                    println!("{} {}", "[warn]".magenta(), "the syntax below to show the resource-handle value is only used for display purposes".to_string().white());
 
                     println!();
 
@@ -129,7 +129,7 @@ pub trait ReplPrinter {
         match analysed_type {
             AnalysedType::Handle(type_handle) => {
                 let text = display_for_resource_handle(type_handle);
-                println!("{} {}", "[warn]".bright_yellow(), "the syntax below to show the resource-handle type is only used for display purposes".to_string().white());
+                println!("{} {}", "[warn]".magenta(), "the syntax below to show the resource-handle type is only used for display purposes".to_string().white());
 
                 println!();
 

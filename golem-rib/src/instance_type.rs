@@ -24,7 +24,7 @@ use golem_api_grpc::proto::golem::rib::{
     FunctionType as ProtoFunctionType, InterfaceName as ProtoInterfaceName,
     PackageName as ProtoPackageName,
 };
-use golem_wasm_ast::analysis::{AnalysedType};
+use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::Debug;

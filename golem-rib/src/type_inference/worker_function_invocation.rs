@@ -15,7 +15,10 @@
 use crate::call_type::{CallType, InstanceCreationType, InstanceIdentifier};
 use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
-use crate::{CustomError, DynamicParsedFunctionName, Expr, FunctionCallError, InferredType, TypeInternal, TypeName, TypeOrigin};
+use crate::{
+    CustomError, DynamicParsedFunctionName, Expr, FunctionCallError, InferredType, TypeInternal,
+    TypeName, TypeOrigin,
+};
 use crate::{FunctionName, InstanceType};
 use std::collections::VecDeque;
 use std::ops::Deref;
@@ -144,7 +147,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 args.clone(),
                                 instance_type.worker_name(),
                                 resource_id,
-                                resource_mode
+                                resource_mode,
                             );
 
                             let new_inferred_type = InferredType::new(
