@@ -118,7 +118,6 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
 }
 
 struct WorkerServiceRibInvoke {
-
     idempotency_key: Option<IdempotencyKey>,
     invocation_context: InvocationContextStack,
     executor: Arc<dyn GatewayWorkerRequestExecutor>,
@@ -126,9 +125,7 @@ struct WorkerServiceRibInvoke {
 }
 
 #[async_trait]
-impl RibComponentFunctionInvoke
-    for WorkerServiceRibInvoke
-{
+impl RibComponentFunctionInvoke for WorkerServiceRibInvoke {
     async fn invoke(
         &self,
         component_dependency_key: ComponentDependencyKey,
