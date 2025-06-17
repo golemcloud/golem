@@ -61,7 +61,7 @@ impl RibCompiler {
 
     pub fn infer_types(&self, expr: Expr) -> Result<InferredExpr, RibCompilationError> {
         InferredExpr::from_expr(expr, &self.component_dependency, &self.input_spec)
-            .map_err(RibCompilationError::RibTypeError)
+            .map_err(|err| RibCompilationError::RibTypeError(Box::new(err)))
     }
 
     // Currently supports only 1 component and hence really only one InstanceType
@@ -194,7 +194,7 @@ pub enum RibCompilationError {
 
     // RibTypeError is a type error that occurs during type inference.
     // This is a typical compilation error, such as: expected u32, found str.
-    RibTypeError(RibTypeError),
+    RibTypeError(Box<RibTypeError>),
 
     // This captures only the syntax parse errors in a Rib script.
     InvalidSyntax(String),
@@ -226,7 +226,7 @@ impl From<RibByteCodeGenerationError> for RibCompilationError {
 
 impl From<RibTypeError> for RibCompilationError {
     fn from(err: RibTypeError) -> Self {
-        RibCompilationError::RibTypeError(err)
+        RibCompilationError::RibTypeError(Box::new(err))
     }
 }
 
