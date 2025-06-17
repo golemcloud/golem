@@ -108,37 +108,30 @@ impl From<PlanLimitError> for ProjectError {
 pub trait ProjectService: Send + Sync {
     async fn create(
         &self,
-        project: &Project,
-        auth: &AccountAuthorisation,
+        project: &Project
     ) -> Result<(), ProjectError>;
 
     async fn delete(
         &self,
-        project_id: &ProjectId,
-        auth: &AccountAuthorisation,
+        project_id: &ProjectId
     ) -> Result<(), ProjectError>;
 
-    async fn get_default(&self, auth: &AccountAuthorisation) -> Result<Project, ProjectError>;
+    async fn get_default(&self, account_id: &AccountId) -> Result<Project, ProjectError>;
 
-    async fn get_all(&self, auth: &AccountAuthorisation) -> Result<Vec<Project>, ProjectError>;
+    async fn get_all(&self, viewable_projects: ViewableProjects) -> Result<Vec<Project>, ProjectError>;
 
-    async fn get_all_by_name(
-        &self,
-        name: &str,
-        auth: &AccountAuthorisation,
-    ) -> Result<Vec<Project>, ProjectError>;
+    async fn get_all_by_name(&self, name: &str, viewable_projects: ViewableProjects) -> Result<Vec<Project>, ProjectError>;
 
     async fn get(
         &self,
-        project_id: &ProjectId,
-        auth: &AccountAuthorisation,
+        project_id: &ProjectId
     ) -> Result<Option<Project>, ProjectError>;
 
     /// Gets the list of installed plugins for a given project
     async fn get_plugin_installations_for_project(
         &self,
         project_id: &ProjectId,
-        auth: &AccountAuthorisation,
+        auth: &AccountAuthorisation
     ) -> Result<Vec<PluginInstallation>, ProjectError>;
 
     async fn create_plugin_installation_for_project(
@@ -280,17 +273,8 @@ impl ProjectServiceDefault {
 impl ProjectService for ProjectServiceDefault {
     async fn create(
         &self,
-        project: &Project,
-        auth: &AccountAuthorisation,
+        project: &Project
     ) -> Result<(), ProjectError> {
-        self.auth_service
-            .authorize_account_action(
-                auth,
-                &project.project_data.owner_account_id,
-                &AccountAction::CreateProject,
-            )
-            .await?;
-
         info!("Create project {}", project.project_id);
 
         let check_limit_result = self
@@ -312,13 +296,8 @@ impl ProjectService for ProjectServiceDefault {
 
     async fn delete(
         &self,
-        project_id: &ProjectId,
-        auth: &AccountAuthorisation,
+        project_id: &ProjectId
     ) -> Result<(), ProjectError> {
-        self.auth_service
-            .authorize_project_action(auth, project_id, &ProjectAction::DeleteProject)
-            .await?;
-
         info!("Delete project {}", project_id);
 
         let project = self.project_repo.get(&project_id.0).await?;
@@ -341,13 +320,7 @@ impl ProjectService for ProjectServiceDefault {
         Ok(())
     }
 
-    async fn get_default(&self, auth: &AccountAuthorisation) -> Result<Project, ProjectError> {
-        let account_id = &auth.token.account_id;
-
-        self.auth_service
-            .authorize_account_action(auth, account_id, &AccountAction::ViewDefaultProject)
-            .await?;
-
+    async fn get_default(&self, account_id: &AccountId) -> Result<Project, ProjectError> {
         info!("Getting default project for account {}", account_id);
         let result = self
             .project_repo
@@ -358,7 +331,7 @@ impl ProjectService for ProjectServiceDefault {
             Ok(result.into())
         } else {
             info!("Creating default project for account {}", account_id);
-            let project = create_default_project(&auth.token.account_id);
+            let project = create_default_project(&account_id);
             let create_res = self.project_repo.create(&project.clone().into()).await;
             if let Err(err) = create_res {
                 info!("Project creation failed: {err:?}");
@@ -375,27 +348,25 @@ impl ProjectService for ProjectServiceDefault {
         }
     }
 
-    async fn get_all(&self, auth: &AccountAuthorisation) -> Result<Vec<Project>, ProjectError> {
-        let visible_projects = self.auth_service.viewable_projects(auth).await?;
-
-        match visible_projects {
+    async fn get_all(&self, viewable_projects: ViewableProjects) -> Result<Vec<Project>, ProjectError> {
+        match viewable_projects {
             ViewableProjects::All => {
                 info!("Getting all projects");
                 let result = self.project_repo.get_all().await?;
                 Ok(result.iter().map(|p| p.clone().into()).collect())
             }
             ViewableProjects::OwnedAndAdditional {
+                owner_account_id,
                 additional_project_ids,
             } => {
-                let account_id = &auth.token.account_id;
-                info!("Getting projects for account {}", account_id);
+                info!("Getting projects for account {}", owner_account_id);
                 let additional_project_ids = additional_project_ids
                     .into_iter()
                     .map(|pid| pid.0)
                     .collect::<Vec<_>>();
                 let result = self
                     .project_repo
-                    .get_owned(account_id.value.as_str(), &additional_project_ids)
+                    .get_owned(&owner_account_id.value.as_str(), &additional_project_ids)
                     .await?;
                 Ok(result.iter().map(|p| p.clone().into()).collect())
             }
@@ -405,11 +376,11 @@ impl ProjectService for ProjectServiceDefault {
     async fn get_all_by_name(
         &self,
         name: &str,
-        auth: &AccountAuthorisation,
+        viewable_projects: ViewableProjects
     ) -> Result<Vec<Project>, ProjectError> {
         // Auth is done in get_all
 
-        let result = self.get_all(auth).await?;
+        let result = self.get_all(viewable_projects).await?;
         Ok(result
             .into_iter()
             .filter(|p| p.project_data.name == name)
@@ -418,12 +389,8 @@ impl ProjectService for ProjectServiceDefault {
 
     async fn get(
         &self,
-        project_id: &ProjectId,
-        auth: &AccountAuthorisation,
+        project_id: &ProjectId
     ) -> Result<Option<Project>, ProjectError> {
-        self.auth_service
-            .authorize_project_action(auth, project_id, &ProjectAction::ViewProject)
-            .await?;
         info!("Getting project {}", project_id);
         let result = self.project_repo.get(&project_id.0).await?;
         Ok(result.map(|p| p.into()))
