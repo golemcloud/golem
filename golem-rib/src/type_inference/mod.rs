@@ -434,7 +434,7 @@ mod tests {
 
         let inferred_expr = rib_compiler.infer_types(expr).unwrap();
 
-        let let_variable = let_binding(
+        let let_binding_1 = let_binding(
             VariableId::local("x", 0),
             None,
             number(
@@ -446,7 +446,7 @@ mod tests {
             ), // The number in let expression is identified to be a U64
         );
 
-        let let_instance = let_binding(
+        let let_binding_2 = let_binding(
             VariableId::local("worker", 0),
             None,
             Expr::call(
@@ -466,11 +466,11 @@ mod tests {
         let call_expr = call(
             CallType::function_call_with_worker(
                 InstanceIdentifier {
-                    variable_id: None,
-                    instance_type: Box::new(InstanceType::Global {
+                    variable_id: Some(VariableId::local("worker", 0)),
+                    instance_type: InstanceType::Global {
                         worker_name: Some(Box::new(Expr::literal("foo"))),
                         component_dependency: rib_compiler.get_component_dependencies().clone(),
-                    }),
+                    },
                 },
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -490,7 +490,7 @@ mod tests {
         );
 
         let expected = expr_block(
-            vec![let_variable, let_instance, call_expr],
+            vec![let_binding_1, let_binding_2, call_expr],
             InferredType::sequence(vec![]),
         );
 
@@ -565,11 +565,11 @@ mod tests {
         let call_expr1 = call(
             CallType::function_call_with_worker(
                 InstanceIdentifier {
-                    variable_id: None,
-                    instance_type: Box::new(InstanceType::Global {
+                    variable_id: Some(VariableId::local("worker", 0)),
+                    instance_type: InstanceType::Global {
                         worker_name: Some(Box::new(Expr::literal("foo"))),
                         component_dependency: rib_compiler.get_component_dependencies().clone(),
-                    }),
+                    },
                 },
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -591,11 +591,11 @@ mod tests {
         let call_expr2 = call(
             CallType::function_call_with_worker(
                 InstanceIdentifier {
-                    variable_id: None,
-                    instance_type: Box::new(InstanceType::Global {
+                    variable_id: Some(VariableId::local("worker", 0)),
+                    instance_type: InstanceType::Global {
                         worker_name: Some(Box::new(Expr::literal("foo"))),
                         component_dependency: rib_compiler.get_component_dependencies().clone(),
-                    }),
+                    },
                 },
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -1443,13 +1443,13 @@ mod tests {
                     call(
                         CallType::function_call_with_worker(
                             InstanceIdentifier {
-                                variable_id: None,
-                                instance_type: Box::new(InstanceType::Global {
+                                variable_id: Some(VariableId::local("worker", 0)),
+                                instance_type: InstanceType::Global {
                                     worker_name: Some(Box::new(Expr::literal("foo"))),
                                     component_dependency: rib_compiler
                                         .get_component_dependencies()
                                         .clone(),
-                                }),
+                                },
                             },
                             DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
@@ -1479,13 +1479,13 @@ mod tests {
                     call(
                         CallType::function_call_with_worker(
                             InstanceIdentifier {
-                                variable_id: None,
-                                instance_type: Box::new(InstanceType::Global {
+                                variable_id: Some(VariableId::local("worker", 0)),
+                                instance_type: InstanceType::Global {
                                     worker_name: Some(Box::new(Expr::literal("foo"))),
                                     component_dependency: rib_compiler
                                         .get_component_dependencies()
                                         .clone(),
-                                }),
+                                },
                             },
                             DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
@@ -2974,11 +2974,11 @@ mod tests {
                         call(
                             CallType::function_call_with_worker(
                                 InstanceIdentifier {
-                                    variable_id: None,
-                                    instance_type: Box::new(InstanceType::Global {
+                                    variable_id: Some(VariableId::local("worker", 0)),
+                                    instance_type: InstanceType::Global {
                                         worker_name: Some(Box::new(Expr::literal("foo"))),
                                         component_dependency: component_dependencies.clone(),
-                                    }),
+                                    },
                                 },
                                 DynamicParsedFunctionName {
                                     site: ParsedFunctionSite::Global,
@@ -3510,11 +3510,11 @@ mod tests {
                         call(
                             CallType::function_call_with_worker(
                                 InstanceIdentifier {
-                                    variable_id: None,
-                                    instance_type: Box::new(InstanceType::Global {
+                                    variable_id: Some(VariableId::local("worker", 0)),
+                                    instance_type: InstanceType::Global {
                                         worker_name: Some(Box::new(Expr::literal("foo"))),
                                         component_dependency: component_dependencies.clone(),
-                                    }),
+                                    },
                                 },
                                 DynamicParsedFunctionName {
                                     site: ParsedFunctionSite::Global,

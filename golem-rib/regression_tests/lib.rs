@@ -478,10 +478,25 @@ async fn test_rib_regression() {
         vec![],
     ));
 
+    use std::time::Instant;
+
+    let start = Instant::now();
+
     let compiled_expr = compiler.compile(expr).unwrap().byte_code;
 
+    let duration = start.elapsed();
+
+    println!("Compile time of the complex rib: {:?}", duration);
+
     let mut rib_executor = mock_interpreter::interpreter();
+
+    let start = Instant::now();
+
     let result = rib_executor.run(compiled_expr).await.unwrap();
+
+    let duration = start.elapsed();
+
+    println!("Execution time of the complex rib: {:?}", duration);
 
     let actual_as_text = test_utils::convert_value_and_type_to_str(&result.get_val().unwrap());
 

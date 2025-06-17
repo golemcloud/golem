@@ -38,7 +38,7 @@ pub struct InstanceIdentifier {
     // `let x = instance(); x.foo()`.
     // module identifier here is variable-id x, with instance type being a worker
     pub variable_id: Option<VariableId>,
-    pub instance_type: Box<InstanceType>,
+    pub instance_type: InstanceType,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
@@ -101,7 +101,7 @@ impl CallType {
                 ..
             } => {
                 let module = module.as_mut()?;
-                let instance = &mut *module.instance_type;
+                let instance = &mut module.instance_type;
                 instance.worker_mut()
             }
             _ => None,

@@ -5373,7 +5373,6 @@ mod tests {
                 args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
-                dbg!(function_name.0.as_str());
                 match function_name.0.as_str() {
                     "amazon:shopping-cart/api1.{foo}" => {
                         let result_value =
