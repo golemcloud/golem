@@ -90,8 +90,8 @@ impl From<AccountSummaryServiceError> for AccountSummaryError {
 }
 
 pub struct AccountSummaryApi {
-    pub auth_service: Arc<dyn AuthService + Sync + Send>,
-    pub account_summary_service: Arc<dyn AccountSummaryService + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService>,
+    pub account_summary_service: Arc<dyn AccountSummaryService>,
 }
 
 #[OpenApi(prefix_path = "/v1/admin/accounts", tag = ApiTags::AccountSummary)]

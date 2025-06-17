@@ -14,10 +14,10 @@
 
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
+use crate::login::OAuth2Error;
+use crate::login::{self, LoginSystem, LoginSystemEnabled};
 use crate::model;
 use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::login;
-use crate::service::oauth2::{OAuth2Error, OAuth2Service};
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::login::v1::cloud_login_service_server::CloudLoginService;
 use golem_api_grpc::proto::golem::login::v1::{
@@ -67,8 +67,10 @@ impl From<login::LoginError> for LoginError {
             }),
             login::LoginError::InternalAccountError(_)
             | login::LoginError::Internal(_)
-            | login::LoginError::InternalOAuth2TokenError(_)
             | login::LoginError::InternalOAuth2ProviderClientError(_)
+            | login::LoginError::InternalSerializationError { .. }
+            | login::LoginError::UnknownTokenState(_)
+            | login::LoginError::InternalRepoError(_)
             | login::LoginError::InternalTokenServiceError(_) => {
                 login_error::Error::Internal(ErrorBody {
                     error: value.to_safe_string(),
@@ -98,12 +100,22 @@ impl From<OAuth2Error> for LoginError {
 }
 
 pub struct LoginGrpcApi {
-    pub auth_service: Arc<dyn AuthService + Sync + Send>,
-    pub login_service: Arc<dyn login::LoginService + Sync + Send>,
-    pub oauth2_service: Arc<dyn OAuth2Service + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService>,
+    pub login_system: Arc<LoginSystem>,
 }
 
 impl LoginGrpcApi {
+    fn get_enabled_login_system(&self) -> Result<&LoginSystemEnabled, LoginError> {
+        match &*self.login_system {
+            LoginSystem::Enabled(inner) => Ok(inner),
+            LoginSystem::Disabled => Err(LoginError {
+                error: Some(login_error::Error::Internal(ErrorBody {
+                    error: "Login system is disabled".to_string(),
+                })),
+            }),
+        }
+    }
+
     async fn auth(&self, metadata: MetadataMap) -> Result<AccountAuthorisation, LoginError> {
         match get_authorisation_token(metadata) {
             Some(t) => self
@@ -133,6 +145,8 @@ impl LoginGrpcApi {
         request: OAuth2Request,
         _metadata: MetadataMap,
     ) -> Result<UnsafeToken, LoginError> {
+        let login_system = self.get_enabled_login_system()?;
+
         let provider: model::OAuth2Provider =
             model::OAuth2Provider::from_str(request.provider.as_str()).map_err(|_| LoginError {
                 error: Some(login_error::Error::BadRequest(ErrorsBody {
@@ -140,7 +154,7 @@ impl LoginGrpcApi {
                 })),
             })?;
 
-        let result = self
+        let result = login_system
             .login_service
             .oauth2(&provider, &request.access_token)
             .await?;
@@ -152,13 +166,15 @@ impl LoginGrpcApi {
         request: CompleteOAuth2Request,
         _metadata: MetadataMap,
     ) -> Result<UnsafeToken, LoginError> {
-        let token = self
+        let login_system = self.get_enabled_login_system()?;
+
+        let token = login_system
             .oauth2_service
             .finish_workflow(&model::EncodedOAuth2Session {
                 value: request.body,
             })
             .await?;
-        let result = self
+        let result = login_system
             .login_service
             .oauth2(&token.provider, &token.access_token)
             .await?;
@@ -167,7 +183,9 @@ impl LoginGrpcApi {
     }
 
     async fn start_oauth2(&self) -> Result<OAuth2Data, LoginError> {
-        let result = self.oauth2_service.start_workflow().await?;
+        let login_system = self.get_enabled_login_system()?;
+
+        let result = login_system.oauth2_service.start_workflow().await?;
         Ok(result.into())
     }
 }

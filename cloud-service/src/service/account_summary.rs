@@ -40,7 +40,7 @@ impl SafeDisplay for AccountSummaryServiceError {
 }
 
 #[async_trait]
-pub trait AccountSummaryService {
+pub trait AccountSummaryService: Send + Sync {
     async fn get(
         &self,
         skip: i32,
@@ -52,13 +52,13 @@ pub trait AccountSummaryService {
 
 pub struct AccountSummaryServiceDefault {
     auth_service: Arc<dyn AuthService>,
-    account_summary_repo: Arc<dyn AccountSummaryRepo + Send + Sync>,
+    account_summary_repo: Arc<dyn AccountSummaryRepo>,
 }
 
 impl AccountSummaryServiceDefault {
     pub fn new(
         auth_service: Arc<dyn AuthService>,
-        account_summary_repo: Arc<dyn AccountSummaryRepo + Send + Sync>,
+        account_summary_repo: Arc<dyn AccountSummaryRepo>,
     ) -> Self {
         Self {
             auth_service,

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bootstrap::Services;
 use crate::grpcapi::component::ComponentGrpcApi;
 use crate::grpcapi::plugin::PluginGrpcApi;
-use crate::service::Services;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentServiceServer;

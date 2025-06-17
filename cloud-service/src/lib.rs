@@ -16,8 +16,10 @@ use golem_common::golem_version;
 
 pub mod api;
 pub mod auth;
+pub mod bootstrap;
 pub mod config;
 pub mod grpcapi;
+pub mod login;
 pub mod metrics;
 pub mod model;
 pub mod repo;

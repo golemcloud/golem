@@ -15,17 +15,17 @@
 use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plugin::PluginInstallation;
-use golem_component_service_base::api::dto;
-use golem_component_service_base::model::Component;
 use golem_service_base::clients::plugin::{PluginError, PluginServiceClient};
+use golem_service_base::dto;
+use golem_service_base::model::Component;
 use std::sync::Arc;
 
-pub struct RemoteCloudApiMapper {
-    plugin_service_client: Arc<dyn PluginServiceClient + Sync + Send>,
+pub struct ApiMapper {
+    plugin_service_client: Arc<dyn PluginServiceClient>,
 }
 
-impl RemoteCloudApiMapper {
-    pub fn new(plugin_service_client: Arc<dyn PluginServiceClient + Sync + Send>) -> Self {
+impl ApiMapper {
+    pub fn new(plugin_service_client: Arc<dyn PluginServiceClient>) -> Self {
         Self {
             plugin_service_client,
         }
@@ -58,6 +58,8 @@ impl RemoteCloudApiMapper {
             .await?;
 
         Ok(dto::Component {
+            account_id: component.owner.account_id,
+            project_id: component.owner.project_id,
             versioned_component_id: component.versioned_component_id,
             component_name: component.component_name,
             component_size: component.component_size,

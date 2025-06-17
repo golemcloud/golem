@@ -14,17 +14,14 @@
 
 use super::component::ComponentOwner;
 use super::{Empty, PluginId, ProjectId};
-use crate::model::auth::AuthCtx;
 use crate::model::{
     AccountId, ComponentId, ComponentVersion, PluginInstallationId, PoemTypeRequirements,
 };
-use async_trait::async_trait;
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
@@ -282,45 +279,6 @@ impl PluginScope {
             Self::Project(scope) => &scope.project_id == project_id,
         }
     }
-
-    pub async fn accessible_scopes(
-        &self,
-        context: (Arc<dyn ComponentOwnershipQuery>, AuthCtx),
-    ) -> Result<Vec<Self>, String> {
-        match self {
-            Self::Global(_) =>
-            // In global scope we only have access to plugins in global scope
-            {
-                Ok(vec![self.clone()])
-            }
-            Self::Component(component) =>
-            // In a component scope we have access to
-            // - plugins in that particular scope
-            // - plugins of the component's owner project
-            // - and all the global ones
-            {
-                let (component_service, auth_ctx) = context;
-                let project = component_service
-                    .get_project(&component.component_id, &auth_ctx)
-                    .await?;
-
-                if let Some(project_id) = project {
-                    Ok(vec![
-                        Self::global(),
-                        Self::project(project_id),
-                        self.clone(),
-                    ])
-                } else {
-                    Ok(vec![Self::global(), self.clone()])
-                }
-            }
-            Self::Project(_) =>
-            // In a project scope we have access to plugins in that particular scope, and all the global ones
-            {
-                Ok(vec![Self::global(), self.clone()])
-            }
-        }
-    }
 }
 
 impl Default for PluginScope {
@@ -337,15 +295,6 @@ impl Display for PluginScope {
             Self::Project(scope) => write!(f, "project:{}", scope.project_id),
         }
     }
-}
-
-#[async_trait]
-pub trait ComponentOwnershipQuery: Send + Sync {
-    async fn get_project(
-        &self,
-        component_id: &ComponentId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Option<ProjectId>, String>;
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

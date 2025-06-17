@@ -797,4 +797,5 @@ pub enum AccountAction {
     ListProjectGrants,
     ViewLimits,
     UpdateLimits,
+    DeleteToken,
 }

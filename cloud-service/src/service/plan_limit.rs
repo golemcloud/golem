@@ -105,7 +105,7 @@ impl CheckLimitResult {
 }
 
 #[async_trait]
-pub trait PlanLimitService {
+pub trait PlanLimitService: Send + Sync {
     /// Get Account Limits.
     async fn get_account_limits(
         &self,
@@ -166,15 +166,15 @@ pub trait PlanLimitService {
 
 pub struct PlanLimitServiceDefault {
     auth_service: Arc<dyn AuthService>,
-    plan_repo: Arc<dyn PlanRepo + Sync + Send>,
-    account_repo: Arc<dyn AccountRepo + Sync + Send>,
-    account_workers_repo: Arc<dyn AccountWorkersRepo + Sync + Send>,
-    account_connections_repo: Arc<dyn AccountConnectionsRepo + Send + Sync>,
-    account_components_repo: Arc<dyn AccountComponentsRepo + Sync + Send>,
-    account_used_storage_repo: Arc<dyn AccountUsedStorageRepo + Sync + Send>,
-    account_uploads_repo: Arc<dyn AccountUploadsRepo + Sync + Send>,
-    project_repo: Arc<dyn ProjectRepo + Sync + Send>,
-    account_fuel_repo: Arc<dyn AccountFuelRepo + Sync + Send>,
+    plan_repo: Arc<dyn PlanRepo>,
+    account_repo: Arc<dyn AccountRepo>,
+    account_workers_repo: Arc<dyn AccountWorkersRepo>,
+    account_connections_repo: Arc<dyn AccountConnectionsRepo>,
+    account_components_repo: Arc<dyn AccountComponentsRepo>,
+    account_used_storage_repo: Arc<dyn AccountUsedStorageRepo>,
+    account_uploads_repo: Arc<dyn AccountUploadsRepo>,
+    project_repo: Arc<dyn ProjectRepo>,
+    account_fuel_repo: Arc<dyn AccountFuelRepo>,
 }
 
 #[async_trait]
@@ -406,15 +406,15 @@ impl PlanLimitService for PlanLimitServiceDefault {
 impl PlanLimitServiceDefault {
     pub fn new(
         auth_service: Arc<dyn AuthService>,
-        plan_repo: Arc<dyn PlanRepo + Sync + Send>,
-        account_repo: Arc<dyn AccountRepo + Sync + Send>,
-        account_workers_repo: Arc<dyn AccountWorkersRepo + Sync + Send>,
-        account_connections_repo: Arc<dyn AccountConnectionsRepo + Send + Sync>,
-        account_components_repo: Arc<dyn AccountComponentsRepo + Sync + Send>,
-        account_used_storage_repo: Arc<dyn AccountUsedStorageRepo + Sync + Send>,
-        account_uploads_repo: Arc<dyn AccountUploadsRepo + Sync + Send>,
-        project_repo: Arc<dyn ProjectRepo + Sync + Send>,
-        account_fuel_repo: Arc<dyn AccountFuelRepo + Sync + Send>,
+        plan_repo: Arc<dyn PlanRepo>,
+        account_repo: Arc<dyn AccountRepo>,
+        account_workers_repo: Arc<dyn AccountWorkersRepo>,
+        account_connections_repo: Arc<dyn AccountConnectionsRepo>,
+        account_components_repo: Arc<dyn AccountComponentsRepo>,
+        account_used_storage_repo: Arc<dyn AccountUsedStorageRepo>,
+        account_uploads_repo: Arc<dyn AccountUploadsRepo>,
+        project_repo: Arc<dyn ProjectRepo>,
+        account_fuel_repo: Arc<dyn AccountFuelRepo>,
     ) -> Self {
         PlanLimitServiceDefault {
             auth_service,

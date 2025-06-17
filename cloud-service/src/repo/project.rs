@@ -76,7 +76,7 @@ pub struct OwnerAccountIdRow {
 }
 
 #[async_trait]
-pub trait ProjectRepo {
+pub trait ProjectRepo: Send + Sync {
     async fn create(&self, project: &ProjectRecord) -> Result<(), RepoError>;
 
     async fn get(&self, project_id: &Uuid) -> Result<Option<ProjectRecord>, RepoError>;
@@ -371,7 +371,7 @@ impl ProjectRepo for DbProjectRepo<golem_service_base::db::postgres::PostgresPoo
         let mut query = self.plugin_installation_queries.create(record);
 
         self.db_pool
-            .with_rw("project", "get_installed_plugins")
+            .with_rw("project", "install_plugin")
             .execute(query.build())
             .await?;
 

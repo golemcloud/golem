@@ -1,17 +1,16 @@
 use test_r::test;
 
 use cloud_service::auth::AccountAuthorisation;
+use cloud_service::bootstrap::Services;
 use cloud_service::config::{make_config_loader, CloudServiceConfig};
 use cloud_service::model::{
-    Account, AccountData, OAuth2Provider, OAuth2Token, Project, ProjectData, ProjectGrant,
-    ProjectGrantData, ProjectPolicy, ProjectType, Token,
+    Account, AccountData, Project, ProjectData, ProjectGrant, ProjectGrantData, ProjectPolicy,
+    ProjectType, Token,
 };
 use cloud_service::service::account::AccountService;
-use cloud_service::service::oauth2_token::OAuth2TokenService;
 use cloud_service::service::project::ProjectService;
 use cloud_service::service::project_grant::ProjectGrantService;
 use cloud_service::service::project_policy::ProjectPolicyService;
-use cloud_service::service::Services;
 use golem_common::config::DbConfig;
 use golem_common::model::auth::{ProjectActions, ProjectAuthorisedActions, Role};
 use golem_common::model::AccountId;
@@ -120,28 +119,6 @@ async fn create_account(
     );
 
     create_result.unwrap()
-}
-
-async fn create_oauth2_token(
-    account_id: &AccountId,
-    oauth2_token_service: Arc<dyn OAuth2TokenService + Sync + Send>,
-) -> OAuth2Token {
-    let token = OAuth2Token {
-        provider: OAuth2Provider::Github,
-        external_id: account_id.value.clone(),
-        account_id: account_id.clone(),
-        token_id: None,
-    };
-
-    let create_result = oauth2_token_service.upsert(&token).await;
-
-    assert!(
-        create_result.is_ok(),
-        "Failed to create oauth2 token: {:?}",
-        token
-    );
-
-    token
 }
 
 async fn create_project(
@@ -329,20 +306,6 @@ async fn test_services(config: &CloudServiceConfig) {
             .unwrap();
 
         assert!(auth.token.account_id == token.data.account_id && auth.token.id == token.data.id);
-    }
-
-    // check that we can get oauth tokens
-    {
-        let oauth2_token =
-            create_oauth2_token(&account.id, services.oauth2_token_service.clone()).await;
-
-        let oauth2_token_by_id = services
-            .oauth2_token_service
-            .get(&oauth2_token.provider, oauth2_token.external_id.as_str())
-            .await
-            .unwrap();
-
-        assert!(oauth2_token_by_id.is_some_and(|p| p == oauth2_token));
     }
 
     // Check that we can only search for our own account

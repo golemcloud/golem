@@ -37,7 +37,7 @@ impl SafeDisplay for ProjectPolicyError {
 }
 
 #[async_trait]
-pub trait ProjectPolicyService {
+pub trait ProjectPolicyService: Send + Sync {
     async fn create(&self, project_policy: &ProjectPolicy) -> Result<(), ProjectPolicyError>;
 
     async fn get_all(

@@ -105,15 +105,15 @@ pub trait AccountService: Send + Sync {
 
 pub struct AccountServiceDefault {
     auth_service: Arc<dyn AuthService>,
-    account_repo: Arc<dyn AccountRepo + Sync + Send>,
-    plan_service: Arc<dyn PlanService + Sync + Send>,
+    account_repo: Arc<dyn AccountRepo>,
+    plan_service: Arc<dyn PlanService>,
 }
 
 impl AccountServiceDefault {
     pub fn new(
         auth_service: Arc<dyn AuthService>,
-        account_repo: Arc<dyn AccountRepo + Sync + Send>,
-        plan_service: Arc<dyn PlanService + Sync + Send>,
+        account_repo: Arc<dyn AccountRepo>,
+        plan_service: Arc<dyn PlanService>,
     ) -> Self {
         AccountServiceDefault {
             auth_service,

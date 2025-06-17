@@ -262,7 +262,7 @@ impl From<ProjectPolicy> for ProjectPolicyRecord {
 }
 
 #[async_trait]
-pub trait ProjectPolicyRepo {
+pub trait ProjectPolicyRepo: Send + Sync {
     async fn create(&self, project_policy: &ProjectPolicyRecord) -> Result<(), RepoError>;
 
     async fn get(&self, project_policy_id: &Uuid)
