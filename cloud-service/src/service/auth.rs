@@ -264,20 +264,36 @@ impl AuthService for AuthServiceDefault {
                     }
                 }
             }
-            AccountAction::UpdateAccount => limit_to_account_or_roles(auth, account_id, &[Role::Admin]),
+            AccountAction::UpdateAccount => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
             AccountAction::ViewPlan => limit_to_account_or_roles(auth, account_id, &[Role::Admin]),
-            AccountAction::CreateProject => limit_to_account_or_roles(auth, account_id, &[Role::Admin]),
+            AccountAction::CreateProject => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
             AccountAction::DeleteAccount => limit_to_roles(auth, &[Role::Admin]),
-            AccountAction::ViewAccountGrants => limit_to_account_or_roles(auth, account_id, &[Role::Admin]),
+            AccountAction::ViewAccountGrants => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
             AccountAction::CreateAccountGrant => limit_to_roles(auth, &[Role::Admin]),
             AccountAction::DeleteAccountGrant => limit_to_roles(auth, &[Role::Admin]),
-            AccountAction::ViewDefaultProject => limit_to_account_or_roles(auth, account_id, &[Role::Admin]),
+            AccountAction::ViewDefaultProject => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
             AccountAction::ListProjectGrants => limit_to_roles(auth, &[Role::Admin]),
-            AccountAction::ViewLimits => limit_to_account_or_roles(auth, account_id, &[Role::Admin]),
+            AccountAction::ViewLimits => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
             AccountAction::UpdateLimits => limit_to_roles(auth, &[Role::Admin]),
-            AccountAction::ViewTokens => limit_to_account_or_roles(auth, account_id, &[Role::Admin]),
-            AccountAction::CreateToken => limit_to_account_or_roles(auth, account_id, &[Role::Admin]),
-            AccountAction::DeleteToken => limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            AccountAction::ViewTokens => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
+            AccountAction::CreateToken => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
+            AccountAction::DeleteToken => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
         }
     }
 

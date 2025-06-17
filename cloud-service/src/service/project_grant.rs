@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::auth::{AuthService, AuthServiceError};
-use crate::auth::AccountAuthorisation;
+use super::auth::AuthServiceError;
 use crate::model::ProjectGrant;
 use crate::repo::account::AccountRepo;
 use crate::repo::project_grant::{ProjectGrantRecord, ProjectGrantRepo};
 use crate::repo::project_policy::ProjectPolicyRepo;
 use async_trait::async_trait;
-use golem_common::model::auth::ProjectAction;
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_common::model::{ProjectGrantId, ProjectPolicyId};
@@ -56,26 +54,23 @@ impl SafeDisplay for ProjectGrantError {
 
 #[async_trait]
 pub trait ProjectGrantService: Send + Sync {
-    async fn create(
-        &self,
-        project_grant: &ProjectGrant
-    ) -> Result<(), ProjectGrantError>;
+    async fn create(&self, project_grant: &ProjectGrant) -> Result<(), ProjectGrantError>;
 
     async fn get_by_project(
         &self,
-        project_id: &ProjectId
+        project_id: &ProjectId,
     ) -> Result<Vec<ProjectGrant>, ProjectGrantError>;
 
     async fn get(
         &self,
         project_id: &ProjectId,
-        project_grant_id: &ProjectGrantId
+        project_grant_id: &ProjectGrantId,
     ) -> Result<Option<ProjectGrant>, ProjectGrantError>;
 
     async fn delete(
         &self,
         project_id: &ProjectId,
-        project_grant_id: &ProjectGrantId
+        project_grant_id: &ProjectGrantId,
     ) -> Result<(), ProjectGrantError>;
 }
 
@@ -83,7 +78,6 @@ pub struct ProjectGrantServiceDefault {
     project_grant_repo: Arc<dyn ProjectGrantRepo>,
     project_policy_repo: Arc<dyn ProjectPolicyRepo>,
     account_repo: Arc<dyn AccountRepo>,
-    auth_service: Arc<dyn AuthService>,
 }
 
 impl ProjectGrantServiceDefault {
@@ -91,23 +85,18 @@ impl ProjectGrantServiceDefault {
         project_grant_repo: Arc<dyn ProjectGrantRepo>,
         project_policy_repo: Arc<dyn ProjectPolicyRepo>,
         account_repo: Arc<dyn AccountRepo>,
-        auth_service: Arc<dyn AuthService>,
     ) -> Self {
         ProjectGrantServiceDefault {
             project_grant_repo,
             project_policy_repo,
             account_repo,
-            auth_service,
         }
     }
 }
 
 #[async_trait]
 impl ProjectGrantService for ProjectGrantServiceDefault {
-    async fn create(
-        &self,
-        project_grant: &ProjectGrant
-    ) -> Result<(), ProjectGrantError> {
+    async fn create(&self, project_grant: &ProjectGrant) -> Result<(), ProjectGrantError> {
         info!(
             "Create project {} grant {}",
             &project_grant.data.grantor_project_id, project_grant.id
@@ -136,7 +125,7 @@ impl ProjectGrantService for ProjectGrantServiceDefault {
 
     async fn get_by_project(
         &self,
-        project_id: &ProjectId
+        project_id: &ProjectId,
     ) -> Result<Vec<ProjectGrant>, ProjectGrantError> {
         info!("Getting project grants for project {}", project_id);
 
@@ -153,7 +142,7 @@ impl ProjectGrantService for ProjectGrantServiceDefault {
     async fn get(
         &self,
         project_id: &ProjectId,
-        project_grant_id: &ProjectGrantId
+        project_grant_id: &ProjectGrantId,
     ) -> Result<Option<ProjectGrant>, ProjectGrantError> {
         info!("Getting project {} grant {}", project_id, project_grant_id);
 
@@ -170,7 +159,7 @@ impl ProjectGrantService for ProjectGrantServiceDefault {
     async fn delete(
         &self,
         project_id: &ProjectId,
-        project_grant_id: &ProjectGrantId
+        project_grant_id: &ProjectGrantId,
     ) -> Result<(), ProjectGrantError> {
         info!("Deleting project {} grant {}", project_id, project_grant_id);
 

@@ -14,6 +14,7 @@
 
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
+use crate::model::GlobalAction;
 use crate::service::account_summary;
 use crate::service::account_summary::AccountSummaryServiceError;
 use crate::service::auth::{AuthService, AuthServiceError};
@@ -32,7 +33,6 @@ use std::sync::Arc;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
-use crate::model::GlobalAction;
 
 impl From<AuthServiceError> for AccountSummaryError {
     fn from(value: AuthServiceError) -> Self {

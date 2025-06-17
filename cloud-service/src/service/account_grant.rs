@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::auth::{AuthService, AuthServiceError};
+use super::auth::AuthServiceError;
 use crate::repo::account::AccountRepo;
 use crate::repo::account_grant::AccountGrantRepo;
 use async_trait::async_trait;
@@ -48,19 +48,16 @@ impl SafeDisplay for AccountGrantServiceError {
 
 #[async_trait]
 pub trait AccountGrantService: Send + Sync {
-    async fn get(
-        &self,
-        account_id: &AccountId
-    ) -> Result<Vec<Role>, AccountGrantServiceError>;
+    async fn get(&self, account_id: &AccountId) -> Result<Vec<Role>, AccountGrantServiceError>;
     async fn add(
         &self,
         account_id: &AccountId,
-        role: &Role
+        role: &Role,
     ) -> Result<(), AccountGrantServiceError>;
     async fn remove(
         &self,
         account_id: &AccountId,
-        role: &Role
+        role: &Role,
     ) -> Result<(), AccountGrantServiceError>;
 }
 
@@ -83,10 +80,7 @@ impl AccountGrantServiceDefault {
 
 #[async_trait]
 impl AccountGrantService for AccountGrantServiceDefault {
-    async fn get(
-        &self,
-        account_id: &AccountId
-    ) -> Result<Vec<Role>, AccountGrantServiceError> {
+    async fn get(&self, account_id: &AccountId) -> Result<Vec<Role>, AccountGrantServiceError> {
         let roles = match self.account_grant_repo.get(account_id).await {
             Ok(roles) => roles,
             Err(error) => {
@@ -101,7 +95,7 @@ impl AccountGrantService for AccountGrantServiceDefault {
     async fn add(
         &self,
         account_id: &AccountId,
-        role: &Role
+        role: &Role,
     ) -> Result<(), AccountGrantServiceError> {
         let account = self.account_repo.get(account_id.value.as_str()).await?;
 
@@ -123,7 +117,7 @@ impl AccountGrantService for AccountGrantServiceDefault {
     async fn remove(
         &self,
         account_id: &AccountId,
-        role: &Role
+        role: &Role,
     ) -> Result<(), AccountGrantServiceError> {
         match self.account_grant_repo.remove(account_id, role).await {
             Ok(_) => Ok(()),

@@ -190,7 +190,7 @@ impl LimitsApi {
             self.auth_service
                 .authorize_account_action(&auth, account_id, &AccountAction::UpdateLimits)
                 .await?;
-        };
+        }
 
         self.plan_limit_service
             .record_fuel_consumption(updates)

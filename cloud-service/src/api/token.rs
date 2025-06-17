@@ -14,7 +14,6 @@
 
 use super::ApiError;
 use crate::api::{ApiResult, ApiTags};
-use crate::auth::AccountAuthorisation;
 use crate::login::LoginSystem;
 use crate::model::*;
 use crate::service::auth::AuthService;
@@ -68,7 +67,9 @@ impl TokenApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Vec<Token>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        self.auth_service.authorize_account_action(&auth, &account_id, &AccountAction::ViewTokens).await?;
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::ViewTokens)
+            .await?;
 
         let result = self.token_service.find(&account_id).await?;
         Ok(Json(result))
@@ -110,7 +111,9 @@ impl TokenApi {
     ) -> ApiResult<Json<Token>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
         let result = self.token_service.get(&token_id).await?;
-        self.auth_service.authorize_account_action(&auth, &result.account_id, &AccountAction::ViewTokens).await?;
+        self.auth_service
+            .authorize_account_action(&auth, &result.account_id, &AccountAction::ViewTokens)
+            .await?;
         Ok(Json(result))
     }
 
@@ -148,7 +151,9 @@ impl TokenApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<UnsafeToken>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        self.auth_service.authorize_account_action(&auth, &account_id, &AccountAction::CreateToken).await?;
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::CreateToken)
+            .await?;
 
         let response = self
             .token_service
@@ -192,11 +197,7 @@ impl TokenApi {
     ) -> ApiResult<Json<DeleteTokenResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
 
-        match self
-            .token_service
-            .get(&token_id)
-            .await
-        {
+        match self.token_service.get(&token_id).await {
             Ok(existing) => {
                 self.auth_service
                     .authorize_account_action(

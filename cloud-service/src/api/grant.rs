@@ -148,9 +148,7 @@ impl GrantApi {
             .authorize_account_action(&auth, &account_id, &AccountAction::CreateAccountGrant)
             .await?;
 
-        self.account_grant_service
-            .add(&account_id, &role)
-            .await?;
+        self.account_grant_service.add(&account_id, &role).await?;
 
         Ok(Json(role))
     }

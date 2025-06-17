@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::auth::{AuthService, AuthServiceError};
-use crate::auth::AccountAuthorisation;
-use crate::model::{AccountAction, Plan, ResourceLimits};
+use super::auth::AuthServiceError;
+use crate::model::{Plan, ResourceLimits};
 use crate::repo::account::AccountRepo;
 use crate::repo::account_components::AccountComponentsRepo;
 use crate::repo::account_connections::AccountConnectionsRepo;
@@ -127,13 +126,13 @@ pub trait PlanLimitService: Send + Sync {
     /// Get memory and CPU limits
     async fn get_resource_limits(
         &self,
-        account_id: &AccountId
+        account_id: &AccountId,
     ) -> Result<ResourceLimits, PlanLimitError>;
 
     /// Record fuel consumption - internal API for executors
     async fn record_fuel_consumption(
         &self,
-        updates: HashMap<AccountId, i64>
+        updates: HashMap<AccountId, i64>,
     ) -> Result<(), PlanLimitError>;
 
     /// Update component limit.
@@ -141,26 +140,25 @@ pub trait PlanLimitService: Send + Sync {
         &self,
         account_id: &AccountId,
         count: i32,
-        size: i64
+        size: i64,
     ) -> Result<(), PlanLimitError>;
 
     /// Update worker limit.
     async fn update_worker_limit(
         &self,
         account_id: &AccountId,
-        value: i32
+        value: i32,
     ) -> Result<(), PlanLimitError>;
 
     /// Update worker connection limit.
     async fn update_worker_connection_limit(
         &self,
         account_id: &AccountId,
-        value: i32
+        value: i32,
     ) -> Result<(), PlanLimitError>;
 }
 
 pub struct PlanLimitServiceDefault {
-    auth_service: Arc<dyn AuthService>,
     plan_repo: Arc<dyn PlanRepo>,
     account_repo: Arc<dyn AccountRepo>,
     account_workers_repo: Arc<dyn AccountWorkersRepo>,
@@ -213,7 +211,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
 
     async fn get_resource_limits(
         &self,
-        account_id: &AccountId
+        account_id: &AccountId,
     ) -> Result<ResourceLimits, PlanLimitError> {
         let plan = self.get_plan(account_id).await?;
         let fuel = self.account_fuel_repo.get(account_id).await?;
@@ -226,7 +224,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
 
     async fn record_fuel_consumption(
         &self,
-        updates: HashMap<AccountId, i64>
+        updates: HashMap<AccountId, i64>,
     ) -> Result<(), PlanLimitError> {
         // TODO: Should we do this in parallel?
         for (account_id, update) in updates {
@@ -240,7 +238,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
         &self,
         account_id: &AccountId,
         count: i32,
-        size: i64
+        size: i64,
     ) -> Result<(), PlanLimitError> {
         if size > 50000000 {
             return Err(PlanLimitError::limit_exceeded(
@@ -312,9 +310,8 @@ impl PlanLimitService for PlanLimitServiceDefault {
     async fn update_worker_limit(
         &self,
         account_id: &AccountId,
-        value: i32
+        value: i32,
     ) -> Result<(), PlanLimitError> {
-
         let plan = self.get_plan(account_id).await?;
         let num_workers = self.account_workers_repo.get(account_id).await?;
 
@@ -343,7 +340,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
     async fn update_worker_connection_limit(
         &self,
         account_id: &AccountId,
-        value: i32
+        value: i32,
     ) -> Result<(), PlanLimitError> {
         let connections = self.account_connections_repo.get(account_id).await?;
 
@@ -377,7 +374,6 @@ impl PlanLimitService for PlanLimitServiceDefault {
 // Helper functions.
 impl PlanLimitServiceDefault {
     pub fn new(
-        auth_service: Arc<dyn AuthService>,
         plan_repo: Arc<dyn PlanRepo>,
         account_repo: Arc<dyn AccountRepo>,
         account_workers_repo: Arc<dyn AccountWorkersRepo>,
@@ -389,7 +385,6 @@ impl PlanLimitServiceDefault {
         account_fuel_repo: Arc<dyn AccountFuelRepo>,
     ) -> Self {
         PlanLimitServiceDefault {
-            auth_service,
             plan_repo,
             account_repo,
             account_workers_repo,

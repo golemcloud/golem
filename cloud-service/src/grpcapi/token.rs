@@ -67,11 +67,6 @@ impl From<AuthServiceError> for TokenError {
 impl From<token::TokenServiceError> for TokenError {
     fn from(value: token::TokenServiceError) -> Self {
         let error = match value {
-            token::TokenServiceError::Unauthorized(_) => {
-                token_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_safe_string(),
-                })
-            }
             token::TokenServiceError::InternalRepoError(_)
             | token::TokenServiceError::InternalSecretAlreadyExists { .. } => {
                 token_error::Error::InternalError(ErrorBody {
@@ -151,11 +146,7 @@ impl TokenGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing token id"))?;
 
-        match self
-            .token_service
-            .get(&token_id)
-            .await
-        {
+        match self.token_service.get(&token_id).await {
             Ok(existing) => {
                 self.auth_service
                     .authorize_account_action(
@@ -200,12 +191,11 @@ impl TokenGrpcApi {
             .and_then(|d| chrono::DateTime::<chrono::Utc>::from_str(d.expires_at.as_str()).ok())
             .ok_or_else(|| bad_request_error("Missing expires at"))?;
 
-        self.auth_service.authorize_account_action(&auth, &account_id, &AccountAction::CreateToken).await?;
-
-        let result = self
-            .token_service
-            .create(&account_id, &expires_at)
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::CreateToken)
             .await?;
+
+        let result = self.token_service.create(&account_id, &expires_at).await?;
         Ok(result.into())
     }
 
@@ -222,7 +212,9 @@ impl TokenGrpcApi {
 
         let result = self.token_service.get(&id).await?;
 
-        self.auth_service.authorize_account_action(&auth, &result.account_id, &AccountAction::ViewTokens).await?;
+        self.auth_service
+            .authorize_account_action(&auth, &result.account_id, &AccountAction::ViewTokens)
+            .await?;
 
         Ok(result.into())
     }
@@ -238,7 +230,9 @@ impl TokenGrpcApi {
             .map(|id| id.into())
             .ok_or_else(|| bad_request_error("Missing account id"))?;
 
-        self.auth_service.authorize_account_action(&auth, &account_id, &AccountAction::ViewTokens).await?;
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::ViewTokens)
+            .await?;
 
         let result = self.token_service.find(&account_id).await?;
         Ok(result.into_iter().map(|p| p.into()).collect())

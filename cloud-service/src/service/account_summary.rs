@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::auth::{AuthService, AuthServiceError};
+use super::auth::AuthServiceError;
 use crate::model::AccountSummary;
 use crate::repo::account_summary::AccountSummaryRepo;
-use crate::{auth::AccountAuthorisation, model::GlobalAction};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
@@ -44,24 +43,19 @@ pub trait AccountSummaryService: Send + Sync {
     async fn get(
         &self,
         skip: i32,
-        limit: i32
+        limit: i32,
     ) -> Result<Vec<AccountSummary>, AccountSummaryServiceError>;
 
     async fn count(&self) -> Result<u64, AccountSummaryServiceError>;
 }
 
 pub struct AccountSummaryServiceDefault {
-    auth_service: Arc<dyn AuthService>,
     account_summary_repo: Arc<dyn AccountSummaryRepo>,
 }
 
 impl AccountSummaryServiceDefault {
-    pub fn new(
-        auth_service: Arc<dyn AuthService>,
-        account_summary_repo: Arc<dyn AccountSummaryRepo>,
-    ) -> Self {
+    pub fn new(account_summary_repo: Arc<dyn AccountSummaryRepo>) -> Self {
         Self {
-            auth_service,
             account_summary_repo,
         }
     }
@@ -72,7 +66,7 @@ impl AccountSummaryService for AccountSummaryServiceDefault {
     async fn get(
         &self,
         skip: i32,
-        limit: i32
+        limit: i32,
     ) -> Result<Vec<AccountSummary>, AccountSummaryServiceError> {
         match self.account_summary_repo.get(skip, limit).await {
             Ok(account_summary) => Ok(account_summary),

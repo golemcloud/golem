@@ -29,6 +29,7 @@ use golem_api_grpc::proto::golem::project::v1::{
 };
 use golem_api_grpc::proto::golem::project::Project;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::auth::ProjectAction;
 use golem_common::model::{AccountId, ProjectId};
 use golem_common::recorded_grpc_api_request;
 use golem_common::SafeDisplay;
@@ -38,7 +39,6 @@ use std::sync::Arc;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
-use golem_common::model::auth::ProjectAction;
 
 impl From<AuthServiceError> for ProjectError {
     fn from(value: AuthServiceError) -> Self {
@@ -141,10 +141,13 @@ impl ProjectGrpcApi {
         let auth = self.auth(metadata).await?;
         let account_id = &auth.token.account_id;
         self.auth_service
-            .authorize_account_action(&auth, &account_id, &AccountAction::ViewDefaultProject)
+            .authorize_account_action(&auth, account_id, &AccountAction::ViewDefaultProject)
             .await?;
 
-        let result = self.project_service.get_default(&auth.token.account_id).await?;
+        let result = self
+            .project_service
+            .get_default(&auth.token.account_id)
+            .await?;
         Ok(result.into())
     }
 
@@ -185,7 +188,11 @@ impl ProjectGrpcApi {
         let viewable_projects = self.auth_service.viewable_projects(&auth).await?;
 
         let projects = match request.project_name {
-            Some(name) => self.project_service.get_all_by_name(&name, viewable_projects).await?,
+            Some(name) => {
+                self.project_service
+                    .get_all_by_name(&name, viewable_projects)
+                    .await?
+            }
             None => self.project_service.get_all(viewable_projects).await?,
         };
 
@@ -225,11 +232,7 @@ impl ProjectGrpcApi {
             .ok_or_else(|| bad_request_error("Missing account id"))?;
 
         self.auth_service
-            .authorize_account_action(
-                &auth,
-                &owner_account_id,
-                &AccountAction::CreateProject,
-            )
+            .authorize_account_action(&auth, &owner_account_id, &AccountAction::CreateProject)
             .await?;
 
         let project = model::Project {

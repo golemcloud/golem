@@ -15,7 +15,6 @@
 use super::oauth2_provider_client::{OAuth2ProviderClient, OAuth2ProviderClientError};
 use super::oauth2_token_repo::{OAuth2TokenRecord, OAuth2TokenRepo};
 use super::oauth2_web_flow_state_repo::{LinkedTokenState, OAuth2WebFlowStateRepo};
-use crate::auth::AccountAuthorisation;
 use crate::model::{AccountData, ExternalLogin, OAuth2Provider, OAuth2Token, UnsafeToken};
 use crate::service::account::{AccountError, AccountService};
 use crate::service::token::{TokenService, TokenServiceError};
@@ -156,7 +155,7 @@ impl LoginServiceDefault {
     async fn make_account(
         &self,
         _provider: &OAuth2Provider,
-        external_login: &ExternalLogin
+        external_login: &ExternalLogin,
     ) -> Result<AccountId, LoginError> {
         let email = external_login
             .email
@@ -175,10 +174,7 @@ impl LoginServiceDefault {
 
         let account = self
             .account_service
-            .create(
-                &fresh_account_id,
-                &AccountData { name, email }
-            )
+            .create(&fresh_account_id, &AccountData { name, email })
             .await?;
 
         Ok(account.id)
@@ -188,17 +184,14 @@ impl LoginServiceDefault {
         &self,
         provider: &OAuth2Provider,
         external_login: &ExternalLogin,
-        account_id: &AccountId
+        account_id: &AccountId,
     ) -> Result<UnsafeToken, LoginError> {
         let expiration = Utc::now()
             // Ten years.
             .checked_add_months(chrono::Months::new(10 * 12))
             .ok_or(LoginError::internal("Failed to calculate token expiry"))?;
 
-        let unsafe_token = self
-            .token_service
-            .create(account_id, &expiration)
-            .await?;
+        let unsafe_token = self.token_service.create(account_id, &expiration).await?;
 
         {
             let token = unsafe_token.data.clone();
@@ -241,18 +234,14 @@ impl LoginService for LoginServiceDefault {
 
         let account_id = match existing_data.clone() {
             Some(token) => token.account_id,
-            None => self.make_account(provider, &external_login).await?
+            None => self.make_account(provider, &external_login).await?,
         };
 
         let unsafe_token = match existing_data.and_then(|token| token.token_id) {
             Some(token_id) => self.token_service.get_unsafe(&token_id).await?,
             None => {
-                self.make_token(
-                    provider,
-                    &external_login,
-                    &account_id,
-                )
-                .await?
+                self.make_token(provider, &external_login, &account_id)
+                    .await?
             }
         };
         Ok(unsafe_token)

@@ -67,10 +67,13 @@ impl ProjectApi {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
         let account_id = &auth.token.account_id;
         self.auth_service
-            .authorize_account_action(&auth, &account_id, &AccountAction::ViewDefaultProject)
+            .authorize_account_action(&auth, account_id, &AccountAction::ViewDefaultProject)
             .await?;
 
-        let project = self.project_service.get_default(&auth.token.account_id).await?;
+        let project = self
+            .project_service
+            .get_default(&auth.token.account_id)
+            .await?;
         Ok(Json(project))
     }
 

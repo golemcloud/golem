@@ -60,7 +60,10 @@ impl AccountApi {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
         let viewable_accounts = self.auth_service.viewable_accounts(&auth).await?;
 
-        let values = self.account_service.find(email.as_deref(), viewable_accounts).await?;
+        let values = self
+            .account_service
+            .find(email.as_deref(), viewable_accounts)
+            .await?;
         Ok(Json(dto::FindAccountsResponse { values }))
     }
 
@@ -166,10 +169,7 @@ impl AccountApi {
             .authorize_account_action(&auth, &account_id, &AccountAction::UpdateAccount)
             .await?;
 
-        let response = self
-            .account_service
-            .update(&account_id, &data)
-            .await?;
+        let response = self.account_service.update(&account_id, &data).await?;
         Ok(Json(response))
     }
 

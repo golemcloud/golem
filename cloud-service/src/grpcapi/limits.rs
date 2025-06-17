@@ -14,6 +14,7 @@
 
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
+use crate::model::AccountAction;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody, ResourceLimits};
@@ -38,7 +39,6 @@ use std::sync::Arc;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
-use crate::model::AccountAction;
 
 impl From<AuthServiceError> for LimitsError {
     fn from(value: AuthServiceError) -> Self {
@@ -174,7 +174,7 @@ impl LimitsGrpcApi {
             self.auth_service
                 .authorize_account_action(&auth, account_id, &AccountAction::UpdateLimits)
                 .await?;
-        };
+        }
 
         self.plan_limit_service
             .record_fuel_consumption(updates)

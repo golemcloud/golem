@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::auth::AccountAuthorisation;
 use crate::model::{Token, UnsafeToken};
 use crate::repo::account::AccountRepo;
 use crate::repo::token::TokenRepo;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_common::model::auth::Role;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::AccountId;
 use golem_common::model::TokenId;
@@ -31,8 +29,6 @@ use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TokenServiceError {
-    #[error("Unauthorized: {0}")]
-    Unauthorized(String),
     #[error("Account Not Found: {0}")]
     AccountNotFound(AccountId),
     #[error("Unknown token: {0}")]
@@ -50,16 +46,9 @@ pub enum TokenServiceError {
     },
 }
 
-impl TokenServiceError {
-    fn unauthorized(error: impl AsRef<str>) -> Self {
-        Self::Unauthorized(error.as_ref().to_string())
-    }
-}
-
 impl SafeDisplay for TokenServiceError {
     fn to_safe_string(&self) -> String {
         match self {
-            Self::Unauthorized(_) => self.to_string(),
             Self::AccountNotFound(_) => self.to_string(),
             Self::UnknownToken(_) => self.to_string(),
             Self::UnknownTokenState(_) => self.to_string(),
@@ -76,13 +65,23 @@ pub trait TokenService: Send + Sync {
 
     async fn get_unsafe(&self, id: &TokenId) -> Result<UnsafeToken, TokenServiceError>;
 
-    async fn get_by_secret(&self, secret: &TokenSecret) -> Result<Option<Token>, TokenServiceError>;
+    async fn get_by_secret(&self, secret: &TokenSecret)
+        -> Result<Option<Token>, TokenServiceError>;
 
     async fn find(&self, account_id: &AccountId) -> Result<Vec<Token>, TokenServiceError>;
 
-    async fn create(&self, account_id: &AccountId, expires_at: &DateTime<Utc>) -> Result<UnsafeToken, TokenServiceError>;
+    async fn create(
+        &self,
+        account_id: &AccountId,
+        expires_at: &DateTime<Utc>,
+    ) -> Result<UnsafeToken, TokenServiceError>;
 
-    async fn create_known_secret(&self, account_id: &AccountId, expires_at: &DateTime<Utc>, secret: &TokenSecret) -> Result<(), TokenServiceError>;
+    async fn create_known_secret(
+        &self,
+        account_id: &AccountId,
+        expires_at: &DateTime<Utc>,
+        secret: &TokenSecret,
+    ) -> Result<(), TokenServiceError>;
 
     async fn delete(&self, id: &TokenId) -> Result<(), TokenServiceError>;
 }
@@ -100,25 +99,11 @@ impl TokenServiceDefault {
         }
     }
 
-    fn check_authorization(
-        &self,
-        account_id: &AccountId,
-        auth: &AccountAuthorisation,
-    ) -> Result<(), TokenServiceError> {
-        if auth.has_account_or_role(account_id, &Role::Admin) {
-            Ok(())
-        } else {
-            Err(TokenServiceError::unauthorized(
-                "Access to another account.",
-            ))
-        }
-    }
-
     async fn create_known_secret_unsafe(
         &self,
         account_id: &AccountId,
         expires_at: &DateTime<Utc>,
-        secret: &TokenSecret
+        secret: &TokenSecret,
     ) -> Result<UnsafeToken, TokenServiceError> {
         let token_id = TokenId(Uuid::new_v4());
 
@@ -144,10 +129,7 @@ impl TokenServiceDefault {
 
 #[async_trait]
 impl TokenService for TokenServiceDefault {
-    async fn get(
-        &self,
-        id: &TokenId
-    ) -> Result<Token, TokenServiceError> {
+    async fn get(&self, id: &TokenId) -> Result<Token, TokenServiceError> {
         match self.token_repo.get(&id.0).await {
             Ok(Some(record)) => {
                 let token: Token = record.into();
@@ -193,10 +175,7 @@ impl TokenService for TokenServiceDefault {
         }
     }
 
-    async fn find(
-        &self,
-        account_id: &AccountId
-    ) -> Result<Vec<Token>, TokenServiceError> {
+    async fn find(&self, account_id: &AccountId) -> Result<Vec<Token>, TokenServiceError> {
         match self
             .token_repo
             .get_by_account(account_id.value.as_str())
@@ -213,21 +192,22 @@ impl TokenService for TokenServiceDefault {
     async fn create(
         &self,
         account_id: &AccountId,
-        expires_at: &DateTime<Utc>
+        expires_at: &DateTime<Utc>,
     ) -> Result<UnsafeToken, TokenServiceError> {
         let account = self.account_repo.get(account_id.value.as_str()).await?;
         if account.is_none() {
             return Err(TokenServiceError::AccountNotFound(account_id.clone()));
         }
         let secret = TokenSecret::new(Uuid::new_v4());
-        self.create_known_secret_unsafe(account_id, expires_at, &secret).await
+        self.create_known_secret_unsafe(account_id, expires_at, &secret)
+            .await
     }
 
     async fn create_known_secret(
         &self,
         account_id: &AccountId,
         expires_at: &DateTime<Utc>,
-        secret: &TokenSecret
+        secret: &TokenSecret,
     ) -> Result<(), TokenServiceError> {
         debug!("{} is authorised", account_id.value);
         match self.get_by_secret(secret).await? {
@@ -236,7 +216,8 @@ impl TokenService for TokenServiceDefault {
                 existing_account_id: token.account_id.clone(),
             }),
             None => {
-                self.create_known_secret_unsafe(account_id, expires_at, secret).await?;
+                self.create_known_secret_unsafe(account_id, expires_at, secret)
+                    .await?;
                 Ok(())
             }
         }
