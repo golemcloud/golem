@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{ComponentDependencyKey, DynamicParsedFunctionName, Expr};
-use crate::{FullyQualifiedResourceConstructor, InstanceType, VariableId};
+use crate::{FullyQualifiedResourceConstructor, VariableId};
 use std::fmt::Display;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]

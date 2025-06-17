@@ -55,7 +55,6 @@ mod internal {
     use crate::type_refinement::precise_types::StringType;
     use crate::type_refinement::TypeRefinement;
     use crate::{Expr, InvalidWorkerName, TypeName};
-    use std::ops::Deref;
 
     pub(crate) fn check_worker_name(
         worker_name_opt: Option<&Expr>,
@@ -73,7 +72,7 @@ mod internal {
                             .map(|t| t.to_string())
                             .unwrap_or_else(|_| "unknown".to_string());
                         return Err(InvalidWorkerName {
-                            worker_name_expr: expr.deref().clone(),
+                            worker_name_expr: expr.clone(),
                             message: format!("expected string, found {}", type_name),
                         });
                     }

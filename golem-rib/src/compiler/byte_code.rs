@@ -158,7 +158,7 @@ mod internal {
     use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstanceIdentifier, InstanceType, InstanceVariable, InstructionId, Range,
+        InferredType, InstanceIdentifier, InstanceVariable, InstructionId, Range,
         RibByteCodeGenerationError, RibIR, TypeInternal, VariableId,
     };
     use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
