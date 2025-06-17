@@ -125,6 +125,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                             .with_source_span(source_span.clone());
                             *expr = new_call;
                         }
+
                         FunctionName::ResourceConstructor(fully_qualified_resource_constructor) => {
                             let (resource_id, resource_mode) = match function.function_type.return_type {
                                 Some(return_type) => match return_type.internal_type()  {
