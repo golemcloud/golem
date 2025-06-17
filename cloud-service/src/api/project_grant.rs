@@ -16,10 +16,10 @@ use super::{ApiError, ApiResult, ApiTags};
 use crate::auth::AccountAuthorisation;
 use crate::model::*;
 use crate::service::account::AccountService;
-use crate::service::auth::AuthService;
+use crate::service::auth::{AuthService, ViewableAccounts};
 use crate::service::project_grant::ProjectGrantService;
 use crate::service::project_policy::ProjectPolicyService;
-use golem_common::model::auth::ProjectActions;
+use golem_common::model::auth::{ProjectAction, ProjectActions};
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::ProjectId;
 use golem_common::model::{ProjectGrantId, ProjectPolicyId};
@@ -168,6 +168,7 @@ impl ProjectGrantApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<ProjectGrant>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service.authorize_project_action(&auth, &project_id, &ProjectAction::CreateProjectGrants).await?;
 
         let account_id = match (request.grantee_account_id, request.grantee_email) {
             (Some(account_id), _) => account_id,
@@ -175,7 +176,7 @@ impl ProjectGrantApi {
                 info!("Looking up account by email {email}");
                 let mut accounts = self
                     .account_service
-                    .find(Some(&email), &AccountAuthorisation::admin())
+                    .find(Some(&email), ViewableAccounts::All)
                     .await?;
                 if accounts.len() == 1 {
                     accounts.swap_remove(0).id

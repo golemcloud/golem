@@ -32,6 +32,7 @@ use std::sync::Arc;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
+use crate::model::GlobalAction;
 
 impl From<AuthServiceError> for AccountSummaryError {
     fn from(value: AuthServiceError) -> Self {
@@ -108,7 +109,11 @@ impl AccountSummaryGrpcApi {
         metadata: MetadataMap,
     ) -> Result<i64, AccountSummaryError> {
         let auth = self.auth(metadata).await?;
-        let value = self.account_summary_service.count(&auth).await?;
+        self.auth_service
+            .authorize_global_action(&auth, &GlobalAction::ViewAccountSummaries)
+            .await?;
+
+        let value = self.account_summary_service.count().await?;
         Ok(value as i64)
     }
 
@@ -118,9 +123,13 @@ impl AccountSummaryGrpcApi {
         metadata: MetadataMap,
     ) -> Result<GetAccountsSuccessResponse, AccountSummaryError> {
         let auth = self.auth(metadata).await?;
+        self.auth_service
+            .authorize_global_action(&auth, &GlobalAction::ViewAccountCount)
+            .await?;
+
         let values = self
             .account_summary_service
-            .get(request.skip, request.limit, &auth)
+            .get(request.skip, request.limit)
             .await?;
 
         let accounts = values

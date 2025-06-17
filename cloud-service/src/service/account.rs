@@ -66,40 +66,35 @@ pub trait AccountService: Send + Sync {
     async fn create(
         &self,
         id: &AccountId,
-        account: &AccountData,
-        auth: &AccountAuthorisation,
+        account: &AccountData
     ) -> Result<Account, AccountError>;
 
     async fn update(
         &self,
         account_id: &AccountId,
-        account: &AccountData,
-        auth: &AccountAuthorisation,
+        account: &AccountData
     ) -> Result<Account, AccountError>;
 
     async fn get(
         &self,
-        account_id: &AccountId,
-        auth: &AccountAuthorisation,
+        account_id: &AccountId
     ) -> Result<Account, AccountError>;
 
     /// Get all matching accounts. This will return your account + all accounts that you got access through at least one grant.
     async fn find(
         &self,
         email: Option<&str>,
-        auth: &AccountAuthorisation,
+        viewable_accounts: ViewableAccounts
     ) -> Result<Vec<Account>, AccountError>;
 
     async fn get_plan(
         &self,
-        account_id: &AccountId,
-        auth: &AccountAuthorisation,
+        account_id: &AccountId
     ) -> Result<Plan, AccountError>;
 
     async fn delete(
         &self,
-        account_id: &AccountId,
-        auth: &AccountAuthorisation,
+        account_id: &AccountId
     ) -> Result<(), AccountError>;
 }
 
@@ -138,13 +133,8 @@ impl AccountService for AccountServiceDefault {
     async fn create(
         &self,
         id: &AccountId,
-        account: &AccountData,
-        auth: &AccountAuthorisation,
+        account: &AccountData
     ) -> Result<Account, AccountError> {
-        self.auth_service
-            .authorize_global_action(auth, &GlobalAction::CreateAccount)
-            .await?;
-
         let plan_id = self.get_default_plan_id().await?;
         info!("Creating account: {}", id);
         match self
@@ -169,13 +159,8 @@ impl AccountService for AccountServiceDefault {
     async fn update(
         &self,
         account_id: &AccountId,
-        account: &AccountData,
-        auth: &AccountAuthorisation,
+        account: &AccountData
     ) -> Result<Account, AccountError> {
-        self.auth_service
-            .authorize_account_action(auth, account_id, &AccountAction::UpdateAccount)
-            .await?;
-
         info!("Updating account: {}", account_id);
         let current_account = self.account_repo.get(&account_id.value).await?;
         let plan_id = match current_account {
@@ -202,13 +187,8 @@ impl AccountService for AccountServiceDefault {
 
     async fn get(
         &self,
-        account_id: &AccountId,
-        auth: &AccountAuthorisation,
+        account_id: &AccountId
     ) -> Result<Account, AccountError> {
-        self.auth_service
-            .authorize_account_action(auth, account_id, &AccountAction::ViewAccount)
-            .await?;
-
         info!("Get account: {}", account_id);
 
         let result = self.account_repo.get(&account_id.value).await;
@@ -226,11 +206,9 @@ impl AccountService for AccountServiceDefault {
     async fn find(
         &self,
         email: Option<&str>,
-        auth: &AccountAuthorisation,
+        viewable_accounts: ViewableAccounts
     ) -> Result<Vec<Account>, AccountError> {
-        let visible_accounts = self.auth_service.viewable_accounts(auth).await?;
-
-        let results = match visible_accounts {
+        let results = match viewable_accounts {
             ViewableAccounts::All => self.account_repo.find_all(email).await?,
             ViewableAccounts::Limited { account_ids } => {
                 let ids = account_ids
@@ -246,13 +224,8 @@ impl AccountService for AccountServiceDefault {
 
     async fn get_plan(
         &self,
-        account_id: &AccountId,
-        auth: &AccountAuthorisation,
+        account_id: &AccountId
     ) -> Result<Plan, AccountError> {
-        self.auth_service
-            .authorize_account_action(auth, account_id, &AccountAction::ViewPlan)
-            .await?;
-
         info!("Get plan: {}", account_id);
 
         let result = self.account_repo.get(&account_id.value).await;
@@ -281,18 +254,8 @@ impl AccountService for AccountServiceDefault {
 
     async fn delete(
         &self,
-        account_id: &AccountId,
-        auth: &AccountAuthorisation,
+        account_id: &AccountId
     ) -> Result<(), AccountError> {
-        self.auth_service
-            .authorize_account_action(auth, account_id, &AccountAction::DeleteAccount)
-            .await?;
-
-        if auth.token.account_id == *account_id {
-            return Err(AccountError::ArgValidation(vec![
-                "Cannot delete current account.".to_string(),
-            ]));
-        }
         let result = self.account_repo.delete(&account_id.value).await;
         match result {
             Ok(_) => Ok(()),

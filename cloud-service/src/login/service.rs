@@ -156,8 +156,7 @@ impl LoginServiceDefault {
     async fn make_account(
         &self,
         _provider: &OAuth2Provider,
-        external_login: &ExternalLogin,
-        authorisation: &AccountAuthorisation,
+        external_login: &ExternalLogin
     ) -> Result<AccountId, LoginError> {
         let email = external_login
             .email
@@ -166,19 +165,22 @@ impl LoginServiceDefault {
                 "No user email from OAuth2 Provider for login {}",
                 external_login.external_id
             )))?;
+
         let name = external_login
             .name
             .clone()
             .unwrap_or(external_login.external_id.clone());
+
         let fresh_account_id = AccountId::generate();
+
         let account = self
             .account_service
             .create(
                 &fresh_account_id,
-                &AccountData { name, email },
-                authorisation,
+                &AccountData { name, email }
             )
             .await?;
+
         Ok(account.id)
     }
 
@@ -240,10 +242,7 @@ impl LoginService for LoginServiceDefault {
 
         let account_id = match existing_data.clone() {
             Some(token) => token.account_id,
-            None => {
-                self.make_account(provider, &external_login, &AccountAuthorisation::admin())
-                    .await?
-            }
+            None => self.make_account(provider, &external_login).await?
         };
 
         let unsafe_token = match existing_data.and_then(|token| token.token_id) {
