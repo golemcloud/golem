@@ -44,10 +44,10 @@ pub trait AccountSummaryService: Send + Sync {
     async fn get(
         &self,
         skip: i32,
-        limit: i32,
-        auth: &AccountAuthorisation,
+        limit: i32
     ) -> Result<Vec<AccountSummary>, AccountSummaryServiceError>;
-    async fn count(&self, auth: &AccountAuthorisation) -> Result<u64, AccountSummaryServiceError>;
+
+    async fn count(&self) -> Result<u64, AccountSummaryServiceError>;
 }
 
 pub struct AccountSummaryServiceDefault {
@@ -72,12 +72,8 @@ impl AccountSummaryService for AccountSummaryServiceDefault {
     async fn get(
         &self,
         skip: i32,
-        limit: i32,
-        auth: &AccountAuthorisation,
+        limit: i32
     ) -> Result<Vec<AccountSummary>, AccountSummaryServiceError> {
-        self.auth_service
-            .authorize_global_action(auth, &GlobalAction::ViewAccountSummaries)
-            .await?;
         match self.account_summary_repo.get(skip, limit).await {
             Ok(account_summary) => Ok(account_summary),
             Err(error) => {
@@ -87,10 +83,7 @@ impl AccountSummaryService for AccountSummaryServiceDefault {
         }
     }
 
-    async fn count(&self, auth: &AccountAuthorisation) -> Result<u64, AccountSummaryServiceError> {
-        self.auth_service
-            .authorize_global_action(auth, &GlobalAction::ViewAccountCount)
-            .await?;
+    async fn count(&self) -> Result<u64, AccountSummaryServiceError> {
         match self.account_summary_repo.count().await {
             Ok(count) => Ok(count),
             Err(error) => {
