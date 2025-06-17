@@ -31,7 +31,7 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
 use std::panic;
-use test_r::{flaky, inherit_test_dep, test};
+use test_r::{finherit_test_dep, test};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -39,7 +39,6 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
-#[flaky(10)] // TODO: stabilize test
 async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
     let component_id = deps.component("shopping-cart").unique().store().await;
 
@@ -220,7 +219,7 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
         }],
         site: ApiSite {
             host: "localhost".to_string(),
-            subdomain: Some("subdomain".to_string()),
+            subdomain: Some("subdomain-2".to_string()),
         },
     };
 
@@ -253,7 +252,7 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
     // Delete the API deployment and see if component can be updated
     // as constraints should be removed after deleting the API deployment
     deps.worker_service()
-        .delete_api_deployment("subdomain.localhost")
+        .delete_api_deployment("subdomain-2.localhost")
         .await
         .unwrap();
 
