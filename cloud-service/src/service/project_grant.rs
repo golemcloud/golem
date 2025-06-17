@@ -58,43 +58,39 @@ impl SafeDisplay for ProjectGrantError {
 pub trait ProjectGrantService: Send + Sync {
     async fn create(
         &self,
-        project_grant: &ProjectGrant,
-        auth: &AccountAuthorisation,
+        project_grant: &ProjectGrant
     ) -> Result<(), ProjectGrantError>;
 
     async fn get_by_project(
         &self,
-        project_id: &ProjectId,
-        auth: &AccountAuthorisation,
+        project_id: &ProjectId
     ) -> Result<Vec<ProjectGrant>, ProjectGrantError>;
 
     async fn get(
         &self,
         project_id: &ProjectId,
-        project_grant_id: &ProjectGrantId,
-        auth: &AccountAuthorisation,
+        project_grant_id: &ProjectGrantId
     ) -> Result<Option<ProjectGrant>, ProjectGrantError>;
 
     async fn delete(
         &self,
         project_id: &ProjectId,
-        project_grant_id: &ProjectGrantId,
-        auth: &AccountAuthorisation,
+        project_grant_id: &ProjectGrantId
     ) -> Result<(), ProjectGrantError>;
 }
 
 pub struct ProjectGrantServiceDefault {
-    project_grant_repo: Arc<dyn ProjectGrantRepo + Sync + Send>,
-    project_policy_repo: Arc<dyn ProjectPolicyRepo + Sync + Send>,
-    account_repo: Arc<dyn AccountRepo + Sync + Send>,
+    project_grant_repo: Arc<dyn ProjectGrantRepo>,
+    project_policy_repo: Arc<dyn ProjectPolicyRepo>,
+    account_repo: Arc<dyn AccountRepo>,
     auth_service: Arc<dyn AuthService>,
 }
 
 impl ProjectGrantServiceDefault {
     pub fn new(
-        project_grant_repo: Arc<dyn ProjectGrantRepo + Sync + Send>,
-        project_policy_repo: Arc<dyn ProjectPolicyRepo + Sync + Send>,
-        account_repo: Arc<dyn AccountRepo + Sync + Send>,
+        project_grant_repo: Arc<dyn ProjectGrantRepo>,
+        project_policy_repo: Arc<dyn ProjectPolicyRepo>,
+        account_repo: Arc<dyn AccountRepo>,
         auth_service: Arc<dyn AuthService>,
     ) -> Self {
         ProjectGrantServiceDefault {
@@ -110,17 +106,8 @@ impl ProjectGrantServiceDefault {
 impl ProjectGrantService for ProjectGrantServiceDefault {
     async fn create(
         &self,
-        project_grant: &ProjectGrant,
-        auth: &AccountAuthorisation,
+        project_grant: &ProjectGrant
     ) -> Result<(), ProjectGrantError> {
-        self.auth_service
-            .authorize_project_action(
-                auth,
-                &project_grant.data.grantor_project_id,
-                &ProjectAction::CreateProjectGrants,
-            )
-            .await?;
-
         info!(
             "Create project {} grant {}",
             &project_grant.data.grantor_project_id, project_grant.id
@@ -149,13 +136,8 @@ impl ProjectGrantService for ProjectGrantServiceDefault {
 
     async fn get_by_project(
         &self,
-        project_id: &ProjectId,
-        auth: &AccountAuthorisation,
+        project_id: &ProjectId
     ) -> Result<Vec<ProjectGrant>, ProjectGrantError> {
-        self.auth_service
-            .authorize_project_action(auth, project_id, &ProjectAction::ViewProjectGrants)
-            .await?;
-
         info!("Getting project grants for project {}", project_id);
 
         let result = self
@@ -171,13 +153,8 @@ impl ProjectGrantService for ProjectGrantServiceDefault {
     async fn get(
         &self,
         project_id: &ProjectId,
-        project_grant_id: &ProjectGrantId,
-        auth: &AccountAuthorisation,
+        project_grant_id: &ProjectGrantId
     ) -> Result<Option<ProjectGrant>, ProjectGrantError> {
-        self.auth_service
-            .authorize_project_action(auth, project_id, &ProjectAction::ViewProjectGrants)
-            .await?;
-
         info!("Getting project {} grant {}", project_id, project_grant_id);
 
         let project_grant = self.project_grant_repo.get(&project_grant_id.0).await?;
@@ -193,13 +170,8 @@ impl ProjectGrantService for ProjectGrantServiceDefault {
     async fn delete(
         &self,
         project_id: &ProjectId,
-        project_grant_id: &ProjectGrantId,
-        auth: &AccountAuthorisation,
+        project_grant_id: &ProjectGrantId
     ) -> Result<(), ProjectGrantError> {
-        self.auth_service
-            .authorize_project_action(auth, project_id, &ProjectAction::DeleteProjectGrants)
-            .await?;
-
         info!("Deleting project {} grant {}", project_id, project_grant_id);
 
         let project_grant = self.project_grant_repo.get(&project_grant_id.0).await?;

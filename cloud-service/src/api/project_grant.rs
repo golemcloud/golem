@@ -78,9 +78,13 @@ impl ProjectGrantApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Vec<ProjectGrant>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::ViewProjectGrants)
+            .await?;
+
         let grants = self
             .project_grant_service
-            .get_by_project(&project_id, &auth)
+            .get_by_project(&project_id)
             .await?;
         Ok(Json(grants))
     }
@@ -119,10 +123,15 @@ impl ProjectGrantApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<ProjectGrant>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::ViewProjectGrants)
+            .await?;
+
         let grant = self
             .project_grant_service
-            .get(&project_id, &grant_id, &auth)
+            .get(&project_id, &grant_id)
             .await?;
+
         match grant {
             Some(grant) => Ok(Json(grant)),
             None => Err(ApiError::NotFound(Json(ErrorBody {
@@ -221,7 +230,7 @@ impl ProjectGrantApi {
             data,
         };
 
-        self.project_grant_service.create(&grant, &auth).await?;
+        self.project_grant_service.create(&grant).await?;
         Ok(Json(grant))
     }
 
@@ -259,10 +268,14 @@ impl ProjectGrantApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<DeleteProjectGrantResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::DeleteProjectGrants)
+            .await?;
 
         self.project_grant_service
-            .delete(&project_id, &grant_id, &auth)
+            .delete(&project_id, &grant_id)
             .await?;
+
         Ok(Json(DeleteProjectGrantResponse {}))
     }
 }
