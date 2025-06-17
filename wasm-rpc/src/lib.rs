@@ -97,7 +97,7 @@ pub use golem_rpc_0_2_x::types::{
 pub use bindings::wasi::io::poll::Pollable;
 
 #[cfg(feature = "host-bindings")]
-pub use wasmtime_wasi::DynPollable;
+pub use wasmtime_wasi::p2::DynPollable;
 
 #[cfg(feature = "host-bindings")]
 mod generated {
@@ -177,7 +177,7 @@ pub struct FutureInvokeResultEntry {
 
 #[cfg(feature = "host-bindings")]
 #[async_trait::async_trait]
-impl wasmtime_wasi::Pollable for FutureInvokeResultEntry {
+impl wasmtime_wasi::p2::Pollable for FutureInvokeResultEntry {
     async fn ready(&mut self) {
         self.payload.ready().await
     }
