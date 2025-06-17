@@ -158,7 +158,7 @@ mod internal {
     use crate::compiler::desugar::{desugar_pattern_match, desugar_range_selection};
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstanceType, InstanceVariable, InstructionId, Range,
+        InferredType, InstanceIdentifier, InstanceType, InstanceVariable, InstructionId, Range,
         RibByteCodeGenerationError, RibIR, TypeInternal, VariableId,
     };
     use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
@@ -468,18 +468,17 @@ mod internal {
                             .as_ref()
                             .expect("Module should be present for function calls");
 
-                        let instance_variable = match module.instance_type.as_ref() {
-                            InstanceType::Resource { .. } => {
-                                let variable_id = module.variable_id.clone().ok_or({
+                        let instance_variable = match module.as_ref() {
+                            InstanceIdentifier::WitResource { variable_id, .. } => {
+                                let variable_id = variable_id.clone().ok_or({
                                     RibByteCodeGenerationError::UnresolvedResourceVariable
                                 })?;
                                 InstanceVariable::WitResource(variable_id)
                             }
-                            _ => {
-                                let variable_id = module
-                                    .variable_id
+                            InstanceIdentifier::WitWorker { variable_id, .. } => {
+                                let variable_id = variable_id
                                     .clone()
-                                    .ok_or({ RibByteCodeGenerationError::UnresolvedWorkerName })?;
+                                    .ok_or(RibByteCodeGenerationError::UnresolvedWorkerName)?;
 
                                 InstanceVariable::WitWorker(variable_id)
                             }
@@ -639,16 +638,16 @@ mod internal {
                                     .as_ref()
                                     .expect("Module should be present for resource calls");
 
-                                let instance_variable = match module.instance_type.as_ref() {
-                                    InstanceType::Resource { .. } => {
-                                        let variable_id = module.variable_id.as_ref().ok_or({
+                                let instance_variable = match module {
+                                    InstanceIdentifier::WitResource { variable_id, .. } => {
+                                        let variable_id = variable_id.as_ref().ok_or({
                                             RibByteCodeGenerationError::UnresolvedResourceVariable
                                         })?;
 
                                         InstanceVariable::WitResource(variable_id.clone())
                                     }
-                                    _ => {
-                                        let variable_id = module.variable_id.as_ref().ok_or({
+                                    InstanceIdentifier::WitWorker { variable_id, .. } => {
+                                        let variable_id = variable_id.as_ref().ok_or({
                                             RibByteCodeGenerationError::UnresolvedWorkerName
                                         })?;
 

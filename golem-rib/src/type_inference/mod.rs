@@ -465,12 +465,9 @@ mod tests {
 
         let call_expr = call(
             CallType::function_call_with_worker(
-                InstanceIdentifier {
+                InstanceIdentifier::WitWorker {
                     variable_id: Some(VariableId::local("worker", 0)),
-                    instance_type: Box::new(InstanceType::Global {
-                        worker_name: Some(Box::new(Expr::literal("foo"))),
-                        component_dependency: rib_compiler.get_component_dependencies().clone(),
-                    }),
+                    worker_name: Some(Box::new(Expr::literal("foo"))),
                 },
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -564,12 +561,9 @@ mod tests {
 
         let call_expr1 = call(
             CallType::function_call_with_worker(
-                InstanceIdentifier {
+                InstanceIdentifier::WitWorker {
                     variable_id: Some(VariableId::local("worker", 0)),
-                    instance_type: Box::new(InstanceType::Global {
-                        worker_name: Some(Box::new(Expr::literal("foo"))),
-                        component_dependency: rib_compiler.get_component_dependencies().clone(),
-                    }),
+                    worker_name: Some(Box::new(Expr::literal("foo"))),
                 },
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -590,12 +584,9 @@ mod tests {
 
         let call_expr2 = call(
             CallType::function_call_with_worker(
-                InstanceIdentifier {
+                InstanceIdentifier::WitWorker {
                     variable_id: Some(VariableId::local("worker", 0)),
-                    instance_type: Box::new(InstanceType::Global {
-                        worker_name: Some(Box::new(Expr::literal("foo"))),
-                        component_dependency: rib_compiler.get_component_dependencies().clone(),
-                    }),
+                    worker_name: Some(Box::new(Expr::literal("foo"))),
                 },
                 DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
@@ -1442,14 +1433,9 @@ mod tests {
                     ))),
                     call(
                         CallType::function_call_with_worker(
-                            InstanceIdentifier {
+                            InstanceIdentifier::WitWorker {
                                 variable_id: Some(VariableId::local("worker", 0)),
-                                instance_type: Box::new(InstanceType::Global {
-                                    worker_name: Some(Box::new(Expr::literal("foo"))),
-                                    component_dependency: rib_compiler
-                                        .get_component_dependencies()
-                                        .clone(),
-                                }),
+                                worker_name: Some(Box::new(Expr::literal("foo"))),
                             },
                             DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
@@ -1478,14 +1464,9 @@ mod tests {
                     ))),
                     call(
                         CallType::function_call_with_worker(
-                            InstanceIdentifier {
+                            InstanceIdentifier::WitWorker {
                                 variable_id: Some(VariableId::local("worker", 0)),
-                                instance_type: Box::new(InstanceType::Global {
-                                    worker_name: Some(Box::new(Expr::literal("foo"))),
-                                    component_dependency: rib_compiler
-                                        .get_component_dependencies()
-                                        .clone(),
-                                }),
+                                worker_name: Some(Box::new(Expr::literal("foo"))),
                             },
                             DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
@@ -2973,12 +2954,9 @@ mod tests {
                         None,
                         call(
                             CallType::function_call_with_worker(
-                                InstanceIdentifier {
+                                InstanceIdentifier::WitWorker {
                                     variable_id: Some(VariableId::local("worker", 0)),
-                                    instance_type: Box::new(InstanceType::Global {
-                                        worker_name: Some(Box::new(Expr::literal("foo"))),
-                                        component_dependency: component_dependencies.clone(),
-                                    }),
+                                    worker_name: Some(Box::new(Expr::literal("foo"))),
                                 },
                                 DynamicParsedFunctionName {
                                     site: ParsedFunctionSite::Global,
@@ -3509,12 +3487,9 @@ mod tests {
                         None,
                         call(
                             CallType::function_call_with_worker(
-                                InstanceIdentifier {
+                                InstanceIdentifier::WitWorker {
                                     variable_id: Some(VariableId::local("worker", 0)),
-                                    instance_type: Box::new(InstanceType::Global {
-                                        worker_name: Some(Box::new(Expr::literal("foo"))),
-                                        component_dependency: component_dependencies.clone(),
-                                    }),
+                                    worker_name: Some(Box::new(Expr::literal("foo"))),
                                 },
                                 DynamicParsedFunctionName {
                                     site: ParsedFunctionSite::Global,

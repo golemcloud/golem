@@ -290,8 +290,19 @@ fn get_module_identifier(instance_type: &InstanceType, lhs: &Expr) -> InstanceId
         _ => None,
     };
 
-    InstanceIdentifier {
-        variable_id: variable_id.cloned(),
-        instance_type: Box::new(instance_type.clone()),
+    match instance_type {
+        InstanceType::Resource {
+            worker_name,
+            resource_constructor,
+            ..
+        } => InstanceIdentifier::WitResource {
+            variable_id: variable_id.cloned(),
+            worker_name: worker_name.clone(),
+            resource_name: resource_constructor.clone(),
+        },
+        instance_type => InstanceIdentifier::WitWorker {
+            variable_id: variable_id.cloned(),
+            worker_name: instance_type.worker_name(),
+        },
     }
 }

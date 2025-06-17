@@ -32,13 +32,35 @@ pub enum CallType {
     InstanceCreation(InstanceCreationType),
 }
 
+// InstanceIdentifier holds the variables that are used to identify a worker or resource instance.
+// Unlike InstanceCreationType, this type can be formed only after the instance is inferred
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
-pub struct InstanceIdentifier {
-    // The variable-id of the worker instance or the resource instance,
-    // `let x = instance(); x.foo()`.
-    // module identifier here is variable-id x, with instance type being a worker
-    pub variable_id: Option<VariableId>,
-    pub instance_type: Box<InstanceType>,
+pub enum InstanceIdentifier {
+    WitWorker {
+        variable_id: Option<VariableId>,
+        worker_name: Option<Box<Expr>>,
+    },
+
+    WitResource {
+        variable_id: Option<VariableId>,
+        worker_name: Option<Box<Expr>>,
+        resource_name: String,
+    },
+}
+
+impl InstanceIdentifier {
+    pub fn worker_name_mut(&mut self) -> Option<&mut Box<Expr>> {
+        match self {
+            InstanceIdentifier::WitWorker { worker_name, .. } => worker_name.as_mut(),
+            InstanceIdentifier::WitResource { worker_name, .. } => worker_name.as_mut(),
+        }
+    }
+    pub fn worker_name(&self) -> Option<&Expr> {
+        match self {
+            InstanceIdentifier::WitWorker { worker_name, .. } => worker_name.as_deref(),
+            InstanceIdentifier::WitResource { worker_name, .. } => worker_name.as_deref(),
+        }
+    }
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
@@ -66,8 +88,8 @@ impl InstanceCreationType {
         match self {
             InstanceCreationType::WitWorker { worker_name, .. } => worker_name.as_deref().cloned(),
             InstanceCreationType::WitResource { module, .. } => {
-                let r = module.as_ref().and_then(|m| m.instance_type.worker_name());
-                r.as_deref().cloned()
+                let r = module.as_ref().and_then(|m| m.worker_name());
+                r.cloned()
             }
         }
     }
@@ -83,30 +105,16 @@ impl CallType {
     pub fn worker_expr(&self) -> Option<&Expr> {
         match self {
             CallType::Function {
-                instance_identifier: worker,
+                instance_identifier,
                 ..
             } => {
-                let module = worker.as_ref()?;
-                let instance = &module.instance_type;
-                instance.worker()
+                let module = instance_identifier.as_ref()?;
+                module.worker_name().clone()
             }
             _ => None,
         }
     }
 
-    pub fn worker_expr_mut(&mut self) -> Option<&mut Box<Expr>> {
-        match self {
-            CallType::Function {
-                instance_identifier: module,
-                ..
-            } => {
-                let module = module.as_mut()?;
-                let instance = &mut module.instance_type;
-                instance.worker_mut()
-            }
-            _ => None,
-        }
-    }
     pub fn function_call(
         function: DynamicParsedFunctionName,
         component_info: Option<ComponentDependencyKey>,

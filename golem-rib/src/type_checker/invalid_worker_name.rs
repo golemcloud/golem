@@ -25,26 +25,24 @@ pub fn check_invalid_worker_name(expr: &mut Expr) -> Result<(), InvalidWorkerNam
                 CallType::InstanceCreation(InstanceCreationType::WitWorker {
                     worker_name, ..
                 }) => {
-                    internal::check_worker_name(worker_name)?;
+                    internal::check_worker_name(worker_name.as_deref())?;
                 }
                 CallType::Function {
                     instance_identifier: module,
                     ..
                 } => {
-                    let worker_name_opt =
-                        module.as_ref().and_then(|x| x.instance_type.worker_name());
+                    let worker_name_opt = module.as_ref().and_then(|x| x.worker_name());
 
-                    internal::check_worker_name(&worker_name_opt)?;
+                    internal::check_worker_name(worker_name_opt)?;
                 }
                 CallType::VariantConstructor(_) => {}
                 CallType::EnumConstructor(_) => {}
                 CallType::InstanceCreation(InstanceCreationType::WitResource {
                     module, ..
                 }) => {
-                    let worker_name_opt =
-                        module.as_ref().and_then(|x| x.instance_type.worker_name());
+                    let worker_name_opt = module.as_ref().and_then(|x| x.worker_name());
 
-                    internal::check_worker_name(&worker_name_opt)?;
+                    internal::check_worker_name(worker_name_opt)?;
                 }
             }
         }
@@ -60,7 +58,7 @@ mod internal {
     use std::ops::Deref;
 
     pub(crate) fn check_worker_name(
-        worker_name_opt: &Option<Box<Expr>>,
+        worker_name_opt: Option<&Expr>,
     ) -> Result<(), InvalidWorkerName> {
         match worker_name_opt {
             None => {}
