@@ -12,11 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use chrono::{DateTime, Utc};
 use cloud_service::api::make_open_api_service;
-use cloud_service::config::{make_config_loader, CloudServiceConfig};
-use cloud_service::service::Services;
+use cloud_service::auth::AccountAuthorisation;
+use cloud_service::bootstrap::Services;
+use cloud_service::config::{
+    make_config_loader, AccountConfig, AccountsConfig, CloudServiceConfig,
+};
+use cloud_service::model::AccountData;
+use cloud_service::service::account::AccountService;
+use cloud_service::service::account_grant::AccountGrantService;
+use cloud_service::service::token::TokenService;
 use cloud_service::{api, grpcapi, metrics};
 use golem_common::config::DbConfig;
+use golem_common::model::auth::TokenSecret;
+use golem_common::model::AccountId;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_service_base::db;
 use golem_service_base::migration::{Migrations, MigrationsDir};
@@ -28,9 +38,11 @@ use poem::EndpointExt;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::select;
 use tracing::error;
+use tracing::info;
 
 fn main() -> Result<(), std::io::Error> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
@@ -115,14 +127,13 @@ async fn async_main(
             std::io::Error::other("Plan Error")
         })?;
 
-    services
-        .login_service
-        .create_initial_users()
-        .await
-        .map_err(|e| {
-            error!("Login - init error: {}", e);
-            std::io::Error::other("Login Error")
-        })?;
+    create_all_initial_accounts(
+        &config.accounts,
+        &services.account_service,
+        &services.account_grant_service,
+        &services.token_service,
+    )
+    .await;
 
     let http_services = services.clone();
     let grpc_services = services.clone();
@@ -158,4 +169,66 @@ async fn async_main(
     }
 
     Ok(())
+}
+
+async fn create_all_initial_accounts(
+    accounts_config: &AccountsConfig,
+    account_service: &Arc<dyn AccountService>,
+    grant_service: &Arc<dyn AccountGrantService>,
+    token_service: &Arc<dyn TokenService>,
+) {
+    for account_config in accounts_config.accounts.values() {
+        create_initial_account(
+            account_config,
+            account_service,
+            grant_service,
+            token_service,
+        )
+        .await
+    }
+}
+
+async fn create_initial_account(
+    account_config: &AccountConfig,
+    account_service: &Arc<dyn AccountService>,
+    grant_service: &Arc<dyn AccountGrantService>,
+    token_service: &Arc<dyn TokenService>,
+) {
+    info!(
+        "Creating initial account({}, {}).",
+        account_config.id, account_config.name
+    );
+    // This unwrap is infallible.
+    let account_id = AccountId::from_str(&account_config.id).unwrap();
+
+    account_service
+        .create(
+            &account_id,
+            &AccountData {
+                name: account_config.name.clone(),
+                email: account_config.email.clone(),
+            },
+            &AccountAuthorisation::admin(),
+        )
+        .await
+        .ok();
+
+    grant_service
+        .add(
+            &account_id,
+            &account_config.role,
+            &AccountAuthorisation::admin(),
+        )
+        .await
+        .ok();
+
+    token_service
+        .create_known_secret(
+            &account_id,
+            &DateTime::<Utc>::MAX_UTC,
+            &TokenSecret::new(account_config.token),
+            &AccountAuthorisation::admin(),
+        )
+        .await
+        .ok();
 }

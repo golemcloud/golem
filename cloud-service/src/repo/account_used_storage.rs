@@ -19,7 +19,7 @@ use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
 
 #[async_trait]
-pub trait AccountUsedStorageRepo {
+pub trait AccountUsedStorageRepo: Send + Sync {
     async fn get(&self, id: &AccountId) -> Result<i64, RepoError>;
     async fn update(&self, id: &AccountId, value: i64) -> Result<i64, RepoError>;
     async fn delete(&self, id: &AccountId) -> Result<(), RepoError>;

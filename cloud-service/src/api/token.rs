@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ApiError;
 use crate::api::{ApiResult, ApiTags};
+use crate::auth::AccountAuthorisation;
+use crate::login::LoginSystem;
 use crate::model::*;
 use crate::service::auth::AuthService;
-use crate::service::token::TokenService;
+use crate::service::token::{TokenService, TokenServiceError};
+use golem_common::model::error::ErrorBody;
 use golem_common::model::AccountId;
 use golem_common::model::TokenId;
 use golem_common::recorded_http_api_request;
@@ -27,8 +31,9 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct TokenApi {
-    pub auth_service: Arc<dyn AuthService + Sync + Send>,
-    pub token_service: Arc<dyn TokenService + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService>,
+    pub token_service: Arc<dyn TokenService>,
+    pub login_system: Arc<LoginSystem>,
 }
 
 #[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Token)]
@@ -181,8 +186,37 @@ impl TokenApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<DeleteTokenResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        // FIXME account_id check
-        self.token_service.delete(&token_id, &auth).await?;
-        Ok(Json(DeleteTokenResponse {}))
+
+        match self
+            .token_service
+            .get(&token_id, &AccountAuthorisation::admin())
+            .await
+        {
+            Ok(existing) => {
+                self.auth_service
+                    .authorize_account_action(
+                        &auth,
+                        &existing.account_id,
+                        &AccountAction::DeleteToken,
+                    )
+                    .await?;
+
+                if let LoginSystem::Enabled(login_system) = &*self.login_system {
+                    login_system
+                        .login_service
+                        .unlink_temp_token(&token_id)
+                        .await?;
+                };
+
+                self.token_service.delete(&token_id).await?;
+                Ok(Json(DeleteTokenResponse {}))
+            }
+            Err(TokenServiceError::UnknownToken(_)) => {
+                Err(ApiError::Unauthorized(Json(ErrorBody {
+                    error: "Invalid token".to_string(),
+                })))?
+            }
+            Err(e) => Err(e)?,
+        }
     }
 }

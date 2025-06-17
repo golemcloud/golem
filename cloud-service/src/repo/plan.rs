@@ -63,7 +63,7 @@ impl From<Plan> for PlanRecord {
 }
 
 #[async_trait]
-pub trait PlanRepo {
+pub trait PlanRepo: Send + Sync {
     async fn create(&self, plan: &PlanRecord) -> Result<(), RepoError>;
 
     async fn update(&self, plan: &PlanRecord) -> Result<(), RepoError>;

@@ -16,7 +16,7 @@ use crate::model::{Plan, PlanData};
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
 use golem_common::model::auth::Role;
-use golem_common::model::PlanId;
+use golem_common::model::{Empty, PlanId};
 use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::RemoteCloudServiceConfig;
 use serde::{Deserialize, Serialize};
@@ -34,9 +34,8 @@ pub struct CloudServiceConfig {
     pub grpc_port: u16,
     pub db: DbConfig,
     pub plans: PlansConfig,
-    pub ed_dsa: EdDsaConfig,
     pub accounts: AccountsConfig,
-    pub oauth2: OAuth2Config,
+    pub login: LoginConfig,
     pub component_service: RemoteCloudServiceConfig,
     pub cors_origin_regex: String,
 }
@@ -51,9 +50,8 @@ impl Default for CloudServiceConfig {
             grpc_port: 8081,
             db: DbConfig::default(),
             plans: PlansConfig::default(),
-            ed_dsa: EdDsaConfig::default(),
             accounts: AccountsConfig::default(),
-            oauth2: OAuth2Config::default(),
+            login: LoginConfig::default(),
             component_service: RemoteCloudServiceConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
         }
@@ -125,18 +123,37 @@ impl From<PlanConfig> for Plan {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OAuth2Config {
-    pub github_client_id: String,
-    pub github_client_secret: String,
-    pub github_redirect_uri: url::Url,
+#[serde(tag = "type", content = "config")]
+pub enum LoginConfig {
+    OAuth2(OAuth2Config),
+    Disabled(Empty),
 }
 
-impl Default for OAuth2Config {
+impl Default for LoginConfig {
+    fn default() -> LoginConfig {
+        LoginConfig::OAuth2(OAuth2Config::default())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct OAuth2Config {
+    pub github: GitHubOAuth2Config,
+    pub ed_dsa: EdDsaConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GitHubOAuth2Config {
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_uri: url::Url,
+}
+
+impl Default for GitHubOAuth2Config {
     fn default() -> Self {
-        OAuth2Config {
-            github_client_id: "GITHUB_CLIENT_ID".to_string(),
-            github_client_secret: "GITHUB_CLIENT_SECRET".to_string(),
-            github_redirect_uri: url::Url::parse(
+        Self {
+            client_id: "GITHUB_CLIENT_ID".to_string(),
+            client_secret: "GITHUB_CLIENT_SECRET".to_string(),
+            redirect_uri: url::Url::parse(
                 "http://localhost:8080/v1/login/oauth2/web/callback/github",
             )
             .unwrap(),

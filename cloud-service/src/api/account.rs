@@ -28,8 +28,8 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct AccountApi {
-    pub auth_service: Arc<dyn AuthService + Sync + Send>,
-    pub account_service: Arc<dyn AccountService + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService>,
+    pub account_service: Arc<dyn AccountService>,
 }
 
 #[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Account)]

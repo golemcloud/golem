@@ -105,7 +105,7 @@ impl From<PlanLimitError> for ProjectError {
 }
 
 #[async_trait]
-pub trait ProjectService {
+pub trait ProjectService: Send + Sync {
     async fn create(
         &self,
         project: &Project,
@@ -177,17 +177,17 @@ pub trait ProjectService {
 
 pub struct ProjectServiceDefault {
     auth_service: Arc<dyn AuthService>,
-    project_repo: Arc<dyn ProjectRepo + Send + Sync>,
-    plan_limit_service: Arc<dyn PlanLimitService + Send + Sync>,
-    plugin_service: Arc<dyn PluginServiceClient + Send + Sync>,
+    project_repo: Arc<dyn ProjectRepo>,
+    plan_limit_service: Arc<dyn PlanLimitService>,
+    plugin_service: Arc<dyn PluginServiceClient>,
 }
 
 impl ProjectServiceDefault {
     pub fn new(
         auth_service: Arc<dyn AuthService>,
-        project_repo: Arc<dyn ProjectRepo + Send + Sync>,
-        plan_limit_service: Arc<dyn PlanLimitService + Send + Sync>,
-        plugin_service: Arc<dyn PluginServiceClient + Send + Sync>,
+        project_repo: Arc<dyn ProjectRepo>,
+        plan_limit_service: Arc<dyn PlanLimitService>,
+        plugin_service: Arc<dyn PluginServiceClient>,
     ) -> Self {
         ProjectServiceDefault {
             auth_service,

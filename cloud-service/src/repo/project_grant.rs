@@ -55,7 +55,7 @@ impl From<ProjectGrant> for ProjectGrantRecord {
 }
 
 #[async_trait]
-pub trait ProjectGrantRepo {
+pub trait ProjectGrantRepo: Send + Sync {
     async fn create(&self, project_grant: &ProjectGrantRecord) -> Result<(), RepoError>;
 
     async fn get(&self, project_grant_id: &Uuid) -> Result<Option<ProjectGrantRecord>, RepoError>;

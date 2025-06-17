@@ -167,22 +167,22 @@ pub trait AuthService: Send + Sync {
 /// This is the foundation of all other services. Avoid depending on other services here and instead query the repositories directly
 /// to avoid cyclical dependencies / logic.
 pub struct AuthServiceDefault {
-    token_service: Arc<dyn TokenService + Send + Sync>,
-    account_repo: Arc<dyn AccountRepo + Send + Sync>,
-    account_grant_repo: Arc<dyn AccountGrantRepo + Send + Sync>,
-    project_repo: Arc<dyn ProjectRepo + Sync + Send>,
-    project_policy_repo: Arc<dyn ProjectPolicyRepo + Sync + Send>,
-    project_grant_repo: Arc<dyn ProjectGrantRepo + Sync + Send>,
+    token_service: Arc<dyn TokenService>,
+    account_repo: Arc<dyn AccountRepo>,
+    account_grant_repo: Arc<dyn AccountGrantRepo>,
+    project_repo: Arc<dyn ProjectRepo>,
+    project_policy_repo: Arc<dyn ProjectPolicyRepo>,
+    project_grant_repo: Arc<dyn ProjectGrantRepo>,
 }
 
 impl AuthServiceDefault {
     pub fn new(
-        token_service: Arc<dyn TokenService + Send + Sync>,
-        account_repo: Arc<dyn AccountRepo + Send + Sync>,
-        account_grant_repo: Arc<dyn AccountGrantRepo + Send + Sync>,
-        project_repo: Arc<dyn ProjectRepo + Sync + Send>,
-        project_policy_repo: Arc<dyn ProjectPolicyRepo + Sync + Send>,
-        project_grant_repo: Arc<dyn ProjectGrantRepo + Sync + Send>,
+        token_service: Arc<dyn TokenService>,
+        account_repo: Arc<dyn AccountRepo>,
+        account_grant_repo: Arc<dyn AccountGrantRepo>,
+        project_repo: Arc<dyn ProjectRepo>,
+        project_policy_repo: Arc<dyn ProjectPolicyRepo>,
+        project_grant_repo: Arc<dyn ProjectGrantRepo>,
     ) -> Self {
         AuthServiceDefault {
             token_service,
@@ -284,6 +284,9 @@ impl AuthService for AuthServiceDefault {
                 limit_to_account_or_roles(auth, account_id, &[Role::Admin])
             }
             AccountAction::UpdateLimits => limit_to_roles(auth, &[Role::Admin]),
+            AccountAction::DeleteToken => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
         }
     }
 

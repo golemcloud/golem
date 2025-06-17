@@ -53,7 +53,7 @@ impl From<Account> for AccountRecord {
 }
 
 #[async_trait]
-pub trait AccountRepo {
+pub trait AccountRepo: Send + Sync {
     async fn create(&self, account: &AccountRecord) -> Result<Option<AccountRecord>, RepoError>;
 
     async fn update(&self, account: &AccountRecord) -> Result<AccountRecord, RepoError>;

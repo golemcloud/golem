@@ -42,7 +42,7 @@ impl SafeDisplay for PlanError {
 }
 
 #[async_trait]
-pub trait PlanService {
+pub trait PlanService: Send + Sync {
     async fn create_initial_plan(&self) -> Result<Plan, PlanError>;
 
     async fn get_default_plan(&self) -> Result<Plan, PlanError>;
@@ -51,12 +51,12 @@ pub trait PlanService {
 }
 
 pub struct PlanServiceDefault {
-    plan_repo: Arc<dyn PlanRepo + Sync + Send>,
+    plan_repo: Arc<dyn PlanRepo>,
     plans_config: PlansConfig,
 }
 
 impl PlanServiceDefault {
-    pub fn new(plan_repo: Arc<dyn PlanRepo + Sync + Send>, plans_config: PlansConfig) -> Self {
+    pub fn new(plan_repo: Arc<dyn PlanRepo>, plans_config: PlansConfig) -> Self {
         PlanServiceDefault {
             plan_repo,
             plans_config,

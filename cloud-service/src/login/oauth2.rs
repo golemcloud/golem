@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::oauth2_github_client::{OAuth2GithubClient, OAuth2GithubClientError};
+use super::oauth2_session::{OAuth2SessionError, OAuth2SessionService};
 use crate::model::{
     EncodedOAuth2Session, OAuth2AccessToken, OAuth2Data, OAuth2Provider, OAuth2Session,
 };
-use crate::service::oauth2_github_client::{OAuth2GithubClient, OAuth2GithubClientError};
-use crate::service::oauth2_session::{OAuth2SessionError, OAuth2SessionService};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use std::sync::Arc;
@@ -44,14 +44,8 @@ impl SafeDisplay for OAuth2Error {
     }
 }
 
-#[derive(Debug)]
-pub struct UrlWithState {
-    pub url: String,
-    pub state: String,
-}
-
 #[async_trait]
-pub trait OAuth2Service {
+pub trait OAuth2Service: Send + Sync {
     async fn start_workflow(&self) -> Result<OAuth2Data, OAuth2Error>;
     async fn finish_workflow(
         &self,
@@ -73,14 +67,14 @@ pub trait OAuth2Service {
 }
 
 pub struct OAuth2ServiceDefault {
-    client: Arc<dyn OAuth2GithubClient + Send + Sync>,
-    session_service: Arc<dyn OAuth2SessionService + Send + Sync>,
+    client: Arc<dyn OAuth2GithubClient>,
+    session_service: Arc<dyn OAuth2SessionService>,
 }
 
 impl OAuth2ServiceDefault {
     pub fn new(
-        client: Arc<dyn OAuth2GithubClient + Send + Sync>,
-        session_service: Arc<dyn OAuth2SessionService + Send + Sync>,
+        client: Arc<dyn OAuth2GithubClient>,
+        session_service: Arc<dyn OAuth2SessionService>,
     ) -> OAuth2ServiceDefault {
         OAuth2ServiceDefault {
             client,
