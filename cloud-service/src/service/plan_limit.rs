@@ -127,15 +127,13 @@ pub trait PlanLimitService: Send + Sync {
     /// Get memory and CPU limits
     async fn get_resource_limits(
         &self,
-        account_id: &AccountId,
-        auth: &AccountAuthorisation,
+        account_id: &AccountId
     ) -> Result<ResourceLimits, PlanLimitError>;
 
     /// Record fuel consumption - internal API for executors
     async fn record_fuel_consumption(
         &self,
-        updates: HashMap<AccountId, i64>,
-        auth: &AccountAuthorisation,
+        updates: HashMap<AccountId, i64>
     ) -> Result<(), PlanLimitError>;
 
     /// Update component limit.
@@ -143,24 +141,21 @@ pub trait PlanLimitService: Send + Sync {
         &self,
         account_id: &AccountId,
         count: i32,
-        size: i64,
-        auth: &AccountAuthorisation,
+        size: i64
     ) -> Result<(), PlanLimitError>;
 
     /// Update worker limit.
     async fn update_worker_limit(
         &self,
         account_id: &AccountId,
-        value: i32,
-        auth: &AccountAuthorisation,
+        value: i32
     ) -> Result<(), PlanLimitError>;
 
     /// Update worker connection limit.
     async fn update_worker_connection_limit(
         &self,
         account_id: &AccountId,
-        value: i32,
-        auth: &AccountAuthorisation,
+        value: i32
     ) -> Result<(), PlanLimitError>;
 }
 
@@ -218,13 +213,8 @@ impl PlanLimitService for PlanLimitServiceDefault {
 
     async fn get_resource_limits(
         &self,
-        account_id: &AccountId,
-        auth: &AccountAuthorisation,
+        account_id: &AccountId
     ) -> Result<ResourceLimits, PlanLimitError> {
-        self.auth_service
-            .authorize_account_action(auth, account_id, &AccountAction::ViewLimits)
-            .await?;
-
         let plan = self.get_plan(account_id).await?;
         let fuel = self.account_fuel_repo.get(account_id).await?;
         let available_fuel = plan.plan_data.monthly_gas_limit - fuel;
@@ -236,14 +226,10 @@ impl PlanLimitService for PlanLimitServiceDefault {
 
     async fn record_fuel_consumption(
         &self,
-        updates: HashMap<AccountId, i64>,
-        auth: &AccountAuthorisation,
+        updates: HashMap<AccountId, i64>
     ) -> Result<(), PlanLimitError> {
         // TODO: Should we do this in parallel?
         for (account_id, update) in updates {
-            self.auth_service
-                .authorize_account_action(auth, &account_id, &AccountAction::UpdateLimits)
-                .await?;
             self.get_plan(&account_id).await?;
             self.account_fuel_repo.update(&account_id, update).await?;
         }
@@ -254,13 +240,8 @@ impl PlanLimitService for PlanLimitServiceDefault {
         &self,
         account_id: &AccountId,
         count: i32,
-        size: i64,
-        auth: &AccountAuthorisation,
+        size: i64
     ) -> Result<(), PlanLimitError> {
-        self.auth_service
-            .authorize_account_action(auth, account_id, &AccountAction::UpdateLimits)
-            .await?;
-
         if size > 50000000 {
             return Err(PlanLimitError::limit_exceeded(
                 "Component size limit exceeded (limit: 50MB)",
@@ -331,12 +312,8 @@ impl PlanLimitService for PlanLimitServiceDefault {
     async fn update_worker_limit(
         &self,
         account_id: &AccountId,
-        value: i32,
-        auth: &AccountAuthorisation,
+        value: i32
     ) -> Result<(), PlanLimitError> {
-        self.auth_service
-            .authorize_account_action(auth, account_id, &AccountAction::UpdateLimits)
-            .await?;
 
         let plan = self.get_plan(account_id).await?;
         let num_workers = self.account_workers_repo.get(account_id).await?;
@@ -366,13 +343,8 @@ impl PlanLimitService for PlanLimitServiceDefault {
     async fn update_worker_connection_limit(
         &self,
         account_id: &AccountId,
-        value: i32,
-        auth: &AccountAuthorisation,
+        value: i32
     ) -> Result<(), PlanLimitError> {
-        self.auth_service
-            .authorize_account_action(auth, account_id, &AccountAction::UpdateLimits)
-            .await?;
-
         let connections = self.account_connections_repo.get(account_id).await?;
 
         if value > 0 {

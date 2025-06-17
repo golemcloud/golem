@@ -208,7 +208,6 @@ async fn create_initial_account(
                 name: account_config.name.clone(),
                 email: account_config.email.clone(),
             },
-            &AccountAuthorisation::admin(),
         )
         .await
         .ok();
@@ -217,7 +216,6 @@ async fn create_initial_account(
         .add(
             &account_id,
             &account_config.role,
-            &AccountAuthorisation::admin(),
         )
         .await
         .ok();
