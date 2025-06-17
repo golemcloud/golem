@@ -21,7 +21,7 @@ include!(concat!(env!("OUT_DIR"), "/wasm.rpc.rs"));
 pub use golem_wasm_ast::analysis::protobuf::*;
 
 // Conversion from WIT WitValue to Protobuf WitValue
-
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<super::WitValue> for WitValue {
     fn from(value: super::WitValue) -> Self {
         WitValue {
@@ -30,6 +30,7 @@ impl From<super::WitValue> for WitValue {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<super::WitNode> for WitNode {
     fn from(value: super::WitNode) -> Self {
         match value {
@@ -123,6 +124,7 @@ impl From<super::WitNode> for WitNode {
 }
 
 // Conversion from Protobuf WitValue to WIT WitValue
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl TryFrom<WitValue> for super::WitValue {
     type Error = String;
 
@@ -137,6 +139,7 @@ impl TryFrom<WitValue> for super::WitValue {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl TryFrom<WitNode> for super::WitNode {
     type Error = String;
 
@@ -221,6 +224,7 @@ impl TryFrom<WitNode> for super::WitNode {
 }
 
 // Conversion from WitValue to protobuf Val
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<super::WitValue> for Val {
     fn from(value: super::WitValue) -> Self {
         let value: Value = value.into();
@@ -363,6 +367,7 @@ impl TryFrom<&type_annotated_value::TypeAnnotatedValue> for AnalysedType {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl TryFrom<type_annotated_value::TypeAnnotatedValue> for super::WitValue {
     type Error = String;
 
@@ -641,6 +646,7 @@ impl From<Value> for Val {
 }
 
 // Conversion from protobuf Val to WitValue
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl TryFrom<Val> for super::WitValue {
     type Error = String;
 

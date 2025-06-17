@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::call_type::{CallType, InstanceCreationType};
+use crate::call_type::CallType;
 use crate::generic_type_parameter::GenericTypeParameter;
 use crate::inferred_type::{DefaultType, TypeOrigin};
 use crate::parser::block::block;
@@ -22,14 +22,13 @@ use crate::rib_type_error::RibTypeError;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
     from_string, text, type_checker, type_inference, DynamicParsedFunctionName, ExprVisitor,
-    GlobalVariableTypeSpec, InferredType, ParsedFunctionName, VariableId,
+    GlobalVariableTypeSpec, InferredType, VariableId,
 };
-use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
+use bigdecimal::{BigDecimal, ToPrimitive};
 use combine::parser::char::spaces;
 use combine::stream::position;
 use combine::Parser;
 use combine::{eof, EasyParser};
-use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValueAndType, ValueAndType};
 use serde::{Deserialize, Serialize, Serializer};
@@ -37,7 +36,6 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
-use std::str::FromStr;
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Expr {
@@ -1972,419 +1970,6 @@ impl ArmPattern {
     }
 }
 
-#[cfg(feature = "protobuf")]
-impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
-    type Error = String;
-
-    fn try_from(value: golem_api_grpc::proto::golem::rib::Expr) -> Result<Self, Self::Error> {
-        let expr = value.expr.ok_or("Missing expr")?;
-
-        let expr = match expr {
-            golem_api_grpc::proto::golem::rib::expr::Expr::Let(expr) => {
-                let name = expr.name;
-                let type_annotation = expr.type_name.map(TypeName::try_from).transpose()?;
-                let expr_: golem_api_grpc::proto::golem::rib::Expr =
-                    *expr.expr.ok_or("Missing expr")?;
-                let expr: Expr = expr_.try_into()?;
-                Expr::let_binding(name, expr, type_annotation)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndexV1(expr) => {
-                let selection = *expr.expr.ok_or("Missing expr")?;
-                let field = *expr.index.ok_or("Missing index")?;
-                let type_annotation = expr.type_name.map(TypeName::try_from).transpose()?;
-
-                Expr::select_index(selection.try_into()?, field.try_into()?)
-                    .with_type_annotation_opt(type_annotation)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Length(expr) => {
-                let expr = expr.expr.ok_or("Missing expr")?;
-                Expr::Length {
-                    expr: Box::new((*expr).try_into()?),
-                    type_annotation: None,
-                    inferred_type: InferredType::unknown(),
-                    source_span: SourceSpan::default(),
-                }
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Range(range) => {
-                let range_expr = range.range_expr.ok_or("Missing range expr")?;
-
-                match range_expr {
-                    RangeExpr::RangeFrom(range_from) => {
-                        let from = range_from.from.ok_or("Missing from expr")?;
-                        Expr::range_from((*from).try_into()?)
-                    }
-                    RangeExpr::Range(range) => {
-                        let from = range.from.ok_or("Missing from expr")?;
-                        let to = range.to.ok_or("Missing to expr")?;
-                        Expr::range((*from).try_into()?, (*to).try_into()?)
-                    }
-                    RangeExpr::RangeInclusive(range_inclusive) => {
-                        let from = range_inclusive.from.ok_or("Missing from expr")?;
-                        let to = range_inclusive.to.ok_or("Missing to expr")?;
-                        Expr::range_inclusive((*from).try_into()?, (*to).try_into()?)
-                    }
-                }
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Not(expr) => {
-                let expr = expr.expr.ok_or("Missing expr")?;
-                Expr::not((*expr).try_into()?)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThan(expr) => {
-                let left = expr.left.ok_or("Missing left expr")?;
-                let right = expr.right.ok_or("Missing right expr")?;
-                Expr::greater_than((*left).try_into()?, (*right).try_into()?)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThanOrEqual(expr) => {
-                let left = expr.left.ok_or("Missing left expr")?;
-                let right = expr.right.ok_or("Missing right expr")?;
-                Expr::greater_than_or_equal_to((*left).try_into()?, (*right).try_into()?)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::LessThan(expr) => {
-                let left = expr.left.ok_or("Missing left expr")?;
-                let right = expr.right.ok_or("Missing right expr")?;
-                Expr::less_than((*left).try_into()?, (*right).try_into()?)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(expr) => {
-                let left = expr.left.ok_or("Missing left expr")?;
-                let right = expr.right.ok_or("Missing right expr")?;
-                Expr::less_than_or_equal_to((*left).try_into()?, (*right).try_into()?)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::EqualTo(expr) => {
-                let left = expr.left.ok_or("Missing left expr")?;
-                let right = expr.right.ok_or("Missing right expr")?;
-                Expr::equal_to((*left).try_into()?, (*right).try_into()?)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Add(expr) => {
-                let left = expr.left.ok_or("Missing left expr")?;
-                let right = expr.right.ok_or("Missing right expr")?;
-                Expr::plus((*left).try_into()?, (*right).try_into()?)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Subtract(expr) => {
-                let left = expr.left.ok_or("Missing left expr")?;
-                let right = expr.right.ok_or("Missing right expr")?;
-                Expr::plus((*left).try_into()?, (*right).try_into()?)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Divide(expr) => {
-                let left = expr.left.ok_or("Missing left expr")?;
-                let right = expr.right.ok_or("Missing right expr")?;
-                Expr::plus((*left).try_into()?, (*right).try_into()?)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Multiply(expr) => {
-                let left = expr.left.ok_or("Missing left expr")?;
-                let right = expr.right.ok_or("Missing right expr")?;
-                Expr::plus((*left).try_into()?, (*right).try_into()?)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Cond(expr) => {
-                let left = expr.left.ok_or("Missing left expr")?;
-                let cond = expr.cond.ok_or("Missing cond expr")?;
-                let right = expr.right.ok_or("Missing right expr")?;
-                Expr::cond(
-                    (*left).try_into()?,
-                    (*cond).try_into()?,
-                    (*right).try_into()?,
-                )
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Concat(
-                golem_api_grpc::proto::golem::rib::ConcatExpr { exprs },
-            ) => {
-                let exprs: Vec<Expr> = exprs
-                    .into_iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
-                Expr::concat(exprs)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
-                golem_api_grpc::proto::golem::rib::MultipleExpr { exprs },
-            ) => {
-                let exprs: Vec<Expr> = exprs
-                    .into_iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
-                Expr::expr_block(exprs)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
-                golem_api_grpc::proto::golem::rib::SequenceExpr { exprs, type_name },
-            ) => {
-                let type_annotation = type_name.map(TypeName::try_from).transpose()?;
-
-                let exprs: Vec<Expr> = exprs
-                    .into_iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
-                Expr::sequence(exprs, type_annotation)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
-                golem_api_grpc::proto::golem::rib::TupleExpr { exprs },
-            ) => {
-                let exprs: Vec<Expr> = exprs
-                    .into_iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
-                Expr::tuple(exprs)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Record(
-                golem_api_grpc::proto::golem::rib::RecordExpr { fields },
-            ) => {
-                let mut values: Vec<(String, Expr)> = vec![];
-                for record in fields.into_iter() {
-                    let name = record.name;
-                    let expr = record.expr.ok_or("Missing expr")?;
-                    values.push((name, expr.try_into()?));
-                }
-                Expr::record(values)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Flags(
-                golem_api_grpc::proto::golem::rib::FlagsExpr { values },
-            ) => Expr::flags(values),
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
-                golem_api_grpc::proto::golem::rib::LiteralExpr { value },
-            ) => Expr::literal(value),
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
-                golem_api_grpc::proto::golem::rib::IdentifierExpr { name, type_name },
-            ) => {
-                let type_name = type_name.map(TypeName::try_from).transpose()?;
-
-                Expr::identifier_global(name.as_str(), type_name)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
-                golem_api_grpc::proto::golem::rib::BooleanExpr { value },
-            ) => Expr::boolean(value),
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Throw(
-                golem_api_grpc::proto::golem::rib::ThrowExpr { message },
-            ) => Expr::throw(message),
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::And(expr) => {
-                let left = expr.left.ok_or("Missing left expr")?;
-                let right = expr.right.ok_or("Missing right expr")?;
-                Expr::and((*left).try_into()?, (*right).try_into()?)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Or(expr) => {
-                let left = expr.left.ok_or("Missing left expr")?;
-                let right = expr.right.ok_or("Missing right expr")?;
-                Expr::or((*left).try_into()?, (*right).try_into()?)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Tag(expr) => {
-                let expr = expr.expr.ok_or("Missing expr in tag")?;
-                Expr::get_tag((*expr).try_into()?)
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Unwrap(expr) => {
-                let expr = expr.expr.ok_or("Missing expr")?;
-                let expr: Expr = (*expr).try_into()?;
-                expr.unwrap()
-            }
-
-            golem_api_grpc::proto::golem::rib::expr::Expr::Number(number) => {
-                // Backward compatibility
-                let type_name = number.type_name.map(TypeName::try_from).transpose()?;
-                let big_decimal = if let Some(number) = number.number {
-                    BigDecimal::from_str(&number).map_err(|e| e.to_string())?
-                } else if let Some(float) = number.float {
-                    BigDecimal::from_f64(float).ok_or("Invalid float")?
-                } else {
-                    return Err("Missing number".to_string());
-                };
-
-                Expr::number(big_decimal).with_type_annotation_opt(type_name)
-            }
-            golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(expr) => {
-                let expr = *expr;
-                let field = expr.field;
-                let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
-                let expr = *expr.expr.ok_or(
-                    "Mi\
-                ssing expr",
-                )?;
-
-                Expr::select_field(expr.try_into()?, field.as_str(), type_name)
-            }
-            golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(expr) => {
-                let expr = *expr;
-                let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
-                let index = expr.index as usize;
-                let expr = *expr.expr.ok_or("Missing expr")?;
-
-                let index_expr =
-                    Expr::number(BigDecimal::from_usize(index).ok_or("Invalid index")?);
-
-                Expr::select_index(expr.try_into()?, index_expr).with_type_annotation_opt(type_name)
-            }
-            golem_api_grpc::proto::golem::rib::expr::Expr::Option(expr) => {
-                let type_name = expr.type_name;
-                let type_name = type_name.map(TypeName::try_from).transpose()?;
-
-                match expr.expr {
-                    Some(expr) => {
-                        Expr::option(Some((*expr).try_into()?)).with_type_annotation_opt(type_name)
-                    }
-                    None => Expr::option(None).with_type_annotation_opt(type_name),
-                }
-            }
-            golem_api_grpc::proto::golem::rib::expr::Expr::Result(expr) => {
-                let type_name = expr.type_name;
-                let type_name = type_name.map(TypeName::try_from).transpose()?;
-                let result = expr.result.ok_or("Missing result")?;
-                match result {
-                    golem_api_grpc::proto::golem::rib::result_expr::Result::Ok(expr) => {
-                        Expr::ok((*expr).try_into()?, type_name)
-                    }
-                    golem_api_grpc::proto::golem::rib::result_expr::Result::Err(expr) => {
-                        Expr::err((*expr).try_into()?, type_name)
-                    }
-                }
-            }
-            golem_api_grpc::proto::golem::rib::expr::Expr::PatternMatch(expr) => {
-                let patterns: Vec<MatchArm> = expr
-                    .patterns
-                    .into_iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
-                let expr = expr.expr.ok_or("Missing expr")?;
-                Expr::pattern_match((*expr).try_into()?, patterns)
-            }
-            golem_api_grpc::proto::golem::rib::expr::Expr::ListComprehension(
-                list_comprehension,
-            ) => {
-                let iterable_expr = list_comprehension.iterable_expr.ok_or("Missing expr")?;
-                let iterable_expr = (*iterable_expr).try_into()?;
-                let yield_expr = list_comprehension.yield_expr.ok_or("Missing list")?;
-                let yield_expr = (*yield_expr).try_into()?;
-                let variable_id =
-                    VariableId::list_comprehension_identifier(list_comprehension.iterated_variable);
-                Expr::list_comprehension(variable_id, iterable_expr, yield_expr)
-            }
-            golem_api_grpc::proto::golem::rib::expr::Expr::ListReduce(list_reduce) => {
-                let init_value_expr = list_reduce.init_value_expr.ok_or("Missing initial expr")?;
-                let init_value_expr = (*init_value_expr).try_into()?;
-                let iterable_expr = list_reduce.iterable_expr.ok_or("Missing expr")?;
-                let iterable_expr = (*iterable_expr).try_into()?;
-                let yield_expr = list_reduce.yield_expr.ok_or("Missing list")?;
-                let yield_expr = (*yield_expr).try_into()?;
-                let iterated_variable_id =
-                    VariableId::list_comprehension_identifier(list_reduce.iterated_variable);
-                let reduce_variable_id =
-                    VariableId::list_reduce_identifier(list_reduce.reduce_variable);
-                Expr::list_reduce(
-                    reduce_variable_id,
-                    iterated_variable_id,
-                    iterable_expr,
-                    init_value_expr,
-                    yield_expr,
-                )
-            }
-            golem_api_grpc::proto::golem::rib::expr::Expr::Call(expr) => {
-                let params: Vec<Expr> = expr
-                    .params
-                    .into_iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
-                // This is not required and kept for backward compatibility
-                let legacy_invocation_name = expr.name;
-                let call_type = expr.call_type;
-                let generic_type_parameter = expr
-                    .generic_type_parameter
-                    .map(|tp| GenericTypeParameter { value: tp });
-
-                match (legacy_invocation_name, call_type) {
-                    (Some(legacy), None) => {
-                        let name = legacy.name.ok_or("Missing function call name")?;
-                        match name {
-                            golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => {
-                                // Reading the previous parsed-function-name in persistent store as a dynamic-parsed-function-name
-                                Expr::call_worker_function(DynamicParsedFunctionName::parse(
-                                    ParsedFunctionName::try_from(name)?.to_string()
-                                )?, generic_type_parameter, None, params)
-                            }
-                            golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
-                                name,
-                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
-                            golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(
-                                name,
-                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
-                        }
-                    }
-                    (_, Some(call_type)) => {
-                        let name = call_type.name.ok_or("Missing function call name")?;
-                        match name {
-                            golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(name) => {
-                                Expr::call_worker_function(name.try_into()?, generic_type_parameter, None, params)
-                            }
-                            golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(
-                                name,
-                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
-                            golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(
-                                name,
-                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
-                            golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(instance_creation) => {
-                                let instance_creation_type = InstanceCreationType::try_from(*instance_creation)?;
-                                let call_type = CallType::InstanceCreation(instance_creation_type);
-                                Expr::Call {
-                                    call_type,
-                                    generic_type_parameter,
-                                    args: vec![],
-                                    inferred_type: InferredType::unknown(),
-                                    source_span: SourceSpan::default(),
-                                    type_annotation: None, // TODO
-                                }
-                            }
-                        }
-                    }
-                    (_, _) => Err("Missing both call type (and legacy invocation type)")?,
-                }
-            }
-            golem_api_grpc::proto::golem::rib::expr::Expr::LazyInvokeMethod(lazy_invoke) => {
-                let lhs_proto = lazy_invoke.lhs.ok_or("Missing lhs")?;
-                let lhs = Box::new((*lhs_proto).try_into()?);
-                let method = lazy_invoke.method;
-                let generic_type_parameter = lazy_invoke.generic_type_parameter;
-                let args: Vec<Expr> = lazy_invoke
-                    .args
-                    .into_iter()
-                    .map(Expr::try_from)
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                Expr::InvokeMethodLazy {
-                    lhs,
-                    method,
-                    generic_type_parameter: generic_type_parameter
-                        .map(|value| GenericTypeParameter { value }),
-                    args,
-                    inferred_type: InferredType::unknown(),
-                    source_span: SourceSpan::default(),
-                    type_annotation: None, //TODO
-                }
-            }
-        };
-        Ok(expr)
-    }
-}
-
 impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", text::to_string(self).unwrap())
@@ -2431,8 +2016,430 @@ impl Serialize for Expr {
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use crate::{ArmPattern, Expr, MatchArm, Range};
+    use crate::generic_type_parameter::GenericTypeParameter;
+    use crate::rib_source_span::SourceSpan;
+    use crate::{
+        ArmPattern, CallType, DynamicParsedFunctionName, Expr, InferredType, InstanceCreationType,
+        MatchArm, ParsedFunctionName, Range, TypeName, VariableId,
+    };
+    use bigdecimal::{BigDecimal, FromPrimitive};
     use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
+    use std::str::FromStr;
+
+    #[cfg(feature = "protobuf")]
+    impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
+        type Error = String;
+
+        fn try_from(value: golem_api_grpc::proto::golem::rib::Expr) -> Result<Self, Self::Error> {
+            let expr = value.expr.ok_or("Missing expr")?;
+
+            let expr = match expr {
+                golem_api_grpc::proto::golem::rib::expr::Expr::Let(expr) => {
+                    let name = expr.name;
+                    let type_annotation = expr.type_name.map(TypeName::try_from).transpose()?;
+                    let expr_: golem_api_grpc::proto::golem::rib::Expr =
+                        *expr.expr.ok_or("Missing expr")?;
+                    let expr: Expr = expr_.try_into()?;
+                    Expr::let_binding(name, expr, type_annotation)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndexV1(expr) => {
+                    let selection = *expr.expr.ok_or("Missing expr")?;
+                    let field = *expr.index.ok_or("Missing index")?;
+                    let type_annotation = expr.type_name.map(TypeName::try_from).transpose()?;
+
+                    Expr::select_index(selection.try_into()?, field.try_into()?)
+                        .with_type_annotation_opt(type_annotation)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Length(expr) => {
+                    let expr = expr.expr.ok_or("Missing expr")?;
+                    Expr::Length {
+                        expr: Box::new((*expr).try_into()?),
+                        type_annotation: None,
+                        inferred_type: InferredType::unknown(),
+                        source_span: SourceSpan::default(),
+                    }
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Range(range) => {
+                    let range_expr = range.range_expr.ok_or("Missing range expr")?;
+
+                    match range_expr {
+                        RangeExpr::RangeFrom(range_from) => {
+                            let from = range_from.from.ok_or("Missing from expr")?;
+                            Expr::range_from((*from).try_into()?)
+                        }
+                        RangeExpr::Range(range) => {
+                            let from = range.from.ok_or("Missing from expr")?;
+                            let to = range.to.ok_or("Missing to expr")?;
+                            Expr::range((*from).try_into()?, (*to).try_into()?)
+                        }
+                        RangeExpr::RangeInclusive(range_inclusive) => {
+                            let from = range_inclusive.from.ok_or("Missing from expr")?;
+                            let to = range_inclusive.to.ok_or("Missing to expr")?;
+                            Expr::range_inclusive((*from).try_into()?, (*to).try_into()?)
+                        }
+                    }
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Not(expr) => {
+                    let expr = expr.expr.ok_or("Missing expr")?;
+                    Expr::not((*expr).try_into()?)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThan(expr) => {
+                    let left = expr.left.ok_or("Missing left expr")?;
+                    let right = expr.right.ok_or("Missing right expr")?;
+                    Expr::greater_than((*left).try_into()?, (*right).try_into()?)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThanOrEqual(expr) => {
+                    let left = expr.left.ok_or("Missing left expr")?;
+                    let right = expr.right.ok_or("Missing right expr")?;
+                    Expr::greater_than_or_equal_to((*left).try_into()?, (*right).try_into()?)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::LessThan(expr) => {
+                    let left = expr.left.ok_or("Missing left expr")?;
+                    let right = expr.right.ok_or("Missing right expr")?;
+                    Expr::less_than((*left).try_into()?, (*right).try_into()?)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(expr) => {
+                    let left = expr.left.ok_or("Missing left expr")?;
+                    let right = expr.right.ok_or("Missing right expr")?;
+                    Expr::less_than_or_equal_to((*left).try_into()?, (*right).try_into()?)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::EqualTo(expr) => {
+                    let left = expr.left.ok_or("Missing left expr")?;
+                    let right = expr.right.ok_or("Missing right expr")?;
+                    Expr::equal_to((*left).try_into()?, (*right).try_into()?)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Add(expr) => {
+                    let left = expr.left.ok_or("Missing left expr")?;
+                    let right = expr.right.ok_or("Missing right expr")?;
+                    Expr::plus((*left).try_into()?, (*right).try_into()?)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Subtract(expr) => {
+                    let left = expr.left.ok_or("Missing left expr")?;
+                    let right = expr.right.ok_or("Missing right expr")?;
+                    Expr::plus((*left).try_into()?, (*right).try_into()?)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Divide(expr) => {
+                    let left = expr.left.ok_or("Missing left expr")?;
+                    let right = expr.right.ok_or("Missing right expr")?;
+                    Expr::plus((*left).try_into()?, (*right).try_into()?)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Multiply(expr) => {
+                    let left = expr.left.ok_or("Missing left expr")?;
+                    let right = expr.right.ok_or("Missing right expr")?;
+                    Expr::plus((*left).try_into()?, (*right).try_into()?)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Cond(expr) => {
+                    let left = expr.left.ok_or("Missing left expr")?;
+                    let cond = expr.cond.ok_or("Missing cond expr")?;
+                    let right = expr.right.ok_or("Missing right expr")?;
+                    Expr::cond(
+                        (*left).try_into()?,
+                        (*cond).try_into()?,
+                        (*right).try_into()?,
+                    )
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Concat(
+                    golem_api_grpc::proto::golem::rib::ConcatExpr { exprs },
+                ) => {
+                    let exprs: Vec<Expr> = exprs
+                        .into_iter()
+                        .map(|expr| expr.try_into())
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Expr::concat(exprs)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
+                    golem_api_grpc::proto::golem::rib::MultipleExpr { exprs },
+                ) => {
+                    let exprs: Vec<Expr> = exprs
+                        .into_iter()
+                        .map(|expr| expr.try_into())
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Expr::expr_block(exprs)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
+                    golem_api_grpc::proto::golem::rib::SequenceExpr { exprs, type_name },
+                ) => {
+                    let type_annotation = type_name.map(TypeName::try_from).transpose()?;
+
+                    let exprs: Vec<Expr> = exprs
+                        .into_iter()
+                        .map(|expr| expr.try_into())
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Expr::sequence(exprs, type_annotation)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
+                    golem_api_grpc::proto::golem::rib::TupleExpr { exprs },
+                ) => {
+                    let exprs: Vec<Expr> = exprs
+                        .into_iter()
+                        .map(|expr| expr.try_into())
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Expr::tuple(exprs)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Record(
+                    golem_api_grpc::proto::golem::rib::RecordExpr { fields },
+                ) => {
+                    let mut values: Vec<(String, Expr)> = vec![];
+                    for record in fields.into_iter() {
+                        let name = record.name;
+                        let expr = record.expr.ok_or("Missing expr")?;
+                        values.push((name, expr.try_into()?));
+                    }
+                    Expr::record(values)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Flags(
+                    golem_api_grpc::proto::golem::rib::FlagsExpr { values },
+                ) => Expr::flags(values),
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
+                    golem_api_grpc::proto::golem::rib::LiteralExpr { value },
+                ) => Expr::literal(value),
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
+                    golem_api_grpc::proto::golem::rib::IdentifierExpr { name, type_name },
+                ) => {
+                    let type_name = type_name.map(TypeName::try_from).transpose()?;
+
+                    Expr::identifier_global(name.as_str(), type_name)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
+                    golem_api_grpc::proto::golem::rib::BooleanExpr { value },
+                ) => Expr::boolean(value),
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Throw(
+                    golem_api_grpc::proto::golem::rib::ThrowExpr { message },
+                ) => Expr::throw(message),
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::And(expr) => {
+                    let left = expr.left.ok_or("Missing left expr")?;
+                    let right = expr.right.ok_or("Missing right expr")?;
+                    Expr::and((*left).try_into()?, (*right).try_into()?)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Or(expr) => {
+                    let left = expr.left.ok_or("Missing left expr")?;
+                    let right = expr.right.ok_or("Missing right expr")?;
+                    Expr::or((*left).try_into()?, (*right).try_into()?)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Tag(expr) => {
+                    let expr = expr.expr.ok_or("Missing expr in tag")?;
+                    Expr::get_tag((*expr).try_into()?)
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Unwrap(expr) => {
+                    let expr = expr.expr.ok_or("Missing expr")?;
+                    let expr: Expr = (*expr).try_into()?;
+                    expr.unwrap()
+                }
+
+                golem_api_grpc::proto::golem::rib::expr::Expr::Number(number) => {
+                    // Backward compatibility
+                    let type_name = number.type_name.map(TypeName::try_from).transpose()?;
+                    let big_decimal = if let Some(number) = number.number {
+                        BigDecimal::from_str(&number).map_err(|e| e.to_string())?
+                    } else if let Some(float) = number.float {
+                        BigDecimal::from_f64(float).ok_or("Invalid float")?
+                    } else {
+                        return Err("Missing number".to_string());
+                    };
+
+                    Expr::number(big_decimal).with_type_annotation_opt(type_name)
+                }
+                golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(expr) => {
+                    let expr = *expr;
+                    let field = expr.field;
+                    let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
+                    let expr = *expr.expr.ok_or(
+                        "Mi\
+                ssing expr",
+                    )?;
+
+                    Expr::select_field(expr.try_into()?, field.as_str(), type_name)
+                }
+                golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(expr) => {
+                    let expr = *expr;
+                    let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
+                    let index = expr.index as usize;
+                    let expr = *expr.expr.ok_or("Missing expr")?;
+
+                    let index_expr =
+                        Expr::number(BigDecimal::from_usize(index).ok_or("Invalid index")?);
+
+                    Expr::select_index(expr.try_into()?, index_expr)
+                        .with_type_annotation_opt(type_name)
+                }
+                golem_api_grpc::proto::golem::rib::expr::Expr::Option(expr) => {
+                    let type_name = expr.type_name;
+                    let type_name = type_name.map(TypeName::try_from).transpose()?;
+
+                    match expr.expr {
+                        Some(expr) => Expr::option(Some((*expr).try_into()?))
+                            .with_type_annotation_opt(type_name),
+                        None => Expr::option(None).with_type_annotation_opt(type_name),
+                    }
+                }
+                golem_api_grpc::proto::golem::rib::expr::Expr::Result(expr) => {
+                    let type_name = expr.type_name;
+                    let type_name = type_name.map(TypeName::try_from).transpose()?;
+                    let result = expr.result.ok_or("Missing result")?;
+                    match result {
+                        golem_api_grpc::proto::golem::rib::result_expr::Result::Ok(expr) => {
+                            Expr::ok((*expr).try_into()?, type_name)
+                        }
+                        golem_api_grpc::proto::golem::rib::result_expr::Result::Err(expr) => {
+                            Expr::err((*expr).try_into()?, type_name)
+                        }
+                    }
+                }
+                golem_api_grpc::proto::golem::rib::expr::Expr::PatternMatch(expr) => {
+                    let patterns: Vec<MatchArm> = expr
+                        .patterns
+                        .into_iter()
+                        .map(|expr| expr.try_into())
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let expr = expr.expr.ok_or("Missing expr")?;
+                    Expr::pattern_match((*expr).try_into()?, patterns)
+                }
+                golem_api_grpc::proto::golem::rib::expr::Expr::ListComprehension(
+                    list_comprehension,
+                ) => {
+                    let iterable_expr = list_comprehension.iterable_expr.ok_or("Missing expr")?;
+                    let iterable_expr = (*iterable_expr).try_into()?;
+                    let yield_expr = list_comprehension.yield_expr.ok_or("Missing list")?;
+                    let yield_expr = (*yield_expr).try_into()?;
+                    let variable_id = VariableId::list_comprehension_identifier(
+                        list_comprehension.iterated_variable,
+                    );
+                    Expr::list_comprehension(variable_id, iterable_expr, yield_expr)
+                }
+                golem_api_grpc::proto::golem::rib::expr::Expr::ListReduce(list_reduce) => {
+                    let init_value_expr =
+                        list_reduce.init_value_expr.ok_or("Missing initial expr")?;
+                    let init_value_expr = (*init_value_expr).try_into()?;
+                    let iterable_expr = list_reduce.iterable_expr.ok_or("Missing expr")?;
+                    let iterable_expr = (*iterable_expr).try_into()?;
+                    let yield_expr = list_reduce.yield_expr.ok_or("Missing list")?;
+                    let yield_expr = (*yield_expr).try_into()?;
+                    let iterated_variable_id =
+                        VariableId::list_comprehension_identifier(list_reduce.iterated_variable);
+                    let reduce_variable_id =
+                        VariableId::list_reduce_identifier(list_reduce.reduce_variable);
+                    Expr::list_reduce(
+                        reduce_variable_id,
+                        iterated_variable_id,
+                        iterable_expr,
+                        init_value_expr,
+                        yield_expr,
+                    )
+                }
+                golem_api_grpc::proto::golem::rib::expr::Expr::Call(expr) => {
+                    let params: Vec<Expr> = expr
+                        .params
+                        .into_iter()
+                        .map(|expr| expr.try_into())
+                        .collect::<Result<Vec<_>, _>>()?;
+                    // This is not required and kept for backward compatibility
+                    let legacy_invocation_name = expr.name;
+                    let call_type = expr.call_type;
+                    let generic_type_parameter = expr
+                        .generic_type_parameter
+                        .map(|tp| GenericTypeParameter { value: tp });
+
+                    match (legacy_invocation_name, call_type) {
+                        (Some(legacy), None) => {
+                            let name = legacy.name.ok_or("Missing function call name")?;
+                            match name {
+                            golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => {
+                                // Reading the previous parsed-function-name in persistent store as a dynamic-parsed-function-name
+                                Expr::call_worker_function(DynamicParsedFunctionName::parse(
+                                    ParsedFunctionName::try_from(name)?.to_string()
+                                )?, generic_type_parameter, None, params)
+                            }
+                            golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
+                                name,
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(
+                                name,
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                        }
+                        }
+                        (_, Some(call_type)) => {
+                            let name = call_type.name.ok_or("Missing function call name")?;
+                            match name {
+                            golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(name) => {
+                                Expr::call_worker_function(name.try_into()?, generic_type_parameter, None, params)
+                            }
+                            golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(
+                                name,
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(
+                                name,
+                            ) => Expr::call_worker_function(DynamicParsedFunctionName::parse(name)?, generic_type_parameter, None, params),
+                            golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(instance_creation) => {
+                                let instance_creation_type = InstanceCreationType::try_from(*instance_creation)?;
+                                let call_type = CallType::InstanceCreation(instance_creation_type);
+                                Expr::Call {
+                                    call_type,
+                                    generic_type_parameter,
+                                    args: vec![],
+                                    inferred_type: InferredType::unknown(),
+                                    source_span: SourceSpan::default(),
+                                    type_annotation: None, // TODO
+                                }
+                            }
+                        }
+                        }
+                        (_, _) => Err("Missing both call type (and legacy invocation type)")?,
+                    }
+                }
+                golem_api_grpc::proto::golem::rib::expr::Expr::LazyInvokeMethod(lazy_invoke) => {
+                    let lhs_proto = lazy_invoke.lhs.ok_or("Missing lhs")?;
+                    let lhs = Box::new((*lhs_proto).try_into()?);
+                    let method = lazy_invoke.method;
+                    let generic_type_parameter = lazy_invoke.generic_type_parameter;
+                    let args: Vec<Expr> = lazy_invoke
+                        .args
+                        .into_iter()
+                        .map(Expr::try_from)
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    Expr::InvokeMethodLazy {
+                        lhs,
+                        method,
+                        generic_type_parameter: generic_type_parameter
+                            .map(|value| GenericTypeParameter { value }),
+                        args,
+                        inferred_type: InferredType::unknown(),
+                        source_span: SourceSpan::default(),
+                        type_annotation: None, //TODO
+                    }
+                }
+            };
+            Ok(expr)
+        }
+    }
 
     impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
         fn from(value: Expr) -> Self {

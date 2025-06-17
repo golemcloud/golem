@@ -74,32 +74,6 @@ pub enum WorkerNamePresence {
     Absent,
 }
 
-impl From<golem_api_grpc::proto::golem::rib::WorkerNamePresence> for WorkerNamePresence {
-    fn from(value: golem_api_grpc::proto::golem::rib::WorkerNamePresence) -> Self {
-        match value {
-            golem_api_grpc::proto::golem::rib::WorkerNamePresence::Present => {
-                WorkerNamePresence::Present
-            }
-            golem_api_grpc::proto::golem::rib::WorkerNamePresence::Absent => {
-                WorkerNamePresence::Absent
-            }
-        }
-    }
-}
-
-impl From<WorkerNamePresence> for golem_api_grpc::proto::golem::rib::WorkerNamePresence {
-    fn from(value: WorkerNamePresence) -> Self {
-        match value {
-            WorkerNamePresence::Present => {
-                golem_api_grpc::proto::golem::rib::WorkerNamePresence::Present
-            }
-            WorkerNamePresence::Absent => {
-                golem_api_grpc::proto::golem::rib::WorkerNamePresence::Absent
-            }
-        }
-    }
-}
-
 impl RibIR {
     pub fn get_instruction_id(&self) -> Option<InstructionId> {
         match self {
@@ -194,6 +168,32 @@ mod protobuf {
     };
     use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
     use golem_wasm_rpc::ValueAndType;
+
+    impl From<golem_api_grpc::proto::golem::rib::WorkerNamePresence> for WorkerNamePresence {
+        fn from(value: golem_api_grpc::proto::golem::rib::WorkerNamePresence) -> Self {
+            match value {
+                golem_api_grpc::proto::golem::rib::WorkerNamePresence::Present => {
+                    WorkerNamePresence::Present
+                }
+                golem_api_grpc::proto::golem::rib::WorkerNamePresence::Absent => {
+                    WorkerNamePresence::Absent
+                }
+            }
+        }
+    }
+
+    impl From<WorkerNamePresence> for golem_api_grpc::proto::golem::rib::WorkerNamePresence {
+        fn from(value: WorkerNamePresence) -> Self {
+            match value {
+                WorkerNamePresence::Present => {
+                    golem_api_grpc::proto::golem::rib::WorkerNamePresence::Present
+                }
+                WorkerNamePresence::Absent => {
+                    golem_api_grpc::proto::golem::rib::WorkerNamePresence::Absent
+                }
+            }
+        }
+    }
 
     impl TryFrom<golem_api_grpc::proto::golem::rib::FunctionReferenceType> for FunctionReferenceType {
         type Error = String;
