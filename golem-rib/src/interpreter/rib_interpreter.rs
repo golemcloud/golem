@@ -1632,8 +1632,7 @@ mod tests {
         RibCompilerConfig, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{
-        bool, f32, field, list, r#enum, record, result, s32, str, tuple, u32,
-        u64, u8,
+        bool, f32, field, list, r#enum, record, result, s32, str, tuple, u32, u64, u8,
     };
     use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType};
 

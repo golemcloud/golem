@@ -631,9 +631,7 @@ mod internal {
                 ..
             } => (
                 function_name.function.raw_resource_params_mut(),
-                module
-                    .as_mut()
-                    .and_then(|m| m.instance_type.worker_mut()),
+                module.as_mut().and_then(|m| m.instance_type.worker_mut()),
             ),
 
             CallType::InstanceCreation(instance_creation) => match instance_creation {
@@ -641,9 +639,7 @@ mod internal {
 
                 InstanceCreationType::WitResource { module, .. } => (
                     None,
-                    module
-                        .as_mut()
-                        .and_then(|m| m.instance_type.worker_mut()),
+                    module.as_mut().and_then(|m| m.instance_type.worker_mut()),
                 ),
             },
 

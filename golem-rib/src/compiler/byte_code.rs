@@ -476,9 +476,10 @@ mod internal {
                                 InstanceVariable::WitResource(variable_id)
                             }
                             _ => {
-                                let variable_id = module.variable_id.clone().ok_or({
-                                    RibByteCodeGenerationError::UnresolvedWorkerName
-                                })?;
+                                let variable_id = module
+                                    .variable_id
+                                    .clone()
+                                    .ok_or({ RibByteCodeGenerationError::UnresolvedWorkerName })?;
 
                                 InstanceVariable::WitWorker(variable_id)
                             }
@@ -647,10 +648,9 @@ mod internal {
                                         InstanceVariable::WitResource(variable_id.clone())
                                     }
                                     _ => {
-                                        let variable_id =
-                                            module.variable_id.as_ref().ok_or({
-                                                RibByteCodeGenerationError::UnresolvedWorkerName
-                                            })?;
+                                        let variable_id = module.variable_id.as_ref().ok_or({
+                                            RibByteCodeGenerationError::UnresolvedWorkerName
+                                        })?;
 
                                         InstanceVariable::WitWorker(variable_id.clone())
                                     }
