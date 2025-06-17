@@ -109,7 +109,7 @@ impl CallType {
                 ..
             } => {
                 let module = instance_identifier.as_ref()?;
-                module.worker_name().clone()
+                module.worker_name()
             }
             _ => None,
         }
