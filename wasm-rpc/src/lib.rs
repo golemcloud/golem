@@ -47,7 +47,7 @@ pub mod poem;
 pub mod protobuf;
 
 /// Serde instances for WitValue
-#[cfg(feature = "serde")]
+#[cfg(all(feature = "serde", any(feature = "host-bindings", feature = "stub")))]
 pub mod serde;
 
 /// Conversion to/from the WAVE format
@@ -133,29 +133,6 @@ pub use golem_rpc_0_2_x::types::{
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-
-impl From<wasi::clocks::wall_clock::Datetime> for DateTime<Utc> {
-    fn from(value: wasi::clocks::wall_clock::Datetime) -> DateTime<Utc> {
-        DateTime::from_timestamp(value.seconds as i64, value.nanoseconds)
-            .expect("Received invalid datetime from wasi")
-    }
-}
-
-impl From<Uuid> for uuid::Uuid {
-    fn from(value: Uuid) -> Self {
-        uuid::Uuid::from_u64_pair(value.high_bits, value.low_bits)
-    }
-}
-
-impl From<uuid::Uuid> for Uuid {
-    fn from(uuid: uuid::Uuid) -> Self {
-        let (high_bits, low_bits) = uuid.as_u64_pair();
-        Uuid {
-            high_bits,
-            low_bits,
-        }
-    }
-}
 
 #[cfg(feature = "host-bindings")]
 pub struct WasmRpcEntry {
@@ -479,18 +456,47 @@ impl<'a> arbitrary::Arbitrary<'a> for WitValue {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
+impl From<wasi::clocks::wall_clock::Datetime> for DateTime<Utc> {
+    fn from(value: wasi::clocks::wall_clock::Datetime) -> DateTime<Utc> {
+        DateTime::from_timestamp(value.seconds as i64, value.nanoseconds)
+            .expect("Received invalid datetime from wasi")
+    }
+}
+
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
+impl From<Uuid> for uuid::Uuid {
+    fn from(value: Uuid) -> Self {
+        uuid::Uuid::from_u64_pair(value.high_bits, value.low_bits)
+    }
+}
+
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
+impl From<uuid::Uuid> for Uuid {
+    fn from(uuid: uuid::Uuid) -> Self {
+        let (high_bits, low_bits) = uuid.as_u64_pair();
+        Uuid {
+            high_bits,
+            low_bits,
+        }
+    }
+}
+
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<uuid::Uuid> for ComponentId {
     fn from(value: uuid::Uuid) -> Self {
         Self { uuid: value.into() }
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<ComponentId> for uuid::Uuid {
     fn from(value: ComponentId) -> Self {
         value.uuid.into()
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl FromStr for ComponentId {
     type Err = uuid::Error;
 
@@ -499,6 +505,7 @@ impl FromStr for ComponentId {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl Display for ComponentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let uuid: uuid::Uuid = self.uuid.into();
@@ -506,12 +513,14 @@ impl Display for ComponentId {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl Display for WorkerId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}/{}", self.component_id, self.worker_name)
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl FromStr for WorkerId {
     type Err = String;
 
@@ -533,6 +542,7 @@ impl FromStr for WorkerId {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl TryFrom<Uri> for WorkerId {
     type Error = String;
 

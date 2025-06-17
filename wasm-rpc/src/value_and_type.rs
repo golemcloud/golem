@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{RpcError, Value, WitNode, WitType, WitTypeNode, WitValue};
+use crate::Value;
 use golem_wasm_ast::analysis::analysed_type::{
     list, option, result, result_err, result_ok, tuple, variant,
 };
@@ -24,6 +24,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Bound;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
+use crate::{RpcError, WitNode, WitType, WitTypeNode, WitValue};
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "bincode", derive(::bincode::Encode, ::bincode::Decode))]
@@ -73,7 +76,7 @@ impl From<ValueAndType> for AnalysedType {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<ValueAndType> for WitValue {
     fn from(value_and_type: ValueAndType) -> Self {
         value_and_type.value.into()
@@ -447,7 +450,7 @@ impl IntoValueAndType for Vec<(&'static str, ValueAndType)> {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl IntoValue for crate::WitValue {
     fn into_value(self) -> Value {
         // NOTE: this is different than From<WitValue> for Value. That conversion creates
@@ -464,7 +467,7 @@ impl IntoValue for crate::WitValue {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl IntoValue for WitNode {
     fn into_value(self) -> Value {
         use crate::WitNode;
@@ -609,7 +612,7 @@ impl IntoValue for WitNode {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl IntoValue for crate::Uri {
     fn into_value(self) -> Value {
         Value::Record(vec![Value::String(self.value)])
@@ -675,6 +678,7 @@ impl IntoValue for crate::RpcError {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<WitType> for AnalysedType {
     fn from(value: WitType) -> Self {
         assert!(!value.nodes.is_empty());
@@ -682,6 +686,7 @@ impl From<WitType> for AnalysedType {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 fn build_tree(node: &WitTypeNode, nodes: &[WitTypeNode]) -> AnalysedType {
     match node {
         WitTypeNode::RecordType(fields) => {
@@ -767,6 +772,7 @@ fn build_tree(node: &WitTypeNode, nodes: &[WitTypeNode]) -> AnalysedType {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<AnalysedType> for WitType {
     fn from(value: AnalysedType) -> Self {
         let mut builder = WitTypeBuilder::new();
@@ -775,11 +781,13 @@ impl From<AnalysedType> for WitType {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 struct WitTypeBuilder {
     nodes: Vec<WitTypeNode>,
     mapping: HashMap<AnalysedType, usize>,
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl WitTypeBuilder {
     pub fn new() -> Self {
         Self {
@@ -863,6 +871,7 @@ impl WitTypeBuilder {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<crate::golem_rpc_0_2_x::types::ValueAndType> for ValueAndType {
     fn from(value: crate::golem_rpc_0_2_x::types::ValueAndType) -> Self {
         Self {
@@ -872,6 +881,7 @@ impl From<crate::golem_rpc_0_2_x::types::ValueAndType> for ValueAndType {
     }
 }
 
+#[cfg(any(feature = "host-bindings", feature = "stub"))]
 impl From<ValueAndType> for crate::golem_rpc_0_2_x::types::ValueAndType {
     fn from(value: ValueAndType) -> Self {
         Self {
