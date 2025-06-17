@@ -14,8 +14,10 @@
 
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
+use crate::login::{LoginError, LoginSystem};
+use crate::model::AccountAction;
 use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::token;
+use crate::service::token::{self, TokenServiceError};
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::token::v1::cloud_token_service_server::CloudTokenService;
 use golem_api_grpc::proto::golem::token::v1::{
@@ -70,9 +72,7 @@ impl From<token::TokenServiceError> for TokenError {
                     error: value.to_safe_string(),
                 })
             }
-            token::TokenServiceError::InternalTokenError(_)
-            | token::TokenServiceError::InternalRepoError(_)
-            | token::TokenServiceError::InternalSerializationError { .. }
+            token::TokenServiceError::InternalRepoError(_)
             | token::TokenServiceError::InternalSecretAlreadyExists { .. } => {
                 token_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
@@ -99,6 +99,16 @@ impl From<token::TokenServiceError> for TokenError {
     }
 }
 
+impl From<LoginError> for TokenError {
+    fn from(value: LoginError) -> Self {
+        TokenError {
+            error: Some(token_error::Error::InternalError(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+        }
+    }
+}
+
 fn bad_request_error(error: &str) -> TokenError {
     TokenError {
         error: Some(token_error::Error::BadRequest(ErrorsBody {
@@ -110,6 +120,7 @@ fn bad_request_error(error: &str) -> TokenError {
 pub struct TokenGrpcApi {
     pub auth_service: Arc<dyn AuthService + Sync + Send>,
     pub token_service: Arc<dyn token::TokenService + Sync + Send>,
+    pub login_system: Arc<LoginSystem>,
 }
 
 impl TokenGrpcApi {
@@ -134,14 +145,44 @@ impl TokenGrpcApi {
         metadata: MetadataMap,
     ) -> Result<(), TokenError> {
         let auth = self.auth(metadata).await?;
-        let id: TokenId = request
+
+        let token_id: TokenId = request
             .token_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing token id"))?;
 
-        self.token_service.delete(&id, &auth).await?;
+        match self
+            .token_service
+            .get(&token_id, &AccountAuthorisation::admin())
+            .await
+        {
+            Ok(existing) => {
+                self.auth_service
+                    .authorize_account_action(
+                        &auth,
+                        &existing.account_id,
+                        &AccountAction::DeleteToken,
+                    )
+                    .await?;
 
-        Ok(())
+                if let LoginSystem::Enabled(login_system) = &*self.login_system {
+                    login_system
+                        .login_service
+                        .unlink_temp_token(&token_id)
+                        .await?;
+                };
+
+                self.token_service.delete(&token_id).await?;
+
+                Ok(())
+            }
+            Err(TokenServiceError::UnknownToken(_)) => Err(TokenError {
+                error: Some(token_error::Error::NotFound(ErrorBody {
+                    error: "Token not found".to_string(),
+                })),
+            })?,
+            Err(e) => Err(e)?,
+        }
     }
 
     async fn create(

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::fmt::Debug;
 
-pub trait OAuth2SessionService {
+pub trait OAuth2SessionService: Send + Sync {
     fn encode_session(
         &self,
         session: &OAuth2Session,

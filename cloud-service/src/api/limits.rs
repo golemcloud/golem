@@ -112,8 +112,8 @@ impl From<AuthServiceError> for LimitsError {
 }
 
 pub struct LimitsApi {
-    pub auth_service: Arc<dyn AuthService + Sync + Send>,
-    pub plan_limit_service: Arc<dyn PlanLimitService + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService>,
+    pub plan_limit_service: Arc<dyn PlanLimitService>,
 }
 
 #[OpenApi(prefix_path = "/v1/resource-limits", tag = ApiTags::Limits)]

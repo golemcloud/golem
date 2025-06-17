@@ -20,12 +20,12 @@ use golem_service_base::dto;
 use golem_service_base::model::Component;
 use std::sync::Arc;
 
-pub struct RemoteCloudApiMapper {
-    plugin_service_client: Arc<dyn PluginServiceClient + Sync + Send>,
+pub struct ApiMapper {
+    plugin_service_client: Arc<dyn PluginServiceClient>,
 }
 
-impl RemoteCloudApiMapper {
-    pub fn new(plugin_service_client: Arc<dyn PluginServiceClient + Sync + Send>) -> Self {
+impl ApiMapper {
+    pub fn new(plugin_service_client: Arc<dyn PluginServiceClient>) -> Self {
         Self {
             plugin_service_client,
         }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api::{ApiTags, LimitedApiError, LimitedApiResult};
+use super::{ApiError, ApiResult, ApiTags};
 use crate::auth::AccountAuthorisation;
 use crate::model::*;
 use crate::service::account::AccountService;
@@ -33,10 +33,10 @@ use tracing::info;
 use tracing::Instrument;
 
 pub struct ProjectGrantApi {
-    pub auth_service: Arc<dyn AuthService + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService>,
     pub account_service: Arc<dyn AccountService>,
-    pub project_grant_service: Arc<dyn ProjectGrantService + Sync + Send>,
-    pub project_policy_service: Arc<dyn ProjectPolicyService + Sync + Send>,
+    pub project_grant_service: Arc<dyn ProjectGrantService>,
+    pub project_policy_service: Arc<dyn ProjectPolicyService>,
 }
 
 #[OpenApi(prefix_path = "/v1/projects", tag = ApiTags::ProjectGrant)]
@@ -59,7 +59,7 @@ impl ProjectGrantApi {
         &self,
         project_id: Path<ProjectId>,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<Vec<ProjectGrant>>> {
+    ) -> ApiResult<Json<Vec<ProjectGrant>>> {
         let record = recorded_http_api_request!(
             "get_project_grants",
             project_id = project_id.0.to_string(),
@@ -76,7 +76,7 @@ impl ProjectGrantApi {
         &self,
         project_id: ProjectId,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<Vec<ProjectGrant>>> {
+    ) -> ApiResult<Json<Vec<ProjectGrant>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
         let grants = self
             .project_grant_service
@@ -98,7 +98,7 @@ impl ProjectGrantApi {
         project_id: Path<ProjectId>,
         grant_id: Path<ProjectGrantId>,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<ProjectGrant>> {
+    ) -> ApiResult<Json<ProjectGrant>> {
         let record = recorded_http_api_request!(
             "get_project_grant",
             project_id = project_id.0.to_string(),
@@ -117,7 +117,7 @@ impl ProjectGrantApi {
         project_id: ProjectId,
         grant_id: ProjectGrantId,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<ProjectGrant>> {
+    ) -> ApiResult<Json<ProjectGrant>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
         let grant = self
             .project_grant_service
@@ -125,7 +125,7 @@ impl ProjectGrantApi {
             .await?;
         match grant {
             Some(grant) => Ok(Json(grant)),
-            None => Err(LimitedApiError::NotFound(Json(ErrorBody {
+            None => Err(ApiError::NotFound(Json(ErrorBody {
                 error: "Project grant not found".to_string(),
             }))),
         }
@@ -148,7 +148,7 @@ impl ProjectGrantApi {
         project_id: Path<ProjectId>,
         request: Json<ProjectGrantDataRequest>,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<ProjectGrant>> {
+    ) -> ApiResult<Json<ProjectGrant>> {
         let record = recorded_http_api_request!(
             "create_project_grant",
             project_id = project_id.0.to_string()
@@ -166,7 +166,7 @@ impl ProjectGrantApi {
         project_id: ProjectId,
         request: ProjectGrantDataRequest,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<ProjectGrant>> {
+    ) -> ApiResult<Json<ProjectGrant>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
 
         let account_id = match (request.grantee_account_id, request.grantee_email) {
@@ -180,12 +180,12 @@ impl ProjectGrantApi {
                 if accounts.len() == 1 {
                     accounts.swap_remove(0).id
                 } else {
-                    Err(LimitedApiError::NotFound(Json(ErrorBody {
+                    Err(ApiError::NotFound(Json(ErrorBody {
                         error: "No matching account found".to_string(),
                     })))?
                 }
             }
-            (None, None) => Err(LimitedApiError::BadRequest(Json(ErrorsBody {
+            (None, None) => Err(ApiError::BadRequest(Json(ErrorsBody {
                 errors: vec!["Account id or email need to be provided".to_string()],
             })))?,
         };
@@ -237,7 +237,7 @@ impl ProjectGrantApi {
         project_id: Path<ProjectId>,
         grant_id: Path<ProjectGrantId>,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<DeleteProjectGrantResponse>> {
+    ) -> ApiResult<Json<DeleteProjectGrantResponse>> {
         let record = recorded_http_api_request!(
             "delete_project_grant",
             project_id = project_id.0.to_string(),
@@ -256,7 +256,7 @@ impl ProjectGrantApi {
         project_id: ProjectId,
         grant_id: ProjectGrantId,
         token: GolemSecurityScheme,
-    ) -> LimitedApiResult<Json<DeleteProjectGrantResponse>> {
+    ) -> ApiResult<Json<DeleteProjectGrantResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
 
         self.project_grant_service

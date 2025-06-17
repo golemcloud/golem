@@ -54,7 +54,7 @@ impl From<UnsafeToken> for TokenRecord {
 }
 
 #[async_trait]
-pub trait TokenRepo {
+pub trait TokenRepo: Send + Sync {
     async fn create(&self, token: &TokenRecord) -> Result<(), RepoError>;
 
     async fn get(&self, token_id: &Uuid) -> Result<Option<TokenRecord>, RepoError>;

@@ -48,7 +48,7 @@ impl SafeDisplay for AccountGrantServiceError {
 }
 
 #[async_trait]
-pub trait AccountGrantService {
+pub trait AccountGrantService: Send + Sync {
     async fn get(
         &self,
         account_id: &AccountId,

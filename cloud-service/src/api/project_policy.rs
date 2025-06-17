@@ -27,8 +27,8 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct ProjectPolicyApi {
-    pub auth_service: Arc<dyn AuthService + Sync + Send>,
-    pub project_policy_service: Arc<dyn ProjectPolicyService + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService>,
+    pub project_policy_service: Arc<dyn ProjectPolicyService>,
 }
 
 #[OpenApi(prefix_path = "/v1/project-policies", tag = ApiTags::ProjectPolicy)]

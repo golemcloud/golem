@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{ApiError, ApiResult};
 use crate::api::ApiTags;
+use crate::login::LoginSystem;
+use crate::login::LoginSystemEnabled;
 use crate::model::*;
-use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::login::{LoginError as LoginServiceError, LoginService};
-use crate::service::oauth2::{OAuth2Error, OAuth2Service};
-use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::error::{ErrorBody, ErrorsBody};
+use crate::service::auth::AuthService;
 use golem_common::recorded_http_api_request;
-use golem_common::SafeDisplay;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
@@ -29,108 +27,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tracing::Instrument;
 
-#[derive(ApiResponse, Debug, Clone)]
-pub enum LoginError {
-    /// Invalid request, returning with a list of issues detected in the request
-    #[oai(status = 400)]
-    BadRequest(Json<ErrorsBody>),
-    /// Failed to login
-    #[oai(status = 401)]
-    External(Json<ErrorBody>),
-    /// External service call failed during login
-    #[oai(status = 500)]
-    Internal(Json<ErrorBody>),
-}
-
-impl TraceErrorKind for LoginError {
-    fn trace_error_kind(&self) -> &'static str {
-        match &self {
-            LoginError::BadRequest(_) => "BadRequest",
-            LoginError::External(_) => "External",
-            LoginError::Internal(_) => "Internal",
-        }
-    }
-
-    fn is_expected(&self) -> bool {
-        match &self {
-            LoginError::BadRequest(_) => true,
-            LoginError::External(_) => true,
-            LoginError::Internal(_) => false,
-        }
-    }
-}
-
-impl LoginError {
-    pub fn bad_request(error: impl Into<String>) -> Self {
-        LoginError::BadRequest(Json(ErrorsBody {
-            errors: vec![error.into()],
-        }))
-    }
-}
-
-type Result<T> = std::result::Result<T, LoginError>;
-
-impl From<AuthServiceError> for LoginError {
-    fn from(value: AuthServiceError) -> Self {
-        match value {
-            AuthServiceError::InvalidToken(_)
-            | AuthServiceError::AccountOwnershipRequired
-            | AuthServiceError::RoleMissing { .. }
-            | AuthServiceError::AccountAccessForbidden { .. }
-            | AuthServiceError::ProjectAccessForbidden { .. }
-            | AuthServiceError::ProjectActionForbidden { .. } => {
-                LoginError::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_safe_string()],
-                }))
-            }
-            AuthServiceError::InternalTokenServiceError(_)
-            | AuthServiceError::InternalRepoError(_) => LoginError::Internal(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
-        }
-    }
-}
-
-impl From<LoginServiceError> for LoginError {
-    fn from(value: LoginServiceError) -> Self {
-        match value {
-            LoginServiceError::External(_) => LoginError::External(Json(ErrorBody {
-                error: value.to_safe_string(),
-            })),
-            LoginServiceError::InternalAccountError(_)
-            | LoginServiceError::Internal(_)
-            | LoginServiceError::InternalOAuth2ProviderClientError(_)
-            | LoginServiceError::InternalOAuth2TokenError(_)
-            | LoginServiceError::InternalTokenServiceError(_) => {
-                LoginError::Internal(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
-        }
-    }
-}
-
-impl From<OAuth2Error> for LoginError {
-    fn from(value: OAuth2Error) -> Self {
-        match value {
-            OAuth2Error::InternalGithubClientError(_) | OAuth2Error::InternalSessionError(_) => {
-                LoginError::Internal(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
-            OAuth2Error::InvalidSession(_) | OAuth2Error::InvalidState(_) => {
-                LoginError::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_safe_string()],
-                }))
-            }
-        }
-    }
-}
-
 pub struct LoginApi {
-    pub auth_service: Arc<dyn AuthService + Sync + Send>,
-    pub login_service: Arc<dyn LoginService + Sync + Send>,
-    pub oauth2_service: Arc<dyn OAuth2Service + Sync + Send>,
+    pub auth_service: Arc<dyn AuthService>,
+    pub login_system: Arc<LoginSystem>,
 }
 
 #[OpenApi(prefix_path = "", tag = ApiTags::Login)]
@@ -152,7 +51,7 @@ impl LoginApi {
         /// OAuth2 access token
         #[oai(name = "access-token")]
         access_token: Query<String>,
-    ) -> Result<Json<UnsafeToken>> {
+    ) -> ApiResult<Json<UnsafeToken>> {
         let record = recorded_http_api_request!("login_oauth2",);
         let response = self
             .oauth2_internal(provider.0, access_token.0)
@@ -165,10 +64,13 @@ impl LoginApi {
         &self,
         provider: String,
         access_token: String,
-    ) -> Result<Json<UnsafeToken>> {
+    ) -> ApiResult<Json<UnsafeToken>> {
+        let login_system = self.get_enabled_login_system()?;
+
         let auth_provider =
-            OAuth2Provider::from_str(provider.as_str()).map_err(LoginError::bad_request)?;
-        let result = self
+            OAuth2Provider::from_str(provider.as_str()).map_err(ApiError::bad_request)?;
+
+        let result = login_system
             .login_service
             .oauth2(&auth_provider, &access_token)
             .await?;
@@ -184,7 +86,7 @@ impl LoginApi {
         method = "get",
         operation_id = "current_login_token"
     )]
-    async fn current_token(&self, token: GolemSecurityScheme) -> Result<Json<Token>> {
+    async fn current_token(&self, token: GolemSecurityScheme) -> ApiResult<Json<Token>> {
         let record = recorded_http_api_request!("current_login_token",);
         let response = self
             .auth_service
@@ -207,17 +109,26 @@ impl LoginApi {
         method = "post",
         operation_id = "start_login_oauth2"
     )]
-    async fn start_login_oauth2(&self) -> Result<Json<OAuth2Data>> {
+    async fn start_login_oauth2(&self) -> ApiResult<Json<OAuth2Data>> {
         let record = recorded_http_api_request!("start_login_oauth2",);
+
         let response = self
-            .oauth2_service
-            .start_workflow()
+            .start_login_oauth2_internal()
             .instrument(record.span.clone())
-            .await
-            .map(Json)
-            .map_err(|err| err.into());
+            .await;
 
         record.result(response)
+    }
+
+    async fn start_login_oauth2_internal(&self) -> ApiResult<Json<OAuth2Data>> {
+        let login_system = self.get_enabled_login_system()?;
+
+        login_system
+            .oauth2_service
+            .start_workflow()
+            .await
+            .map(Json)
+            .map_err(|err| err.into())
     }
 
     /// Finish GitHub OAuth2 interactive flow
@@ -229,7 +140,7 @@ impl LoginApi {
         method = "post",
         operation_id = "complete_login_oauth2"
     )]
-    async fn complete_login_oauth2(&self, result: Json<String>) -> Result<Json<UnsafeToken>> {
+    async fn complete_login_oauth2(&self, result: Json<String>) -> ApiResult<Json<UnsafeToken>> {
         let record = recorded_http_api_request!("complete_login_oauth2",);
         let response = self
             .complete_login_oauth2_internal(result.0)
@@ -239,15 +150,19 @@ impl LoginApi {
         record.result(response)
     }
 
-    async fn complete_login_oauth2_internal(&self, result: String) -> Result<Json<UnsafeToken>> {
-        let token = self
+    async fn complete_login_oauth2_internal(&self, result: String) -> ApiResult<Json<UnsafeToken>> {
+        let login_system = self.get_enabled_login_system()?;
+
+        let token = login_system
             .oauth2_service
             .finish_workflow(&EncodedOAuth2Session { value: result })
             .await?;
-        let result = self
+
+        let result = login_system
             .login_service
             .oauth2(&token.provider, &token.access_token)
             .await?;
+
         Ok(Json(result))
     }
 
@@ -265,7 +180,7 @@ impl LoginApi {
         Query(provider): Query<String>,
         /// The redirect URL to redirect to after the user has authorized the application
         Query(redirect): Query<Option<String>>,
-    ) -> Result<Json<WebFlowAuthorizeUrlResponse>> {
+    ) -> ApiResult<Json<WebFlowAuthorizeUrlResponse>> {
         let record = recorded_http_api_request!("oauth2_web_flow_start",);
         let response = self
             .oauth2_web_flow_start_internal(provider, redirect)
@@ -279,32 +194,37 @@ impl LoginApi {
         &self,
         provider: String,
         redirect: Option<String>,
-    ) -> Result<Json<WebFlowAuthorizeUrlResponse>> {
+    ) -> ApiResult<Json<WebFlowAuthorizeUrlResponse>> {
+        let login_system = self.get_enabled_login_system()?;
+
         let redirect = match redirect {
             Some(r) => {
                 let url = url::Url::parse(&r)
-                    .map_err(|_| LoginError::bad_request("Invalid redirect URL"))?;
+                    .map_err(|_| ApiError::bad_request("Invalid redirect URL"))?;
                 if url
                     .domain()
                     .is_some_and(|d| d.starts_with("localhost") || d.contains("golem.cloud"))
                 {
                     Some(url)
                 } else {
-                    return Err(LoginError::bad_request("Invalid redirect domain"));
+                    return Err(ApiError::bad_request("Invalid redirect domain"));
                 }
             }
             None => None,
         };
         let provider =
-            OAuth2Provider::from_str(provider.as_str()).map_err(LoginError::bad_request)?;
-        let state = self
+            OAuth2Provider::from_str(provider.as_str()).map_err(ApiError::bad_request)?;
+
+        let state = login_system
             .login_service
             .generate_temp_token_state(redirect)
             .await?;
-        let url = self
+
+        let url = login_system
             .oauth2_service
             .get_authorize_url(provider, &state)
             .await?;
+
         Ok(Json(WebFlowAuthorizeUrlResponse { url, state }))
     }
 
@@ -323,7 +243,7 @@ impl LoginApi {
         Query(code): Query<String>,
         /// The state parameter for CSRF protection
         Query(state): Query<String>,
-    ) -> Result<WebFlowCallbackSuccess> {
+    ) -> ApiResult<WebFlowCallbackSuccess> {
         let record = recorded_http_api_request!("oauth2_web_flow_callback_github",);
         let response = self
             .oauth2_web_flow_callback_github_internal(code, state)
@@ -337,21 +257,23 @@ impl LoginApi {
         &self,
         code: String,
         state: String,
-    ) -> Result<WebFlowCallbackSuccess> {
+    ) -> ApiResult<WebFlowCallbackSuccess> {
+        let login_system = self.get_enabled_login_system()?;
+
         // Exchange the code for an access token
-        let access_token = self
+        let access_token = login_system
             .oauth2_service
             .exchange_code_for_token(OAuth2Provider::Github, &code, &state)
             .await?;
 
         // Use the access token to log in or create a user
-        let unsafe_token = self
+        let unsafe_token = login_system
             .login_service
             .oauth2(&OAuth2Provider::Github, &access_token)
             .await?;
 
         // Store the token temporarily
-        let token = self
+        let token = login_system
             .login_service
             .link_temp_token(&unsafe_token.data.id, &state)
             .await?;
@@ -381,7 +303,7 @@ impl LoginApi {
         &self,
         /// The state parameter for identifying the session
         Query(state): Query<String>,
-    ) -> Result<WebFlowPoll> {
+    ) -> ApiResult<WebFlowPoll> {
         let record = recorded_http_api_request!("oauth2_web_flow_poll",);
         let response = self
             .oauth2_web_flow_poll_internal(state)
@@ -391,8 +313,10 @@ impl LoginApi {
         record.result(response)
     }
 
-    async fn oauth2_web_flow_poll_internal(&self, state: String) -> Result<WebFlowPoll> {
-        let token = self.login_service.get_temp_token(&state).await?;
+    async fn oauth2_web_flow_poll_internal(&self, state: String) -> ApiResult<WebFlowPoll> {
+        let login_system = self.get_enabled_login_system()?;
+
+        let token = login_system.login_service.get_temp_token(&state).await?;
 
         let result = match token {
             Some(token) => WebFlowPoll::Completed(Json(token.token)),
@@ -400,6 +324,13 @@ impl LoginApi {
         };
 
         Ok(result)
+    }
+
+    fn get_enabled_login_system(&self) -> ApiResult<&LoginSystemEnabled> {
+        match &*self.login_system {
+            LoginSystem::Enabled(inner) => Ok(inner),
+            LoginSystem::Disabled => Err(ApiError::logins_disabled()),
+        }
     }
 }
 

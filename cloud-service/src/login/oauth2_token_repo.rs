@@ -57,7 +57,7 @@ impl From<OAuth2Token> for OAuth2TokenRecord {
 }
 
 #[async_trait]
-pub trait OAuth2TokenRepo {
+pub trait OAuth2TokenRepo: Send + Sync {
     async fn upsert(&self, token: &OAuth2TokenRecord) -> Result<(), RepoError>;
 
     async fn get(

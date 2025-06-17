@@ -21,7 +21,7 @@ use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo::RepoError;
 
 #[async_trait]
-pub trait AccountSummaryRepo {
+pub trait AccountSummaryRepo: Send + Sync {
     async fn get(&self, skip: i32, limit: i32) -> Result<Vec<AccountSummary>, RepoError>;
     async fn count(&self) -> Result<u64, RepoError>;
 }

@@ -38,14 +38,17 @@ type = "Sqlite"
 database = "golem_service.db"
 max_connections = 10
 
-[ed_dsa]
+[login]
+type = "OAuth2"
+
+[login.config.ed_dsa]
 private_key = "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
 public_key = "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg="
 
-[oauth2]
-github_client_id = "GITHUB_CLIENT_ID"
-github_client_secret = "GITHUB_CLIENT_SECRET"
-github_redirect_uri = "http://localhost:8080/v1/login/oauth2/web/callback/github"
+[login.config.github]
+client_id = "GITHUB_CLIENT_ID"
+client_secret = "GITHUB_CLIENT_SECRET"
+redirect_uri = "http://localhost:8080/v1/login/oauth2/web/callback/github"
 
 [plans.default]
 component_limit = 100
