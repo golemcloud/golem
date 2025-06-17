@@ -188,8 +188,7 @@ impl LoginServiceDefault {
         &self,
         provider: &OAuth2Provider,
         external_login: &ExternalLogin,
-        account_id: &AccountId,
-        authorisation: &AccountAuthorisation,
+        account_id: &AccountId
     ) -> Result<UnsafeToken, LoginError> {
         let expiration = Utc::now()
             // Ten years.
@@ -198,7 +197,7 @@ impl LoginServiceDefault {
 
         let unsafe_token = self
             .token_service
-            .create(account_id, &expiration, authorisation)
+            .create(account_id, &expiration)
             .await?;
 
         {
@@ -252,7 +251,6 @@ impl LoginService for LoginServiceDefault {
                     provider,
                     &external_login,
                     &account_id,
-                    &AccountAuthorisation::admin(),
                 )
                 .await?
             }

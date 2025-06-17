@@ -68,7 +68,9 @@ impl TokenApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Vec<Token>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let result = self.token_service.find(&account_id, &auth).await?;
+        self.auth_service.authorize_account_action(&auth, &account_id, &AccountAction::ViewTokens).await?;
+
+        let result = self.token_service.find(&account_id).await?;
         Ok(Json(result))
     }
 
@@ -107,7 +109,8 @@ impl TokenApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Token>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let result = self.token_service.get(&token_id, &auth).await?;
+        let result = self.token_service.get(&token_id).await?;
+        self.auth_service.authorize_account_action(&auth, &result.account_id, &AccountAction::ViewTokens).await?;
         Ok(Json(result))
     }
 
@@ -145,9 +148,11 @@ impl TokenApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<UnsafeToken>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service.authorize_account_action(&auth, &account_id, &AccountAction::CreateToken).await?;
+
         let response = self
             .token_service
-            .create(&account_id, &request.expires_at, &auth)
+            .create(&account_id, &request.expires_at)
             .await?;
         Ok(Json(response))
     }
@@ -189,7 +194,7 @@ impl TokenApi {
 
         match self
             .token_service
-            .get(&token_id, &AccountAuthorisation::admin())
+            .get(&token_id)
             .await
         {
             Ok(existing) => {

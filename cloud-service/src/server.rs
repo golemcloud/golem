@@ -224,8 +224,7 @@ async fn create_initial_account(
         .create_known_secret(
             &account_id,
             &DateTime::<Utc>::MAX_UTC,
-            &TokenSecret::new(account_config.token),
-            &AccountAuthorisation::admin(),
+            &TokenSecret::new(account_config.token)
         )
         .await
         .ok();

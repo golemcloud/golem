@@ -153,7 +153,7 @@ impl TokenGrpcApi {
 
         match self
             .token_service
-            .get(&token_id, &AccountAuthorisation::admin())
+            .get(&token_id)
             .await
         {
             Ok(existing) => {
@@ -199,9 +199,12 @@ impl TokenGrpcApi {
             .create_token_dto
             .and_then(|d| chrono::DateTime::<chrono::Utc>::from_str(d.expires_at.as_str()).ok())
             .ok_or_else(|| bad_request_error("Missing expires at"))?;
+
+        self.auth_service.authorize_account_action(&auth, &account_id, &AccountAction::CreateToken).await?;
+
         let result = self
             .token_service
-            .create(&account_id, &expires_at, &auth)
+            .create(&account_id, &expires_at)
             .await?;
         Ok(result.into())
     }
@@ -216,7 +219,11 @@ impl TokenGrpcApi {
             .token_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing token id"))?;
-        let result = self.token_service.get(&id, &auth).await?;
+
+        let result = self.token_service.get(&id).await?;
+
+        self.auth_service.authorize_account_action(&auth, &result.account_id, &AccountAction::ViewTokens).await?;
+
         Ok(result.into())
     }
 
@@ -231,7 +238,9 @@ impl TokenGrpcApi {
             .map(|id| id.into())
             .ok_or_else(|| bad_request_error("Missing account id"))?;
 
-        let result = self.token_service.find(&account_id, &auth).await?;
+        self.auth_service.authorize_account_action(&auth, &account_id, &AccountAction::ViewTokens).await?;
+
+        let result = self.token_service.find(&account_id).await?;
         Ok(result.into_iter().map(|p| p.into()).collect())
     }
 }
