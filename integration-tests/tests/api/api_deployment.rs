@@ -31,7 +31,7 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
 use std::panic;
-use test_r::{finherit_test_dep, test};
+use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
