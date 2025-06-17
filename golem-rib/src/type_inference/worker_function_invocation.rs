@@ -292,6 +292,6 @@ fn get_module_identifier(instance_type: &InstanceType, lhs: &Expr) -> InstanceId
 
     InstanceIdentifier {
         variable_id: variable_id.cloned(),
-        instance_type: instance_type.clone(),
+        instance_type: Box::new(instance_type.clone()),
     }
 }

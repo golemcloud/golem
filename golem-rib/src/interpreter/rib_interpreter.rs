@@ -2859,20 +2859,6 @@ mod tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let result_type = list(record(vec![
-            field("product-id", str()),
-            field("name", str()),
-            field("price", f32()),
-            field("quantity", u32()),
-        ]));
-
-        let result_value = test_utils::get_value_and_type(
-            &result_type,
-            r#"
-            [{product-id: "foo", name: "bar", price: 100.0, quantity: 1}, {product-id: "bar", name: "baz", price: 200.0, quantity: 2}]
-        "#,
-        );
-
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
@@ -5185,16 +5171,6 @@ mod tests {
             }
         }
 
-        pub(crate) fn parse_function_details(input: &str) -> ValueAndType {
-            let analysed_type = record(vec![
-                field("worker-name", option(str())),
-                field("function-name", str()),
-                field("args0", str()),
-            ]);
-
-            get_value_and_type(&analysed_type, input)
-        }
-
         struct TestInvoke1 {
             value: ValueAndType,
         }
@@ -5221,12 +5197,12 @@ mod tests {
         impl RibComponentFunctionInvoke for PassThroughFunctionInvoke {
             async fn invoke(
                 &self,
-                component_dependency_key: ComponentDependencyKey,
-                instruction_id: &InstructionId,
+                _component_dependency_key: ComponentDependencyKey,
+                _instruction_id: &InstructionId,
                 worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
-                return_type: Option<AnalysedType>,
+                _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
                 let analysed_type = record(vec![
                     field("worker-name", str()),
@@ -5368,9 +5344,9 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                worker_name: Option<EvaluatedWorkerName>,
+                _worker_name: Option<EvaluatedWorkerName>,
                 function_name: EvaluatedFqFn,
-                args: EvaluatedFnArgs,
+                _args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
                 match function_name.0.as_str() {

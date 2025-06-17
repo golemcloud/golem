@@ -468,7 +468,7 @@ mod internal {
                             .as_ref()
                             .expect("Module should be present for function calls");
 
-                        let instance_variable = match module.instance_type {
+                        let instance_variable = match module.instance_type.as_ref() {
                             InstanceType::Resource { .. } => {
                                 let variable_id = module.variable_id.clone().ok_or({
                                     RibByteCodeGenerationError::UnresolvedResourceVariable
@@ -638,7 +638,7 @@ mod internal {
                                     .as_ref()
                                     .expect("Module should be present for resource calls");
 
-                                let instance_variable = match module.instance_type {
+                                let instance_variable = match module.instance_type.as_ref() {
                                     InstanceType::Resource { .. } => {
                                         let variable_id = module.variable_id.as_ref().ok_or({
                                             RibByteCodeGenerationError::UnresolvedResourceVariable
