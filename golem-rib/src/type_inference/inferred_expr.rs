@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::rib_type_error::RibTypeError;
+use crate::rib_type_error::RibTypeErrorInternal;
 use crate::{
     ComponentDependencies, DynamicParsedFunctionName, Expr, ExprVisitor, FunctionName,
     GlobalVariableTypeSpec,
@@ -32,7 +32,7 @@ impl InferredExpr {
         expr: Expr,
         component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<InferredExpr, RibTypeError> {
+    ) -> Result<InferredExpr, RibTypeErrorInternal> {
         let mut mutable_expr = expr;
 
         mutable_expr.infer_types(component_dependency, type_spec)?;

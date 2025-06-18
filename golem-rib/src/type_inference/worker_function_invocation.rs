@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::{CallType, InstanceCreationType, InstanceIdentifier};
-use crate::rib_type_error::RibTypeError;
+use crate::rib_type_error::RibTypeErrorInternal;
 use crate::type_parameter::TypeParameter;
 use crate::{
     CustomError, DynamicParsedFunctionName, Expr, FunctionCallError, InferredType, TypeInternal,
@@ -25,7 +25,7 @@ use std::collections::VecDeque;
 // This phase is responsible for identifying the worker function invocations
 // such as `worker.foo("x, y, z")` or `cart-resource.add-item(..)` etc
 // lazy method invocations are converted to actual Expr::Call
-pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError> {
+pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeErrorInternal> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
@@ -36,7 +36,6 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
             generic_type_parameter,
             args,
             source_span,
-            type_annotation,
             ..
         } = expr
         {
@@ -46,7 +45,11 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                         .as_ref()
                         .map(|gtp| {
                             TypeParameter::from_text(&gtp.value).map_err(|err| {
-                                FunctionCallError::invalid_generic_type_parameter(&gtp.value, err)
+                                FunctionCallError::invalid_generic_type_parameter(
+                                    &gtp.value,
+                                    err,
+                                    source_span.clone(),
+                                )
                             })
                         })
                         .transpose()?;
@@ -58,15 +61,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                         .map_err(|err| {
                             FunctionCallError::invalid_function_call(
                                 method,
-                                &Expr::InvokeMethodLazy {
-                                    lhs: lhs.clone(),
-                                    method: method.clone(),
-                                    generic_type_parameter: generic_type_parameter.clone(),
-                                    args: args.clone(),
-                                    source_span: source_span.clone(),
-                                    type_annotation: type_annotation.clone(),
-                                    inferred_type: InferredType::unknown(),
-                                },
+                                source_span.clone(),
                                 err,
                             )
                         })?;
@@ -94,15 +89,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                             .map_err(|err| {
                                 FunctionCallError::invalid_function_call(
                                     &dynamic_parsed_function_name,
-                                    &Expr::InvokeMethodLazy {
-                                        lhs: lhs.clone(),
-                                        method: method.clone(),
-                                        generic_type_parameter: generic_type_parameter.clone(),
-                                        args: args.clone(),
-                                        source_span: source_span.clone(),
-                                        type_annotation: type_annotation.clone(),
-                                        inferred_type: InferredType::unknown(),
-                                    },
+                                    source_span.clone(),
                                     format!("invalid function name: {}", err),
                                 )
                             })?;
@@ -124,12 +111,12 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                     TypeInternal::Resource {resource_id, resource_mode} =>  {
                                         (*resource_id, *resource_mode)
                                     }
-                                    _ => return Err(RibTypeError::from(CustomError::new(expr, "expected resource type as return type of resource constructor"))),
+                                    _ => return Err(RibTypeErrorInternal::from(CustomError::new(expr.source_span(), "expected resource type as return type of resource constructor"))),
                                 }
 
                                 None => {
-                                    return Err(RibTypeError::from(CustomError::new(
-                                        expr,
+                                    return Err(RibTypeErrorInternal::from(CustomError::new(
+                                        expr.source_span(),
                                         "resource constructor must have a return type",
                                     )));
                                 }
@@ -144,8 +131,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                     resource_mode,
                                 )
                                 .map_err(|err| {
-                                    RibTypeError::from(CustomError::new(
-                                        lhs,
+                                    RibTypeErrorInternal::from(CustomError::new(
+                                        lhs.source_span(),
                                         format!("Failed to get resource instance type: {}", err),
                                     ))
                                 })?;
@@ -179,15 +166,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 resource_method_dictionary.get(&FunctionName::ResourceMethod(resource_method.clone()))
                                     .ok_or(FunctionCallError::invalid_function_call(
                                         resource_method.method_name(),
-                                    &Expr::InvokeMethodLazy {
-                                        lhs: lhs.clone(),
-                                        method: method.clone(),
-                                        generic_type_parameter: generic_type_parameter.clone(),
-                                        args: args.clone(),
-                                        source_span: source_span.clone(),
-                                        type_annotation: type_annotation.clone(),
-                                        inferred_type: InferredType::unknown()
-                                    },
+                                        source_span.clone(),
                                     format!(
                                         "Resource method {} not found in resource method dictionary",
                                         resource_method.method_name()
@@ -199,15 +178,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 .map_err(|err| {
                                     FunctionCallError::invalid_function_call(
                                         resource_method.method_name(),
-                                        &Expr::InvokeMethodLazy {
-                                            lhs: lhs.clone(),
-                                            method: method.clone(),
-                                            generic_type_parameter: generic_type_parameter.clone(),
-                                            args: args.clone(),
-                                            source_span: source_span.clone(),
-                                            type_annotation: type_annotation.clone(),
-                                            inferred_type: InferredType::unknown(),
-                                        },
+                                        source_span.clone(),
                                         format!("Invalid function name: {}", err),
                                     )
                                 })?;
@@ -232,15 +203,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                 _ => {
                     return Err(FunctionCallError::invalid_function_call(
                         method,
-                        &Expr::InvokeMethodLazy {
-                            lhs: lhs.clone(),
-                            method: method.clone(),
-                            generic_type_parameter: generic_type_parameter.clone(),
-                            args: args.clone(),
-                            source_span: source_span.clone(),
-                            type_annotation: type_annotation.clone(),
-                            inferred_type: InferredType::unknown(),
-                        },
+                        source_span.clone(),
                         "invalid worker function invoke. Expected to be an instance type",
                     )
                     .into());

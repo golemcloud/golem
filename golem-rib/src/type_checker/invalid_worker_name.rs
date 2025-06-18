@@ -72,7 +72,7 @@ mod internal {
                             .map(|t| t.to_string())
                             .unwrap_or_else(|_| "unknown".to_string());
                         return Err(InvalidWorkerName {
-                            worker_name_expr: expr.clone(),
+                            worker_name_source_span: expr.source_span(),
                             message: format!("expected string, found {}", type_name),
                         });
                     }

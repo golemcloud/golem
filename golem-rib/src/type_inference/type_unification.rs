@@ -75,16 +75,14 @@ fn unify_inferred_type(
                 additional_messages.extend(additional_error_detail);
 
                 Err(TypeUnificationError::unresolved_types_error(
-                    sub_expr.clone(),
-                    None,
+                    sub_expr.source_span(),
                     additional_messages,
                 ))
             }
 
             UnificationFailureInternal::UnknownType => {
                 Err(TypeUnificationError::unresolved_types_error(
-                    sub_expr.clone(),
-                    None,
+                    sub_expr.source_span(),
                     vec!["cannot determine the type".to_string()],
                 ))
             }
@@ -136,8 +134,7 @@ fn get_type_unification_error_from_mismatch(
             ));
 
             TypeUnificationError::type_mismatch_error(
-                left_expr.clone(),
-                None,
+                left_expr.source_span(),
                 right,
                 left,
                 additional_error_detail,
@@ -149,8 +146,7 @@ fn get_type_unification_error_from_mismatch(
                 get_error_detail(&left_expr, &left, left_declared, left_default);
 
             TypeUnificationError::type_mismatch_error(
-                left_expr.clone(),
-                None,
+                left_expr.source_span(),
                 right,
                 left,
                 additional_error_detail,
@@ -162,8 +158,7 @@ fn get_type_unification_error_from_mismatch(
                 get_error_detail(&right_expr, &right, right_declared, right_default);
 
             TypeUnificationError::type_mismatch_error(
-                right_expr.clone(),
-                None,
+                right_expr.source_span(),
                 left,
                 right,
                 additional_error_detail,
@@ -178,8 +173,7 @@ fn get_type_unification_error_from_mismatch(
             )];
 
             TypeUnificationError::unresolved_types_error(
-                expr_unified.clone(),
-                None,
+                expr_unified.source_span(),
                 additional_messages,
             )
         }

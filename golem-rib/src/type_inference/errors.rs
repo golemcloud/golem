@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::rib_source_span::SourceSpan;
 use crate::type_inference::type_hint::{GetTypeHint, TypeHint};
 use crate::{Expr, InferredType, Path, PathElem};
 use golem_wasm_ast::analysis::AnalysedType;
-use std::fmt;
 use std::fmt::Display;
 
 #[derive(Debug, Clone)]
 pub struct AmbiguousTypeError {
-    pub expr: Expr,
+    pub ambiguous_expr_source_span: SourceSpan,
     pub ambiguous_types: Vec<String>,
     pub additional_error_details: Vec<String>,
 }
@@ -28,7 +28,7 @@ pub struct AmbiguousTypeError {
 impl AmbiguousTypeError {
     pub fn new(
         inferred_expr: &InferredType,
-        expr: &Expr,
+        source_span: &SourceSpan,
         expected: &TypeHint,
     ) -> AmbiguousTypeError {
         let actual_kind = inferred_expr.get_type_hint();
@@ -40,13 +40,13 @@ impl AmbiguousTypeError {
                     .collect::<Vec<_>>();
 
                 AmbiguousTypeError {
-                    expr: expr.clone(),
+                    ambiguous_expr_source_span: source_span.clone(),
                     ambiguous_types: possibilities,
                     additional_error_details: vec![],
                 }
             }
             _ => AmbiguousTypeError {
-                expr: expr.clone(),
+                ambiguous_expr_source_span: source_span.clone(),
                 ambiguous_types: vec![expected.to_string(), inferred_expr.printable()],
                 additional_error_details: vec![],
             },
@@ -62,13 +62,11 @@ impl AmbiguousTypeError {
 
 pub enum InvalidPatternMatchError {
     ConstructorMismatch {
-        predicate_expr: Expr,
-        match_expr: Expr,
+        match_expr_source_span: SourceSpan,
         constructor_name: String,
     },
     ArgSizeMismatch {
-        predicate_expr: Expr,
-        match_expr: Expr,
+        match_expr_source_span: SourceSpan,
         constructor_name: String,
         expected_arg_size: usize,
         actual_arg_size: usize,
@@ -77,27 +75,23 @@ pub enum InvalidPatternMatchError {
 
 impl InvalidPatternMatchError {
     pub fn constructor_type_mismatch(
-        predicate_expr: &Expr,
-        match_expr: &Expr,
+        match_expr_source_span: SourceSpan,
         constructor_name: &str,
     ) -> InvalidPatternMatchError {
         InvalidPatternMatchError::ConstructorMismatch {
-            predicate_expr: predicate_expr.clone(),
-            match_expr: match_expr.clone(),
+            match_expr_source_span,
             constructor_name: constructor_name.to_string(),
         }
     }
 
     pub fn arg_size_mismatch(
-        predicate_expr: &Expr,
-        match_expr: &Expr,
+        match_expr_source_span: SourceSpan,
         constructor_name: &str,
         expected_arg_size: usize,
         actual_arg_size: usize,
     ) -> InvalidPatternMatchError {
         InvalidPatternMatchError::ArgSizeMismatch {
-            predicate_expr: predicate_expr.clone(),
-            match_expr: match_expr.clone(),
+            match_expr_source_span,
             expected_arg_size,
             actual_arg_size,
             constructor_name: constructor_name.to_string(),
@@ -110,8 +104,7 @@ pub struct UnificationError {}
 
 #[derive(Clone, Debug)]
 pub struct TypeMismatchError {
-    pub expr_with_wrong_type: Expr,
-    pub parent_expr: Option<Expr>,
+    pub source_span: SourceSpan,
     pub expected_type: ExpectedType,
     pub actual_type: ActualType,
     pub field_path: Path,
@@ -135,12 +128,6 @@ pub enum ActualType {
 }
 
 impl TypeMismatchError {
-    pub fn with_parent_expr(&self, expr: &Expr) -> TypeMismatchError {
-        let mut mismatch_error: TypeMismatchError = self.clone();
-        mismatch_error.parent_expr = Some(expr.clone());
-        mismatch_error
-    }
-
     pub fn updated_expected_type(&self, expected_type: &AnalysedType) -> TypeMismatchError {
         let mut mismatch_error: TypeMismatchError = self.clone();
         mismatch_error.expected_type = ExpectedType::AnalysedType(expected_type.clone());
@@ -164,14 +151,12 @@ pub enum TypeUnificationError {
 
 impl TypeUnificationError {
     pub fn unresolved_types_error(
-        expr: Expr,
-        parent_expr: Option<Expr>,
+        source_span: SourceSpan,
         additional_messages: Vec<String>,
     ) -> TypeUnificationError {
         TypeUnificationError::UnresolvedTypesError {
             error: UnResolvedTypesError {
-                unresolved_expr: expr,
-                parent_expr,
+                source_span,
                 additional_messages,
                 help_messages: vec![],
                 path: Path::default(),
@@ -179,16 +164,14 @@ impl TypeUnificationError {
         }
     }
     pub fn type_mismatch_error(
-        expr: Expr,
-        parent_expr: Option<Expr>,
+        source_span: SourceSpan,
         expected_type: InferredType,
         actual_type: InferredType,
         additional_error_detail: Vec<String>,
     ) -> TypeUnificationError {
         TypeUnificationError::TypeMismatchError {
             error: TypeMismatchError {
-                expr_with_wrong_type: expr,
-                parent_expr,
+                source_span,
                 expected_type: ExpectedType::InferredType(expected_type),
                 actual_type: ActualType::Inferred(actual_type),
                 field_path: Path::default(),
@@ -200,21 +183,19 @@ impl TypeUnificationError {
 
 #[derive(Debug, Clone)]
 pub struct UnResolvedTypesError {
-    pub unresolved_expr: Expr,
-    pub parent_expr: Option<Expr>,
-    pub additional_messages: Vec<String>,
+    pub source_span: SourceSpan,
     pub help_messages: Vec<String>,
     pub path: Path,
+    pub additional_messages: Vec<String>,
 }
 
 impl UnResolvedTypesError {
-    pub fn from(expr: &Expr, parent_expr: Option<Expr>) -> Self {
+    pub fn from(source_span: SourceSpan) -> Self {
         let unresolved_types = UnResolvedTypesError {
-            unresolved_expr: expr.clone(),
-            additional_messages: Vec::new(),
-            parent_expr: parent_expr.clone(),
+            source_span,
             help_messages: Vec::new(),
             path: Path::default(),
+            additional_messages: Vec::new(),
         };
 
         unresolved_types.with_default_help_messages()
@@ -226,12 +207,6 @@ impl UnResolvedTypesError {
         ).with_help_message(
             "if the issue persists, please review the script for potential type inconsistencies"
         )
-    }
-
-    pub fn with_parent_expr(&self, expr: &Expr) -> UnResolvedTypesError {
-        let mut unresolved_error: UnResolvedTypesError = self.clone();
-        unresolved_error.parent_expr = Some(expr.clone());
-        unresolved_error
     }
 
     pub fn with_additional_error_detail(&self, message: impl AsRef<str>) -> UnResolvedTypesError {
@@ -266,71 +241,44 @@ impl UnResolvedTypesError {
     }
 }
 
-impl Display for UnResolvedTypesError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let span = self.unresolved_expr.source_span();
-
-        writeln!(
-            f,
-            "cannot determine the type of the following rib expression found at line {}, column {}",
-            span.start_line(),
-            span.start_column()
-        )?;
-
-        writeln!(f, "`{}`", self.unresolved_expr)?;
-
-        if let Some(parent) = &self.parent_expr {
-            writeln!(f, "found within:")?;
-            writeln!(f, "`{}`", parent)?;
-        }
-
-        if !self.additional_messages.is_empty() {
-            for message in &self.additional_messages {
-                writeln!(f, "{}", message)?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum FunctionCallError {
     InvalidFunctionCall {
         function_name: String,
-        expr: Expr,
+        source_span: SourceSpan,
         message: String,
     },
     TypeMisMatch {
         function_name: String,
-        argument: Expr,
+        argument_source_span: SourceSpan,
         error: TypeMismatchError,
     },
     MissingRecordFields {
         function_name: String,
-        argument: Expr,
+        argument_source_span: SourceSpan,
         missing_fields: Vec<Path>,
     },
     UnResolvedTypes {
         function_name: String,
-        argument: Expr,
+        source_span: SourceSpan,
         unresolved_error: UnResolvedTypesError,
         expected_type: AnalysedType,
     },
 
     InvalidResourceMethodCall {
         resource_method_name: String,
-        invalid_lhs: Expr,
+        invalid_lhs_source_span: SourceSpan,
     },
 
     InvalidGenericTypeParameter {
         generic_type_parameter: String,
+        source_span: SourceSpan,
         message: String,
     },
 
     ArgumentSizeMisMatch {
         function_name: String,
-        expr: Expr,
+        source_span: SourceSpan,
         expected: usize,
         provided: usize,
     },
@@ -339,42 +287,44 @@ pub enum FunctionCallError {
 impl FunctionCallError {
     pub fn invalid_function_call(
         function_name: &str,
-        expr: &Expr,
+        function_source_span: SourceSpan,
         message: impl AsRef<str>,
     ) -> FunctionCallError {
         FunctionCallError::InvalidFunctionCall {
             function_name: function_name.to_string(),
-            expr: expr.clone(),
+            source_span: function_source_span,
             message: message.as_ref().to_string(),
         }
     }
     pub fn invalid_generic_type_parameter(
         generic_type_parameter: &str,
         message: impl AsRef<str>,
+        source_span: SourceSpan,
     ) -> FunctionCallError {
         FunctionCallError::InvalidGenericTypeParameter {
             generic_type_parameter: generic_type_parameter.to_string(),
             message: message.as_ref().to_string(),
+            source_span,
         }
     }
 }
 
 pub struct InvalidWorkerName {
-    pub worker_name_expr: Expr,
+    pub worker_name_source_span: SourceSpan,
     pub message: String,
 }
 
 #[derive(Clone)]
 pub struct CustomError {
-    pub expr: Expr,
+    pub source_span: SourceSpan,
     pub message: String,
     pub help_message: Vec<String>,
 }
 
 impl CustomError {
-    pub fn new(expr: &Expr, message: impl AsRef<str>) -> CustomError {
+    pub fn new(source_span: SourceSpan, message: impl AsRef<str>) -> CustomError {
         CustomError {
-            expr: expr.clone(),
+            source_span,
             message: message.as_ref().to_string(),
             help_message: Vec::new(),
         }

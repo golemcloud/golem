@@ -18,7 +18,7 @@ pub use ir::*;
 pub use type_with_unit::*;
 pub use worker_functions_in_rib::*;
 
-use crate::rib_type_error::RibTypeError;
+use crate::rib_type_error::{RibTypeError, RibTypeErrorInternal};
 use crate::{
     ComponentDependencies, ComponentDependencyKey, Expr, GlobalVariableTypeSpec, InferredExpr,
     RibInputTypeInfo, RibOutputTypeInfo,
@@ -60,8 +60,12 @@ impl RibCompiler {
     }
 
     pub fn infer_types(&self, expr: Expr) -> Result<InferredExpr, RibCompilationError> {
-        InferredExpr::from_expr(expr, &self.component_dependency, &self.input_spec)
-            .map_err(|err| RibCompilationError::RibTypeError(Box::new(err)))
+        InferredExpr::from_expr(expr.clone(), &self.component_dependency, &self.input_spec).map_err(
+            |err| {
+                let rib_type_error = RibTypeError::from_rib_type_error_internal(err, expr);
+                RibCompilationError::RibTypeError(Box::new(rib_type_error))
+            },
+        )
     }
 
     // Currently supports only 1 component and hence really only one InstanceType
@@ -426,8 +430,6 @@ mod compiler_error_tests {
             let expected = r#"
             error in the following rib found at line 2, column 28
             `1`
-            found within:
-            `foo(1)`
             cause: type mismatch. expected record { a: record { aa: s32, ab: s32, ac: list<s32>, ad: record { ada: s32 }, ae: tuple<s32, string> }, b: u64, c: list<s32>, d: record { da: s32 } }, found s32
             invalid argument to the function `foo`
             "#;
@@ -769,7 +771,7 @@ mod compiler_error_tests {
 
             let expected = r#"
             error in the following rib found at line 3, column 19
-            `cart()`
+            `worker.cart()`
             cause: invalid argument size for function `cart`. expected 1 arguments, found 0
             "#;
 
@@ -792,8 +794,6 @@ mod compiler_error_tests {
             let expected = r#"
             error in the following rib found at line 3, column 31
             `1`
-            found within:
-            `cart(1)`
             cause: type mismatch. expected string, found s32
             invalid argument to the function `cart`
             "#;
@@ -818,8 +818,6 @@ mod compiler_error_tests {
             let expected = r#"
             error in the following rib found at line 4, column 22
             `1`
-            found within:
-            `add-item(1)`
             cause: type mismatch. expected record { product-id: string, name: string, price: f32, quantity: u32 }, found s32
             invalid argument to the function `add-item`
             "#;
