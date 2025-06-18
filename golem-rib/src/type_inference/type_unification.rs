@@ -17,7 +17,9 @@ use crate::rib_source_span::SourceSpan;
 use crate::{Expr, ExprVisitor, InferredType, TypeUnificationError};
 
 pub fn unify_types(expr: &mut Expr) -> Result<(), TypeUnificationError> {
+    // keeping the original expression to lookup source span
     let original_expr = expr.clone();
+
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     // Pop front to get the innermost expression first that may have caused the type mismatch.

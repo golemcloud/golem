@@ -17,26 +17,14 @@ use crate::{Expr, UnResolvedTypesError};
 use std::collections::VecDeque;
 use std::ops::Deref;
 
-struct QueuedExpr<'a> {
-    expr: &'a Expr,
-}
-
-impl<'a> QueuedExpr<'a> {
-    pub fn new(expr: &'a Expr) -> Self {
-        QueuedExpr { expr }
-    }
-}
-
 pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
     let mut queue = VecDeque::new();
-    queue.push_back(QueuedExpr { expr });
+    queue.push_back(expr);
 
-    while let Some(queued_expr) = queue.pop_back() {
-        let expr = queued_expr.expr;
-
+    while let Some(expr) = queue.pop_back() {
         match expr {
             Expr::Let { expr, .. } => {
-                queue.push_back(QueuedExpr::new(expr));
+                queue.push_back(expr);
             }
 
             Expr::Range {
@@ -47,7 +35,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 let exprs = range.get_exprs();
 
                 for expr in exprs {
-                    queue.push_back(QueuedExpr::new(expr));
+                    queue.push_back(expr);
                 }
 
                 if inferred_type.is_unknown() {
@@ -61,10 +49,10 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 inferred_type,
                 ..
             } => {
-                queue.push_back(QueuedExpr::new(lhs));
+                queue.push_back(lhs);
 
                 for arg in args {
-                    queue.push_back(QueuedExpr::new(arg));
+                    queue.push_back(arg);
                 }
 
                 if inferred_type.is_unknown() {
@@ -78,7 +66,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 inferred_type,
                 ..
             } => {
-                queue.push_back(QueuedExpr::new(expr));
+                queue.push_back(expr);
                 if inferred_type.is_unknown() {
                     return Err(
                         UnResolvedTypesError::from(expr.source_span()).at_field(field.clone())
@@ -92,8 +80,8 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 inferred_type,
                 ..
             } => {
-                queue.push_back(QueuedExpr::new(expr));
-                queue.push_back(QueuedExpr::new(index));
+                queue.push_back(expr);
+                queue.push_back(index);
 
                 if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr.source_span()));
@@ -173,7 +161,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             }
             Expr::ExprBlock { exprs, .. } => {
                 for expr in exprs {
-                    queue.push_back(QueuedExpr::new(expr));
+                    queue.push_back(expr);
                 }
             }
             Expr::Not {
@@ -181,7 +169,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 inferred_type,
                 ..
             } => {
-                queue.push_back(QueuedExpr::new(expr));
+                queue.push_back(expr);
 
                 if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr.source_span()));
@@ -345,7 +333,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 ..
             } => {
                 if let Some(expr) = expr0 {
-                    queue.push_back(QueuedExpr::new(expr));
+                    queue.push_back(expr);
                 }
 
                 if inferred_type.is_unknown() {
@@ -361,13 +349,13 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 ..
             } => {
                 for arg in args {
-                    queue.push_back(QueuedExpr::new(arg));
+                    queue.push_back(arg);
                 }
 
                 let worker_name = call_type.worker_expr();
 
                 if let Some(worker_name) = worker_name {
-                    queue.push_back(QueuedExpr::new(worker_name));
+                    queue.push_back(worker_name);
                 }
 
                 let additional_message = match call_type {
@@ -444,7 +432,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 inferred_type,
                 ..
             } => {
-                queue.push_back(QueuedExpr::new(expr));
+                queue.push_back(expr);
 
                 if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr.source_span()));
