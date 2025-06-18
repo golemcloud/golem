@@ -647,11 +647,11 @@ mod internal {
         let error_expr = ok_err.as_ref().err();
 
         if let Some(ok_expr_inner) = ok_expr {
-            check_unresolved_types(&ok_expr_inner)?;
+            check_unresolved_types(ok_expr_inner)?;
         }
 
         if let Some(error_expr_inner) = error_expr {
-            check_unresolved_types(&error_expr_inner)?;
+            check_unresolved_types(error_expr_inner)?;
         }
 
         Ok(())
