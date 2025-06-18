@@ -1132,6 +1132,21 @@ where
     }
 }
 
+fn get_db_transaction_state<Ctx, T>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsTransactionEntry<T>>,
+) -> Result<RdbmsTransactionState<T>, RdbmsError>
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + 'static,
+{
+    ctx.as_wasi_view()
+        .table()
+        .get::<RdbmsTransactionEntry<T>>(entry)
+        .map(|e| e.state.clone())
+        .map_err(RdbmsError::other_response_failure)
+}
+
 async fn db_transaction_pre_commit<Ctx, T>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     entry: &Resource<RdbmsTransactionEntry<T>>,
@@ -1140,16 +1155,10 @@ where
     Ctx: WorkerCtx,
     T: RdbmsType + 'static,
 {
-    let state = ctx
-        .as_wasi_view()
-        .table()
-        .get::<RdbmsTransactionEntry<T>>(entry)
-        .map(|e| e.state.clone());
-
+    let state = get_db_transaction_state(ctx, entry)?;
     match state {
-        Ok(RdbmsTransactionState::Open(transaction)) => transaction.pre_commit().await,
-        Ok(_) => Ok(()),
-        Err(error) => Err(RdbmsError::other_response_failure(error)),
+        RdbmsTransactionState::Open(transaction) => transaction.pre_commit().await,
+        _ => Ok(()),
     }
 }
 
@@ -1161,24 +1170,18 @@ where
     Ctx: WorkerCtx,
     T: RdbmsType + 'static,
 {
-    let state = ctx
-        .as_wasi_view()
-        .table()
-        .get::<RdbmsTransactionEntry<T>>(entry)
-        .map(|e| e.state.clone());
-
+    let state = get_db_transaction_state(ctx, entry)?;
     match state {
-        Ok(RdbmsTransactionState::Open(transaction)) => {
-            transaction.commit().await?;
+        RdbmsTransactionState::Open(transaction) => {
+            let result = transaction.commit().await;
             ctx.as_wasi_view()
                 .table()
                 .get_mut::<RdbmsTransactionEntry<T>>(entry)
                 .map_err(RdbmsError::other_response_failure)?
                 .set_closed();
-            Ok(())
+            result
         }
-        Ok(_) => Ok(()),
-        Err(error) => Err(RdbmsError::other_response_failure(error)),
+        _ => Ok(()),
     }
 }
 
@@ -1190,16 +1193,10 @@ where
     Ctx: WorkerCtx,
     T: RdbmsType + 'static,
 {
-    let state = ctx
-        .as_wasi_view()
-        .table()
-        .get::<RdbmsTransactionEntry<T>>(entry)
-        .map(|e| e.state.clone());
-
+    let state = get_db_transaction_state(ctx, entry)?;
     match state {
-        Ok(RdbmsTransactionState::Open(transaction)) => transaction.pre_rollback().await,
-        Ok(_) => Ok(()),
-        Err(error) => Err(RdbmsError::other_response_failure(error)),
+        RdbmsTransactionState::Open(transaction) => transaction.pre_rollback().await,
+        _ => Ok(()),
     }
 }
 
@@ -1211,24 +1208,18 @@ where
     Ctx: WorkerCtx,
     T: RdbmsType + 'static,
 {
-    let state = ctx
-        .as_wasi_view()
-        .table()
-        .get::<RdbmsTransactionEntry<T>>(entry)
-        .map(|e| e.state.clone());
-
+    let state = get_db_transaction_state(ctx, entry)?;
     match state {
-        Ok(RdbmsTransactionState::Open(transaction)) => {
-            transaction.rollback().await?;
+        RdbmsTransactionState::Open(transaction) => {
+            let result = transaction.rollback().await;
             ctx.as_wasi_view()
                 .table()
                 .get_mut::<RdbmsTransactionEntry<T>>(entry)
                 .map_err(RdbmsError::other_response_failure)?
                 .set_closed();
-            Ok(())
+            result
         }
-        Ok(_) => Ok(()),
-        Err(error) => Err(RdbmsError::other_response_failure(error)),
+        _ => Ok(()),
     }
 }
 
