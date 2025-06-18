@@ -18,7 +18,7 @@ pub use ir::*;
 pub use type_with_unit::*;
 pub use worker_functions_in_rib::*;
 
-use crate::rib_type_error::{RibTypeError, RibTypeErrorInternal};
+use crate::rib_type_error::RibTypeError;
 use crate::{
     ComponentDependencies, ComponentDependencyKey, Expr, GlobalVariableTypeSpec, InferredExpr,
     RibInputTypeInfo, RibOutputTypeInfo,

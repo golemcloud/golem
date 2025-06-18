@@ -20,7 +20,7 @@ use crate::{
     UnResolvedTypesError,
 };
 use std::fmt;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Display};
 
 // RibTypeError is front end of all types of errors that can occur during type inference phase
 // or type checker phase such as `UnresolvedTypesError`, `TypeMismatchError`, `AmbiguousTypeError` etc

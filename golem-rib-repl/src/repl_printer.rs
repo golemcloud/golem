@@ -380,14 +380,19 @@ fn print_rib_compilation_error(error: &RibCompilationError) {
         }
         RibCompilationError::RibTypeError(compilation_error) => {
             let cause = &compilation_error.cause;
-            let position = compilation_error.expr.source_span();
+            let position = &compilation_error.source_span;
 
             println!("{}", "[compilation error]".red().bold());
             println!("{} {}", "[position]".yellow(), position.start_column());
             println!(
                 "{} {}",
                 "[expression]".yellow(),
-                compilation_error.expr.to_string().white()
+                compilation_error
+                    .expr
+                    .as_ref()
+                    .map(|x| x.to_string())
+                    .unwrap_or_default()
+                    .white()
             );
             println!("{} {}", "[cause]".yellow(), cause.bright_red().bold());
 

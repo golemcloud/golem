@@ -19,34 +19,27 @@ use std::ops::Deref;
 
 struct QueuedExpr<'a> {
     expr: &'a Expr,
-    parent: Option<&'a Expr>,
 }
 
 impl<'a> QueuedExpr<'a> {
-    pub fn new(expr: &'a Expr, parent: &'a Expr) -> Self {
-        QueuedExpr {
-            expr,
-            parent: Some(parent),
-        }
+    pub fn new(expr: &'a Expr) -> Self {
+        QueuedExpr { expr }
     }
 }
 
 pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
     let mut queue = VecDeque::new();
-    queue.push_back(QueuedExpr { expr, parent: None });
+    queue.push_back(QueuedExpr { expr });
 
     while let Some(queued_expr) = queue.pop_back() {
         let expr = queued_expr.expr;
 
-        // Parent of `outer_expr`s below
-        let parent = queued_expr.parent.cloned();
-
         match expr {
-            outer_expr @ Expr::Let { expr, .. } => {
-                queue.push_back(QueuedExpr::new(expr, outer_expr));
+            Expr::Let { expr, .. } => {
+                queue.push_back(QueuedExpr::new(expr));
             }
 
-            outer_expr @ Expr::Range {
+            Expr::Range {
                 range,
                 inferred_type,
                 ..
@@ -54,24 +47,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 let exprs = range.get_exprs();
 
                 for expr in exprs {
-                    queue.push_back(QueuedExpr::new(expr, outer_expr));
-                }
-
-                if inferred_type.is_unknown() {
-                    return Err(UnResolvedTypesError::from(outer_expr.source_span()));
-                }
-            }
-
-            outer_expr @ Expr::InvokeMethodLazy {
-                lhs,
-                args,
-                inferred_type,
-                ..
-            } => {
-                queue.push_back(QueuedExpr::new(lhs, outer_expr));
-
-                for arg in args {
-                    queue.push_back(QueuedExpr::new(arg, outer_expr));
+                    queue.push_back(QueuedExpr::new(expr));
                 }
 
                 if inferred_type.is_unknown() {
@@ -79,13 +55,30 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 }
             }
 
-            outer_expr @ Expr::SelectField {
+            Expr::InvokeMethodLazy {
+                lhs,
+                args,
+                inferred_type,
+                ..
+            } => {
+                queue.push_back(QueuedExpr::new(lhs));
+
+                for arg in args {
+                    queue.push_back(QueuedExpr::new(arg));
+                }
+
+                if inferred_type.is_unknown() {
+                    return Err(UnResolvedTypesError::from(expr.source_span()));
+                }
+            }
+
+            Expr::SelectField {
                 expr,
                 field,
                 inferred_type,
                 ..
             } => {
-                queue.push_back(QueuedExpr::new(expr, outer_expr));
+                queue.push_back(QueuedExpr::new(expr));
                 if inferred_type.is_unknown() {
                     return Err(
                         UnResolvedTypesError::from(expr.source_span()).at_field(field.clone())
@@ -93,14 +86,14 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 }
             }
 
-            outer_expr @ Expr::SelectIndex {
+            Expr::SelectIndex {
                 expr,
                 index,
                 inferred_type,
                 ..
             } => {
-                queue.push_back(QueuedExpr::new(expr, outer_expr));
-                queue.push_back(QueuedExpr::new(index, outer_expr));
+                queue.push_back(QueuedExpr::new(expr));
+                queue.push_back(QueuedExpr::new(index));
 
                 if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr.source_span()));
@@ -118,7 +111,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::from(expr.source_span()));
                 }
             }
-            outer_expr @ Expr::Record {
+            Expr::Record {
                 exprs,
                 inferred_type,
                 ..
@@ -128,7 +121,6 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                         .iter()
                         .map(|(k, v)| (k.clone(), v.deref().clone()))
                         .collect(),
-                    outer_expr,
                 )?;
 
                 if inferred_type.is_unknown() {
@@ -168,28 +160,28 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::from(expr.source_span()));
                 }
             }
-            outer_expr @ Expr::Concat {
+            Expr::Concat {
                 exprs,
                 inferred_type,
                 ..
             } => {
-                internal::unresolved_type_for_concat(exprs, outer_expr)?;
+                internal::unresolved_type_for_concat(exprs)?;
 
                 if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr.source_span()));
                 }
             }
-            outer_expr @ Expr::ExprBlock { exprs, .. } => {
+            Expr::ExprBlock { exprs, .. } => {
                 for expr in exprs {
-                    queue.push_back(QueuedExpr::new(expr, outer_expr));
+                    queue.push_back(QueuedExpr::new(expr));
                 }
             }
-            outer_expr @ Expr::Not {
+            Expr::Not {
                 expr,
                 inferred_type,
                 ..
             } => {
-                queue.push_back(QueuedExpr::new(expr, outer_expr));
+                queue.push_back(QueuedExpr::new(expr));
 
                 if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr.source_span()));
@@ -347,13 +339,13 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             } => {
                 internal::unresolved_type_for_pattern_match(predicate, match_arms)?;
             }
-            outer_expr @ Expr::Option {
+            Expr::Option {
                 expr: expr0,
                 inferred_type,
                 ..
             } => {
                 if let Some(expr) = expr0 {
-                    queue.push_back(QueuedExpr::new(expr, outer_expr));
+                    queue.push_back(QueuedExpr::new(expr));
                 }
 
                 if inferred_type.is_unknown() {
@@ -362,20 +354,20 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             }
             Expr::Result { expr, .. } => internal::unresolved_type_for_result(expr)?,
 
-            outer_expr @ Expr::Call {
+            Expr::Call {
                 call_type,
                 args,
                 inferred_type,
                 ..
             } => {
                 for arg in args {
-                    queue.push_back(QueuedExpr::new(arg, outer_expr));
+                    queue.push_back(QueuedExpr::new(arg));
                 }
 
                 let worker_name = call_type.worker_expr();
 
                 if let Some(worker_name) = worker_name {
-                    queue.push_back(QueuedExpr::new(worker_name, outer_expr));
+                    queue.push_back(QueuedExpr::new(worker_name));
                 }
 
                 let additional_message = match call_type {
@@ -447,12 +439,12 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 }
             }
 
-            outer_expr @ Expr::Length {
+            Expr::Length {
                 expr,
                 inferred_type,
                 ..
             } => {
-                queue.push_back(QueuedExpr::new(expr, outer_expr));
+                queue.push_back(QueuedExpr::new(expr));
 
                 if inferred_type.is_unknown() {
                     return Err(UnResolvedTypesError::from(expr.source_span()));
@@ -485,11 +477,9 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
 mod internal {
     use crate::type_checker::unresolved_types::check_unresolved_types;
     use crate::{Expr, MatchArm, UnResolvedTypesError};
-    use std::ops::Deref;
 
     pub fn unresolved_types_in_record(
         expr_fields: &Vec<(String, Expr)>,
-        original_expr: &Expr,
     ) -> Result<(), UnResolvedTypesError> {
         for (field_name, field_expr) in expr_fields {
             check_unresolved_types(field_expr).map_err(|err| err.at_field(field_name.clone()))?;
@@ -506,10 +496,7 @@ mod internal {
         Ok(())
     }
 
-    pub fn unresolved_type_for_concat(
-        expr_fields: &[Expr],
-        original_expr: &Expr,
-    ) -> Result<(), UnResolvedTypesError> {
+    pub fn unresolved_type_for_concat(expr_fields: &[Expr]) -> Result<(), UnResolvedTypesError> {
         for (index, field_expr) in expr_fields.iter().enumerate() {
             let field_type = field_expr.inferred_type();
             if field_type.is_unknown() {

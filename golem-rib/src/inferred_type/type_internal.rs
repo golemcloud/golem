@@ -68,12 +68,8 @@ impl TypeInternal {
         &mut self,
         component_dependency_key: &ComponentDependencyKey,
     ) {
-        match self {
-            TypeInternal::Instance { instance_type } => {
-                instance_type.narrow_to_single_component(component_dependency_key)
-            }
-
-            _ => {}
+        if let TypeInternal::Instance { instance_type } = self {
+            instance_type.narrow_to_single_component(component_dependency_key)
         }
     }
 }

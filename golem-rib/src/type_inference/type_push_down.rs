@@ -40,9 +40,9 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeErrorInternal> {
             }
 
             Expr::SelectIndex {
-                expr,          // LHS
-                index,         // RHS
-                inferred_type, // This is the type of the total expression
+                expr,
+                index,
+                inferred_type,
                 ..
             } => {
                 let field_type = inferred_type.clone();
@@ -120,12 +120,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeErrorInternal> {
                 } in match_arms
                 {
                     let predicate_type = predicate.inferred_type();
-                    internal::update_arm_pattern_type(
-                        &copied,
-                        arm_pattern,
-                        &predicate_type,
-                        predicate,
-                    )?;
+                    internal::update_arm_pattern_type(&copied, arm_pattern, &predicate_type)?;
                     arm_resolution_expr.add_infer_type_mut(inferred_type.clone());
                 }
             }
@@ -565,20 +560,13 @@ mod internal {
         pattern_match_expr: &Expr,
         arm_pattern: &mut ArmPattern,
         predicate_type: &InferredType,
-        original_predicate: &Expr,
     ) -> Result<(), RibTypeErrorInternal> {
         match arm_pattern {
             ArmPattern::Literal(expr) => {
                 expr.add_infer_type_mut(predicate_type.clone());
-                //expr.push_types_down()?;
             }
             ArmPattern::As(_, pattern) => {
-                update_arm_pattern_type(
-                    pattern_match_expr,
-                    pattern,
-                    predicate_type,
-                    original_predicate,
-                )?;
+                update_arm_pattern_type(pattern_match_expr, pattern, predicate_type)?;
             }
 
             ArmPattern::Constructor(constructor_name, patterns) => {
@@ -593,12 +581,7 @@ mod internal {
                     let inner = resolved.inner_type();
 
                     for pattern in patterns {
-                        update_arm_pattern_type(
-                            pattern_match_expr,
-                            pattern,
-                            &inner,
-                            original_predicate,
-                        )?;
+                        update_arm_pattern_type(pattern_match_expr, pattern, &inner)?;
                     }
                 } else if constructor_name == "ok" {
                     let resolved = OkType::refine(predicate_type);
@@ -608,12 +591,7 @@ mod internal {
                             let inner = resolved.inner_type();
 
                             for pattern in patterns {
-                                update_arm_pattern_type(
-                                    pattern_match_expr,
-                                    pattern,
-                                    &inner,
-                                    original_predicate,
-                                )?;
+                                update_arm_pattern_type(pattern_match_expr, pattern, &inner)?;
                             }
                         }
 
@@ -634,12 +612,7 @@ mod internal {
                             let inner = resolved.inner_type();
 
                             for pattern in patterns {
-                                update_arm_pattern_type(
-                                    pattern_match_expr,
-                                    pattern,
-                                    &inner,
-                                    original_predicate,
-                                )?;
+                                update_arm_pattern_type(pattern_match_expr, pattern, &inner)?;
                             }
                         }
 
@@ -655,12 +628,7 @@ mod internal {
                 } else if let Some(variant_type) = VariantType::refine(predicate_type) {
                     let variant_arg_type = variant_type.inner_type_by_name(constructor_name);
                     for pattern in patterns {
-                        update_arm_pattern_type(
-                            pattern_match_expr,
-                            pattern,
-                            &variant_arg_type,
-                            original_predicate,
-                        )?;
+                        update_arm_pattern_type(pattern_match_expr, pattern, &variant_arg_type)?;
                     }
                 }
             }
@@ -677,12 +645,7 @@ mod internal {
 
                 if patterns.len() == inner_types.len() {
                     for (pattern, inner_type) in patterns.iter_mut().zip(inner_types) {
-                        update_arm_pattern_type(
-                            pattern_match_expr,
-                            pattern,
-                            &inner_type,
-                            original_predicate,
-                        )?;
+                        update_arm_pattern_type(pattern_match_expr, pattern, &inner_type)?;
                     }
                 } else {
                     return Err(InvalidPatternMatchError::arg_size_mismatch(
@@ -706,12 +669,7 @@ mod internal {
                 let list_elem_type = list_type.inner_type();
 
                 for pattern in &mut *patterns {
-                    update_arm_pattern_type(
-                        pattern_match_expr,
-                        pattern,
-                        &list_elem_type,
-                        original_predicate,
-                    )?;
+                    update_arm_pattern_type(pattern_match_expr, pattern, &list_elem_type)?;
                 }
             }
 
@@ -725,12 +683,7 @@ mod internal {
 
                 for (field, pattern) in fields {
                     let type_of_field = record_type.inner_type_by_name(field);
-                    update_arm_pattern_type(
-                        pattern_match_expr,
-                        pattern,
-                        &type_of_field,
-                        original_predicate,
-                    )?;
+                    update_arm_pattern_type(pattern_match_expr, pattern, &type_of_field)?;
                 }
             }
 

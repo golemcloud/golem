@@ -96,7 +96,7 @@ mod internal {
                 args,
                 inferred_type,
                 source_span,
-                type_annotation,
+                ..
             } = expr
             {
                 let type_parameter = generic_type_parameter
