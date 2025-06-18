@@ -130,6 +130,16 @@ impl ComponentDependencies {
         }
     }
 
+
+    pub fn narrow_to_component(&mut self, component_dependency_key: &ComponentDependencyKey) {
+        // If the component dependency key is not found, we do nothing
+        if let Some(function_dict) = self.dependencies.remove(component_dependency_key) {
+            self.dependencies.clear();
+            self.dependencies.insert(component_dependency_key.clone(), function_dict);
+        }
+
+    }
+
     pub fn function_dictionary(&self) -> Vec<&FunctionDictionary> {
         self.dependencies.values().collect::<Vec<_>>()
     }

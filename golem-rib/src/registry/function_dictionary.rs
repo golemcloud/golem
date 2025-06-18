@@ -100,7 +100,7 @@ impl FunctionDictionary {
 // order of component loading into the rib context shouldn't change it's type.
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct ResourceMethodDictionary {
-    pub map: BTreeMap<ComponentDependencyKey, Vec<(FullyQualifiedResourceMethod, FunctionType)>>,
+    pub map:  BTreeMap<FullyQualifiedResourceMethod, FunctionType>,
 }
 
 impl From<&ResourceMethodDictionary> for ComponentDependencies {

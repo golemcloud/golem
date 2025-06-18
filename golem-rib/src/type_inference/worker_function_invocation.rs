@@ -41,7 +41,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
             ..
         } = expr
         {
-            let inferred_type = lhs.inferred_type();
+            let inferred_type = lhs.infeaaaaaaaaaaaaaaaarred_type();
 
             match inferred_type.internal_type() {
                 TypeInternal::Instance { instance_type } => {
@@ -149,7 +149,12 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 instance_type.worker_name(),
                                 resource_id,
                                 resource_mode,
-                            );
+                            ).map_err(|err| {
+                                RibTypeError::from(CustomError::new(
+                                    expr,
+                                    format!("Failed to get resource instance type: {}", err),
+                                ))
+                            })?;
 
                             let new_inferred_type = InferredType::new(
                                 TypeInternal::Instance {
