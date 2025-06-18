@@ -1047,6 +1047,50 @@ impl Expr {
         }
     }
 
+    pub fn inferred_type_mut(&mut self) -> &mut InferredType {
+        match self {
+            Expr::Let { inferred_type, .. }
+            | Expr::SelectField { inferred_type, .. }
+            | Expr::SelectIndex { inferred_type, .. }
+            | Expr::Sequence { inferred_type, .. }
+            | Expr::Record { inferred_type, .. }
+            | Expr::Tuple { inferred_type, .. }
+            | Expr::Literal { inferred_type, .. }
+            | Expr::Number { inferred_type, .. }
+            | Expr::Flags { inferred_type, .. }
+            | Expr::Identifier { inferred_type, .. }
+            | Expr::Boolean { inferred_type, .. }
+            | Expr::Concat { inferred_type, .. }
+            | Expr::ExprBlock { inferred_type, .. }
+            | Expr::Not { inferred_type, .. }
+            | Expr::GreaterThan { inferred_type, .. }
+            | Expr::GreaterThanOrEqualTo { inferred_type, .. }
+            | Expr::LessThanOrEqualTo { inferred_type, .. }
+            | Expr::EqualTo { inferred_type, .. }
+            | Expr::Plus { inferred_type, .. }
+            | Expr::Minus { inferred_type, .. }
+            | Expr::Divide { inferred_type, .. }
+            | Expr::Multiply { inferred_type, .. }
+            | Expr::LessThan { inferred_type, .. }
+            | Expr::Cond { inferred_type, .. }
+            | Expr::PatternMatch { inferred_type, .. }
+            | Expr::Option { inferred_type, .. }
+            | Expr::Result { inferred_type, .. }
+            | Expr::Unwrap { inferred_type, .. }
+            | Expr::Throw { inferred_type, .. }
+            | Expr::GetTag { inferred_type, .. }
+            | Expr::And { inferred_type, .. }
+            | Expr::Or { inferred_type, .. }
+            | Expr::ListComprehension { inferred_type, .. }
+            | Expr::ListReduce { inferred_type, .. }
+            | Expr::Call { inferred_type, .. }
+            | Expr::Range { inferred_type, .. }
+            | Expr::InvokeMethodLazy { inferred_type, .. }
+            | Expr::Length { inferred_type, .. }
+            | Expr::GenerateWorkerName { inferred_type, .. } => &mut *inferred_type,
+        }
+    }
+
     pub fn inferred_type(&self) -> InferredType {
         match self {
             Expr::Let { inferred_type, .. }

@@ -84,24 +84,37 @@ pub enum InstanceType {
 }
 
 impl InstanceType {
-
-    pub fn narrow_to_single_component(&mut self, component_dependency_key: &ComponentDependencyKey) {
+    pub fn narrow_to_single_component(
+        &mut self,
+        component_dependency_key: &ComponentDependencyKey,
+    ) {
         match self {
-            InstanceType::Global { component_dependency, .. } => {
+            InstanceType::Global {
+                component_dependency,
+                ..
+            } => {
                 component_dependency.narrow_to_component(component_dependency_key);
             }
-            InstanceType::Package { component_dependency, .. } => {
+            InstanceType::Package {
+                component_dependency,
+                ..
+            } => {
                 component_dependency.narrow_to_component(component_dependency_key);
             }
-            InstanceType::Interface { component_dependency, .. } => {
+            InstanceType::Interface {
+                component_dependency,
+                ..
+            } => {
                 component_dependency.narrow_to_component(component_dependency_key);
             }
-            InstanceType::PackageInterface { component_dependency, .. } => {
+            InstanceType::PackageInterface {
+                component_dependency,
+                ..
+            } => {
                 component_dependency.narrow_to_component(component_dependency_key);
             }
-            InstanceType::Resource { resource_method_dictionary, .. } => {
-                resource_method_dictionary.narrow_to_component(component_dependency_key);
-            }
+            // A resource is already narrowed down to a component
+            InstanceType::Resource { .. } => {}
         }
     }
 
@@ -190,8 +203,7 @@ impl InstanceType {
         }
 
         if tree.len() == 1 {
-            let (component_dependency_key, resource_methods) =
-                tree.pop().unwrap();
+            let (component_dependency_key, resource_methods) = tree.pop().unwrap();
 
             let resource_method_dict = ResourceMethodDictionary {
                 map: resource_methods,
@@ -459,8 +471,15 @@ impl InstanceType {
             } => component_dependency.clone(),
             InstanceType::Resource {
                 resource_method_dictionary,
+                component_dependency_key,
                 ..
-            } => ComponentDependencies::from(resource_method_dictionary),
+            } => {
+                let function_dictionary = FunctionDictionary::from(resource_method_dictionary);
+                let mut dependencies = BTreeMap::new();
+                dependencies.insert(component_dependency_key.clone(), function_dictionary);
+
+                ComponentDependencies { dependencies }
+            }
         }
     }
 

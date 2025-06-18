@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::inferred_type::TypeOrigin;
-use crate::{InferredType, InstanceType};
+use crate::{ComponentDependencyKey, InferredType, InstanceType};
 use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, Ord, PartialOrd)]
@@ -62,6 +62,19 @@ pub enum TypeInternal {
 impl TypeInternal {
     pub fn to_inferred_type(&self) -> InferredType {
         InferredType::new(self.clone(), TypeOrigin::NoOrigin)
+    }
+
+    pub fn narrow_to_single_component(
+        &mut self,
+        component_dependency_key: &ComponentDependencyKey,
+    ) {
+        match self {
+            TypeInternal::Instance { instance_type } => {
+                instance_type.narrow_to_single_component(component_dependency_key)
+            }
+
+            _ => {}
+        }
     }
 }
 

@@ -15,9 +15,8 @@
 use crate::parser::{PackageName, TypeParameter};
 use crate::type_parameter::InterfaceName;
 use crate::{
-    CallType, ComponentDependencies, ComponentDependencyKey, DynamicParsedFunctionName,
-    DynamicParsedFunctionReference, FunctionTypeRegistry, InferredType, ParsedFunctionSite,
-    RegistryKey, RegistryValue, SemVer,
+    CallType, DynamicParsedFunctionName, DynamicParsedFunctionReference, FunctionTypeRegistry,
+    InferredType, ParsedFunctionSite, RegistryKey, RegistryValue, SemVer,
 };
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, TypeEnum, TypeVariant};
 use std::collections::BTreeMap;
@@ -100,25 +99,18 @@ impl FunctionDictionary {
 // order of component loading into the rib context shouldn't change it's type.
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct ResourceMethodDictionary {
-    pub map:  BTreeMap<FullyQualifiedResourceMethod, FunctionType>,
+    pub map: BTreeMap<FullyQualifiedResourceMethod, FunctionType>,
 }
 
-impl From<&ResourceMethodDictionary> for ComponentDependencies {
+impl From<&ResourceMethodDictionary> for FunctionDictionary {
     fn from(value: &ResourceMethodDictionary) -> Self {
-        let mut dict = BTreeMap::new();
-
-        for (info, function_dictionary) in value.map.iter() {
-            let function_dictionary = FunctionDictionary {
-                name_and_types: function_dictionary
-                    .iter()
-                    .map(|(k, v)| (FunctionName::ResourceMethod(k.clone()), v.clone()))
-                    .collect(),
-            };
-
-            dict.insert(info.clone(), function_dictionary);
+        FunctionDictionary {
+            name_and_types: value
+                .map
+                .iter()
+                .map(|(key, value)| (FunctionName::ResourceMethod(key.clone()), value.clone()))
+                .collect(),
         }
-
-        ComponentDependencies { dependencies: dict }
     }
 }
 
