@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::call_type::{CallType, InstanceCreationType};
-use crate::instance_type::{FunctionName, InstanceType};
+use crate::call_type::{CallType, InstanceCreationType, InstanceIdentifier};
 use crate::rib_type_error::RibTypeError;
 use crate::type_parameter::TypeParameter;
 use crate::{
-    DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, FunctionCallError,
-    InferredType, TypeInternal, TypeName, TypeOrigin,
+    CustomError, DynamicParsedFunctionName, Expr, FunctionCallError, InferredType, TypeInternal,
+    TypeName, TypeOrigin,
 };
+use crate::{FunctionName, InstanceType};
 use std::collections::VecDeque;
 use std::ops::Deref;
 
@@ -54,26 +54,34 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                         })
                         .transpose()?;
 
-                    let function =
-                        instance_type
-                            .get_function(method, type_parameter)
-                            .map_err(|err| {
-                                FunctionCallError::invalid_function_call(
-                                    method,
-                                    &Expr::InvokeMethodLazy {
-                                        lhs: lhs.clone(),
-                                        method: method.clone(),
-                                        generic_type_parameter: generic_type_parameter.clone(),
-                                        args: args.clone(),
-                                        source_span: source_span.clone(),
-                                        type_annotation: type_annotation.clone(),
-                                        inferred_type: inferred_type.clone(),
-                                    },
-                                    err,
-                                )
-                            })?;
+                    // This can be made optional component info to improve type inference
+                    // with multiple possibilities of functions but complicates quite a bit
+                    let (component, function) = instance_type
+                        .get_function(method, type_parameter)
+                        .map_err(|err| {
+                            FunctionCallError::invalid_function_call(
+                                method,
+                                &Expr::InvokeMethodLazy {
+                                    lhs: lhs.clone(),
+                                    method: method.clone(),
+                                    generic_type_parameter: generic_type_parameter.clone(),
+                                    args: args.clone(),
+                                    source_span: source_span.clone(),
+                                    type_annotation: type_annotation.clone(),
+                                    inferred_type: inferred_type.clone(),
+                                },
+                                err,
+                            )
+                        })?;
 
                     match function.function_name {
+                        // TODO; verify if this assumption is true
+                        // that user never need to call a variant function from an instance
+                        // If we need to support instance.variant-name(),
+                        // this needs to be implemented
+                        FunctionName::Variant(_) => {}
+                        FunctionName::Enum(_) => {}
+
                         FunctionName::Function(function_name) => {
                             let dynamic_parsed_function_name = function_name.to_string();
                             let dynamic_parsed_function_name = DynamicParsedFunctionName::parse(
@@ -95,22 +103,52 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 )
                             })?;
 
-                            let worker_name = instance_type.worker_name().as_deref().cloned();
+                            // let x = instance();
+                            // x is now fo the type instance
+                            // when we bump into add.
+                            // the interpretation of add should lookup the variable-id  which is optional
+                            // or it should lookup the instance type itself which is already part of
+                            // the call_type. If there is no variable-id, then no reuse, otherwise
+                            // do what's in the instance type
+                            // This implies the CallType::Function should take a variable-id representing the instance
+                            // such that it can lookup or it can use InstanceType
+                            // x.add("item");
+                            let module = get_module_identifier(instance_type, lhs);
 
                             let new_call = Expr::call_worker_function(
                                 dynamic_parsed_function_name,
                                 None,
-                                worker_name,
+                                Some(module),
                                 args.clone(),
+                                Some(component),
                             )
                             .with_source_span(source_span.clone());
                             *expr = new_call;
                         }
+
                         FunctionName::ResourceConstructor(fully_qualified_resource_constructor) => {
+                            let (resource_id, resource_mode) = match function.function_type.return_type {
+                                Some(return_type) => match return_type.internal_type()  {
+                                    TypeInternal::Resource {resource_id, resource_mode} =>  {
+                                        (*resource_id, *resource_mode)
+                                    }
+                                    _ => return Err(RibTypeError::from(CustomError::new(expr, "Expected resource type as return type of resource constructor"))),
+                                }
+
+                                None => {
+                                    return Err(RibTypeError::from(CustomError::new(
+                                        expr,
+                                        "Resource constructor must have a return type",
+                                    )));
+                                }
+                            };
+
                             let resource_instance_type = instance_type.get_resource_instance_type(
                                 fully_qualified_resource_constructor.clone(),
                                 args.clone(),
                                 instance_type.worker_name(),
+                                resource_id,
+                                resource_mode,
                             );
 
                             let new_inferred_type = InferredType::new(
@@ -120,9 +158,12 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 TypeOrigin::NoOrigin,
                             );
 
+                            let module = get_module_identifier(instance_type, lhs);
+
                             let new_call_type =
-                                CallType::InstanceCreation(InstanceCreationType::Resource {
-                                    worker_name: instance_type.worker_name(),
+                                CallType::InstanceCreation(InstanceCreationType::WitResource {
+                                    component_info: Some(component.clone()),
+                                    module: Some(module),
                                     resource_name: fully_qualified_resource_constructor.clone(),
                                 });
 
@@ -136,13 +177,31 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                         FunctionName::ResourceMethod(resource_method) => {
                             match instance_type.deref() {
                                 InstanceType::Resource {
-                                    resource_args,
-                                    resource_method_dict,
+                                    resource_method_dictionary: resource_method_dict,
                                     resource_constructor,
                                     ..
                                 } => {
                                     let resource_method = resource_method_dict
                                         .map
+                                        .get(&component)
+                                        .ok_or(FunctionCallError::invalid_function_call(
+                                            resource_method.method_name(),
+                                            &Expr::InvokeMethodLazy {
+                                                lhs: lhs.clone(),
+                                                method: method.clone(),
+                                                generic_type_parameter: generic_type_parameter
+                                                    .clone(),
+                                                args: args.clone(),
+                                                source_span: source_span.clone(),
+                                                type_annotation: type_annotation.clone(),
+                                                inferred_type: inferred_type.clone(),
+                                            },
+                                            format!(
+                                                "Resource method {} not found in resource {}",
+                                                resource_method.method_name(),
+                                                resource_constructor
+                                            ),
+                                        ))?
                                         .iter()
                                         .find(|(k, _)| k == &resource_method)
                                         .map(|(k, _)| k.clone())
@@ -165,8 +224,8 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                             ),
                                         ))?;
 
-                                    let mut dynamic_parsed_function_name = resource_method
-                                        .dynamic_parsed_function_name(resource_args.clone())
+                                    let dynamic_parsed_function_name = resource_method
+                                        .dynamic_parsed_function_name()
                                         .map_err(|err| {
                                             FunctionCallError::invalid_function_call(
                                                 resource_method.method_name(),
@@ -184,34 +243,14 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                             )
                                         })?;
 
-                                    // Making sure the various compile phased resolved resource_args are kept intact
-                                    match &mut dynamic_parsed_function_name.function {
-                                        DynamicParsedFunctionReference::IndexedResourceConstructor { resource_params, .. } => {
-                                            *resource_params = resource_args.clone();
-                                        }
-                                        DynamicParsedFunctionReference::IndexedResourceMethod { resource_params, .. } => {
-                                            *resource_params = resource_args.clone();
-                                        }
-
-                                        DynamicParsedFunctionReference::IndexedResourceStaticMethod { resource_params, .. } => {
-                                            *resource_params = resource_args.clone();
-                                        }
-
-                                        DynamicParsedFunctionReference::IndexedResourceDrop { resource_params, .. } => {
-                                            *resource_params = resource_args.clone();
-                                        }
-
-                                        _ => {}
-                                    };
-
-                                    let worker_name =
-                                        instance_type.worker_name().as_deref().cloned();
+                                    let module = get_module_identifier(instance_type, lhs);
 
                                     let new_call = Expr::call_worker_function(
                                         dynamic_parsed_function_name,
                                         None,
-                                        worker_name,
+                                        Some(module),
                                         args.clone(),
+                                        Some(component),
                                     )
                                     .with_source_span(source_span.clone());
 
@@ -262,4 +301,27 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
     }
 
     Ok(())
+}
+
+fn get_module_identifier(instance_type: &InstanceType, lhs: &Expr) -> InstanceIdentifier {
+    let variable_id = match lhs {
+        Expr::Identifier { variable_id, .. } => Some(variable_id),
+        _ => None,
+    };
+
+    match instance_type {
+        InstanceType::Resource {
+            worker_name,
+            resource_constructor,
+            ..
+        } => InstanceIdentifier::WitResource {
+            variable_id: variable_id.cloned(),
+            worker_name: worker_name.clone(),
+            resource_name: resource_constructor.clone(),
+        },
+        instance_type => InstanceIdentifier::WitWorker {
+            variable_id: variable_id.cloned(),
+            worker_name: instance_type.worker_name(),
+        },
+    }
 }

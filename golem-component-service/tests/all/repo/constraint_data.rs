@@ -19,16 +19,24 @@ use golem_common::model::ComponentId;
 use golem_component_service::model::ComponentConstraints;
 use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32, u64};
 use golem_wasm_ast::analysis::NameTypePair;
-use rib::RegistryKey;
+use rib::{FullyQualifiedFunctionName, FunctionName, InterfaceName, PackageName};
 
 pub(crate) fn get_shopping_cart_worker_functions_constraint1() -> FunctionConstraints {
     FunctionConstraints {
         constraints: vec![FunctionUsageConstraint {
             function_signature: FunctionSignature::new(
-                RegistryKey::FunctionNameWithInterface {
-                    interface_name: "golem:it/api".to_string(),
+                FunctionName::Function(FullyQualifiedFunctionName {
+                    package_name: Some(PackageName {
+                        namespace: "golem".to_string(),
+                        package_name: "it".to_string(),
+                        version: None,
+                    }),
+                    interface_name: Some(InterfaceName {
+                        name: "api".to_string(),
+                        version: None,
+                    }),
                     function_name: "initialize-cart".to_string(),
-                },
+                }),
                 vec![str()],
                 None,
             ),
@@ -41,10 +49,18 @@ pub(crate) fn get_shopping_cart_worker_functions_constraint2() -> FunctionConstr
     FunctionConstraints {
         constraints: vec![FunctionUsageConstraint {
             function_signature: FunctionSignature::new(
-                RegistryKey::FunctionNameWithInterface {
-                    interface_name: "golem:it/api".to_string(),
+                FunctionName::Function(FullyQualifiedFunctionName {
+                    package_name: Some(PackageName {
+                        namespace: "golem".to_string(),
+                        package_name: "it".to_string(),
+                        version: None,
+                    }),
+                    interface_name: Some(InterfaceName {
+                        name: "api".to_string(),
+                        version: None,
+                    }),
                     function_name: "get-cart-contents".to_string(),
-                },
+                }),
                 vec![],
                 Some(list(record(vec![
                     NameTypePair {
@@ -74,10 +90,18 @@ pub(crate) fn get_shopping_cart_worker_functions_constraint_incompatible() -> Fu
     FunctionConstraints {
         constraints: vec![FunctionUsageConstraint {
             function_signature: FunctionSignature::new(
-                RegistryKey::FunctionNameWithInterface {
-                    interface_name: "golem:it/api".to_string(),
+                FunctionName::Function(FullyQualifiedFunctionName {
+                    package_name: Some(PackageName {
+                        namespace: "golem".to_string(),
+                        package_name: "it".to_string(),
+                        version: None,
+                    }),
+                    interface_name: Some(InterfaceName {
+                        name: "api".to_string(),
+                        version: None,
+                    }),
                     function_name: "initialize-cart".to_string(),
-                },
+                }),
                 vec![u64()],
                 Some(str()),
             ),
@@ -90,7 +114,11 @@ pub(crate) fn get_random_worker_functions_constraint() -> FunctionConstraints {
     FunctionConstraints {
         constraints: vec![FunctionUsageConstraint {
             function_signature: FunctionSignature::new(
-                RegistryKey::FunctionName("foo".to_string()),
+                FunctionName::Function(FullyQualifiedFunctionName {
+                    package_name: None,
+                    interface_name: None,
+                    function_name: "foo".to_string(),
+                }),
                 vec![],
                 Some(list(record(vec![
                     NameTypePair {

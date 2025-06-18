@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedType;
-use rib::{RegistryKey, WorkerFunctionType, WorkerFunctionsInRib};
+use rib::{FunctionName, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
 
 // This is very similar to WorkerFunctionsInRib data structure in `rib`, however
@@ -78,7 +78,7 @@ impl FunctionConstraints {
     pub fn try_merge(
         worker_functions: Vec<FunctionConstraints>,
     ) -> Result<FunctionConstraints, String> {
-        let mut merged_function_calls: HashMap<RegistryKey, FunctionUsageConstraint> =
+        let mut merged_function_calls: HashMap<FunctionName, FunctionUsageConstraint> =
             HashMap::new();
 
         for wf in worker_functions {
@@ -134,19 +134,19 @@ impl FunctionConstraints {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionSignature {
-    function_key: RegistryKey,
+    function_name: FunctionName,
     parameter_types: Vec<AnalysedType>,
     return_type: Option<AnalysedType>,
 }
 
 impl FunctionSignature {
     pub fn new(
-        function_key: RegistryKey,
+        function_key: FunctionName,
         parameter_types: Vec<AnalysedType>,
         return_type: Option<AnalysedType>,
     ) -> Self {
         FunctionSignature {
-            function_key,
+            function_name: function_key,
             parameter_types,
             return_type,
         }
@@ -164,7 +164,7 @@ pub struct FunctionUsageConstraint {
 impl From<FunctionUsageConstraint> for WorkerFunctionType {
     fn from(value: FunctionUsageConstraint) -> Self {
         WorkerFunctionType {
-            function_key: value.function_signature.function_key.clone(),
+            function_name: value.function_signature.function_name.clone(),
             parameter_types: value.function_signature.parameter_types.clone(),
             return_type: value.function_signature.return_type.clone(),
         }
@@ -172,8 +172,8 @@ impl From<FunctionUsageConstraint> for WorkerFunctionType {
 }
 
 impl FunctionUsageConstraint {
-    pub fn function_key(&self) -> &RegistryKey {
-        &self.function_signature.function_key
+    pub fn function_key(&self) -> &FunctionName {
+        &self.function_signature.function_name
     }
 
     pub fn parameter_types(&self) -> &Vec<AnalysedType> {
@@ -189,7 +189,7 @@ impl FunctionUsageConstraint {
     ) -> FunctionUsageConstraint {
         FunctionUsageConstraint {
             function_signature: FunctionSignature {
-                function_key: worker_function_type.function_key.clone(),
+                function_name: worker_function_type.function_name.clone(),
                 parameter_types: worker_function_type.parameter_types.clone(),
                 return_type: worker_function_type.return_type.clone(),
             },
@@ -210,7 +210,7 @@ mod protobuf {
     use golem_api_grpc::proto::golem::component::FunctionConstraint as FunctionConstraintProto;
     use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
     use golem_wasm_ast::analysis::AnalysedType;
-    use rib::RegistryKey;
+    use rib::FunctionName;
 
     impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollection>
         for FunctionConstraints
@@ -264,13 +264,18 @@ mod protobuf {
                 .map(AnalysedType::try_from)
                 .collect::<Result<_, _>>()?;
 
-            let registry_key_proto = value.function_key.ok_or("Function key missing")?;
-            let function_key = RegistryKey::try_from(registry_key_proto)?;
+            let function_name_proto = value
+                .function_key
+                .and_then(|x| x.function_name)
+                .ok_or("Function key missing")?;
+
+            let function_key = FunctionName::try_from(function_name_proto)?;
+
             let usage_count = value.usage_count;
 
             Ok(Self {
                 function_signature: FunctionSignature {
-                    function_key,
+                    function_name: function_key,
                     parameter_types,
                     return_type,
                 },
@@ -281,10 +286,17 @@ mod protobuf {
 
     impl From<FunctionUsageConstraint> for FunctionConstraintProto {
         fn from(value: FunctionUsageConstraint) -> Self {
-            let registry_key = value.function_key().into();
+            let function_name =
+                golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::from(
+                    value.function_signature.clone().function_name,
+                );
+
+            let function_name_type = golem_api_grpc::proto::golem::rib::FunctionNameType {
+                function_name: Some(function_name),
+            };
 
             FunctionConstraintProto {
-                function_key: Some(registry_key),
+                function_key: Some(function_name_type),
                 parameter_types: value
                     .parameter_types()
                     .iter()

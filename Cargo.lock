@@ -3557,6 +3557,7 @@ dependencies = [
  "serde",
  "serde_json",
  "test-r",
+ "uuid",
 ]
 
 [[package]]

@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedType;
-use rib::RegistryKey;
+use rib::FunctionName;
 use std::fmt::{Debug, Display, Formatter};
 
 #[derive(Debug)]
 pub struct ConflictingFunction {
-    pub function: RegistryKey,
+    pub function: FunctionName,
     pub parameter_type_conflict: Option<ParameterTypeConflict>,
     pub return_type_conflict: Option<ReturnTypeConflict>,
 }
@@ -99,7 +99,7 @@ fn convert_to_pretty_type(analysed_type: &Option<AnalysedType>) -> String {
 
 #[derive(Debug)]
 pub struct ConflictReport {
-    pub missing_functions: Vec<RegistryKey>,
+    pub missing_functions: Vec<FunctionName>,
     pub conflicting_functions: Vec<ConflictingFunction>,
 }
 

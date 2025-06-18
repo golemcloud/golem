@@ -18,25 +18,28 @@ use golem_common::model::auth::Namespace;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::ValueAndType;
 use rib::{
-    EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId, RibByteCode,
-    RibFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult,
+    ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId,
+    RibByteCode, RibComponentFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult,
 };
 use std::fmt::Display;
 use std::sync::Arc;
 
-// A wrapper service over original RibInterpreter concerning
-// the details of the worker service.
+// A wrapper service over original RibInterpreter
+// Note that to execute a RibByteCode, there is no need to provide
+// worker_name and component details from outside, as these are already
+// encoded in the RibByteCode itself.
+// This implies file-server handlers and http-handlers will only execute
+// rib that's devoid of any instantiation of worker or worker function invocation
 #[async_trait]
 pub trait WorkerServiceRibInterpreter: Send + Sync {
     // Evaluate a Rib byte against a specific worker.
     // RibByteCode may have actual function calls.
     async fn evaluate(
         &self,
-        worker_name: Option<String>,
-        component_id: ComponentId,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
         rib_byte_code: RibByteCode,
@@ -81,15 +84,11 @@ impl DefaultRibInterpreter {
 
     pub fn rib_invoke(
         &self,
-        global_worker_name: Option<String>,
-        component_id: ComponentId,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
         namespace: Namespace,
-    ) -> Arc<dyn RibFunctionInvoke + Sync + Send> {
+    ) -> Arc<dyn RibComponentFunctionInvoke + Sync + Send> {
         Arc::new(WorkerServiceRibInvoke {
-            global_worker_name,
-            component_id,
             idempotency_key,
             invocation_context,
             executor: self.worker_request_executor.clone(),
@@ -102,23 +101,16 @@ impl DefaultRibInterpreter {
 impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
     async fn evaluate(
         &self,
-        worker_name: Option<String>,
-        component_id: ComponentId,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: InvocationContextStack,
         expr: RibByteCode,
         rib_input: RibInput,
         namespace: Namespace,
     ) -> Result<RibResult, RibRuntimeError> {
-        let worker_invoke_function = self.rib_invoke(
-            worker_name,
-            component_id,
-            idempotency_key,
-            invocation_context,
-            namespace,
-        );
+        let worker_invoke_function =
+            self.rib_invoke(idempotency_key, invocation_context, namespace);
 
-        let result = rib::interpret(expr, rib_input, worker_invoke_function)
+        let result = rib::interpret(expr, rib_input, worker_invoke_function, None)
             .await
             .map_err(|err| RibRuntimeError(err.to_string()))?;
         Ok(result)
@@ -126,12 +118,6 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
 }
 
 struct WorkerServiceRibInvoke {
-    // For backward compatibility.
-    // If there is no worker-name in the Rib (which is EvaluatedWorkerName),
-    // then it tries to fall back to this global_worker_name that came in as
-    // part of the API definition.
-    global_worker_name: Option<String>,
-    component_id: ComponentId,
     idempotency_key: Option<IdempotencyKey>,
     invocation_context: InvocationContextStack,
     executor: Arc<dyn GatewayWorkerRequestExecutor>,
@@ -139,17 +125,17 @@ struct WorkerServiceRibInvoke {
 }
 
 #[async_trait]
-impl RibFunctionInvoke for WorkerServiceRibInvoke {
+impl RibComponentFunctionInvoke for WorkerServiceRibInvoke {
     async fn invoke(
         &self,
+        component_dependency_key: ComponentDependencyKey,
         _instruction_id: &InstructionId,
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         parameters: EvaluatedFnArgs,
+        _return_type: Option<AnalysedType>,
     ) -> RibFunctionInvokeResult {
-        let component_id = self.component_id.clone();
-        let worker_name: Option<String> =
-            worker_name.map(|x| x.0).or(self.global_worker_name.clone());
+        let worker_name: Option<String> = worker_name.map(|x| x.0);
         let idempotency_key = self.idempotency_key.clone();
         let invocation_context = self.invocation_context.clone();
         let executor = self.executor.clone();
@@ -165,7 +151,7 @@ impl RibFunctionInvoke for WorkerServiceRibInvoke {
             .map_err(|errs: Vec<String>| errs.join(", "))?;
 
         let worker_request = GatewayResolvedWorkerRequest {
-            component_id,
+            component_id: ComponentId(component_dependency_key.component_id),
             worker_name,
             function_name,
             function_params,

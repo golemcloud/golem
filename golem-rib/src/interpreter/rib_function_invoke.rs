@@ -12,18 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::InstructionId;
+use crate::{ComponentDependencyKey, InstructionId};
 use async_trait::async_trait;
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 
 #[async_trait]
-pub trait RibFunctionInvoke {
+pub trait RibComponentFunctionInvoke {
     async fn invoke(
         &self,
+        component_dependency_key: ComponentDependencyKey,
         instruction_id: &InstructionId,
         worker_name: Option<EvaluatedWorkerName>,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
+        return_type: Option<AnalysedType>,
     ) -> RibFunctionInvokeResult;
 }
 

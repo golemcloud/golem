@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub use env::*;
+pub use eval::*;
 pub use interpreter_input::*;
 pub use interpreter_result::*;
 pub use literal::*;
@@ -22,6 +23,7 @@ pub use rib_runtime_error::*;
 pub use stack::*;
 
 mod env;
+mod eval;
 mod instruction_cursor;
 mod interpreter_input;
 mod interpreter_result;
@@ -32,15 +34,20 @@ mod rib_interpreter;
 mod rib_runtime_error;
 mod stack;
 
-use crate::RibByteCode;
+use crate::{DefaultWorkerNameGenerator, GenerateWorkerName, RibByteCode};
 use std::sync::Arc;
 
 pub async fn interpret(
     rib: RibByteCode,
     rib_input: RibInput,
-    function_invoke: Arc<dyn RibFunctionInvoke + Sync + Send>,
+    function_invoke: Arc<dyn RibComponentFunctionInvoke + Sync + Send>,
+    generate_worker_name: Option<Arc<dyn GenerateWorkerName + Sync + Send>>,
 ) -> Result<RibResult, RibRuntimeError> {
-    let mut interpreter = Interpreter::new(rib_input, function_invoke);
+    let mut interpreter = Interpreter::new(
+        rib_input,
+        function_invoke,
+        generate_worker_name.unwrap_or_else(|| Arc::new(DefaultWorkerNameGenerator)),
+    );
     interpreter.run(rib).await
 }
 
@@ -50,8 +57,12 @@ pub async fn interpret(
 pub async fn interpret_pure(
     rib: RibByteCode,
     rib_input: RibInput,
+    generate_worker_name: Option<Arc<dyn GenerateWorkerName + Sync + Send>>,
 ) -> Result<RibResult, RibRuntimeError> {
-    let mut interpreter = Interpreter::pure(rib_input);
+    let mut interpreter = Interpreter::pure(
+        rib_input,
+        generate_worker_name.unwrap_or_else(|| Arc::new(DefaultWorkerNameGenerator)),
+    );
     interpreter.run(rib.clone()).await
 }
 

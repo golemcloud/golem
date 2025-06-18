@@ -18,8 +18,9 @@ use crate::gateway_api_definition::http::{
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::ApiSite;
 use crate::gateway_binding::{
-    GatewayBinding, GatewayBindingCompiled, HttpHandlerBinding, HttpHandlerBindingCompiled,
-    StaticBinding, WorkerBinding, WorkerBindingCompiled,
+    FileServerBinding, FileServerBindingCompiled, GatewayBinding, GatewayBindingCompiled,
+    HttpHandlerBinding, HttpHandlerBindingCompiled, StaticBinding, WorkerBinding,
+    WorkerBindingCompiled,
 };
 use crate::gateway_middleware::{CorsPreflightExpr, HttpCors, HttpMiddleware, HttpMiddlewares};
 use crate::gateway_security::{
@@ -376,21 +377,33 @@ impl GatewayBindingData {
                     None
                 };
 
-                let worker_binding = WorkerBinding {
-                    component_id: VersionedComponentId {
-                        component_id: component_view.id,
-                        version: component.version.unwrap_or(component_view.latest_version),
-                    },
-                    worker_name,
-                    idempotency_key,
-                    response_mapping: response,
-                    invocation_context,
-                };
-
                 if v == Some(GatewayBindingType::FileServer) {
-                    Ok(GatewayBinding::FileServer(worker_binding))
+                    let file_server_worker_binding = FileServerBinding {
+                        component_id: VersionedComponentId {
+                            component_id: component_view.id,
+                            version: component.version.unwrap_or(component_view.latest_version),
+                        },
+                        worker_name,
+                        idempotency_key,
+                        response_mapping: response,
+                        invocation_context,
+                    };
+
+                    Ok(GatewayBinding::FileServer(Box::new(
+                        file_server_worker_binding,
+                    )))
                 } else {
-                    Ok(GatewayBinding::Default(worker_binding))
+                    let default_worker_binding = WorkerBinding {
+                        component_id: VersionedComponentId {
+                            component_id: component_view.id,
+                            version: component.version.unwrap_or(component_view.latest_version),
+                        },
+                        idempotency_key,
+                        response_mapping: response,
+                        invocation_context,
+                    };
+
+                    Ok(GatewayBinding::Default(Box::new(default_worker_binding)))
                 }
             }
 
@@ -420,7 +433,7 @@ impl GatewayBindingData {
                     idempotency_key,
                 };
 
-                Ok(GatewayBinding::HttpHandler(binding))
+                Ok(GatewayBinding::HttpHandler(Box::new(binding)))
             }
 
             Some(GatewayBindingType::CorsPreflight) => {
@@ -542,9 +555,9 @@ impl GatewayBindingResponseData {
         let gateway_binding = value.clone();
 
         match gateway_binding {
-            GatewayBindingCompiled::FileServer(worker_binding) => {
-                Self::from_worker_binding_compiled(
-                    worker_binding,
+            GatewayBindingCompiled::FileServer(file_server_binding_compiled) => {
+                Self::from_file_server_binding_compiled(
+                    *file_server_binding_compiled,
                     GatewayBindingType::FileServer,
                     conversion_ctx,
                 )
@@ -552,7 +565,7 @@ impl GatewayBindingResponseData {
             }
             GatewayBindingCompiled::Worker(worker_binding) => {
                 Self::from_worker_binding_compiled(
-                    worker_binding,
+                    *worker_binding,
                     GatewayBindingType::Default,
                     conversion_ctx,
                 )
@@ -560,7 +573,7 @@ impl GatewayBindingResponseData {
             }
             GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
                 Self::from_http_handler_binding_compiled(
-                    http_handler_binding,
+                    *http_handler_binding,
                     GatewayBindingType::HttpHandler,
                     conversion_ctx,
                 )
@@ -593,8 +606,8 @@ impl GatewayBindingResponseData {
         }
     }
 
-    async fn from_worker_binding_compiled(
-        worker_binding: WorkerBindingCompiled,
+    async fn from_file_server_binding_compiled(
+        worker_binding: FileServerBindingCompiled,
         binding_type: GatewayBindingType,
         conversion_ctx: &BoxConversionContext<'_>,
     ) -> Result<Self, String> {
@@ -627,9 +640,47 @@ impl GatewayBindingResponseData {
             ),
             binding_type: Some(binding_type),
             response_mapping_input: Some(worker_binding.response_compiled.rib_input),
-            worker_name_input: worker_binding
-                .worker_name_compiled
-                .map(|compiled| compiled.rib_input_type_info),
+            worker_name_input: None,
+            idempotency_key_input: worker_binding
+                .idempotency_key_compiled
+                .map(|idempotency_key_compiled| idempotency_key_compiled.rib_input),
+            cors_preflight: None,
+            response_mapping_output: worker_binding.response_compiled.rib_output,
+        })
+    }
+
+    async fn from_worker_binding_compiled(
+        worker_binding: WorkerBindingCompiled,
+        binding_type: GatewayBindingType,
+        conversion_ctx: &BoxConversionContext<'_>,
+    ) -> Result<Self, String> {
+        let component_view = conversion_ctx
+            .component_by_id(&worker_binding.component_id.component_id)
+            .await?;
+
+        Ok(GatewayBindingResponseData {
+            component: Some(ResolvedGatewayBindingComponent {
+                name: component_view.name.0,
+                version: worker_binding.component_id.version,
+            }),
+            worker_name: None,
+            idempotency_key: worker_binding.idempotency_key_compiled.as_ref().map(
+                |idempotency_key_compiled| idempotency_key_compiled.idempotency_key.to_string(),
+            ),
+            invocation_context: worker_binding.invocation_context_compiled.as_ref().map(
+                |invocation_context_compiled| {
+                    invocation_context_compiled.invocation_context.to_string()
+                },
+            ),
+            response: Some(
+                worker_binding
+                    .response_compiled
+                    .response_mapping_expr
+                    .to_string(),
+            ),
+            binding_type: Some(binding_type),
+            response_mapping_input: Some(worker_binding.response_compiled.rib_input),
+            worker_name_input: None,
             idempotency_key_input: worker_binding
                 .idempotency_key_compiled
                 .map(|idempotency_key_compiled| idempotency_key_compiled.rib_input),

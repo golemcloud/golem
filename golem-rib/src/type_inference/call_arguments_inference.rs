@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::type_registry::FunctionTypeRegistry;
-use crate::{Expr, ExprVisitor, FunctionCallError};
+use crate::{ComponentDependencies, Expr, ExprVisitor, FunctionCallError};
 
 // Resolving function arguments and return types based on function type registry
-// If the function call is a mere instance creation, then the return type i
+// If the function call is a mere instance creation, then the return type
+// At this point we can even annotate the call_type with the actual component name
+// If component  is ambiguous at this stage, compiler has no other choice than bailing
+// and asking the user to specify the type parameter that may help with drilling down the component explicitly.
 pub fn infer_function_call_types(
     expr: &mut Expr,
-    function_type_registry: &FunctionTypeRegistry,
+    component_dependency: &ComponentDependencies,
 ) -> Result<(), FunctionCallError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
     while let Some(expr) = visitor.pop_back() {
@@ -35,7 +37,7 @@ pub fn infer_function_call_types(
             internal::resolve_call_argument_types(
                 &expr_copied,
                 call_type,
-                function_type_registry,
+                component_dependency,
                 args,
                 inferred_type,
             )?;
@@ -50,8 +52,9 @@ mod internal {
     use crate::inferred_type::TypeOrigin;
     use crate::type_inference::GetTypeHint;
     use crate::{
-        ActualType, DynamicParsedFunctionName, ExpectedType, Expr, FunctionCallError,
-        FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue, TypeMismatchError,
+        ActualType, ComponentDependencies, DynamicParsedFunctionName, ExpectedType, Expr,
+        FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod, FunctionCallError,
+        FunctionName, InferredType, TypeMismatchError,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
@@ -59,7 +62,7 @@ mod internal {
     pub(crate) fn resolve_call_argument_types(
         original_expr: &Expr,
         call_type: &mut CallType,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
         args: &mut [Expr],
         function_result_inferred_type: &mut InferredType,
     ) -> Result<(), FunctionCallError> {
@@ -67,7 +70,7 @@ mod internal {
 
         match call_type {
             CallType::InstanceCreation(instance) => match instance {
-                InstanceCreationType::Worker { .. } => {
+                InstanceCreationType::WitWorker { .. } => {
                     for arg in args.iter_mut() {
                         arg.add_infer_type_mut(InferredType::string());
                     }
@@ -75,31 +78,12 @@ mod internal {
                     Ok(())
                 }
 
-                InstanceCreationType::Resource { resource_name, .. } => {
-                    let resource_constructor_with_prefix =
-                        format!["[constructor]{}", resource_name.resource_name];
-                    let interface =
-                        match (&resource_name.package_name, &resource_name.interface_name) {
-                            (Some(package_name), Some(interface_name)) => {
-                                Some(format!("{}/{}", package_name, interface_name))
-                            }
-                            (None, Some(interface_name)) => Some(interface_name.to_string()),
-                            _ => None,
-                        };
-
-                    let registry_key = match interface {
-                        None => RegistryKey::FunctionName(resource_constructor_with_prefix),
-                        Some(interface) => RegistryKey::FunctionNameWithInterface {
-                            interface_name: interface.to_string(),
-                            function_name: resource_constructor_with_prefix,
-                        },
-                    };
-
+                InstanceCreationType::WitResource { resource_name, .. } => {
                     infer_resource_constructor_arguments(
                         original_expr,
-                        &registry_key,
+                        resource_name,
                         Some(args),
-                        function_type_registry,
+                        component_dependency,
                     )?;
 
                     Ok(())
@@ -107,20 +91,21 @@ mod internal {
             },
 
             CallType::Function { function_name, .. } => {
-                let resource_constructor_registry_key =
-                    RegistryKey::resource_constructor_registry_key(function_name);
+                let function_name0 = FunctionName::from_dynamic_parsed_function_name(function_name);
 
-                match resource_constructor_registry_key {
-                    Some(resource_constructor_name) => handle_function_with_resource(
-                        original_expr,
-                        &resource_constructor_name,
-                        function_name,
-                        function_type_registry,
-                        function_result_inferred_type,
-                        args,
-                    ),
-                    None => {
-                        let registry_key = RegistryKey::from_call_type(&cloned).ok_or(
+                match function_name0 {
+                    FunctionName::ResourceMethod(fqn_resource_method) => {
+                        infer_resource_method_arguments(
+                            original_expr,
+                            &fqn_resource_method,
+                            function_name,
+                            component_dependency,
+                            args,
+                            function_result_inferred_type,
+                        )
+                    }
+                    _ => {
+                        let registry_key = FunctionName::from_call_type(&cloned).ok_or(
                             FunctionCallError::InvalidFunctionCall {
                                 function_name: function_name.to_string(),
                                 expr: original_expr.clone(),
@@ -131,7 +116,7 @@ mod internal {
                         infer_args_and_result_type(
                             original_expr,
                             &FunctionDetails::Fqn(function_name.clone()),
-                            function_type_registry,
+                            component_dependency,
                             &registry_key,
                             args,
                             Some(function_result_inferred_type),
@@ -154,12 +139,12 @@ mod internal {
             }
 
             CallType::VariantConstructor(variant_name) => {
-                let registry_key = RegistryKey::FunctionName(variant_name.clone());
+                let function_name = FunctionName::Variant(variant_name.clone());
                 infer_args_and_result_type(
                     original_expr,
                     &FunctionDetails::VariantName(variant_name.clone()),
-                    function_type_registry,
-                    &registry_key,
+                    component_dependency,
+                    &function_name,
                     args,
                     Some(function_result_inferred_type),
                 )
@@ -167,60 +152,30 @@ mod internal {
         }
     }
 
-    fn handle_function_with_resource(
-        original_expr: &Expr,
-        resource_constructor_registry_key: &RegistryKey,
-        dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
-        function_type_registry: &FunctionTypeRegistry,
-        function_result_inferred_type: &mut InferredType,
-        resource_method_args: &mut [Expr],
-    ) -> Result<(), FunctionCallError> {
-        // Infer the resource constructors
-        infer_resource_constructor_arguments(
-            original_expr,
-            resource_constructor_registry_key,
-            dynamic_parsed_function_name.raw_resource_params_mut(),
-            function_type_registry,
-        )?;
-
-        let resource_method_registry_key =
-            RegistryKey::fqn_registry_key(dynamic_parsed_function_name);
-
-        // Infer the resource arguments
-        infer_resource_method_arguments(
-            original_expr,
-            &resource_method_registry_key,
-            dynamic_parsed_function_name,
-            function_type_registry,
-            resource_method_args,
-            function_result_inferred_type,
-        )
-    }
-
     fn infer_resource_method_arguments(
         original_expr: &Expr,
-        resource_method_registry_key: &RegistryKey,
+        fqn_resource_method: &FullyQualifiedResourceMethod,
         dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
-        function_type_registry: &FunctionTypeRegistry,
+        function_type_registry: &ComponentDependencies,
         resource_method_args: &mut [Expr],
         function_result_inferred_type: &mut InferredType,
     ) -> Result<(), FunctionCallError> {
         // Infer the types of resource method parameters
-        let resource_method_name_in_metadata =
-            dynamic_parsed_function_name.function_name_with_prefix_identifiers();
 
         let resource_constructor_name = dynamic_parsed_function_name
             .resource_name_simplified()
             .unwrap_or_default();
 
+        let resource_method = fqn_resource_method.method_name.clone();
+
         infer_args_and_result_type(
             original_expr,
             &FunctionDetails::ResourceMethodName {
                 resource_name: resource_constructor_name,
-                resource_method_name: resource_method_name_in_metadata,
+                resource_method_name: resource_method,
             },
             function_type_registry,
-            resource_method_registry_key,
+            &FunctionName::ResourceMethod(fqn_resource_method.clone()),
             resource_method_args,
             Some(function_result_inferred_type),
         )
@@ -228,9 +183,9 @@ mod internal {
 
     fn infer_resource_constructor_arguments(
         original_expr: &Expr,
-        resource_constructor_registry_key: &RegistryKey,
+        resource_constructor: &FullyQualifiedResourceConstructor,
         raw_resource_parameters: Option<&mut [Expr]>,
-        function_type_registry: &FunctionTypeRegistry,
+        function_type_registry: &ComponentDependencies,
     ) -> Result<(), FunctionCallError> {
         let mut constructor_params: &mut [Expr] = &mut [];
 
@@ -238,14 +193,16 @@ mod internal {
             constructor_params = resource_params
         }
 
+        let function_name = FunctionName::ResourceConstructor(resource_constructor.clone());
+
         // Infer the types of constructor parameter expressions
         infer_args_and_result_type(
             original_expr,
             &FunctionDetails::ResourceConstructorName {
-                resource_constructor_name: resource_constructor_registry_key.get_function_name(),
+                resource_constructor_name: resource_constructor.resource_name.clone(),
             },
             function_type_registry,
-            resource_constructor_registry_key,
+            &function_name,
             constructor_params,
             None,
         )
@@ -254,79 +211,112 @@ mod internal {
     fn infer_args_and_result_type(
         original_expr: &Expr,
         function_name: &FunctionDetails,
-        function_type_registry: &FunctionTypeRegistry,
-        key: &RegistryKey,
+        component_dependency: &ComponentDependencies,
+        key: &FunctionName,
         args: &mut [Expr],
         function_result_inferred_type: Option<&mut InferredType>,
     ) -> Result<(), FunctionCallError> {
-        if let Some(value) = function_type_registry.types.get(key) {
-            match value {
-                RegistryValue::Value(_) => Ok(()),
-                RegistryValue::Variant {
-                    parameter_types,
-                    variant_type,
-                } => {
-                    let parameter_types = parameter_types.clone();
-
-                    if parameter_types.len() == args.len() {
-                        tag_argument_types(original_expr, function_name, args, &parameter_types)?;
-
-                        if let Some(function_result_type) = function_result_inferred_type {
-                            *function_result_type = InferredType::from_type_variant(variant_type);
-                        }
-
-                        Ok(())
-                    } else {
-                        Err(FunctionCallError::ArgumentSizeMisMatch {
-                            function_name: function_name.name(),
-                            expr: original_expr.clone(),
-                            expected: parameter_types.len(),
-                            provided: args.len(),
-                        })
-                    }
-                }
-                RegistryValue::Function {
-                    parameter_types,
-                    return_type,
-                } => {
-                    let mut parameter_types = parameter_types.clone();
-
-                    if let FunctionDetails::ResourceMethodName { .. } = function_name {
-                        if let Some(AnalysedType::Handle(_)) = parameter_types.first() {
-                            parameter_types.remove(0);
-                        }
-                    }
-
-                    if parameter_types.len() == args.len() {
-                        tag_argument_types(original_expr, function_name, args, &parameter_types)?;
-
-                        if let Some(function_result_type) = function_result_inferred_type {
-                            *function_result_type = {
-                                if let Some(tpe) = return_type {
-                                    tpe.into()
-                                } else {
-                                    InferredType::sequence(vec![])
-                                }
-                            }
-                        };
-
-                        Ok(())
-                    } else {
-                        Err(FunctionCallError::ArgumentSizeMisMatch {
-                            function_name: function_name.name(),
-                            expr: original_expr.clone(),
-                            expected: parameter_types.len(),
-                            provided: args.len(),
-                        })
-                    }
-                }
-            }
-        } else {
-            Err(FunctionCallError::InvalidFunctionCall {
+        let function_type = component_dependency
+            .get_function_type(&None, key)
+            .map_err(|err| FunctionCallError::InvalidFunctionCall {
                 function_name: function_name.to_string(),
                 expr: original_expr.clone(),
-                message: "unknown function".to_string(),
-            })
+                message: err.to_string(),
+            })?;
+
+        let mut parameter_types: Vec<AnalysedType> = function_type
+            .parameter_types
+            .iter()
+            .map(|t| AnalysedType::try_from(t).unwrap())
+            .collect::<Vec<_>>();
+
+        match key {
+            FunctionName::Variant(_) => {
+                let result_type = function_type.as_type_variant().ok_or(
+                    FunctionCallError::InvalidFunctionCall {
+                        function_name: function_name.to_string(),
+                        expr: original_expr.clone(),
+                        message: "expected a variant type".to_string(),
+                    },
+                )?;
+
+                if parameter_types.len() == args.len() {
+                    tag_argument_types(original_expr, function_name, args, &parameter_types)?;
+
+                    if let Some(function_result_type) = function_result_inferred_type {
+                        *function_result_type = InferredType::from_type_variant(&result_type);
+                    }
+
+                    Ok(())
+                } else {
+                    Err(FunctionCallError::ArgumentSizeMisMatch {
+                        function_name: function_name.name(),
+                        expr: original_expr.clone(),
+                        expected: parameter_types.len(),
+                        provided: args.len(),
+                    })
+                }
+            }
+
+            FunctionName::Enum(_) => Ok(()),
+
+            FunctionName::ResourceConstructor(_) | FunctionName::Function(_) => {
+                if parameter_types.len() == args.len() {
+                    let result_type = function_type.return_type.clone();
+
+                    tag_argument_types(original_expr, function_name, args, &parameter_types)?;
+
+                    if let Some(function_result_type) = function_result_inferred_type {
+                        *function_result_type = {
+                            if let Some(tpe) = result_type {
+                                tpe
+                            } else {
+                                InferredType::sequence(vec![])
+                            }
+                        };
+                    }
+
+                    Ok(())
+                } else {
+                    Err(FunctionCallError::ArgumentSizeMisMatch {
+                        function_name: function_name.name(),
+                        expr: original_expr.clone(),
+                        expected: parameter_types.len(),
+                        provided: args.len(),
+                    })
+                }
+            }
+
+            FunctionName::ResourceMethod(_) => {
+                if let Some(AnalysedType::Handle(_)) = parameter_types.first() {
+                    parameter_types.remove(0);
+                }
+
+                let return_type = function_type.return_type.clone();
+
+                if parameter_types.len() == args.len() {
+                    tag_argument_types(original_expr, function_name, args, &parameter_types)?;
+
+                    if let Some(function_result_type) = function_result_inferred_type {
+                        *function_result_type = {
+                            if let Some(tpe) = return_type {
+                                tpe
+                            } else {
+                                InferredType::sequence(vec![])
+                            }
+                        }
+                    };
+
+                    Ok(())
+                } else {
+                    Err(FunctionCallError::ArgumentSizeMisMatch {
+                        function_name: function_name.name(),
+                        expr: original_expr.clone(),
+                        expected: parameter_types.len(),
+                        provided: args.len(),
+                    })
+                }
+            }
         }
     }
 
@@ -438,18 +428,20 @@ mod internal {
 
 #[cfg(test)]
 mod function_parameters_inference_tests {
-    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::rib_source_span::SourceSpan;
-    use crate::type_registry::FunctionTypeRegistry;
-    use crate::{Expr, InferredType, ParsedFunctionSite};
+    use crate::{
+        ComponentDependencies, ComponentDependencyKey, Expr, InferredType, ParsedFunctionSite,
+    };
+    use bigdecimal::BigDecimal;
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
+    use uuid::Uuid;
 
-    fn get_function_type_registry() -> FunctionTypeRegistry {
+    fn get_component_dependencies() -> ComponentDependencies {
         let metadata = vec![
             AnalysedExport::Function(AnalysedFunction {
                 name: "foo".to_string(),
@@ -468,7 +460,16 @@ mod function_parameters_inference_tests {
                 result: None,
             }),
         ];
-        FunctionTypeRegistry::from_export_metadata(&metadata)
+
+        let component_info = ComponentDependencyKey {
+            component_name: "foo".to_string(),
+            component_id: Uuid::new_v4(),
+            root_package_name: None,
+            root_package_version: None,
+        };
+
+        ComponentDependencies::from_raw(vec![(component_info, metadata.as_ref())])
+            .expect("Failed to create component dependencies")
     }
 
     #[test]
@@ -478,7 +479,7 @@ mod function_parameters_inference_tests {
           foo(x)
         "#;
 
-        let function_type_registry = get_function_type_registry();
+        let function_type_registry = get_component_dependencies();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_function_call_types(&function_type_registry)
@@ -496,6 +497,7 @@ mod function_parameters_inference_tests {
             None,
             None,
             vec![Expr::identifier_global("x", None).with_inferred_type(InferredType::u64())],
+            None,
         )
         .with_inferred_type(InferredType::sequence(vec![]));
 

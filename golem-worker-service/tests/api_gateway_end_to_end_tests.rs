@@ -123,121 +123,8 @@ fn test_namespace() -> Namespace {
 }
 
 #[test]
-async fn test_legacy_api_def_1() {
-    let api_request =
-        get_gateway_request("/foo/1", None, &HeaderMap::new(), serde_json::Value::Null);
-
-    // In legacy API definitions, we have worker name outside API definitions
-    let worker_name = r#"
-      let id: u64 = request.path.user-id;
-      "shopping-cart-${id}"
-    "#;
-
-    let response_mapping = r#"
-      let response = golem:it/api.{get-cart-contents}("a", "b");
-      response
-    "#;
-
-    let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
-            .await;
-
-    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
-
-    let response = execute(
-        api_request,
-        &api_specification,
-        &session_store,
-        &TestIdentityProvider::default(),
-    )
-    .await;
-
-    let test_response = internal::get_details_from_response(response).await;
-
-    let result = (test_response.function_name, test_response.function_params);
-
-    let expected = (
-        "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
-        ]),
-    );
-
-    assert_eq!(result, expected);
-}
-
-// This ensures that request body can be looked up multiple times
-// from the same http request in multiple rib script that exists in API definition
-// In this case, one for worker name and the other for response mapping.
-// This hardly occurs in practice when it comes to first class worker support,
-// where worker name is part of response mapping
-#[test]
-async fn test_legacy_api_def_2() {
-    let body = serde_json::json!({
-        "foo_key": "foo_value",
-        "bar_key": "bar_value"
-    });
-
-    let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), body);
-
-    // In legacy API definitions, we have worker name outside API definitions
-    let worker_name = r#"
-      let id: u64 = request.path.user-id;
-      let foo_key: string = request.body.foo_key;
-      let bar_key: string = request.body.bar_key;
-      "shopping-cart-${id}-${foo_key}-${bar_key}"
-    "#;
-
-    let response_mapping = r#"
-      let foo_key: string = request.body.foo_key;
-      let bar_key: string = request.body.bar_key;
-      let response = golem:it/api.{get-cart-contents}(foo_key, bar_key);
-      response
-    "#;
-
-    let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
-            .await;
-
-    let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
-
-    let response = execute(
-        api_request,
-        &api_specification,
-        &session_store,
-        &TestIdentityProvider::default(),
-    )
-    .await;
-
-    let test_response = internal::get_details_from_response(response).await;
-
-    let result = (
-        test_response.worker_name,
-        test_response.function_name,
-        test_response.function_params,
-    );
-
-    let expected = (
-        "shopping-cart-1-foo_value-bar_value".to_string(),
-        "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("foo_value".to_string()),
-            Value::String("bar_value".to_string()),
-        ]),
-    );
-
-    assert_eq!(result, expected);
-}
-
-#[test]
 async fn test_api_def_with_resource_1() {
-    let api_request = get_gateway_request(
-        "/foo/mystore",
-        None,
-        &HeaderMap::new(),
-        serde_json::Value::Null,
-    );
+    let api_request = get_gateway_request("/foo/mystore", None, &HeaderMap::new(), Value::Null);
 
     // These functions get-user-name and get-currency produce the same result
     let response_mapping = r#"
@@ -258,7 +145,7 @@ async fn test_api_def_with_resource_1() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{store}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{store}", response_mapping).await;
 
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
@@ -293,7 +180,7 @@ async fn test_api_def_with_single_query_param() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo?{userid}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo?{userid}", response_mapping).await;
 
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
@@ -339,7 +226,7 @@ async fn test_api_def_with_multiple_query_params() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo?{userid}&{country}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo?{userid}&{country}", response_mapping).await;
 
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
@@ -381,7 +268,7 @@ async fn test_api_def_with_query_and_path_params() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}?{country}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}?{country}", response_mapping).await;
 
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
@@ -419,7 +306,7 @@ async fn test_api_def_with_invalid_path_lookup() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/bar", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/bar", response_mapping).await;
 
     let result = CompiledHttpApiDefinition::from_http_api_definition(
         &api_specification,
@@ -449,7 +336,7 @@ async fn test_api_def_with_invalid_query_and_path_lookup() {
     "#;
 
     let api_specification1: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/bar", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/bar", response_mapping).await;
 
     let result1 = CompiledHttpApiDefinition::from_http_api_definition(
         &api_specification1,
@@ -470,8 +357,7 @@ async fn test_api_def_with_invalid_query_and_path_lookup() {
     assert_eq!(&result1, &expected);
 
     let api_specification2 =
-        get_api_def_with_worker_binding("/foo/{user  -  id}?{cou ntry}", None, response_mapping)
-            .await;
+        get_api_def_with_worker_binding("/foo/{user  -  id}?{cou ntry}", response_mapping).await;
 
     let result2 = CompiledHttpApiDefinition::from_http_api_definition(
         &api_specification2,
@@ -495,12 +381,9 @@ async fn test_api_def_with_path_parameters_in_space() {
     "#;
 
     // user-id and country is having space before and after
-    let api_specification: HttpApiDefinition = get_api_def_with_worker_binding(
-        "/foo/{ user-id   }?{    country }",
-        None,
-        response_mapping,
-    )
-    .await;
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{ user-id   }?{    country }", response_mapping)
+            .await;
 
     let api_request =
         get_gateway_request("/foo/jon?country=usa", None, &HeaderMap::new(), Value::Null);
@@ -541,7 +424,7 @@ async fn test_api_def_with_invalid_query_lookup() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{userid}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{userid}", response_mapping).await;
 
     let result = CompiledHttpApiDefinition::from_http_api_definition(
         &api_specification,
@@ -573,7 +456,7 @@ async fn test_api_def_with_request_path_0() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{foo}/{bar}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{foo}/{bar}", response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -619,7 +502,7 @@ async fn test_api_def_with_request_path_only_1() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", response_mapping).await;
 
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
@@ -667,12 +550,9 @@ async fn test_api_def_with_request_path_only_2() {
       response
     "#;
 
-    let api_specification: HttpApiDefinition = get_api_def_with_worker_binding(
-        "/foo/{user-id}/{cart-id}?{account-id}",
-        None,
-        response_mapping,
-    )
-    .await;
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo/{user-id}/{cart-id}?{account-id}", response_mapping)
+            .await;
 
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
@@ -704,19 +584,16 @@ async fn test_api_def_with_request_path_only_2() {
 #[test]
 async fn test_legacy_api_def_with_invalid_input_1() {
     // RibInput (request.path.user-id) to form worker name is expected to be a u64
-    let worker_name = r#"
-      let id: u64 = request.path.user-id;
-      "shopping-cart-${id}"
-    "#;
-
     let response_mapping = r#"
-      let response = golem:it/api.{get-cart-contents}("a", "b");
+      let id: u64 = request.path.user-id;
+      let worker-name = "shopping-cart-${id}";
+      let worker = instance(worker-name);
+      let response = worker.get-cart-contents("a", "b");
       response
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
-            .await;
+        get_api_def_with_worker_binding("/foo/{user-id}", response_mapping).await;
 
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
@@ -747,7 +624,7 @@ async fn test_api_def_with_invalid_input_1() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", response_mapping).await;
 
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
@@ -793,7 +670,7 @@ async fn test_api_def_with_request_body_0() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -857,7 +734,7 @@ async fn test_api_def_with_request_body_1() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -900,23 +777,20 @@ async fn test_api_def_with_request_body_2() {
         Value::String("address".to_string()),
     );
 
-    let worker_name = r#"
+    let response_mapping = r#"
         let userid: u64 = request.path.user-id;
         let max: u64 = 100;
         let zero: u64 = 0;
         let one: u64 = 1;
         let res = if userid > max then zero else one;
-        "shopping-cart-${res}"
-    "#;
-
-    let response_mapping = r#"
-        let response = golem:it/api.{get-cart-contents}(request.body, request.body);
+        let worker-name = "shopping-cart-${res}";
+        let worker = instance(worker-name);
+        let response = worker.get-cart-contents(request.body, request.body);
         response
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", Some(worker_name), response_mapping)
-            .await;
+        get_api_def_with_worker_binding("/foo/{user-id}", response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -982,7 +856,7 @@ async fn test_api_def_with_invalid_request_body() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -1558,20 +1432,17 @@ async fn test_api_def_with_default_cors_preflight_2() {
 
     let api_request = get_gateway_request("/foo/1", None, &empty_headers, serde_json::Value::Null);
 
-    let worker_name = r#"
-      let id: u64 = request.path.user-id;
-      "shopping-cart-${id}"
-    "#;
-
     let response_mapping = r#"
-      let response = golem:it/api.{get-cart-contents}("a", "b");
+       let id: u64 = request.path.user-id;
+       let worker-name = "shopping-cart-${id}";
+      let worker = instance(worker-name);
+      let response = worker.get-cart-contents("a", "b");
       response
     "#;
 
     let api_specification: HttpApiDefinition =
         get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
             "/foo/{user-id}",
-            worker_name,
             response_mapping,
         )
         .await;
@@ -1799,7 +1670,7 @@ async fn test_api_def_with_path_and_query_1() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}?{token-id}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}?{token-id}", response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -1848,7 +1719,7 @@ async fn test_api_def_with_path_and_query_2() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}?{token-id}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}?{token-id}", response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -1904,7 +1775,7 @@ async fn test_api_def_with_path_and_query_3() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -1971,7 +1842,7 @@ async fn test_api_def_with_path_and_request_body_1() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -2036,7 +1907,7 @@ async fn test_api_def_with_path_and_request_body_2() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{user-id}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{user-id}", response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -2098,7 +1969,7 @@ async fn test_api_def_with_path_and_query_and_header_and_body() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_def_with_worker_binding("/foo/{foo}?{bar}", None, response_mapping).await;
+        get_api_def_with_worker_binding("/foo/{foo}?{bar}", response_mapping).await;
 
     let session_store = internal::get_session_store();
 
@@ -2143,7 +2014,7 @@ async fn test_api_def_with_idempotency_key() {
             "#;
 
         let api_specification: HttpApiDefinition =
-            get_api_def_with_worker_binding("/getcartcontent/{cart-id}", None, expression).await;
+            get_api_def_with_worker_binding("/getcartcontent/{cart-id}", expression).await;
 
         let session_store = internal::get_session_store();
 
@@ -2242,37 +2113,10 @@ fn get_preflight_gateway_request(
 
 async fn get_api_def_with_worker_binding(
     path_pattern: &str,
-    global_worker_name: Option<&str>,
     rib_expression: &str,
 ) -> HttpApiDefinition {
-    // Global worker name exists only for backward compatibility
-    // With first class worker support, we always have `none` as global worker name
-    // With first class worker support (where worker name is none), it depends on the Rib script, whether an invoke is with a ephemeral worker or not
-    let yaml_string = match global_worker_name {
-        Some(worker_name) => {
-            format!(
-                r#"
-          id: users-api
-          version: 0.0.1
-          createdAt: 2024-08-21T07:42:15.696Z
-          routes:
-          - method: Get
-            path: {}
-            binding:
-              type: wit-worker
-              component:
-                name: test-component
-                version: 0
-              workerName: '{}'
-              response: '${{{}}}'
-
-        "#,
-                path_pattern, worker_name, rib_expression
-            )
-        }
-        None => {
-            format!(
-                r#"
+    let yaml_string = format!(
+        r#"
           id: users-api
           version: 0.0.1
           createdAt: 2024-08-21T07:42:15.696Z
@@ -2287,10 +2131,8 @@ async fn get_api_def_with_worker_binding(
               response: '${{{}}}'
 
         "#,
-                path_pattern, rib_expression
-            )
-        }
-    };
+        path_pattern, rib_expression
+    );
 
     // Serde is available only for user facing HttpApiDefinition
     let http_api_definition_request: api::dto::HttpApiDefinitionRequest =
@@ -2546,7 +2388,6 @@ async fn get_api_def_with_preflight_and_get_endpoint(
 
 async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
     path_pattern: &str,
-    worker_name: &str,
     rib_expression: &str,
 ) -> HttpApiDefinition {
     let yaml_string = format!(
@@ -2566,11 +2407,10 @@ async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
               component:
                 name: test-component
                 version: 0
-              workerName: '{}'
               response: '${{{}}}'
 
         "#,
-        path_pattern, path_pattern, worker_name, rib_expression
+        path_pattern, path_pattern, rib_expression
     );
 
     // Serde is available only for user facing HttpApiDefinition
@@ -2603,13 +2443,13 @@ mod internal {
     use golem_wasm_ast::analysis::analysed_type::{field, handle, record, result, str, tuple, u32};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-        AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
+        AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
     };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
     use golem_wasm_rpc::ValueAndType;
     use golem_worker_service::gateway_api_definition::http::{
-        CompiledHttpApiDefinition, ComponentMetadataDictionary,
+        CompiledHttpApiDefinition, ComponentDetails, ComponentMetadataDictionary,
     };
     use golem_worker_service::gateway_api_deployment::ApiSiteString;
     use golem_worker_service::gateway_execution::api_definition_lookup::{
@@ -2639,10 +2479,11 @@ mod internal {
         ACCESS_CONTROL_MAX_AGE,
     };
     use poem::Response;
-    use rib::RibResult;
+    use rib::{ComponentDependencyKey, RibResult};
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+    use uuid::Uuid;
 
     pub struct TestApiDefinitionLookup {
         pub api_definition: CompiledHttpApiDefinition,
@@ -2680,6 +2521,27 @@ mod internal {
         ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
             let function_name = resolved_worker_request.function_name.clone();
 
+            if function_name == "bigw:shopping/api.{store.new}" {
+                let uri = format!(
+                    "urn:worker:71a31a33-28a5-4978-8a58-83424a149c8b/{}",
+                    resolved_worker_request.worker_name.unwrap_or_default()
+                );
+                let handle = golem_wasm_rpc::Value::Handle {
+                    uri,
+                    resource_id: 0,
+                };
+
+                let handle_type = AnalysedType::Handle(TypeHandle {
+                    resource_id: AnalysedResourceId(0),
+                    mode: AnalysedResourceMode::Owned,
+                });
+
+                let value_and_type = ValueAndType::new(handle, handle_type);
+
+                let type_annotated_value = TypeAnnotatedValue::try_from(value_and_type).unwrap();
+                return Ok(WorkerResponse::new(Some(type_annotated_value)));
+            }
+
             if function_name.clone() == "bigw:shopping/api.{get-user-name}" {
                 let x = ValueAndType::new(
                     golem_wasm_rpc::Value::String("test-user".to_string()),
@@ -2688,7 +2550,9 @@ mod internal {
 
                 let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
                 return Ok(WorkerResponse::new(Some(type_annotated_value)));
-            } else if function_name == "bigw:shopping/api.{store(\"test-user\").get-currency}" {
+            }
+
+            if function_name == "bigw:shopping/api.{store.get-currency}" {
                 let x = ValueAndType::new(
                     golem_wasm_rpc::Value::Result(Ok(Some(Box::new(
                         golem_wasm_rpc::Value::String("USD".to_string()),
@@ -2699,7 +2563,9 @@ mod internal {
                 let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
 
                 return Ok(WorkerResponse::new(Some(type_annotated_value)));
-            } else if function_name == "bigw:shopping/api.{store(\"test-user\").add-user}" {
+            }
+
+            if function_name == "bigw:shopping/api.{store.add-user}" {
                 let x = ValueAndType::new(
                     golem_wasm_rpc::Value::String("test-user-generated".to_string()),
                     str(),
@@ -2873,7 +2739,17 @@ mod internal {
         exports.extend(get_bigw_shopping_metadata_with_resource());
         exports.extend(get_golem_shopping_cart_metadata());
 
-        metadata_dict.insert(versioned_component_id, exports);
+        let component_details = ComponentDetails {
+            component_info: ComponentDependencyKey {
+                component_name: "test-component".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            },
+            metadata: exports,
+        };
+
+        metadata_dict.insert(versioned_component_id, component_details);
 
         ComponentMetadataDictionary {
             metadata: metadata_dict,
