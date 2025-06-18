@@ -17,8 +17,8 @@ use crate::gateway_api_definition::http::{HttpApiDefinitionRequest, RouteRequest
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
 use crate::gateway_api_definition_transformer::transform_http_api_definition;
 use crate::gateway_binding::{
-    GatewayBinding, GatewayBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
-    ResponseMappingCompiled, StaticBinding, WorkerNameCompiled,
+    FileServerBindingCompiled, GatewayBinding, GatewayBindingCompiled, IdempotencyKeyCompiled,
+    InvocationContextCompiled, ResponseMappingCompiled, StaticBinding, WorkerNameCompiled,
 };
 use crate::gateway_binding::{HttpHandlerBindingCompiled, WorkerBindingCompiled};
 use crate::gateway_middleware::{
@@ -36,7 +36,7 @@ use golem_common::model::component::VersionedComponentId;
 use golem_service_base::model::Component;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType};
 use poem_openapi::Enum;
-use rib::{RibCompilationError, RibInputTypeInfo};
+use rib::{ComponentDependency, ComponentDependencyKey, RibCompilationError, RibInputTypeInfo};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -746,17 +746,33 @@ pub enum RouteCompilationErrors {
 
 #[derive(Clone, Debug)]
 pub struct ComponentMetadataDictionary {
-    pub metadata: HashMap<VersionedComponentId, Vec<AnalysedExport>>,
+    pub metadata: HashMap<VersionedComponentId, ComponentDetails>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ComponentDetails {
+    pub component_info: ComponentDependencyKey,
+    pub metadata: Vec<AnalysedExport>,
 }
 
 impl ComponentMetadataDictionary {
     pub fn from_components(components: &Vec<Component>) -> ComponentMetadataDictionary {
         let mut metadata = HashMap::new();
+
         for component in components {
-            metadata.insert(
-                component.versioned_component_id.clone(),
-                component.metadata.exports.clone(),
-            );
+            let component_info = ComponentDependencyKey {
+                component_name: component.component_name.0.clone(),
+                component_id: component.versioned_component_id.component_id.0,
+                root_package_name: component.metadata.root_package_name.clone(),
+                root_package_version: component.metadata.root_package_version.clone(),
+            };
+
+            let component_details = ComponentDetails {
+                component_info,
+                metadata: component.metadata.exports.clone(),
+            };
+
+            metadata.insert(component.versioned_component_id.clone(), component_details);
         }
 
         ComponentMetadataDictionary { metadata }
@@ -788,21 +804,28 @@ impl CompiledRoute {
 
         match &route.binding {
             GatewayBinding::Default(worker_binding) => {
-                let metadata = metadata_dictionary
+                let component_details = metadata_dictionary
                     .metadata
                     .get(&worker_binding.component_id)
                     .ok_or(RouteCompilationErrors::MetadataNotFoundError(
                         worker_binding.component_id.clone(),
                     ))?;
 
-                let binding =
-                    WorkerBindingCompiled::from_raw_worker_binding(worker_binding, metadata)
-                        .map_err(RouteCompilationErrors::RibError)?;
+                let component_dependency = vec![ComponentDependency::new(
+                    component_details.component_info.clone(),
+                    component_details.metadata.clone(),
+                )];
+
+                let binding = WorkerBindingCompiled::from_raw_worker_binding(
+                    worker_binding,
+                    &component_dependency,
+                )
+                .map_err(RouteCompilationErrors::RibError)?;
 
                 Self::validate_rib_scripts(
                     query_params,
                     &path_params,
-                    binding.worker_name_compiled.as_ref(),
+                    None,
                     binding.invocation_context_compiled.as_ref(),
                     binding.idempotency_key_compiled.as_ref(),
                     Some(&binding.response_compiled),
@@ -811,51 +834,27 @@ impl CompiledRoute {
                 Ok(CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
-                    binding: GatewayBindingCompiled::Worker(binding),
+                    binding: GatewayBindingCompiled::Worker(Box::new(binding)),
                     middlewares: route.middlewares.clone(),
                 })
             }
 
             GatewayBinding::FileServer(worker_binding) => {
-                let metadata = metadata_dictionary
+                let component_details = metadata_dictionary
                     .metadata
                     .get(&worker_binding.component_id)
                     .ok_or(RouteCompilationErrors::MetadataNotFoundError(
                         worker_binding.component_id.clone(),
                     ))?;
 
-                let binding =
-                    WorkerBindingCompiled::from_raw_worker_binding(worker_binding, metadata)
-                        .map_err(RouteCompilationErrors::RibError)?;
+                let component_dependency = vec![ComponentDependency::new(
+                    component_details.component_info.clone(),
+                    component_details.metadata.clone(),
+                )];
 
-                Self::validate_rib_scripts(
-                    query_params,
-                    &path_params,
-                    binding.worker_name_compiled.as_ref(),
-                    binding.invocation_context_compiled.as_ref(),
-                    binding.idempotency_key_compiled.as_ref(),
-                    Some(&binding.response_compiled),
-                )?;
-
-                Ok(CompiledRoute {
-                    method: route.method.clone(),
-                    path: route.path.clone(),
-                    binding: GatewayBindingCompiled::FileServer(binding),
-                    middlewares: route.middlewares.clone(),
-                })
-            }
-
-            GatewayBinding::HttpHandler(http_handler_binding) => {
-                let metadata = metadata_dictionary
-                    .metadata
-                    .get(&http_handler_binding.component_id)
-                    .ok_or(RouteCompilationErrors::MetadataNotFoundError(
-                        http_handler_binding.component_id.clone(),
-                    ))?;
-
-                let binding = HttpHandlerBindingCompiled::from_raw_http_handler_binding(
-                    http_handler_binding,
-                    metadata,
+                let binding = FileServerBindingCompiled::from_raw_file_server_worker_binding(
+                    worker_binding,
+                    &component_dependency,
                 )
                 .map_err(RouteCompilationErrors::RibError)?;
 
@@ -863,6 +862,28 @@ impl CompiledRoute {
                     query_params,
                     &path_params,
                     binding.worker_name_compiled.as_ref(),
+                    binding.invocation_context_compiled.as_ref(),
+                    binding.idempotency_key_compiled.as_ref(),
+                    Some(&binding.response_compiled),
+                )?;
+
+                Ok(CompiledRoute {
+                    method: route.method.clone(),
+                    path: route.path.clone(),
+                    binding: GatewayBindingCompiled::FileServer(Box::new(binding)),
+                    middlewares: route.middlewares.clone(),
+                })
+            }
+
+            GatewayBinding::HttpHandler(http_handler_binding) => {
+                let binding =
+                    HttpHandlerBindingCompiled::from_raw_http_handler_binding(http_handler_binding)
+                        .map_err(RouteCompilationErrors::RibError)?;
+
+                Self::validate_rib_scripts(
+                    query_params,
+                    &path_params,
+                    binding.worker_name_compiled.as_ref(),
                     None,
                     binding.idempotency_key_compiled.as_ref(),
                     None,
@@ -871,7 +892,7 @@ impl CompiledRoute {
                 Ok(CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
-                    binding: GatewayBindingCompiled::HttpHandler(binding),
+                    binding: GatewayBindingCompiled::HttpHandler(Box::new(binding)),
                     middlewares: route.middlewares.clone(),
                 })
             }

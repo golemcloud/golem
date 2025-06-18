@@ -211,6 +211,7 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
             }
             Expr::Length { .. } => {}
             Expr::Throw { .. } => {}
+            Expr::GenerateWorkerName { .. } => {}
             Expr::ListComprehension {
                 yield_expr,
                 inferred_type,
@@ -413,12 +414,10 @@ fn get_inferred_type_of_selected_field(
             expected_type: ExpectedType::Hint(TypeHint::Record(None)),
             actual_type: ActualType::Inferred(select_from_inferred_type.clone()),
             field_path: Path::default(),
-            additional_error_detail: vec![format!(
-                "cannot select {} from {} since it is not a record type. Found: {}",
-                field,
-                select_from,
-                select_from_inferred_type.get_type_hint()
-            )],
+            additional_error_detail: vec![
+                format!("cannot select `{}` from `{}`", field, select_from,),
+                format!("if `{}` is a function, pass arguments", field),
+            ],
         }
     })?;
 
@@ -460,13 +459,14 @@ fn get_inferred_type_of_selection_dynamic(
 #[cfg(test)]
 mod type_pull_up_tests {
     use bigdecimal::BigDecimal;
+
     use test_r::test;
 
     use crate::call_type::CallType;
     use crate::function_name::DynamicParsedFunctionName;
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
-    use crate::{ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, VariableId};
+    use crate::{ArmPattern, ComponentDependencies, Expr, InferredType, MatchArm, VariableId};
 
     #[test]
     pub fn test_pull_up_identifier() {
@@ -757,6 +757,7 @@ mod type_pull_up_tests {
             None,
             None,
             vec![Expr::number(BigDecimal::from(1))],
+            None,
         );
 
         expr.pull_types_up().unwrap();
@@ -772,8 +773,9 @@ mod type_pull_up_tests {
         "#;
 
         let mut expr = Expr::from_text(rib).unwrap();
-        let function_registry = FunctionTypeRegistry::empty();
-        expr.infer_types_initial_phase(&function_registry, &vec![])
+        let component_dependencies = ComponentDependencies::default();
+
+        expr.infer_types_initial_phase(&component_dependencies, &vec![])
             .unwrap();
         expr.infer_all_identifiers();
         expr.pull_types_up().unwrap();
@@ -798,29 +800,32 @@ mod type_pull_up_tests {
                 None,
             ),
             Expr::call(
-                CallType::function_without_worker(DynamicParsedFunctionName {
-                    site: PackagedInterface {
-                        namespace: "golem".to_string(),
-                        package: "it".to_string(),
-                        interface: "api".to_string(),
-                        version: None,
+                CallType::function_call(
+                    DynamicParsedFunctionName {
+                        site: PackagedInterface {
+                            namespace: "golem".to_string(),
+                            package: "it".to_string(),
+                            interface: "api".to_string(),
+                            version: None,
+                        },
+                        function: IndexedResourceMethod {
+                            resource: "cart".to_string(),
+                            resource_params: vec![Expr::select_field(
+                                Expr::identifier_local("input", 0, None).with_inferred_type(
+                                    InferredType::record(vec![
+                                        ("foo".to_string(), InferredType::string()),
+                                        ("bar".to_string(), InferredType::string()),
+                                    ]),
+                                ),
+                                "foo",
+                                None,
+                            )
+                            .with_inferred_type(InferredType::string())],
+                            method: "checkout".to_string(),
+                        },
                     },
-                    function: IndexedResourceMethod {
-                        resource: "cart".to_string(),
-                        resource_params: vec![Expr::select_field(
-                            Expr::identifier_local("input", 0, None).with_inferred_type(
-                                InferredType::record(vec![
-                                    ("foo".to_string(), InferredType::string()),
-                                    ("bar".to_string(), InferredType::string()),
-                                ]),
-                            ),
-                            "foo",
-                            None,
-                        )
-                        .with_inferred_type(InferredType::string())],
-                        method: "checkout".to_string(),
-                    },
-                }),
+                    None,
+                ),
                 None,
                 vec![],
             ),

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue, RibCompilationError};
+use crate::{ComponentDependencies, FunctionName, InferredExpr, RibCompilationError};
 use golem_wasm_ast::analysis::AnalysedType;
 
 // An easier data type that focus just on the side effecting function calls in Rib script.
@@ -30,30 +30,31 @@ pub struct WorkerFunctionsInRib {
 impl WorkerFunctionsInRib {
     pub fn from_inferred_expr(
         inferred_expr: &InferredExpr,
-        original_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
     ) -> Result<Option<WorkerFunctionsInRib>, RibCompilationError> {
         let worker_invoke_registry_keys = inferred_expr.worker_invoke_registry_keys();
-        let type_registry_subset =
-            original_type_registry.get_from_keys(worker_invoke_registry_keys);
+
         let mut function_calls = vec![];
 
-        for (key, value) in type_registry_subset.types {
-            if let RegistryValue::Function {
-                parameter_types,
-                return_type,
-            } = value
-            {
-                let function_call_in_rib = WorkerFunctionType {
-                    function_key: key,
-                    parameter_types,
-                    return_type,
-                };
-                function_calls.push(function_call_in_rib)
-            } else {
-                return Err(RibCompilationError::RibStaticAnalysisError(
-                    "unable to inspect the worker function calls in rib. functional calls should have parameter types and return types".to_string(),
-                ));
-            }
+        for key in worker_invoke_registry_keys {
+            let function_type = component_dependency
+                .get_function_type(&None, &key)
+                .map_err(|e| RibCompilationError::RibStaticAnalysisError(e.to_string()))?;
+
+            let function_call_in_rib = WorkerFunctionType {
+                function_name: key,
+                parameter_types: function_type
+                    .parameter_types
+                    .iter()
+                    .map(|param| AnalysedType::try_from(param).unwrap())
+                    .collect(),
+                return_type: function_type
+                    .return_type
+                    .as_ref()
+                    .map(|return_type| AnalysedType::try_from(return_type).unwrap()),
+            };
+
+            function_calls.push(function_call_in_rib)
         }
 
         if function_calls.is_empty() {
@@ -67,14 +68,14 @@ impl WorkerFunctionsInRib {
 // The type of a function call with worker (ephmeral or durable) in Rib script
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerFunctionType {
-    pub function_key: RegistryKey,
+    pub function_name: FunctionName,
     pub parameter_types: Vec<AnalysedType>,
     pub return_type: Option<AnalysedType>,
 }
 
 #[cfg(feature = "protobuf")]
 mod protobuf {
-    use crate::{RegistryKey, WorkerFunctionType, WorkerFunctionsInRib};
+    use crate::{FunctionName, WorkerFunctionType, WorkerFunctionsInRib};
     use golem_api_grpc::proto::golem::rib::WorkerFunctionType as WorkerFunctionTypeProto;
     use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
     use golem_wasm_ast::analysis::AnalysedType;
@@ -122,11 +123,15 @@ mod protobuf {
                 .map(AnalysedType::try_from)
                 .collect::<Result<_, _>>()?;
 
-            let registry_key_proto = value.function_key.ok_or("Function key missing")?;
-            let function_key = RegistryKey::try_from(registry_key_proto)?;
+            let function_key_type = value.function_name.and_then(|x| x.function_name).ok_or(
+                "WorkerFunctionTypeProto function_key must have a function_name".to_string(),
+            )?;
+
+            let function_name = FunctionName::try_from(function_key_type)
+                .map_err(|e| format!("Failed to convert function key: {}", e))?;
 
             Ok(Self {
-                function_key,
+                function_name,
                 return_type,
                 parameter_types,
             })
@@ -135,10 +140,17 @@ mod protobuf {
 
     impl From<WorkerFunctionType> for WorkerFunctionTypeProto {
         fn from(value: WorkerFunctionType) -> Self {
-            let registry_key = (&value.function_key).into();
+            let function_key =
+                golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::from(
+                    value.function_name,
+                );
+
+            let function_name_type = golem_api_grpc::proto::golem::rib::FunctionNameType {
+                function_name: Some(function_key),
+            };
 
             WorkerFunctionTypeProto {
-                function_key: Some(registry_key),
+                function_name: Some(function_name_type),
                 parameter_types: value
                     .parameter_types
                     .iter()

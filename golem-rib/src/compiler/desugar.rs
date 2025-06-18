@@ -32,33 +32,44 @@ pub fn desugar_range_selection(select_from: &Expr, range_expr: &Expr) -> Result<
             .with_inferred_type(select_from.inferred_type())),
 
             Range::RangeFrom { from, .. } => {
-                let length = VariableId::local("__size__", 0);
-                let length_identifier = Expr::identifier_with_variable_id(length.clone(), None)
-                    .with_inferred_type(InferredType::u64());
-                let index = VariableId::local("__index__", 0);
-                let index_identifier = Expr::identifier_with_variable_id(index.clone(), None)
-                    .with_inferred_type(InferredType::u64());
+                let length_variable = VariableId::local("__size__", 0);
+                let length_identifier =
+                    Expr::identifier_with_variable_id(length_variable.clone(), None)
+                        .with_inferred_type(from.inferred_type());
+
+                let length_minus_one_var = VariableId::local("__index__", 0);
+
+                // from's inferred type is used to keep the range from and to be of the same tpe
+                let length_minus_one_identifier =
+                    Expr::identifier_with_variable_id(length_minus_one_var.clone(), None)
+                        .with_inferred_type(from.inferred_type());
 
                 Ok(Expr::expr_block(vec![
+                    // let length = length(select_from)
                     Expr::let_binding_with_variable_id(
-                        length,
+                        length_variable,
                         Expr::length(select_from.clone()),
                         None,
                     ),
+                    // let index = length - 1
                     Expr::let_binding_with_variable_id(
-                        index,
+                        length_minus_one_var,
                         Expr::minus(
                             length_identifier,
                             Expr::number(BigDecimal::from(1))
-                                .with_inferred_type(InferredType::u64()),
+                                .with_inferred_type(from.inferred_type()),
                         )
-                        .with_inferred_type(InferredType::u64()),
+                        .with_inferred_type(from.inferred_type()),
                         None,
                     )
-                    .with_inferred_type(InferredType::u64()),
+                    .with_inferred_type(from.inferred_type()),
+                    // desugared to
+                    // for __i__  in from..length-1 {
+                    //     yield select_from[__i__];
+                    //}
                     Expr::list_comprehension(
                         iterable_expr.clone(),
-                        Expr::range(from.deref().clone(), index_identifier),
+                        Expr::range(from.deref().clone(), length_minus_one_identifier),
                         Expr::select_index(
                             select_from.clone(),
                             Expr::identifier_with_variable_id(iterable_expr, None),
@@ -622,17 +633,18 @@ mod internal {
 mod desugar_tests {
     use test_r::test;
 
+    use super::*;
     use crate::compiler::desugar::desugar_tests::expectations::expected_condition_with_identifiers;
-    use crate::type_registry::FunctionTypeRegistry;
-    use crate::Expr;
+    use crate::{
+        ComponentDependency, ComponentDependencyKey, Expr, RibCompiler, RibCompilerConfig,
+    };
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
     use std::ops::Deref;
+    use uuid::Uuid;
 
-    use super::*;
-
-    fn get_function_type_registry() -> FunctionTypeRegistry {
+    fn get_test_compiler() -> RibCompiler {
         let metadata = vec![
             AnalysedExport::Function(AnalysedFunction {
                 name: "foo".to_string(),
@@ -651,7 +663,18 @@ mod desugar_tests {
                 result: None,
             }),
         ];
-        FunctionTypeRegistry::from_export_metadata(&metadata)
+
+        let component_dependency_key = ComponentDependencyKey {
+            component_name: "foo".to_string(),
+            component_id: Uuid::new_v4(),
+            root_package_name: None,
+            root_package_version: None,
+        };
+
+        RibCompiler::new(RibCompilerConfig::new(
+            vec![ComponentDependency::new(component_dependency_key, metadata)],
+            vec![],
+        ))
     }
 
     #[test]
@@ -664,19 +687,21 @@ mod desugar_tests {
           }
         "#;
 
-        let function_type_registry = get_function_type_registry();
+        let test_compiler = get_test_compiler();
+        let expr = Expr::from_text(rib_expr).unwrap();
+        let inferred_expr = test_compiler.infer_types(expr).unwrap();
 
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry, &vec![]).unwrap();
-
-        let desugared_expr = match internal::last_expr(&expr) {
+        let desugared_expr = match internal::last_expr(inferred_expr.get_expr()) {
             Expr::PatternMatch {
                 predicate,
                 match_arms,
                 ..
-            } => {
-                desugar_pattern_match(predicate.deref(), &match_arms, expr.inferred_type()).unwrap()
-            }
+            } => desugar_pattern_match(
+                predicate.deref(),
+                &match_arms,
+                inferred_expr.get_expr().inferred_type(),
+            )
+            .unwrap(),
             _ => panic!("Expected a match expression"),
         };
 

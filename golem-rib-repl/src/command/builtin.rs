@@ -6,7 +6,7 @@ use crossterm::{
     terminal::{Clear as TermClear, ClearType},
 };
 use golem_wasm_ast::analysis::AnalysedType;
-use rib::{CompilerOutput, Expr, FunctionDictionary, RibCompilationError};
+use rib::{CompilerOutput, ComponentDependencies, Expr, RibCompilationError};
 use std::io::stdout;
 
 #[derive(Parser, Debug)]
@@ -64,19 +64,19 @@ impl Command for TypeInfo {
         Ok(result)
     }
 
-    fn print_output(&self, output: &Self::Output, repl_context: &ReplContext) {
+    fn print_output(&self, output: Self::Output, repl_context: &ReplContext) {
         let printer = repl_context.get_printer();
-        printer.print_wasm_value_type(output);
+        printer.print_wasm_value_type(&output);
     }
 
-    fn print_input_parse_error(&self, error: &Self::InputParseError, repl_context: &ReplContext) {
+    fn print_input_parse_error(&self, error: Self::InputParseError, repl_context: &ReplContext) {
         let printer = repl_context.get_printer();
-        printer.print_clap_parse_error(error);
+        printer.print_clap_parse_error(&error);
     }
 
-    fn print_execution_error(&self, error: &Self::ExecutionError, repl_context: &ReplContext) {
+    fn print_execution_error(&self, error: Self::ExecutionError, repl_context: &ReplContext) {
         let printer = repl_context.get_printer();
-        printer.print_rib_compilation_error(error);
+        printer.print_rib_compilation_error(&error);
     }
 }
 
@@ -96,7 +96,7 @@ impl Command for Clear {
         Ok(())
     }
 
-    fn execute(
+    fn execute<'a>(
         &self,
         _input: Self::Input,
         repl_context: &mut ReplContext,
@@ -107,22 +107,21 @@ impl Command for Clear {
         Ok(())
     }
 
-    fn print_output(&self, _output: &Self::Output, repl_context: &ReplContext) {
+    fn print_output(&self, _output: Self::Output, repl_context: &ReplContext) {
         let printer = repl_context.get_printer();
         printer.print_custom_message("Rib REPL has been cleared");
     }
 
-    fn print_input_parse_error(&self, _error: &Self::InputParseError, _repl_context: &ReplContext) {
-    }
+    fn print_input_parse_error(&self, _error: Self::InputParseError, _repl_context: &ReplContext) {}
 
-    fn print_execution_error(&self, _error: &Self::ExecutionError, _repl_context: &ReplContext) {}
+    fn print_execution_error(&self, _error: Self::ExecutionError, _repl_context: &ReplContext) {}
 }
 
 pub struct Exports;
 
 impl Command for Exports {
     type Input = ();
-    type Output = FunctionDictionary;
+    type Output = ComponentDependencies;
     type InputParseError = ();
     type ExecutionError = RibCompilationError;
 
@@ -139,22 +138,19 @@ impl Command for Exports {
         _input: Self::Input,
         repl_context: &mut ReplContext,
     ) -> Result<Self::Output, Self::ExecutionError> {
-        let compiler = repl_context.get_rib_compiler();
-        let exports = compiler.get_exports()?;
-        Ok(exports)
+        Ok(repl_context.get_rib_compiler().get_component_dependencies())
     }
 
-    fn print_output(&self, output: &Self::Output, repl_context: &ReplContext) {
+    fn print_output(&self, output: Self::Output, repl_context: &ReplContext) {
         let printer = repl_context.get_printer();
-        printer.print_exports(output);
+        printer.print_components_and_exports(&output);
     }
 
-    fn print_input_parse_error(&self, _error: &Self::InputParseError, _repl_context: &ReplContext) {
-    }
+    fn print_input_parse_error(&self, _error: Self::InputParseError, _repl_context: &ReplContext) {}
 
-    fn print_execution_error(&self, error: &Self::ExecutionError, repl_context: &ReplContext) {
+    fn print_execution_error(&self, error: Self::ExecutionError, repl_context: &ReplContext) {
         repl_context
             .get_printer()
-            .print_rib_compilation_error(error)
+            .print_rib_compilation_error(&error)
     }
 }

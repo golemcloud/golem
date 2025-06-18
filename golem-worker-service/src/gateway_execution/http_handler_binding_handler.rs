@@ -71,7 +71,8 @@ impl HttpHandlerBindingHandler for DefaultHttpHandlerBindingHandler {
     ) -> HttpHandlerBindingResult {
         let component_id = worker_detail.component_id.clone();
 
-        let typ: golem_wasm_ast::analysis::protobuf::Type = (&golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest::analysed_type()).into();
+        let typ: golem_wasm_ast::analysis::protobuf::Type =
+            (&IncomingHttpRequest::analysed_type()).into();
 
         let type_annotated_param =
             TypeAnnotatedValue::create(&incoming_http_request.to_value(), typ).map_err(|e| {

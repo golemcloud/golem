@@ -61,7 +61,8 @@ use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
-use rib::{FunctionTypeRegistry, RegistryValue};
+use golem_wasm_ast::analysis::AnalysedType;
+use rib::FunctionDictionary;
 use sqlx::types::Json;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -656,28 +657,29 @@ impl ComponentServiceDefault {
 
     pub fn find_component_metadata_conflicts(
         function_constraints: &FunctionConstraints,
-        new_type_registry: &FunctionTypeRegistry,
+        new_type_registry: &FunctionDictionary,
     ) -> ConflictReport {
         let mut missing_functions = vec![];
         let mut conflicting_functions = vec![];
 
         for existing_function_call in &function_constraints.constraints {
             if let Some(new_registry_value) =
-                new_type_registry.lookup(existing_function_call.function_key())
+                new_type_registry.get(existing_function_call.function_key())
             {
                 let mut parameter_conflict = false;
                 let mut return_conflict = false;
 
-                if existing_function_call.parameter_types() != &new_registry_value.argument_types()
+                if existing_function_call.parameter_types() != &new_registry_value.parameter_types()
                 {
                     parameter_conflict = true;
                 }
 
-                let new_return_type = match new_registry_value.clone() {
-                    RegistryValue::Function { return_type, .. } => return_type,
-                    _ => None,
-                };
+                let new_return_type = new_registry_value
+                    .return_type
+                    .as_ref()
+                    .map(|x| AnalysedType::try_from(x).unwrap());
 
+                // AnalysedType conversion from function `FunctionType` should never fail
                 if existing_function_call.return_type() != &new_return_type {
                     return_conflict = true;
                 }
@@ -685,7 +687,7 @@ impl ComponentServiceDefault {
                 let parameter_conflict = if parameter_conflict {
                     Some(ParameterTypeConflict {
                         existing: existing_function_call.parameter_types().clone(),
-                        new: new_registry_value.clone().argument_types().clone(),
+                        new: new_registry_value.clone().parameter_types().clone(),
                     })
                 } else {
                     None
@@ -937,7 +939,8 @@ impl ComponentServiceDefault {
             .get_constraint(&owner.to_string(), component_id.0)
             .await?;
 
-        let new_type_registry = FunctionTypeRegistry::from_export_metadata(&metadata.exports);
+        let new_type_registry = FunctionDictionary::from_exports(&metadata.exports)
+            .map_err(|e| ComponentError::conversion_error("exports", e))?;
 
         if let Some(constraints) = constraints {
             let conflicts =

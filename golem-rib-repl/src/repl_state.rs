@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::dependency_manager::RibComponentMetadata;
+use crate::worker_name_gen::ReplWorkerNameGen;
 use crate::{RawRibScript, WorkerFunctionInvoke};
 use golem_wasm_rpc::ValueAndType;
 use rib::{InstructionId, RibCompiler};
@@ -21,15 +21,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 pub struct ReplState {
-    // https://github.com/golemcloud/golem/issues/1608 will avoid having to keep
-    // dependency separately in the ReplState
-    dependency: RibComponentMetadata,
     rib_script: RwLock<RawRibScript>,
     worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
     invocation_results: InvocationResultCache,
     last_executed_instruction: RwLock<Option<InstructionId>>,
     rib_compiler: RwLock<RibCompiler>,
     history_file_path: PathBuf,
+    worker_name_gen: RwLock<ReplWorkerNameGen>,
 }
 
 impl ReplState {
@@ -59,6 +57,17 @@ impl ReplState {
 
     pub fn history_file_path(&self) -> &PathBuf {
         &self.history_file_path
+    }
+
+    // This reset is to ensure the rib compiler the REPL can reuse the previous
+    // compilations (within the same session) worker names generated. i.e, before every compilation we reset the instance count,
+    // and there by, for the new script, the instance creation will end up reusing already generated worker names.
+    pub fn reset_instance_count(&self) {
+        self.worker_name_gen.write().unwrap().reset_instance_count();
+    }
+
+    pub fn generate_worker_name(&self) -> String {
+        self.worker_name_gen.write().unwrap().generate_worker_name()
     }
 
     pub fn update_last_executed_instruction(&self, instruction_id: InstructionId) {
@@ -91,18 +100,12 @@ impl ReplState {
         self.rib_script.write().unwrap().pop();
     }
 
-    pub fn dependency(&self) -> &RibComponentMetadata {
-        &self.dependency
-    }
-
     pub fn new(
-        dependency: RibComponentMetadata,
         worker_function_invoke: Arc<dyn WorkerFunctionInvoke + Sync + Send>,
         rib_compiler: RibCompiler,
         history_file: PathBuf,
     ) -> Self {
         Self {
-            dependency,
             rib_script: RwLock::new(RawRibScript::default()),
             worker_function_invoke,
             invocation_results: InvocationResultCache {
@@ -111,6 +114,7 @@ impl ReplState {
             last_executed_instruction: RwLock::new(None),
             rib_compiler: RwLock::new(rib_compiler),
             history_file_path: history_file,
+            worker_name_gen: RwLock::new(ReplWorkerNameGen::new()),
         }
     }
 }
