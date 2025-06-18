@@ -381,7 +381,7 @@ mod internal {
             Expr::SelectIndex { expr, index, .. } => match index.inferred_type().internal_type() {
                 TypeInternal::Range { .. } => {
                     let list_comprehension =
-                        desugar_range_selection(expr, index).map_err(|err| {
+                        desugar_range_selection(&expr, index).map_err(|err| {
                             RibByteCodeGenerationError::RangeSelectionDesugarError(format!(
                                 "Failed to desugar range selection: {}",
                                 err

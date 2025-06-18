@@ -642,15 +642,15 @@ mod internal {
     pub fn unresolved_type_for_result(
         ok_err: &Result<Box<Expr>, Box<Expr>>,
     ) -> Result<(), UnResolvedTypesError> {
-        let ok_expr = ok_err.clone().ok();
+        let ok_expr = ok_err.as_ref().ok();
 
-        let error_expr = ok_err.clone().err();
+        let error_expr = ok_err.as_ref().err();
 
-        if let Some(ok_expr_inner) = ok_expr.clone() {
+        if let Some(ok_expr_inner) = ok_expr {
             check_unresolved_types(&ok_expr_inner)?;
         }
 
-        if let Some(error_expr_inner) = error_expr.clone() {
+        if let Some(error_expr_inner) = error_expr {
             check_unresolved_types(&error_expr_inner)?;
         }
 

@@ -23,7 +23,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeErrorInternal> {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(outer_expr) = visitor.pop_back() {
-        let copied = outer_expr.clone();
+        let source_span = outer_expr.source_span();
 
         match outer_expr {
             Expr::SelectField {
@@ -89,7 +89,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeErrorInternal> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_option(inner_expr, copied, inferred_type)?;
+                internal::handle_option(inner_expr, &source_span, inferred_type)?;
             }
 
             Expr::Result {
@@ -97,7 +97,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeErrorInternal> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_ok(expr, copied, inferred_type)?;
+                internal::handle_ok(expr, &source_span, inferred_type)?;
             }
 
             Expr::Result {
@@ -105,7 +105,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeErrorInternal> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_err(expr, copied, inferred_type)?;
+                internal::handle_err(expr, &source_span, inferred_type)?;
             }
 
             Expr::PatternMatch {
@@ -120,7 +120,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeErrorInternal> {
                 } in match_arms
                 {
                     let predicate_type = predicate.inferred_type();
-                    internal::update_arm_pattern_type(&copied, arm_pattern, &predicate_type)?;
+                    internal::update_arm_pattern_type(&source_span, arm_pattern, &predicate_type)?;
                     arm_resolution_expr.add_infer_type_mut(inferred_type.clone());
                 }
             }
@@ -130,14 +130,14 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeErrorInternal> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_tuple(exprs, copied, inferred_type)?;
+                internal::handle_tuple(exprs, &source_span, inferred_type)?;
             }
             Expr::Sequence {
                 exprs,
                 inferred_type,
                 ..
             } => {
-                internal::handle_sequence(exprs, copied, inferred_type)?;
+                internal::handle_sequence(exprs, &source_span, inferred_type)?;
             }
 
             Expr::Record {
@@ -145,7 +145,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeErrorInternal> {
                 inferred_type,
                 ..
             } => {
-                internal::handle_record(exprs, copied, inferred_type)?;
+                internal::handle_record(exprs, &source_span, inferred_type)?;
             }
 
             Expr::Call {
@@ -248,6 +248,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), RibTypeErrorInternal> {
 
 mod internal {
     use crate::call_type::CallType;
+    use crate::rib_source_span::SourceSpan;
     use crate::rib_type_error::RibTypeErrorInternal;
     use crate::type_inference::type_hint::{GetTypeHint, TypeHint};
     use crate::type_refinement::precise_types::*;
@@ -271,7 +272,7 @@ mod internal {
         let refined_list_type = ListType::refine(comprehension_result_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 comprehension_result_type,
-                yield_expr,
+                &yield_expr.source_span(),
                 &TypeHint::List(None),
             )
             .with_additional_error_detail("the result of a comprehension should be of type list")
@@ -322,7 +323,7 @@ mod internal {
                 Some(refined_iterable) => refined_iterable.inner_type(),
                 None => {
                     let refined_range = RangeType::refine(&iterable_type).ok_or_else(||
-                        get_compilation_error_for_ambiguity(&iterable_type, iterable_expr, &TypeHint::List(None))
+                        get_compilation_error_for_ambiguity(&iterable_type, &iterable_expr.source_span(), &TypeHint::List(None))
                             .with_additional_error_detail(
                                 "the iterable expression in list comprehension should be of type list or a range",
                             ),
@@ -370,7 +371,7 @@ mod internal {
                 Some(refined_iterable) => refined_iterable.inner_type(),
                 None => {
                     let refined_range = RangeType::refine(&iterable_type).ok_or_else(||
-                        get_compilation_error_for_ambiguity(&iterable_type, iterable_expr, &TypeHint::List(None))
+                        get_compilation_error_for_ambiguity(&iterable_type, &iterable_expr.source_span(), &TypeHint::List(None))
                             .with_additional_error_detail(
                                 "the iterable expression in list comprehension should be of type list or a range",
                             ),
@@ -411,13 +412,13 @@ mod internal {
 
     pub(crate) fn handle_option(
         inner_expr: &mut Expr,
-        outer_expr: Expr,
+        source_span: &SourceSpan,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibTypeErrorInternal> {
         let refined_optional_type = OptionalType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
-                &outer_expr,
+                source_span,
                 &TypeHint::Option(None),
             )
         })?;
@@ -430,13 +431,13 @@ mod internal {
 
     pub(crate) fn handle_ok(
         inner_expr: &mut Expr,
-        outer_expr: Expr,
+        source_span: &SourceSpan,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibTypeErrorInternal> {
         let refined_ok_type = OkType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
-                &outer_expr,
+                source_span,
                 &TypeHint::Result {
                     ok: None,
                     err: None,
@@ -453,13 +454,13 @@ mod internal {
 
     pub(crate) fn handle_err(
         inner_expr: &mut Expr,
-        outer_expr: Expr,
+        source_span: &SourceSpan,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibTypeErrorInternal> {
         let refined_err_type = ErrType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
-                &outer_expr,
+                source_span,
                 &TypeHint::Result {
                     ok: None,
                     err: None,
@@ -476,13 +477,13 @@ mod internal {
 
     pub(crate) fn handle_sequence(
         inner_expressions: &mut [Expr],
-        outer_expr: Expr,
+        source_span: &SourceSpan,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibTypeErrorInternal> {
         let refined_list_type = ListType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
-                &outer_expr,
+                source_span,
                 &TypeHint::List(None),
             )
         })?;
@@ -497,13 +498,13 @@ mod internal {
 
     pub(crate) fn handle_tuple(
         inner_expressions: &mut [Expr],
-        outer_expr: Expr,
+        source_span: &SourceSpan,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibTypeErrorInternal> {
         let refined_tuple_type = TupleType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
-                &outer_expr,
+                source_span,
                 &TypeHint::Tuple(None),
             )
         })?;
@@ -518,13 +519,13 @@ mod internal {
 
     pub(crate) fn handle_record(
         inner_expressions: &mut [(String, Box<Expr>)],
-        outer_expr: Expr,
+        source_span: &SourceSpan,
         outer_inferred_type: &InferredType,
     ) -> Result<(), RibTypeErrorInternal> {
         let refined_record_type = RecordType::refine(outer_inferred_type).ok_or_else(|| {
             get_compilation_error_for_ambiguity(
                 outer_inferred_type,
-                &outer_expr,
+                source_span,
                 &TypeHint::Record(None),
             )
         })?;
@@ -557,7 +558,7 @@ mod internal {
     }
 
     pub(crate) fn update_arm_pattern_type(
-        pattern_match_expr: &Expr,
+        source_span: &SourceSpan,
         arm_pattern: &mut ArmPattern,
         predicate_type: &InferredType,
     ) -> Result<(), RibTypeErrorInternal> {
@@ -566,14 +567,14 @@ mod internal {
                 expr.add_infer_type_mut(predicate_type.clone());
             }
             ArmPattern::As(_, pattern) => {
-                update_arm_pattern_type(pattern_match_expr, pattern, predicate_type)?;
+                update_arm_pattern_type(source_span, pattern, predicate_type)?;
             }
 
             ArmPattern::Constructor(constructor_name, patterns) => {
                 if constructor_name == "some" || constructor_name == "none" {
                     let resolved = OptionalType::refine(predicate_type).ok_or_else(|| {
                         InvalidPatternMatchError::constructor_type_mismatch(
-                            pattern_match_expr.source_span(),
+                            source_span.clone(),
                             constructor_name,
                         )
                     })?;
@@ -581,7 +582,7 @@ mod internal {
                     let inner = resolved.inner_type();
 
                     for pattern in patterns {
-                        update_arm_pattern_type(pattern_match_expr, pattern, &inner)?;
+                        update_arm_pattern_type(source_span, pattern, &inner)?;
                     }
                 } else if constructor_name == "ok" {
                     let resolved = OkType::refine(predicate_type);
@@ -591,14 +592,14 @@ mod internal {
                             let inner = resolved.inner_type();
 
                             for pattern in patterns {
-                                update_arm_pattern_type(pattern_match_expr, pattern, &inner)?;
+                                update_arm_pattern_type(source_span, pattern, &inner)?;
                             }
                         }
 
                         None => {
                             ErrType::refine(predicate_type).ok_or_else(|| {
                                 InvalidPatternMatchError::constructor_type_mismatch(
-                                    pattern_match_expr.source_span(),
+                                    source_span.clone(),
                                     "ok",
                                 )
                             })?;
@@ -612,14 +613,14 @@ mod internal {
                             let inner = resolved.inner_type();
 
                             for pattern in patterns {
-                                update_arm_pattern_type(pattern_match_expr, pattern, &inner)?;
+                                update_arm_pattern_type(source_span, pattern, &inner)?;
                             }
                         }
 
                         None => {
                             OkType::refine(predicate_type).ok_or_else(|| {
                                 InvalidPatternMatchError::constructor_type_mismatch(
-                                    pattern_match_expr.source_span(),
+                                    source_span.clone(),
                                     "err",
                                 )
                             })?;
@@ -628,7 +629,7 @@ mod internal {
                 } else if let Some(variant_type) = VariantType::refine(predicate_type) {
                     let variant_arg_type = variant_type.inner_type_by_name(constructor_name);
                     for pattern in patterns {
-                        update_arm_pattern_type(pattern_match_expr, pattern, &variant_arg_type)?;
+                        update_arm_pattern_type(source_span, pattern, &variant_arg_type)?;
                     }
                 }
             }
@@ -636,7 +637,7 @@ mod internal {
             ArmPattern::TupleConstructor(patterns) => {
                 let tuple_type = TupleType::refine(predicate_type).ok_or_else(|| {
                     InvalidPatternMatchError::constructor_type_mismatch(
-                        pattern_match_expr.source_span(),
+                        source_span.clone(),
                         "tuple",
                     )
                 })?;
@@ -645,11 +646,11 @@ mod internal {
 
                 if patterns.len() == inner_types.len() {
                     for (pattern, inner_type) in patterns.iter_mut().zip(inner_types) {
-                        update_arm_pattern_type(pattern_match_expr, pattern, &inner_type)?;
+                        update_arm_pattern_type(source_span, pattern, &inner_type)?;
                     }
                 } else {
                     return Err(InvalidPatternMatchError::arg_size_mismatch(
-                        pattern_match_expr.source_span(),
+                        source_span.clone(),
                         "tuple",
                         inner_types.len(),
                         patterns.len(),
@@ -660,30 +661,27 @@ mod internal {
 
             ArmPattern::ListConstructor(patterns) => {
                 let list_type = ListType::refine(predicate_type).ok_or_else(|| {
-                    InvalidPatternMatchError::constructor_type_mismatch(
-                        pattern_match_expr.source_span(),
-                        "list",
-                    )
+                    InvalidPatternMatchError::constructor_type_mismatch(source_span.clone(), "list")
                 })?;
 
                 let list_elem_type = list_type.inner_type();
 
                 for pattern in &mut *patterns {
-                    update_arm_pattern_type(pattern_match_expr, pattern, &list_elem_type)?;
+                    update_arm_pattern_type(source_span, pattern, &list_elem_type)?;
                 }
             }
 
             ArmPattern::RecordConstructor(fields) => {
                 let record_type = RecordType::refine(predicate_type).ok_or_else(|| {
                     InvalidPatternMatchError::constructor_type_mismatch(
-                        pattern_match_expr.source_span(),
+                        source_span.clone(),
                         "record",
                     )
                 })?;
 
                 for (field, pattern) in fields {
                     let type_of_field = record_type.inner_type_by_name(field);
-                    update_arm_pattern_type(pattern_match_expr, pattern, &type_of_field)?;
+                    update_arm_pattern_type(source_span, pattern, &type_of_field)?;
                 }
             }
 
@@ -698,7 +696,7 @@ mod internal {
     // push_down_kind: The expected kind of the outer expression before pushing down
     pub fn get_compilation_error_for_ambiguity(
         actual_inferred_type: &InferredType,
-        expr: &Expr,
+        source_span: &SourceSpan,
         push_down_kind: &TypeHint,
     ) -> RibTypeErrorInternal {
         // First check if the inferred type is a fully valid WIT type
@@ -707,7 +705,7 @@ mod internal {
         match AnalysedType::try_from(actual_inferred_type) {
             Ok(analysed_type) => {
                 let type_mismatch_error = TypeMismatchError {
-                    source_span: expr.source_span(),
+                    source_span: source_span.clone(),
                     expected_type: ExpectedType::AnalysedType(analysed_type),
                     actual_type: ActualType::Hint(push_down_kind.clone()),
                     field_path: Path::default(),
@@ -723,7 +721,7 @@ mod internal {
                 match actual_kind {
                     TypeHint::Number | TypeHint::Str | TypeHint::Boolean | TypeHint::Char => {
                         TypeMismatchError {
-                            source_span: expr.source_span(),
+                            source_span: source_span.clone(),
                             expected_type: ExpectedType::Hint(actual_kind.clone()),
                             actual_type: ActualType::Hint(push_down_kind.clone()),
                             field_path: Default::default(),
@@ -732,12 +730,8 @@ mod internal {
                         .into()
                     }
 
-                    _ => AmbiguousTypeError::new(
-                        actual_inferred_type,
-                        &expr.source_span(),
-                        push_down_kind,
-                    )
-                    .into(),
+                    _ => AmbiguousTypeError::new(actual_inferred_type, source_span, push_down_kind)
+                        .into(),
                 }
             }
         }
