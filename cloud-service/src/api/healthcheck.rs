@@ -14,7 +14,7 @@
 
 use crate::api::ApiTags;
 use crate::model::{HealthcheckResponse, VersionInfo};
-use crate::VERSION;
+use golem_common::golem_version;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 
@@ -30,7 +30,7 @@ impl HealthcheckApi {
     #[oai(path = "/version", method = "get", operation_id = "version")]
     async fn version(&self) -> Json<VersionInfo> {
         Json(VersionInfo {
-            version: VERSION.to_string(),
+            version: golem_version().to_string(),
         })
     }
 }

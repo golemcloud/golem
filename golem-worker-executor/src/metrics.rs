@@ -16,7 +16,7 @@
 // Collecting them in one place makes it easier to look them up and to share
 // common metrics between different layers of the application.
 
-use crate::VERSION;
+use golem_common::golem_version;
 use lazy_static::lazy_static;
 use prometheus::*;
 
@@ -31,7 +31,7 @@ lazy_static! {
 
 pub fn register_all() -> Registry {
     VERSION_INFO
-        .with_label_values(&[VERSION, wasmtime::VERSION])
+        .with_label_values(&[golem_version(), wasmtime::VERSION])
         .inc();
 
     default_registry().clone()
