@@ -9,6 +9,8 @@ description = "Shared code between Golem services"
 
 license-file = "../LICENSE"
 
+build = "build.rs"
+
 [features]
 default = [
     "base-model",
@@ -106,7 +108,6 @@ dashmap = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true, optional = true }
 fred = { workspace = true, optional = true }
-git-version = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 iso8601-timestamp = { workspace = true }
@@ -126,6 +127,7 @@ regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+shadow-rs = { workspace = true }
 sqlx = { workspace = true, optional = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
@@ -144,3 +146,6 @@ uuid = { workspace = true }
 anyhow = { workspace = true }
 test-r = { workspace = true }
 tracing-test = { workspace = true }
+
+[build-dependencies]
+shadow-rs = { workspace = true }

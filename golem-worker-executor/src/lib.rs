@@ -68,7 +68,6 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
-use golem_common::golem_version;
 use golem_common::redis::RedisPool;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -92,8 +91,6 @@ use tracing::{info, Instrument};
 use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::{Config, Engine, WasmBacktraceDetails};
-
-const VERSION: &str = golem_version!();
 
 pub struct RunDetails {
     pub http_port: u16,
