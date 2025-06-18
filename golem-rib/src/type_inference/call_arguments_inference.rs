@@ -25,7 +25,7 @@ pub fn infer_function_call_types(
 ) -> Result<(), FunctionCallError> {
     let mut visitor = ExprVisitor::bottom_up(expr);
     while let Some(expr) = visitor.pop_back() {
-        let expr_copied = expr.clone();
+        let source_span = expr.source_span();
 
         if let Expr::Call {
             call_type,
@@ -35,7 +35,7 @@ pub fn infer_function_call_types(
         } = expr
         {
             internal::resolve_call_argument_types(
-                &expr_copied,
+                &source_span,
                 call_type,
                 component_dependency,
                 args,
@@ -50,6 +50,7 @@ pub fn infer_function_call_types(
 mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::inferred_type::TypeOrigin;
+    use crate::rib_source_span::SourceSpan;
     use crate::type_inference::GetTypeHint;
     use crate::{
         ActualType, ComponentDependencies, DynamicParsedFunctionName, ExpectedType, Expr,
@@ -60,7 +61,7 @@ mod internal {
     use std::fmt::Display;
 
     pub(crate) fn resolve_call_argument_types(
-        original_expr: &Expr,
+        source_span: &SourceSpan,
         call_type: &mut CallType,
         component_dependency: &ComponentDependencies,
         args: &mut [Expr],
@@ -80,7 +81,7 @@ mod internal {
 
                 InstanceCreationType::WitResource { resource_name, .. } => {
                     infer_resource_constructor_arguments(
-                        original_expr,
+                        source_span,
                         resource_name,
                         Some(args),
                         component_dependency,
@@ -96,7 +97,7 @@ mod internal {
                 match function_name0 {
                     FunctionName::ResourceMethod(fqn_resource_method) => {
                         infer_resource_method_arguments(
-                            original_expr,
+                            source_span,
                             &fqn_resource_method,
                             function_name,
                             component_dependency,
@@ -108,13 +109,13 @@ mod internal {
                         let registry_key = FunctionName::from_call_type(&cloned).ok_or(
                             FunctionCallError::InvalidFunctionCall {
                                 function_name: function_name.to_string(),
-                                expr: original_expr.clone(),
+                                source_span: source_span.clone(),
                                 message: "unknown function".to_string(),
                             },
                         )?;
 
                         infer_args_and_result_type(
-                            original_expr,
+                            source_span,
                             &FunctionDetails::Fqn(function_name.clone()),
                             component_dependency,
                             &registry_key,
@@ -131,7 +132,7 @@ mod internal {
                 } else {
                     Err(FunctionCallError::ArgumentSizeMisMatch {
                         function_name: name.to_string(),
-                        expr: original_expr.clone(),
+                        source_span: source_span.clone(),
                         expected: 0,
                         provided: args.len(),
                     })
@@ -141,7 +142,7 @@ mod internal {
             CallType::VariantConstructor(variant_name) => {
                 let function_name = FunctionName::Variant(variant_name.clone());
                 infer_args_and_result_type(
-                    original_expr,
+                    source_span,
                     &FunctionDetails::VariantName(variant_name.clone()),
                     component_dependency,
                     &function_name,
@@ -153,7 +154,7 @@ mod internal {
     }
 
     fn infer_resource_method_arguments(
-        original_expr: &Expr,
+        source_span: &SourceSpan,
         fqn_resource_method: &FullyQualifiedResourceMethod,
         dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
         function_type_registry: &ComponentDependencies,
@@ -169,7 +170,7 @@ mod internal {
         let resource_method = fqn_resource_method.method_name.clone();
 
         infer_args_and_result_type(
-            original_expr,
+            source_span,
             &FunctionDetails::ResourceMethodName {
                 resource_name: resource_constructor_name,
                 resource_method_name: resource_method,
@@ -182,7 +183,7 @@ mod internal {
     }
 
     fn infer_resource_constructor_arguments(
-        original_expr: &Expr,
+        source_span: &SourceSpan,
         resource_constructor: &FullyQualifiedResourceConstructor,
         raw_resource_parameters: Option<&mut [Expr]>,
         function_type_registry: &ComponentDependencies,
@@ -197,7 +198,7 @@ mod internal {
 
         // Infer the types of constructor parameter expressions
         infer_args_and_result_type(
-            original_expr,
+            source_span,
             &FunctionDetails::ResourceConstructorName {
                 resource_constructor_name: resource_constructor.resource_name.clone(),
             },
@@ -209,7 +210,7 @@ mod internal {
     }
 
     fn infer_args_and_result_type(
-        original_expr: &Expr,
+        original_source_span: &SourceSpan,
         function_name: &FunctionDetails,
         component_dependency: &ComponentDependencies,
         key: &FunctionName,
@@ -220,7 +221,7 @@ mod internal {
             .get_function_type(&None, key)
             .map_err(|err| FunctionCallError::InvalidFunctionCall {
                 function_name: function_name.to_string(),
-                expr: original_expr.clone(),
+                source_span: original_source_span.clone(),
                 message: err.to_string(),
             })?;
 
@@ -235,13 +236,13 @@ mod internal {
                 let result_type = function_type.as_type_variant().ok_or(
                     FunctionCallError::InvalidFunctionCall {
                         function_name: function_name.to_string(),
-                        expr: original_expr.clone(),
+                        source_span: original_source_span.clone(),
                         message: "expected a variant type".to_string(),
                     },
                 )?;
 
                 if parameter_types.len() == args.len() {
-                    tag_argument_types(original_expr, function_name, args, &parameter_types)?;
+                    tag_argument_types(function_name, args, &parameter_types)?;
 
                     if let Some(function_result_type) = function_result_inferred_type {
                         *function_result_type = InferredType::from_type_variant(&result_type);
@@ -251,7 +252,7 @@ mod internal {
                 } else {
                     Err(FunctionCallError::ArgumentSizeMisMatch {
                         function_name: function_name.name(),
-                        expr: original_expr.clone(),
+                        source_span: original_source_span.clone(),
                         expected: parameter_types.len(),
                         provided: args.len(),
                     })
@@ -264,7 +265,7 @@ mod internal {
                 if parameter_types.len() == args.len() {
                     let result_type = function_type.return_type.clone();
 
-                    tag_argument_types(original_expr, function_name, args, &parameter_types)?;
+                    tag_argument_types(function_name, args, &parameter_types)?;
 
                     if let Some(function_result_type) = function_result_inferred_type {
                         *function_result_type = {
@@ -280,7 +281,7 @@ mod internal {
                 } else {
                     Err(FunctionCallError::ArgumentSizeMisMatch {
                         function_name: function_name.name(),
-                        expr: original_expr.clone(),
+                        source_span: original_source_span.clone(),
                         expected: parameter_types.len(),
                         provided: args.len(),
                     })
@@ -295,7 +296,7 @@ mod internal {
                 let return_type = function_type.return_type.clone();
 
                 if parameter_types.len() == args.len() {
-                    tag_argument_types(original_expr, function_name, args, &parameter_types)?;
+                    tag_argument_types(function_name, args, &parameter_types)?;
 
                     if let Some(function_result_type) = function_result_inferred_type {
                         *function_result_type = {
@@ -311,7 +312,7 @@ mod internal {
                 } else {
                     Err(FunctionCallError::ArgumentSizeMisMatch {
                         function_name: function_name.name(),
-                        expr: original_expr.clone(),
+                        source_span: original_source_span.clone(),
                         expected: parameter_types.len(),
                         provided: args.len(),
                     })
@@ -379,7 +380,6 @@ mod internal {
 
     // A preliminary check of the arguments passed before  typ inference
     fn check_function_arguments(
-        function_call_expr: &Expr,
         function_name: &FunctionDetails,
         expected: &AnalysedType,
         provided: &Expr,
@@ -396,10 +396,9 @@ mod internal {
         } else {
             Err(FunctionCallError::TypeMisMatch {
                 function_name: function_name.name(),
-                argument: provided.clone(),
+                argument_source_span: provided.source_span(),
                 error: TypeMismatchError {
-                    expr_with_wrong_type: provided.clone(),
-                    parent_expr: Some(function_call_expr.clone()),
+                    source_span: provided.source_span(),
                     expected_type: ExpectedType::AnalysedType(expected.clone()),
                     actual_type: ActualType::Inferred(provided.inferred_type().clone()),
                     field_path: Default::default(),
@@ -410,13 +409,12 @@ mod internal {
     }
 
     fn tag_argument_types(
-        function_call_expr: &Expr,
         function_name: &FunctionDetails,
         args: &mut [Expr],
         parameter_types: &[AnalysedType],
     ) -> Result<(), FunctionCallError> {
         for (arg, param_type) in args.iter_mut().zip(parameter_types) {
-            check_function_arguments(function_call_expr, function_name, param_type, arg)?;
+            check_function_arguments(function_name, param_type, arg)?;
             arg.add_infer_type_mut(
                 InferredType::from(param_type).add_origin(TypeOrigin::Declared(arg.source_span())),
             );

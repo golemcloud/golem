@@ -78,11 +78,46 @@ pub enum InstanceType {
         interface_name: Option<InterfaceName>,
         resource_constructor: String,
         resource_args: Vec<Expr>,
+        component_dependency_key: ComponentDependencyKey,
         resource_method_dictionary: ResourceMethodDictionary,
     },
 }
 
 impl InstanceType {
+    pub fn narrow_to_single_component(
+        &mut self,
+        component_dependency_key: &ComponentDependencyKey,
+    ) {
+        match self {
+            InstanceType::Global {
+                component_dependency,
+                ..
+            } => {
+                component_dependency.narrow_to_component(component_dependency_key);
+            }
+            InstanceType::Package {
+                component_dependency,
+                ..
+            } => {
+                component_dependency.narrow_to_component(component_dependency_key);
+            }
+            InstanceType::Interface {
+                component_dependency,
+                ..
+            } => {
+                component_dependency.narrow_to_component(component_dependency_key);
+            }
+            InstanceType::PackageInterface {
+                component_dependency,
+                ..
+            } => {
+                component_dependency.narrow_to_component(component_dependency_key);
+            }
+            // A resource is already narrowed down to a component
+            InstanceType::Resource { .. } => {}
+        }
+    }
+
     pub fn set_worker_name(&mut self, worker_name: Expr) {
         match self {
             InstanceType::Global {
@@ -144,14 +179,14 @@ impl InstanceType {
         worker_name: Option<Box<Expr>>,
         analysed_resource_id: u64,
         analysed_resource_mode: u8,
-    ) -> InstanceType {
+    ) -> Result<InstanceType, String> {
         let interface_name = fully_qualified_resource_constructor.interface_name.clone();
         let package_name = fully_qualified_resource_constructor.package_name.clone();
         let resource_constructor_name = fully_qualified_resource_constructor.resource_name.clone();
 
-        let mut tree = BTreeMap::new();
+        let mut tree = vec![];
         for (component_info, function_type) in self.component_dependencies().dependencies.iter() {
-            let mut resource_method_dict = vec![];
+            let mut resource_method_dict = BTreeMap::new();
 
             for (name, typ) in function_type.name_and_types.iter() {
                 if let FunctionName::ResourceMethod(resource_method) = name {
@@ -159,25 +194,42 @@ impl InstanceType {
                         && resource_method.interface_name == interface_name
                         && resource_method.package_name == package_name
                     {
-                        resource_method_dict.push((resource_method.clone(), typ.clone()));
+                        resource_method_dict.insert(resource_method.clone(), typ.clone());
                     }
                 }
             }
 
-            tree.insert(component_info.clone(), resource_method_dict);
+            tree.push((component_info.clone(), resource_method_dict));
         }
 
-        let resource_method_dict = ResourceMethodDictionary { map: tree };
+        if tree.len() == 1 {
+            let (component_dependency_key, resource_methods) = tree.pop().unwrap();
 
-        InstanceType::Resource {
-            worker_name,
-            package_name,
-            interface_name,
-            resource_constructor: resource_constructor_name,
-            resource_args,
-            resource_method_dictionary: resource_method_dict,
-            analysed_resource_id,
-            analysed_resource_mode,
+            let resource_method_dict = ResourceMethodDictionary {
+                map: resource_methods,
+            };
+
+            Ok(InstanceType::Resource {
+                worker_name,
+                package_name,
+                interface_name,
+                resource_constructor: resource_constructor_name,
+                resource_args,
+                component_dependency_key,
+                resource_method_dictionary: resource_method_dict,
+                analysed_resource_id,
+                analysed_resource_mode,
+            })
+        } else if tree.is_empty() {
+            Err(format!(
+                "No components found have the resource constructor '{}'",
+                resource_constructor_name
+            ))
+        } else {
+            Err(format!(
+                "Multiple components found with the resource constructor '{}'. Please specify the type parameter",
+                resource_constructor_name
+            ))
         }
     }
 
@@ -419,8 +471,15 @@ impl InstanceType {
             } => component_dependency.clone(),
             InstanceType::Resource {
                 resource_method_dictionary,
+                component_dependency_key,
                 ..
-            } => ComponentDependencies::from(resource_method_dictionary),
+            } => {
+                let function_dictionary = FunctionDictionary::from(resource_method_dictionary);
+                let mut dependencies = BTreeMap::new();
+                dependencies.insert(component_dependency_key.clone(), function_dictionary);
+
+                ComponentDependencies { dependencies }
+            }
         }
     }
 

@@ -24,7 +24,7 @@ mod missing_fields;
 mod path;
 mod unresolved_types;
 
-use crate::rib_type_error::RibTypeError;
+use crate::rib_type_error::RibTypeErrorInternal;
 use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
 use crate::type_checker::invalid_function_args::check_invalid_function_args;
 use crate::type_checker::invalid_function_calls::check_invalid_function_calls;
@@ -34,7 +34,7 @@ use crate::{ComponentDependencies, Expr};
 pub fn type_check(
     expr: &mut Expr,
     component_dependency: &ComponentDependencies,
-) -> Result<(), RibTypeError> {
+) -> Result<(), RibTypeErrorInternal> {
     check_invalid_function_args(expr, component_dependency)?;
     check_unresolved_types(expr)?;
     check_invalid_worker_name(expr)?;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::rib_type_error::RibTypeError;
+use crate::rib_type_error::RibTypeErrorInternal;
 use crate::type_inference::type_hint::TypeHint;
 use crate::type_refinement::precise_types::{ListType, RecordType};
 use crate::type_refinement::TypeRefinement;
@@ -21,7 +21,7 @@ use crate::{
 };
 use crate::{CustomError, Expr, ExprVisitor};
 
-pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
+pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeErrorInternal> {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
     while let Some(expr) = visitor.pop_front() {
@@ -40,19 +40,12 @@ pub fn type_pull_up(expr: &mut Expr) -> Result<(), RibTypeError> {
 
             Expr::InvokeMethodLazy {
                 lhs,
-                generic_type_parameter,
                 method,
-                args,
                 source_span,
                 ..
             } => {
                 return Err(CustomError {
-                    expr: Expr::invoke_worker_function(
-                        lhs.as_ref().clone(),
-                        method.clone(),
-                        generic_type_parameter.clone(),
-                        args.clone(),
-                    ).with_source_span(source_span.clone()),
+                    source_span:  source_span.clone(),
                     help_message: vec![],
                     message: format!("invalid method invocation `{}.{}`. make sure `{}` is defined and is a valid instance type (i.e, resource or worker)", lhs, method, lhs),
                 }.into());
@@ -273,7 +266,7 @@ fn handle_select_field(
     select_from: &Expr,
     field: &str,
     current_field_type: &mut InferredType,
-) -> Result<(), RibTypeError> {
+) -> Result<(), RibTypeErrorInternal> {
     let selection_field_type = get_inferred_type_of_selected_field(select_from, field)?;
 
     *current_field_type = current_field_type.merge(selection_field_type);
@@ -285,7 +278,7 @@ fn handle_select_index(
     select_from: &Expr,
     index: &Expr,
     current_select_index_type: &mut InferredType,
-) -> Result<(), RibTypeError> {
+) -> Result<(), RibTypeErrorInternal> {
     let selection_expr_inferred_type = select_from.inferred_type();
 
     // if select_from is not yet gone through any phase, we cannot guarantee
@@ -404,13 +397,12 @@ fn handle_range(range: &Range, inferred_type: &mut InferredType) {
 fn get_inferred_type_of_selected_field(
     select_from: &Expr,
     field: &str,
-) -> Result<InferredType, RibTypeError> {
+) -> Result<InferredType, RibTypeErrorInternal> {
     let select_from_inferred_type = select_from.inferred_type();
 
     let refined_record = RecordType::refine(&select_from_inferred_type).ok_or({
         TypeMismatchError {
-            expr_with_wrong_type: select_from.clone(),
-            parent_expr: None,
+            source_span: select_from.source_span(),
             expected_type: ExpectedType::Hint(TypeHint::Record(None)),
             actual_type: ActualType::Inferred(select_from_inferred_type.clone()),
             field_path: Path::default(),
@@ -427,14 +419,13 @@ fn get_inferred_type_of_selected_field(
 fn get_inferred_type_of_selection_dynamic(
     select_from: &Expr,
     index: &Expr,
-) -> Result<InferredType, RibTypeError> {
+) -> Result<InferredType, RibTypeErrorInternal> {
     let select_from_type = select_from.inferred_type();
     let select_index_type = index.inferred_type();
 
     let refined_list = ListType::refine(&select_from_type).ok_or({
         TypeMismatchError {
-            expr_with_wrong_type: select_from.clone(),
-            parent_expr: None,
+            source_span: select_from.source_span(),
             expected_type: ExpectedType::Hint(TypeHint::List(None)),
             actual_type: ActualType::Inferred(select_from_type.clone()),
             field_path: Default::default(),
