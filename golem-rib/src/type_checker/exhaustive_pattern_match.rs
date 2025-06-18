@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::rib_source_span::SourceSpan;
 use crate::{ArmPattern, ComponentDependencies, Expr, ExprVisitor};
 
 // When checking exhaustive pattern match, there is no need to ensure
@@ -40,11 +41,11 @@ pub fn check_exhaustive_pattern_match(
 #[derive(Debug, Clone)]
 pub enum ExhaustivePatternMatchError {
     MissingConstructors {
-        predicate: Expr,
+        predicate_source_span: SourceSpan,
         missing_constructors: Vec<String>,
     },
     DeadCode {
-        predicate: Expr,
+        predicate_source_span: SourceSpan,
         cause: ArmPattern,
         dead_pattern: ArmPattern,
     },
@@ -98,7 +99,7 @@ mod internal {
                                 .push(format!("{}({})", field, missing_constructor));
                         });
                         ExhaustivePatternMatchError::MissingConstructors {
-                            predicate: predicate.clone(),
+                            predicate_source_span: predicate.source_span(),
                             missing_constructors: new_missing_constructors,
                         }
                     }
@@ -150,14 +151,14 @@ mod internal {
 
         fn missing_constructors(predicate: Expr, missing_constructors: Vec<String>) -> Self {
             ExhaustiveCheckResult(Err(ExhaustivePatternMatchError::MissingConstructors {
-                predicate,
+                predicate_source_span: predicate.source_span(),
                 missing_constructors,
             }))
         }
 
         fn dead_code(predicate: &Expr, cause: &ArmPattern, dead_pattern: &ArmPattern) -> Self {
             ExhaustiveCheckResult(Err(ExhaustivePatternMatchError::DeadCode {
-                predicate: predicate.clone(),
+                predicate_source_span: predicate.source_span(),
                 cause: cause.clone(),
                 dead_pattern: dead_pattern.clone(),
             }))

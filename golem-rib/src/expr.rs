@@ -18,7 +18,7 @@ use crate::inferred_type::{DefaultType, TypeOrigin};
 use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::rib_source_span::SourceSpan;
-use crate::rib_type_error::RibTypeError;
+use crate::rib_type_error::RibTypeErrorInternal;
 use crate::{
     from_string, text, type_checker, type_inference, ComponentDependencies, ComponentDependencyKey,
     DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType,
@@ -1047,6 +1047,50 @@ impl Expr {
         }
     }
 
+    pub fn inferred_type_mut(&mut self) -> &mut InferredType {
+        match self {
+            Expr::Let { inferred_type, .. }
+            | Expr::SelectField { inferred_type, .. }
+            | Expr::SelectIndex { inferred_type, .. }
+            | Expr::Sequence { inferred_type, .. }
+            | Expr::Record { inferred_type, .. }
+            | Expr::Tuple { inferred_type, .. }
+            | Expr::Literal { inferred_type, .. }
+            | Expr::Number { inferred_type, .. }
+            | Expr::Flags { inferred_type, .. }
+            | Expr::Identifier { inferred_type, .. }
+            | Expr::Boolean { inferred_type, .. }
+            | Expr::Concat { inferred_type, .. }
+            | Expr::ExprBlock { inferred_type, .. }
+            | Expr::Not { inferred_type, .. }
+            | Expr::GreaterThan { inferred_type, .. }
+            | Expr::GreaterThanOrEqualTo { inferred_type, .. }
+            | Expr::LessThanOrEqualTo { inferred_type, .. }
+            | Expr::EqualTo { inferred_type, .. }
+            | Expr::Plus { inferred_type, .. }
+            | Expr::Minus { inferred_type, .. }
+            | Expr::Divide { inferred_type, .. }
+            | Expr::Multiply { inferred_type, .. }
+            | Expr::LessThan { inferred_type, .. }
+            | Expr::Cond { inferred_type, .. }
+            | Expr::PatternMatch { inferred_type, .. }
+            | Expr::Option { inferred_type, .. }
+            | Expr::Result { inferred_type, .. }
+            | Expr::Unwrap { inferred_type, .. }
+            | Expr::Throw { inferred_type, .. }
+            | Expr::GetTag { inferred_type, .. }
+            | Expr::And { inferred_type, .. }
+            | Expr::Or { inferred_type, .. }
+            | Expr::ListComprehension { inferred_type, .. }
+            | Expr::ListReduce { inferred_type, .. }
+            | Expr::Call { inferred_type, .. }
+            | Expr::Range { inferred_type, .. }
+            | Expr::InvokeMethodLazy { inferred_type, .. }
+            | Expr::Length { inferred_type, .. }
+            | Expr::GenerateWorkerName { inferred_type, .. } => &mut *inferred_type,
+        }
+    }
+
     pub fn inferred_type(&self) -> InferredType {
         match self {
             Expr::Let { inferred_type, .. }
@@ -1095,7 +1139,7 @@ impl Expr {
         &mut self,
         component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<(), RibTypeError> {
+    ) -> Result<(), RibTypeErrorInternal> {
         self.infer_types_initial_phase(component_dependency, type_spec)?;
         self.bind_instance_types();
         // Identifying the first fix point with method calls to infer all
@@ -1115,7 +1159,7 @@ impl Expr {
         &mut self,
         component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<(), RibTypeError> {
+    ) -> Result<(), RibTypeErrorInternal> {
         self.set_origin();
         self.bind_global_variable_types(type_spec);
         self.bind_type_annotations();
@@ -1130,7 +1174,7 @@ impl Expr {
         Ok(())
     }
 
-    pub fn resolve_method_calls(&mut self) -> Result<(), RibTypeError> {
+    pub fn resolve_method_calls(&mut self) -> Result<(), RibTypeErrorInternal> {
         self.bind_instance_types();
         self.infer_worker_function_invokes()?;
         Ok(())
@@ -1151,7 +1195,7 @@ impl Expr {
     // An inference is a single cycle of to-and-fro scanning of Rib expression, that it takes part in fix point of inference.
     // Not all phases of compilation will be part of this scan.
     // Example: function call argument inference based on the worker function hardly needs to be part of the scan.
-    pub fn inference_scan(&mut self) -> Result<(), RibTypeError> {
+    pub fn inference_scan(&mut self) -> Result<(), RibTypeErrorInternal> {
         self.infer_all_identifiers();
         self.push_types_down()?;
         self.infer_all_identifiers();
@@ -1160,7 +1204,7 @@ impl Expr {
         Ok(())
     }
 
-    pub fn infer_worker_function_invokes(&mut self) -> Result<(), RibTypeError> {
+    pub fn infer_worker_function_invokes(&mut self) -> Result<(), RibTypeErrorInternal> {
         type_inference::infer_worker_function_invokes(self)
     }
 
@@ -1189,7 +1233,7 @@ impl Expr {
     pub fn identify_instance_creation(
         &mut self,
         component_dependency: &ComponentDependencies,
-    ) -> Result<(), RibTypeError> {
+    ) -> Result<(), RibTypeErrorInternal> {
         type_inference::identify_instance_creation(self, component_dependency)
     }
 
@@ -1200,12 +1244,12 @@ impl Expr {
     pub fn infer_function_call_types(
         &mut self,
         component_dependency: &ComponentDependencies,
-    ) -> Result<(), RibTypeError> {
+    ) -> Result<(), RibTypeErrorInternal> {
         type_inference::infer_function_call_types(self, component_dependency)?;
         Ok(())
     }
 
-    pub fn push_types_down(&mut self) -> Result<(), RibTypeError> {
+    pub fn push_types_down(&mut self) -> Result<(), RibTypeErrorInternal> {
         type_inference::push_types_down(self)
     }
 
@@ -1213,7 +1257,7 @@ impl Expr {
         type_inference::infer_all_identifiers(self)
     }
 
-    pub fn pull_types_up(&mut self) -> Result<(), RibTypeError> {
+    pub fn pull_types_up(&mut self) -> Result<(), RibTypeErrorInternal> {
         type_inference::type_pull_up(self)
     }
 
@@ -1228,11 +1272,11 @@ impl Expr {
     pub fn check_types(
         &mut self,
         component_dependency: &ComponentDependencies,
-    ) -> Result<(), RibTypeError> {
+    ) -> Result<(), RibTypeErrorInternal> {
         type_checker::type_check(self, component_dependency)
     }
 
-    pub fn unify_types(&mut self) -> Result<(), RibTypeError> {
+    pub fn unify_types(&mut self) -> Result<(), RibTypeErrorInternal> {
         type_inference::unify_types(self)?;
         Ok(())
     }

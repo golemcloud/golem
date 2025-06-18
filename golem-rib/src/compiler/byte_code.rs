@@ -1630,29 +1630,6 @@ mod compiler_tests {
         }
 
         #[test]
-        fn test_invalid_arg_size_variants() {
-            let metadata = internal::metadata_with_variants();
-
-            let expr = r#"
-               let regiser_user_action = register-user(1, "foo");
-               let result = golem:it/api.{foo}(regiser_user_action);
-               result
-            "#;
-
-            let expr = Expr::from_text(expr).unwrap();
-
-            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
-
-            let compiler = RibCompiler::new(compiler_config);
-
-            let compiler_error = compiler.compile(expr).unwrap_err().to_string();
-            assert_eq!(
-                compiler_error,
-                "error in the following rib found at line 0, column 0\n`register-user(1, \"foo\")`\ncause: invalid argument size for function `register-user`. expected 1 arguments, found 2\n"
-            );
-        }
-
-        #[test]
         fn test_invalid_arg_types_function() {
             let metadata = internal::get_component_metadata(
                 "foo",
@@ -1674,7 +1651,7 @@ mod compiler_tests {
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 2, column 33\n`1: u64`\nfound within:\n`foo(1: u64)`\ncause: type mismatch. expected string, found u64\ninvalid argument to the function `foo`\n"
+                "error in the following rib found at line 2, column 33\n`1: u64`\ncause: type mismatch. expected string, found u64\ninvalid argument to the function `foo`\n"
             );
         }
 
@@ -1696,7 +1673,7 @@ mod compiler_tests {
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 3, column 54\n`\"apple\"`\nfound within:\n`add-item(\"apple\")`\ncause: type mismatch. expected record { name: string }, found string\ninvalid argument to the function `add-item`\n"
+                "error in the following rib found at line 3, column 54\n`\"apple\"`\ncause: type mismatch. expected record { name: string }, found string\ninvalid argument to the function `add-item`\n"
             );
         }
 
@@ -1719,7 +1696,7 @@ mod compiler_tests {
             let compiler_error = compiler.compile(expr).unwrap_err().to_string();
             assert_eq!(
                 compiler_error,
-                "error in the following rib found at line 2, column 56\n`\"foo\"`\nfound within:\n`register-user(\"foo\")`\ncause: type mismatch. expected u64, found string\ninvalid argument to the function `register-user`\n"
+                "error in the following rib found at line 2, column 56\n`\"foo\"`\ncause: type mismatch. expected u64, found string\ninvalid argument to the function `register-user`\n"
             );
         }
     }

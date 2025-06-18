@@ -267,6 +267,10 @@ impl InferredType {
         self.inner.as_ref()
     }
 
+    pub fn internal_type_mut(&mut self) -> &mut TypeInternal {
+        self.inner.as_mut()
+    }
+
     pub fn list(inner: InferredType) -> InferredType {
         InferredType {
             inner: Box::new(TypeInternal::List(inner)),

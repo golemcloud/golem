@@ -54,7 +54,7 @@ fn get_missing_record_keys(
     let function_name =
         FunctionName::from_call_type(call_type).ok_or(FunctionCallError::InvalidFunctionCall {
             function_name: call_type.to_string(),
-            expr: function_call_expr.clone(),
+            source_span: function_call_expr.source_span(),
             message: "invalid function call type".to_string(),
         })?;
 
@@ -62,7 +62,7 @@ fn get_missing_record_keys(
         .get_function_type(&None, &function_name)
         .map_err(|err| FunctionCallError::InvalidFunctionCall {
             function_name: call_type.to_string(),
-            expr: function_call_expr.clone(),
+            source_span: function_call_expr.source_span(),
             message: err.to_string(),
         })?;
 
@@ -88,7 +88,7 @@ fn get_missing_record_keys(
         if let Err(unresolved_error) = unresolved_type {
             return Err(FunctionCallError::UnResolvedTypes {
                 function_name: call_type.to_string(),
-                argument: actual_arg.clone(),
+                source_span: actual_arg.source_span(),
                 unresolved_error,
                 expected_type: expected_arg_type.clone(),
             });
@@ -100,7 +100,7 @@ fn get_missing_record_keys(
         if !missing_fields.is_empty() {
             return Err(FunctionCallError::MissingRecordFields {
                 function_name: call_type.to_string(),
-                argument: actual_arg.clone(),
+                argument_source_span: actual_arg.source_span(),
                 missing_fields,
             });
         }
