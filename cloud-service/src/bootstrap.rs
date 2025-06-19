@@ -162,7 +162,6 @@ impl Services {
 
         let plan_limit_service: Arc<dyn service::plan_limit::PlanLimitService> =
             Arc::new(service::plan_limit::PlanLimitServiceDefault::new(
-                auth_service.clone(),
                 plan_repo.clone(),
                 account_repo.clone(),
                 account_workers_repo.clone(),
@@ -176,20 +175,17 @@ impl Services {
 
         let account_service: Arc<dyn service::account::AccountService> =
             Arc::new(service::account::AccountServiceDefault::new(
-                auth_service.clone(),
                 account_repo.clone(),
                 plan_service.clone(),
             ));
 
         let account_summary_service: Arc<dyn service::account_summary::AccountSummaryService> =
             Arc::new(service::account_summary::AccountSummaryServiceDefault::new(
-                auth_service.clone(),
                 account_summary_repo,
             ));
 
         let account_grant_service: Arc<dyn service::account_grant::AccountGrantService> =
             Arc::new(service::account_grant::AccountGrantServiceDefault::new(
-                auth_service.clone(),
                 account_grant_repo.clone(),
                 account_repo.clone(),
             ));
@@ -204,7 +200,6 @@ impl Services {
                 project_grant_repo.clone(),
                 project_policy_repo.clone(),
                 account_repo.clone(),
-                auth_service.clone(),
             ));
 
         let plugin_service_client =

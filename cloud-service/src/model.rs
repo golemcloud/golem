@@ -787,15 +787,24 @@ pub enum GlobalAction {
 pub enum AccountAction {
     ViewAccount,
     UpdateAccount,
-    ViewPlan,
-    CreateProject,
     DeleteAccount,
+
+    ViewPlan,
+
+    CreateProject,
+
     ViewAccountGrants,
     CreateAccountGrant,
     DeleteAccountGrant,
+
     ViewDefaultProject,
+
     ListProjectGrants,
+
     ViewLimits,
     UpdateLimits,
+
+    CreateToken,
+    ViewTokens,
     DeleteToken,
 }

@@ -14,7 +14,6 @@
 
 use chrono::{DateTime, Utc};
 use cloud_service::api::make_open_api_service;
-use cloud_service::auth::AccountAuthorisation;
 use cloud_service::bootstrap::Services;
 use cloud_service::config::{
     make_config_loader, AccountConfig, AccountsConfig, CloudServiceConfig,
@@ -208,17 +207,12 @@ async fn create_initial_account(
                 name: account_config.name.clone(),
                 email: account_config.email.clone(),
             },
-            &AccountAuthorisation::admin(),
         )
         .await
         .ok();
 
     grant_service
-        .add(
-            &account_id,
-            &account_config.role,
-            &AccountAuthorisation::admin(),
-        )
+        .add(&account_id, &account_config.role)
         .await
         .ok();
 
@@ -227,7 +221,6 @@ async fn create_initial_account(
             &account_id,
             &DateTime::<Utc>::MAX_UTC,
             &TokenSecret::new(account_config.token),
-            &AccountAuthorisation::admin(),
         )
         .await
         .ok();

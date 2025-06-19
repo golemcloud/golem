@@ -145,10 +145,15 @@ impl LimitsApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<ResourceLimits>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::ViewLimits)
+            .await?;
+
         let result = self
             .plan_limit_service
-            .get_resource_limits(&account_id, &auth)
+            .get_resource_limits(&account_id)
             .await?;
+
         Ok(Json(result))
     }
 
@@ -181,8 +186,14 @@ impl LimitsApi {
             updates.insert(AccountId::from(k.as_str()), *v);
         }
 
+        for account_id in updates.keys() {
+            self.auth_service
+                .authorize_account_action(&auth, account_id, &AccountAction::UpdateLimits)
+                .await?;
+        }
+
         self.plan_limit_service
-            .record_fuel_consumption(updates, &auth)
+            .record_fuel_consumption(updates)
             .await?;
 
         Ok(Json(UpdateResourceLimitsResponse {}))

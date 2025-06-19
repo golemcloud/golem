@@ -18,7 +18,7 @@ use crate::service::api_mapper::ApiMapper;
 use crate::service::auth::AuthService;
 use crate::service::project::ProjectService;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use golem_common::model::auth::ProjectPermisison;
+use golem_common::model::auth::{ProjectAction, ProjectPermisison};
 use golem_common::model::error::ErrorBody;
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
 use golem_common::model::{Empty, PluginInstallationId, ProjectId};
@@ -65,7 +65,15 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Project>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let project = self.project_service.get_default(&auth).await?;
+        let account_id = &auth.token.account_id;
+        self.auth_service
+            .authorize_account_action(&auth, account_id, &AccountAction::ViewDefaultProject)
+            .await?;
+
+        let project = self
+            .project_service
+            .get_default(&auth.token.account_id)
+            .await?;
         Ok(Json(project))
     }
 
@@ -98,17 +106,18 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Vec<Project>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let viewable_projects = self.auth_service.viewable_projects(&auth).await?;
 
         match project_name {
             Some(project_name) => {
                 let projects = self
                     .project_service
-                    .get_all_by_name(&project_name, &auth)
+                    .get_all_by_name(&project_name, viewable_projects)
                     .await?;
                 Ok(Json(projects))
             }
             None => {
-                let projects = self.project_service.get_all(&auth).await?;
+                let projects = self.project_service.get_all(viewable_projects).await?;
                 Ok(Json(projects))
             }
         }
@@ -150,7 +159,15 @@ impl ProjectApi {
             },
         };
 
-        self.project_service.create(&project, &auth).await?;
+        self.auth_service
+            .authorize_account_action(
+                &auth,
+                &project.project_data.owner_account_id,
+                &AccountAction::CreateProject,
+            )
+            .await?;
+
+        self.project_service.create(&project).await?;
         Ok(Json(project))
     }
 
@@ -179,7 +196,11 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Project>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let project = self.project_service.get(&project_id, &auth).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::ViewProject)
+            .await?;
+
+        let project = self.project_service.get(&project_id).await?;
         match project {
             Some(p) => Ok(Json(p)),
             None => Err(ApiError::NotFound(Json(ErrorBody {
@@ -217,7 +238,11 @@ impl ProjectApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<DeleteProjectResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        self.project_service.delete(&project_id, &auth).await?;
+        self.auth_service
+            .authorize_project_action(&auth, &project_id, &ProjectAction::DeleteProject)
+            .await?;
+
+        self.project_service.delete(&project_id).await?;
         Ok(Json(DeleteProjectResponse {}))
     }
 
