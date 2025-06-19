@@ -17,7 +17,15 @@ use combine::{
     any, attempt, choice, eof, many, none_of, not_followed_by, optional, parser, Parser, Stream,
 };
 
-fn comments_<Input>() -> impl Parser<Input, Output = Option<()>>
+parser! {
+    pub fn comments[Input]()(Input) -> ()
+    where [Input: Stream<Token = char>,]
+    {
+        comments_()
+    }
+}
+
+fn comments_<Input>() -> impl Parser<Input, Output = ()>
 where
     Input: Stream<Token = char>,
 {
@@ -29,7 +37,7 @@ where
                 .skip(spaces().silent())
                 .map(|_| ()),
         )
-        .map(|_| None)
+        .map(|_| ())
 }
 
 fn line_or_block_comments<Input>() -> impl Parser<Input, Output = Option<()>>
@@ -66,14 +74,6 @@ where
         optional(comments()).map(|_: Option<_>| ()),
     )
         .map(|(_, _, _, _): ((), (), (), ())| ())
-}
-
-parser! {
-    pub fn comments[Input]()(Input) -> Option<()>
-    where [Input: Stream<Token = char>,]
-    {
-        comments_()
-    }
 }
 
 #[cfg(test)]
