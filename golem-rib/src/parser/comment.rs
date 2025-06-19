@@ -60,7 +60,7 @@ where
     Input: Stream<Token = char>,
 {
     (
-        attempt(string("//").map(|_| ())),
+        spaces().with(choice!(attempt(string("///")), attempt(string("//"))).map(|_| ())),
         many(none_of(vec!['\n']).map(|_| ())),
         choice((string("\r\n").map(|_| ()), string("\n").map(|_| ()), eof())),
         optional(comments()).map(|_: Option<_>| ()),
@@ -81,6 +81,15 @@ mod tests {
     use crate::parser::comment::comments;
     use combine::EasyParser;
     use test_r::test;
+
+    #[test]
+    fn test_parse_line_comment_0() {
+        let input = r#"
+        //
+        "#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
 
     #[test]
     fn test_parse_line_comment_1() {
@@ -105,17 +114,200 @@ mod tests {
     #[test]
     fn test_parse_line_comment_3() {
         let input = r#"
-        // This is a line comment
-        // foo"#;
+        // This is a line // comment
+        foo"#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "foo");
+    }
+
+    #[test]
+    fn test_parse_line_comment_4() {
+        let input = r#"
+        // foo `code`
+        // bar
+        // baz"#;
         let (_, remaining) = comments().easy_parse(input).unwrap();
         assert_eq!(remaining, "");
     }
 
     #[test]
-    fn test_parse_mixed_comments_4() {
+    fn test_parse_line_comment_5() {
         let input = r#"
-        // This is a line / comment with `code`
+        ///
         "#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_line_comment_6() {
+        let input = r#"
+        /// This is a line comment
+
+
+        "#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_line_comment_7() {
+        let input = r#"
+        /// This is a line comment
+        foo"#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "foo");
+    }
+
+    #[test]
+    fn test_parse_line_comment_8() {
+        let input = r#"
+        /// This is a line /// comment
+        foo"#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "foo");
+    }
+
+    #[test]
+    fn test_parse_line_comment_9() {
+        let input = r#"
+        /// foo `code`
+        /// bar
+        /// baz"#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_block_comment_0() {
+        let input = r#"
+        /** foo  */"#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_block_comment_1() {
+        let input = r#"
+        /** foo `code` */"#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+    #[test]
+    fn test_parse_block_comment_2() {
+        let input = r#"
+        /** foo `code`
+        * bar
+        * baz
+        */  "#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_block_comment_3() {
+        let input = r#"
+        /** foo `code`
+        * bar
+        * baz
+        */  "#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_block_comment_4() {
+        let input = r#"
+        /** foo `code`
+        * bar
+        * baz
+        */
+        /** foo `code`
+        * bar
+        * baz
+        */
+         "#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_block_comment_5() {
+        let input = r#"
+        /***/"#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_block_comment_6() {
+        let input = r#"
+        /*
+        */"#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_block_comment_7() {
+        let input = r#"
+        /* foo `code` */"#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+    #[test]
+    fn test_parse_block_comment_8() {
+        let input = r#"
+        /* foo `code`
+        * bar
+        * baz
+        */  "#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_block_comment_9() {
+        let input = r#"
+        /* foo `code`
+        * bar
+        * baz
+        */  "#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_block_comment_10() {
+        let input = r#"
+        /* foo `code`
+        * bar
+        * baz
+        */
+        /* foo `code`
+        * bar
+        * baz
+        */
+         "#;
+        let (_, remaining) = comments().easy_parse(input).unwrap();
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_parse_block_comment_11() {
+        let input = r#"
+        /* foo `code`
+        * bar
+        * baz
+        */
+        /** foo `code`
+        * bar
+        * baz
+        */
+        // foo `code`
+        // bar
+        // baz
+         "#;
         let (_, remaining) = comments().easy_parse(input).unwrap();
         assert_eq!(remaining, "");
     }

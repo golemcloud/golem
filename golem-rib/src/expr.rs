@@ -3344,10 +3344,14 @@ mod tests {
          let result = x > y; // this is a comment
 
          // this is foo
+         // this is bar
+         // baz
          let foo = some(result);
          let bar = ok(result);
 
-         // this is baz
+         /// this is foo
+         // this is bar
+         /// baz
          let baz = match foo {
            some(x) => x, // the result is x
            none => false
