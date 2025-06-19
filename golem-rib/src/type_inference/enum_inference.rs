@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Expr, FunctionTypeRegistry};
+use crate::{ComponentDependencies, Expr};
 
-pub fn infer_enums(expr: &mut Expr, function_type_registry: &FunctionTypeRegistry) {
-    let eum_info = internal::get_enum_info(expr, function_type_registry);
+pub fn infer_enums(expr: &mut Expr, component_dependencies: &ComponentDependencies) {
+    let eum_info = internal::get_enum_info(expr, component_dependencies);
 
     internal::convert_identifiers_to_enum_function_calls(expr, &eum_info);
 }
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::{Expr, ExprVisitor, FunctionTypeRegistry, RegistryKey, RegistryValue};
+    use crate::{ComponentDependencies, Expr, ExprVisitor};
     use golem_wasm_ast::analysis::AnalysedType;
 
     pub(crate) fn convert_identifiers_to_enum_function_calls(
@@ -57,7 +57,7 @@ mod internal {
 
     pub(crate) fn get_enum_info(
         expr: &mut Expr,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
     ) -> EnumInfo {
         let mut enum_cases = vec![];
         let mut visitor = ExprVisitor::bottom_up(expr);
@@ -72,10 +72,12 @@ mod internal {
                 // If variable is local, it takes priority over being a global enum
                 if !variable_id.is_local() {
                     // Retrieve the possible no-arg variant from the registry
-                    let key = RegistryKey::FunctionName(variable_id.name().clone());
-                    if let Some(RegistryValue::Value(AnalysedType::Enum(typed_enum))) =
-                        function_type_registry.types.get(&key)
-                    {
+                    let result = component_dependency
+                        .function_dictionary()
+                        .iter()
+                        .find_map(|x| x.get_enum_info(variable_id.name().as_str()));
+
+                    if let Some(typed_enum) = result {
                         enum_cases.push(variable_id.name());
                         *inferred_type =
                             inferred_type.merge((&AnalysedType::Enum(typed_enum.clone())).into());

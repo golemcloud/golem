@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use shadow_rs::shadow;
 use std::convert::Infallible;
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -27,8 +28,6 @@ pub mod client;
 
 #[cfg(feature = "config")]
 pub mod config;
-
-pub mod golem_version;
 
 #[cfg(feature = "protobuf")]
 pub mod grpc;
@@ -68,6 +67,16 @@ pub mod virtual_exports;
 
 #[cfg(test)]
 test_r::enable!();
+
+shadow!(build);
+
+pub fn golem_version() -> &'static str {
+    if build::PKG_VERSION != "0.0.0" {
+        build::PKG_VERSION
+    } else {
+        build::GIT_DESCRIBE_TAGS
+    }
+}
 
 /// Trait to convert a value to a string which is safe to return through a public API.
 pub trait SafeDisplay {

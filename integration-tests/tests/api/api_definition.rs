@@ -36,7 +36,11 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
-    let component_id = deps.component("counters").unique().store().await;
+    let component_id = deps
+        .component("shopping-cart-resource")
+        .unique()
+        .store()
+        .await;
 
     let request = ApiDefinitionRequest {
         id: Some(ApiDefinitionId {
@@ -48,20 +52,24 @@ async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
             HttpApiDefinition {
                 routes: vec![HttpRoute {
                     method: HttpMethod::Post as i32,
-                    path: "/test-path-1".to_string(),
+                    path: "/{user-id}/test-path-1".to_string(),
                     binding: Some(GatewayBinding {
                         component: Some(VersionedComponentId {
                             component_id: Some(component_id.clone().into()),
                             version: 0,
                         }),
-                        worker_name: Some(to_grpc_rib_expr(r#""counter""#)),
+                        worker_name: None,
                         response: Some(to_grpc_rib_expr(
                             r#"
-                                let status: u64 = 200;
+                                let user-id = request.path.user-id;
+                                let worker = "shopping-cart-${user-id}";
+                                let inst = instance(worker);
+                                let res = inst.cart(user-id);
+                                let contents = res.get-cart-contents();
                                 {
-                                    headers: {ContentType: "json", userid: "foo"},
-                                   body: "foo",
-                                   status: status
+                                   headers: {ContentType: "json", userid: "foo"},
+                                   body: contents,
+                                   status: 201
                                 }
                             "#,
                         )),
@@ -114,7 +122,11 @@ async fn create_and_get_api_security_scheme(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
-    let component_id = deps.component("counters").unique().store().await;
+    let component_id = deps
+        .component("shopping-cart-resource")
+        .unique()
+        .store()
+        .await;
 
     let request_1 = ApiDefinitionRequest {
         id: Some(ApiDefinitionId {
@@ -126,20 +138,24 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
             HttpApiDefinition {
                 routes: vec![HttpRoute {
                     method: HttpMethod::Post as i32,
-                    path: "/test-path-1".to_string(),
+                    path: "/{user-id}/test-path-1".to_string(),
                     binding: Some(GatewayBinding {
                         component: Some(VersionedComponentId {
                             component_id: Some(component_id.clone().into()),
                             version: 0,
                         }),
-                        worker_name: Some(to_grpc_rib_expr(r#""counter""#)),
+                        worker_name: None,
                         response: Some(to_grpc_rib_expr(
                             r#"
-                                let status: u64 = 201;
+                                let user-id = request.path.user-id;
+                                let worker = "shopping-cart-${user-id}";
+                                let inst = instance(worker);
+                                let res = inst.cart(user-id);
+                                let contents = res.get-cart-contents();
                                 {
-                                    headers: {ContentType: "json", userid: "foo"},
-                                   body: "bar",
-                                   status: status
+                                   headers: {ContentType: "json", userid: "foo"},
+                                   body: contents,
+                                   status: 201
                                 }
                             "#,
                         )),
@@ -163,20 +179,24 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
                 routes: vec![
                     HttpRoute {
                         method: HttpMethod::Get as i32,
-                        path: "/test-path-1".to_string(),
+                        path: "/{user-id}/test-path-1".to_string(),
                         binding: Some(GatewayBinding {
                             component: Some(VersionedComponentId {
                                 component_id: Some(component_id.clone().into()),
                                 version: 0,
                             }),
-                            worker_name: Some(to_grpc_rib_expr(r#""counter""#)),
+                            worker_name: None,
                             response: Some(to_grpc_rib_expr(
                                 r#"
-                                let status: u64 = 200;
+                                let user-id = request.path.user-id;
+                                let worker = "shopping-cart-${user-id}";
+                                let inst = instance(worker);
+                                let res = inst.cart(user-id);
+                                let contents = res.get-cart-contents();
                                 {
-                                    headers: {ContentType: "json", userid: "foo"},
-                                   body: "foo",
-                                   status: status
+                                   headers: {ContentType: "json", userid: "foo"},
+                                   body: contents,
+                                   status: 201
                                 }
                             "#,
                             )),
@@ -189,20 +209,24 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
                     },
                     HttpRoute {
                         method: HttpMethod::Patch as i32,
-                        path: "/test-path-2".to_string(),
+                        path: "/{user-id}/test-path-2".to_string(),
                         binding: Some(GatewayBinding {
                             component: Some(VersionedComponentId {
                                 component_id: Some(component_id.clone().into()),
                                 version: 0,
                             }),
-                            worker_name: Some(to_grpc_rib_expr(r#""counter""#)),
+                            worker_name: None,
                             response: Some(to_grpc_rib_expr(
                                 r#"
-                                let status: u64 = 200;
+                                let user-id = request.path.user-id;
+                                let worker = "shopping-cart-${user-id}";
+                                let inst = instance(worker);
+                                let res = inst.cart(user-id);
+                                let contents = res.get-cart-contents();
                                 {
-                                    headers: {ContentType: "json", userid: "foo"},
-                                   body: "foo",
-                                   status: status
+                                   headers: {ContentType: "json", userid: "foo"},
+                                   body: contents,
+                                   status: 201
                                 }
                             "#,
                             )),
@@ -310,8 +334,16 @@ async fn get_api_definition_versions(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
-    let component_id_1 = deps.component("counters").unique().store().await;
-    let component_id_2 = deps.component("counters").unique().store().await;
+    let component_id_1 = deps
+        .component("shopping-cart-resource")
+        .unique()
+        .store()
+        .await;
+    let component_id_2 = deps
+        .component("shopping-cart-resource")
+        .unique()
+        .store()
+        .await;
 
     let request_1_1 = ApiDefinitionRequest {
         id: Some(ApiDefinitionId {
@@ -323,20 +355,24 @@ async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
             HttpApiDefinition {
                 routes: vec![HttpRoute {
                     method: HttpMethod::Post as i32,
-                    path: "/test-path-1".to_string(),
+                    path: "/{user-id}/test-path-1".to_string(),
                     binding: Some(GatewayBinding {
                         component: Some(VersionedComponentId {
                             component_id: Some(component_id_1.clone().into()),
                             version: 0,
                         }),
-                        worker_name: Some(to_grpc_rib_expr(r#""counter""#)),
+                        worker_name: None,
                         response: Some(to_grpc_rib_expr(
                             r#"
-                                let status: u64 = 201;
+                                let user-id = request.path.user-id;
+                                let worker = "shopping-cart-${user-id}";
+                                let inst = instance(worker);
+                                let res = inst.cart(user-id);
+                                let contents = res.get-cart-contents();
                                 {
-                                    headers: { ContentType: "json", userid: "foo" },
-                                   body: "bar",
-                                   status: status
+                                   headers: {ContentType: "json", userid: "foo"},
+                                   body: contents,
+                                   status: 201
                                 }
                             "#,
                         )),
@@ -366,20 +402,24 @@ async fn get_api_definition_all_versions(deps: &EnvBasedTestDependencies) {
             HttpApiDefinition {
                 routes: vec![HttpRoute {
                     method: HttpMethod::Post as i32,
-                    path: "/test-path-2".to_string(),
+                    path: "/{user-id}/test-path-2".to_string(),
                     binding: Some(GatewayBinding {
                         component: Some(VersionedComponentId {
                             component_id: Some(component_id_2.clone().into()),
                             version: 0,
                         }),
-                        worker_name: Some(to_grpc_rib_expr(r#""counter-2""#)),
+                        worker_name: None,
                         response: Some(to_grpc_rib_expr(
                             r#"
-                                let status: u64 = 404;
+                                 let user-id = request.path.user-id;
+                                let worker = "shopping-cart-${user-id}";
+                                let inst = instance(worker);
+                                let res = inst.cart(user-id);
+                                let contents = res.get-cart-contents();
                                 {
-                                    headers: {ContentType: "json", userid: "foo"},
-                                   body: "bar",
-                                   status: status
+                                   headers: {ContentType: "json", userid: "foo"},
+                                   body: contents,
+                                   status: 201
                                 }
                             "#,
                         )),

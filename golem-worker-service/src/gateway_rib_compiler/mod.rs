@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{
-    CompilerOutput, Expr, GlobalVariableTypeSpec, InferredType, Path, RibCompilationError,
-    RibCompiler, RibCompilerConfig,
+    CompilerOutput, ComponentDependency, Expr, GlobalVariableTypeSpec, InferredType, Path,
+    RibCompilationError, RibCompiler, RibCompilerConfig,
 };
 
 // A wrapper service over original Rib Compiler concerning
@@ -23,7 +22,7 @@ use rib::{
 pub trait WorkerServiceRibCompiler {
     fn compile(
         rib: &Expr,
-        export_metadata: &[AnalysedExport],
+        component_dependency: &[ComponentDependency],
     ) -> Result<CompilerOutput, RibCompilationError>;
 }
 
@@ -32,12 +31,12 @@ pub struct DefaultWorkerServiceRibCompiler;
 impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
     fn compile(
         rib: &Expr,
-        export_metadata: &[AnalysedExport],
+        component_dependency: &[ComponentDependency],
     ) -> Result<CompilerOutput, RibCompilationError> {
         let rib_input_spec = vec![
             GlobalVariableTypeSpec::new(
                 "request",
-                rib::Path::from_elems(vec!["path"]),
+                Path::from_elems(vec!["path"]),
                 InferredType::string(),
             ),
             GlobalVariableTypeSpec::new(
@@ -45,7 +44,6 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
                 Path::from_elems(vec!["query"]),
                 InferredType::string(),
             ),
-            // `request.headers.*` or `request.header.*` should be a `string`.
             GlobalVariableTypeSpec::new(
                 "request",
                 Path::from_elems(vec!["headers"]),
@@ -58,7 +56,7 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
             ),
         ];
 
-        let compiler_config = RibCompilerConfig::new(export_metadata.to_vec(), rib_input_spec);
+        let compiler_config = RibCompilerConfig::new(component_dependency.to_vec(), rib_input_spec);
 
         let compiler = RibCompiler::new(compiler_config);
 

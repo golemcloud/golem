@@ -5,6 +5,8 @@ package golem.rib;
 import "wasm/ast/type.proto";
 import "wasm/rpc/type_annotated_value.proto";
 import "golem/rib/function_name.proto";
+import "golem/rib/expr.proto";
+
 
 message RibIR {
     oneof instruction {
@@ -29,7 +31,7 @@ message RibIR {
         JumpInstruction jump = 19;
         JumpInstruction label = 20;
         wasm.ast.Type deconstruct = 21;
-        CallInstruction call = 22;
+        InvokeFunctionInstruction invoke_function = 22;
         string throw = 23;
         wasm.rpc.TypeAnnotatedValue push_flag = 24;
         GetTag get_tag = 25;
@@ -53,10 +55,15 @@ message RibIR {
         IsEmpty is_empty = 43;
         SelectIndexV1 select_index_v1 = 44;
         Length length = 45;
+        GenerateWorkerName generate_worker_name = 46;
     }
 }
 
 message Length {}
+
+message GenerateWorkerName {
+  optional VariableId variable_id = 1;
+}
 
 message SelectIndexV1{}
 
@@ -64,11 +71,28 @@ message VariableId {
     oneof variable_id {
         Global global = 1;
         Local local = 2;
+        MatchIdentifier match_identifier = 3;
+        ListComprehensionIdentifier list_comprehension_identifier = 4;
+        ListAggregationIdentifier list_aggregation_identifier = 5;
     }
 }
 
 message Global {
     string name = 1;
+}
+
+message ListComprehensionIdentifier {
+    string name = 1;
+}
+
+message ListAggregationIdentifier {
+    string name = 1;
+}
+
+
+message MatchIdentifier {
+    string name = 1;
+    uint32 match_arm_index  = 2;
 }
 
 message Local {
@@ -100,10 +124,27 @@ message JumpInstruction {
     uint64 instruction_id = 1;
 }
 
-message CallInstruction {
+message InvokeFunctionInstruction {
+    golem.rib.ComponentDependencyKey component = 1;
     uint64 argument_count = 2;
     wasm.ast.Type return_type = 3;
-    optional WorkerNamePresence worker_name_presence = 4;
+    InstanceVariable instance_variable = 4;
+
+}
+
+message InstanceVariable {
+    oneof kind {
+        WitWorker worker = 1;
+        WitResource resource = 2;
+    }
+}
+
+message WitWorker {
+  golem.rib.VariableId variable_id = 1;
+}
+
+message WitResource {
+  golem.rib.VariableId variable_id = 1;
 }
 
 enum WorkerNamePresence {

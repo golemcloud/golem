@@ -256,6 +256,7 @@ fn enqueue_expr_top_down(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
             Expr::Boolean { .. } => {}
             Expr::Option { expr: None, .. } => {}
             Expr::Throw { .. } => {}
+            Expr::GenerateWorkerName { .. } => {}
         }
     }
 }
@@ -438,6 +439,7 @@ fn enqueue_expr_bottom_up(expr: &mut Expr, queue: &mut VecDeque<&mut Expr>) {
             Expr::Boolean { .. } => {}
             Expr::Option { expr: None, .. } => {}
             Expr::Throw { .. } => {}
+            Expr::GenerateWorkerName { .. } => {}
         }
     }
 }
@@ -610,6 +612,7 @@ pub fn visit_expr_nodes_lazy<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mu
         Expr::Boolean { .. } => {}
         Expr::Option { expr: None, .. } => {}
         Expr::Throw { .. } => {}
+        Expr::GenerateWorkerName { .. } => {}
     }
 }
 
@@ -624,16 +627,19 @@ mod internal {
         match call_type {
             CallType::Function {
                 function_name,
-                worker,
+                instance_identifier: module,
+                ..
             } => (
                 function_name.function.raw_resource_params_mut(),
-                worker.as_mut(),
+                module.as_mut().and_then(|m| m.worker_name_mut()),
             ),
 
             CallType::InstanceCreation(instance_creation) => match instance_creation {
-                InstanceCreationType::Worker { worker_name, .. } => (None, worker_name.as_mut()),
+                InstanceCreationType::WitWorker { worker_name, .. } => (None, worker_name.as_mut()),
 
-                InstanceCreationType::Resource { worker_name, .. } => (None, worker_name.as_mut()),
+                InstanceCreationType::WitResource { module, .. } => {
+                    (None, module.as_mut().and_then(|m| m.worker_name_mut()))
+                }
             },
 
             CallType::VariantConstructor(_) => (None, None),

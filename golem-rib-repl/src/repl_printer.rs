@@ -14,9 +14,12 @@
 
 use crate::ReplBootstrapError;
 use colored::Colorize;
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::analysed_type::{record, str, u64};
+use golem_wasm_ast::analysis::{AnalysedResourceMode, AnalysedType, NameTypePair, TypeHandle};
+use golem_wasm_rpc::{Value, ValueAndType};
 use rib::*;
 use std::collections::BTreeMap;
+use std::fmt::Display;
 
 pub trait ReplPrinter {
     fn print_bootstrap_error(&self, error: &ReplBootstrapError) {
@@ -35,8 +38,45 @@ pub trait ReplPrinter {
         println!("{} {}", "[message]".yellow(), message.cyan());
     }
 
-    fn print_exports(&self, exports: &FunctionDictionary) {
-        print_function_dictionary(exports)
+    fn print_components_and_exports(&self, exports: &ComponentDependencies) {
+        for (component_dependency_key, component) in &exports.dependencies {
+            let mut indent = Indent::new();
+
+            println!(
+                "{} {}",
+                "📦 Component:".bold().bright_yellow(),
+                component_dependency_key
+                    .component_name
+                    .bold()
+                    .truecolor(180, 180, 180)
+            );
+
+            indent.add();
+
+            if let Some(root_package) = &component_dependency_key.root_package_name {
+                println!(
+                    "{} {} {}",
+                    indent,
+                    "Root Package:".bold().bright_cyan(),
+                    root_package.bold().truecolor(180, 180, 180)
+                );
+
+                indent.add();
+            }
+
+            if let Some(root_interface) = &component_dependency_key.root_package_version {
+                println!(
+                    "{} {} {}",
+                    indent,
+                    "Root Package Version:".bold().bright_cyan(),
+                    root_interface.bold().truecolor(180, 180, 180)
+                );
+
+                indent.add();
+            }
+
+            print_function_dictionary(&mut indent, component)
+        }
     }
 
     fn print_rib_compilation_error(&self, error: &RibCompilationError) {
@@ -44,7 +84,41 @@ pub trait ReplPrinter {
     }
 
     fn print_rib_result(&self, result: &RibResult) {
-        println!("{}", result.to_string().yellow());
+        match result {
+            RibResult::Unit => {
+                println!("{}", "()".yellow());
+            }
+
+            RibResult::Val(value_and_type) => match &value_and_type.value {
+                Value::Handle { uri, resource_id } => {
+                    println!("{} {}", "[warn]".magenta(), "the syntax below to show the resource-handle value is only used for display purposes".to_string().white());
+
+                    println!();
+
+                    let resource = Value::Record(vec![
+                        Value::String(uri.to_string()),
+                        Value::U64(*resource_id),
+                    ]);
+
+                    let analysed_type = record(vec![
+                        NameTypePair {
+                            name: "uri".to_string(),
+                            typ: str(),
+                        },
+                        NameTypePair {
+                            name: "resource-id".to_string(),
+                            typ: u64(),
+                        },
+                    ]);
+
+                    let result = ValueAndType::new(resource, analysed_type);
+
+                    println!("{}", result.to_string().yellow());
+                }
+
+                _ => println!("{}", result.to_string().yellow()),
+            },
+        }
     }
 
     fn print_rib_runtime_error(&self, error: &RibRuntimeError) {
@@ -52,12 +126,23 @@ pub trait ReplPrinter {
     }
 
     fn print_wasm_value_type(&self, analysed_type: &AnalysedType) {
-        println!(
-            "{}",
-            wasm_wave::wasm::DisplayType(analysed_type)
-                .to_string()
-                .yellow()
-        );
+        match analysed_type {
+            AnalysedType::Handle(type_handle) => {
+                let text = display_for_resource_handle(type_handle);
+                println!("{} {}", "[warn]".magenta(), "the syntax below to show the resource-handle type is only used for display purposes".to_string().white());
+
+                println!();
+
+                println!("{}", text.yellow());
+            }
+
+            _ => println!(
+                "{}",
+                wasm_wave::wasm::DisplayType(analysed_type)
+                    .to_string()
+                    .yellow()
+            ),
+        }
     }
 }
 
@@ -66,10 +151,9 @@ pub struct DefaultReplResultPrinter;
 
 impl ReplPrinter for DefaultReplResultPrinter {}
 
-pub fn print_function_dictionary(dict: &FunctionDictionary) {
+pub fn print_function_dictionary(indent: &mut Indent, dict: &FunctionDictionary) {
     let mut output = String::new();
 
-    // Group entries by package and interface
     let mut hierarchy: BTreeMap<
         Option<PackageName>,
         BTreeMap<Option<InterfaceName>, HierarchyNode>,
@@ -110,6 +194,12 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
                     .methods
                     .push((method.method_name.clone(), ftype));
             }
+            FunctionName::Variant(_) => {
+                continue;
+            }
+            FunctionName::Enum(_) => {
+                continue;
+            }
         }
     }
 
@@ -117,63 +207,91 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
         match pkg {
             Some(pkg) => {
                 output.push_str(&format!(
-                    "{} {}\n",
+                    "{} {} {}\n",
+                    indent,
                     "📦 Package:".bold().bright_yellow(),
-                    format!("{}::{}", pkg.namespace, pkg.package_name)
+                    format!("{}:{}", pkg.namespace, pkg.package_name)
                         .bold()
                         .truecolor(180, 180, 180)
                 ));
+
+                indent.add();
             }
             None => {
                 output.push_str(&format!("{}\n", "📦 Global Scope".bold().bright_yellow()));
+                indent.add();
             }
         }
 
         for (iface, node) in interfaces {
             if let Some(iface) = iface {
                 output.push_str(&format!(
-                    "  {} {}\n",
+                    "{} {} {}\n",
+                    indent,
                     "📄 Interface:".bold().bright_cyan(),
                     iface.name.bold().truecolor(180, 180, 180)
                 ));
+                indent.add();
             }
 
             if !node.functions.is_empty() {
-                output.push_str(&format!("    {}\n", "🔧 Functions:".bold().bright_green(),));
+                output.push_str(&format!(
+                    "{} {}\n",
+                    indent,
+                    "🔧 Functions:".bold().bright_green(),
+                ));
+                indent.add();
             }
 
             for (fname, ftype) in &node.functions {
-                output.push_str(&format!("         {}\n", fname.bright_magenta()));
+                output.push_str(&format!("{} {}\n", indent, fname.bright_magenta()));
+                indent.add();
                 output.push_str(&format!(
-                    "           ↳ {}: {}\n",
+                    "{} ↳ {}: {}\n",
+                    indent,
                     "Args".blue(),
                     format_type_list(&ftype.parameter_types).truecolor(180, 180, 180)
                 ));
                 output.push_str(&format!(
-                    "           ↳ {}: {}\n",
+                    "{} ↳ {}: {}\n",
+                    indent,
                     "Returns".blue(),
                     format_return_type(&ftype.return_type).truecolor(180, 180, 180)
                 ));
+                indent.remove();
             }
 
             for (res_name, res) in &node.resources {
                 output.push_str(&format!(
-                    "    {} {}\n",
+                    "{} {} {}\n",
+                    indent,
                     "🧩️ Resource:".bold().bright_yellow(),
                     res_name.truecolor(180, 180, 180)
                 ));
 
+                indent.add();
+
                 if let Some(ftype) = res.constructor {
                     output.push_str(&format!(
-                        "      ↳ {}: {}\n",
+                        "{} ↳ {}: {}\n",
+                        indent,
                         "Args".blue(),
                         format_type_list(&ftype.parameter_types).truecolor(180, 180, 180)
                     ));
 
-                    output.push_str(&format!("      {} \n", "🔧 Methods:".bold().bright_green(),));
+                    indent.add();
+
+                    output.push_str(&format!(
+                        "{} {} \n",
+                        indent,
+                        "🔧 Methods:".bold().bright_green(),
+                    ));
+
+                    indent.add();
 
                     for (mname, mtype) in &res.methods {
-                        output.push_str(&format!("           {}\n", mname.bright_magenta()));
+                        output.push_str(&format!("{} {}\n", indent, mname.bright_magenta()));
+                        indent.add();
 
                         let parameter_types = &mtype.parameter_types;
 
@@ -184,16 +302,20 @@ pub fn print_function_dictionary(dict: &FunctionDictionary) {
                         };
 
                         output.push_str(&format!(
-                            "             ↳ {}: {}\n",
+                            "{} ↳ {}: {}\n",
+                            indent,
                             "Args".blue(),
                             formatted
                         ));
 
                         output.push_str(&format!(
-                            "             ↳ {}: {}\n",
+                            "{} ↳ {}: {}\n",
+                            indent,
                             "Returns".blue(),
                             format_return_type(&mtype.return_type).truecolor(180, 180, 180)
                         ));
+
+                        indent.remove();
                     }
                 }
             }
@@ -258,14 +380,19 @@ fn print_rib_compilation_error(error: &RibCompilationError) {
         }
         RibCompilationError::RibTypeError(compilation_error) => {
             let cause = &compilation_error.cause;
-            let position = compilation_error.expr.source_span();
+            let position = &compilation_error.source_span;
 
             println!("{}", "[compilation error]".red().bold());
             println!("{} {}", "[position]".yellow(), position.start_column());
             println!(
                 "{} {}",
                 "[expression]".yellow(),
-                compilation_error.expr.to_string().white()
+                compilation_error
+                    .expr
+                    .as_ref()
+                    .map(|x| x.to_string())
+                    .unwrap_or_default()
+                    .white()
             );
             println!("{} {}", "[cause]".yellow(), cause.bright_red().bold());
 
@@ -315,5 +442,51 @@ fn print_bootstrap_error(error: &ReplBootstrapError) {
                 "[warn]".yellow()
             );
         }
+    }
+}
+
+// Only used for displaying since Wasm Wave is yet to support resource handle types
+fn display_for_resource_handle(type_handle: &TypeHandle) -> String {
+    let resource_id = &type_handle.resource_id.0;
+    let uri = &type_handle.mode;
+
+    let mode = match uri {
+        AnalysedResourceMode::Owned => "owned",
+        AnalysedResourceMode::Borrowed => "borrowed",
+    };
+
+    format!("handle<resource-id:{}, mode:{}>", resource_id, mode)
+}
+
+pub struct Indent {
+    level: usize,
+}
+
+impl Default for Indent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Indent {
+    pub fn new() -> Self {
+        Self { level: 0 }
+    }
+
+    pub fn add(&mut self) {
+        self.level += 2;
+    }
+
+    pub fn remove(&mut self) {
+        if self.level >= 2 {
+            self.level -= 2;
+        }
+    }
+}
+
+impl Display for Indent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", " ".repeat(self.level))?;
+        Ok(())
     }
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{AnalysedTypeWithUnit, ParsedFunctionSite, VariableId};
+use crate::{AnalysedTypeWithUnit, ComponentDependencyKey, ParsedFunctionSite, VariableId};
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
@@ -49,7 +49,12 @@ pub enum RibIR {
     Label(InstructionId),
     Deconstruct,
     CreateFunctionName(ParsedFunctionSite, FunctionReferenceType),
-    InvokeFunction(WorkerNamePresence, usize, AnalysedTypeWithUnit),
+    InvokeFunction(
+        ComponentDependencyKey,
+        InstanceVariable,
+        usize,
+        AnalysedTypeWithUnit,
+    ),
     PushVariant(String, AnalysedType), // There is no arg size since the type of each variant case is only 1 from beginning
     PushEnum(String, AnalysedType),
     Throw(String),
@@ -66,38 +71,13 @@ pub enum RibIR {
     PushToSink,
     SinkToList,
     Length,
+    GenerateWorkerName(Option<VariableId>),
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
-pub enum WorkerNamePresence {
-    Present,
-    Absent,
-}
-
-impl From<golem_api_grpc::proto::golem::rib::WorkerNamePresence> for WorkerNamePresence {
-    fn from(value: golem_api_grpc::proto::golem::rib::WorkerNamePresence) -> Self {
-        match value {
-            golem_api_grpc::proto::golem::rib::WorkerNamePresence::Present => {
-                WorkerNamePresence::Present
-            }
-            golem_api_grpc::proto::golem::rib::WorkerNamePresence::Absent => {
-                WorkerNamePresence::Absent
-            }
-        }
-    }
-}
-
-impl From<WorkerNamePresence> for golem_api_grpc::proto::golem::rib::WorkerNamePresence {
-    fn from(value: WorkerNamePresence) -> Self {
-        match value {
-            WorkerNamePresence::Present => {
-                golem_api_grpc::proto::golem::rib::WorkerNamePresence::Present
-            }
-            WorkerNamePresence::Absent => {
-                golem_api_grpc::proto::golem::rib::WorkerNamePresence::Absent
-            }
-        }
-    }
+pub enum InstanceVariable {
+    WitResource(VariableId),
+    WitWorker(VariableId),
 }
 
 impl RibIR {
@@ -182,15 +162,15 @@ impl InstructionId {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::{
-        AnalysedTypeWithUnit, FunctionReferenceType, InstructionId, ParsedFunctionSite, RibIR,
-        WorkerNamePresence,
+        AnalysedTypeWithUnit, ComponentDependencyKey, FunctionReferenceType, InstanceVariable,
+        InstructionId, ParsedFunctionSite, RibIR, VariableId,
     };
     use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
     use golem_api_grpc::proto::golem::rib::{
-        And, CallInstruction, ConcatInstruction, CreateFunctionNameInstruction, EqualTo, GetTag,
-        GreaterThan, GreaterThanOrEqualTo, IsEmpty, JumpInstruction, LessThan, LessThanOrEqualTo,
-        Negate, Or, PushListInstruction, PushNoneInstruction, PushTupleInstruction,
-        RibIr as ProtoRibIR,
+        And, ConcatInstruction, CreateFunctionNameInstruction, EqualTo, GetTag, GreaterThan,
+        GreaterThanOrEqualTo, InvokeFunctionInstruction, IsEmpty, JumpInstruction, LessThan,
+        LessThanOrEqualTo, Negate, Or, PushListInstruction, PushNoneInstruction,
+        PushTupleInstruction, RibIr as ProtoRibIR, WitResource,
     };
     use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
     use golem_wasm_rpc::ValueAndType;
@@ -318,6 +298,14 @@ mod protobuf {
                 .ok_or_else(|| "Missing instruction".to_string())?;
 
             match instruction {
+                Instruction::GenerateWorkerName(generate_worker_name) => {
+                    let variable_id = generate_worker_name
+                        .variable_id
+                        .map(VariableId::try_from)
+                        .transpose()?;
+
+                    Ok(RibIR::GenerateWorkerName(variable_id))
+                }
                 Instruction::PushLit(value) => {
                     let value: ValueAndType = value.try_into()?;
                     Ok(RibIR::PushLit(value))
@@ -415,8 +403,8 @@ mod protobuf {
                     value.instruction_id as usize,
                 ))),
                 Instruction::Deconstruct(_) => Ok(RibIR::Deconstruct),
-                Instruction::Call(call_instruction) => {
-                    let return_type = match call_instruction.return_type {
+                Instruction::InvokeFunction(invoke_function_instruction) => {
+                    let return_type = match invoke_function_instruction.return_type {
                         Some(return_type) => {
                             let analysed_type = (&return_type)
                                 .try_into()
@@ -427,22 +415,41 @@ mod protobuf {
                         None => AnalysedTypeWithUnit::Unit,
                     };
 
-                    let worker_name_presence = call_instruction
-                        .worker_name_presence
-                        .map(|x| {
-                            golem_api_grpc::proto::golem::rib::WorkerNamePresence::try_from(x)
-                                .map_err(|err| err.to_string())
-                        })
-                        .transpose()?;
+                    let instance_variable: InstanceVariable = invoke_function_instruction
+                        .instance_variable
+                        .ok_or("Missing instance_variable".to_string())
+                        .and_then(|iv| {
+                            match iv.kind.ok_or("Missing instance_variable kind".to_string())? {
+                                golem_api_grpc::proto::golem::rib::instance_variable::Kind::Resource(wit_resource) => {
+                                    let variable_id = wit_resource.variable_id.ok_or(
+                                        "Missing variable_id in WitResource".to_string(),
+                                    )?.try_into()
+                                        .map_err(|_| "Failed to convert VariableId".to_string())?;
+                                    Ok(InstanceVariable::WitResource(variable_id))
+                                }
+                                golem_api_grpc::proto::golem::rib::instance_variable::Kind::Worker(wit_worker) => {
+                                    let variable_id = wit_worker.variable_id.ok_or(
+                                        "Missing variable_id in WitWorker".to_string(),
+                                    )?.try_into()
+                                        .map_err(|_| "Failed to convert VariableId".to_string())?;
 
-                    // Default is absent because old rib scripts don't have worker name in it
-                    let worker_name_presence = worker_name_presence
-                        .map(|x| x.into())
-                        .unwrap_or(WorkerNamePresence::Absent);
+                                    Ok(InstanceVariable::WitWorker(variable_id))
+                                }
+                            }
+                        })?;
+
+                    let component_dependency_key_proto = invoke_function_instruction
+                        .component
+                        .ok_or("Missing component_dependency_key".to_string())?;
+
+                    let component_dependency_key =
+                        ComponentDependencyKey::try_from(component_dependency_key_proto)
+                            .map_err(|_| "Failed to convert ComponentDependencyKey".to_string())?;
 
                     Ok(RibIR::InvokeFunction(
-                        worker_name_presence,
-                        call_instruction.argument_count as usize,
+                        component_dependency_key,
+                        instance_variable,
+                        invoke_function_instruction.argument_count as usize,
                         return_type,
                     ))
                 }
@@ -536,6 +543,15 @@ mod protobuf {
 
         fn try_from(value: RibIR) -> Result<Self, Self::Error> {
             let instruction = match value {
+                RibIR::GenerateWorkerName(variable_id) => {
+                    let variable_id_proto = variable_id.map(|v| v.into());
+
+                    Instruction::GenerateWorkerName(
+                        golem_api_grpc::proto::golem::rib::GenerateWorkerName {
+                            variable_id: variable_id_proto,
+                        },
+                    )
+                }
                 RibIR::PushLit(value) => {
                     Instruction::PushLit(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                         type_annotated_value: Some(
@@ -596,7 +612,12 @@ mod protobuf {
                 RibIR::Deconstruct => {
                     Instruction::Deconstruct((&AnalysedType::Str(TypeStr)).into())
                 } //TODO; remove type in deconstruct from protobuf
-                RibIR::InvokeFunction(worker_name_presence, arg_count, return_type) => {
+                RibIR::InvokeFunction(
+                    component_dependency_key,
+                    worker_name_presence,
+                    arg_count,
+                    return_type,
+                ) => {
                     let typ = match return_type {
                         AnalysedTypeWithUnit::Unit => None,
                         AnalysedTypeWithUnit::Type(analysed_type) => {
@@ -606,13 +627,41 @@ mod protobuf {
                         }
                     };
 
-                    let worker_name_presence: golem_api_grpc::proto::golem::rib::WorkerNamePresence =
-                        worker_name_presence.into();
+                    let instance_variable = match worker_name_presence {
+                        InstanceVariable::WitResource(variable_id) => {
+                            golem_api_grpc::proto::golem::rib::InstanceVariable {
+                                kind: Some(
+                                    golem_api_grpc::proto::golem::rib::instance_variable::Kind::Resource(
+                                        WitResource {
+                                            variable_id: Some(variable_id.into()),
+                                        },
+                                    ),
+                                ),
+                            }
+                        }
+                        InstanceVariable::WitWorker(variable_id) => {
+                            golem_api_grpc::proto::golem::rib::InstanceVariable {
+                                kind: Some(
+                                    golem_api_grpc::proto::golem::rib::instance_variable::Kind::Worker(
+                                        golem_api_grpc::proto::golem::rib::WitWorker {
+                                            variable_id: Some(variable_id.into()),
+                                        },
+                                    ),
+                                ),
+                            }
+                        }
+                    };
 
-                    Instruction::Call(CallInstruction {
+                    let component_dependency_key =
+                        golem_api_grpc::proto::golem::rib::ComponentDependencyKey::from(
+                            component_dependency_key,
+                        );
+
+                    Instruction::InvokeFunction(InvokeFunctionInstruction {
+                        component: Some(component_dependency_key),
                         argument_count: arg_count as u64,
                         return_type: typ,
-                        worker_name_presence: Some(worker_name_presence.into()),
+                        instance_variable: Some(instance_variable),
                     })
                 }
                 RibIR::PushVariant(name, return_type) => {

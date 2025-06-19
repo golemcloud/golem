@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::rib_type_error::RibTypeError;
+use crate::rib_type_error::RibTypeErrorInternal;
 use crate::{
-    DynamicParsedFunctionName, Expr, ExprVisitor, FunctionTypeRegistry, GlobalVariableTypeSpec,
-    RegistryKey,
+    ComponentDependencies, DynamicParsedFunctionName, Expr, ExprVisitor, FunctionName,
+    GlobalVariableTypeSpec,
 };
 use std::collections::HashSet;
 
@@ -30,12 +30,12 @@ impl InferredExpr {
 
     pub fn from_expr(
         expr: Expr,
-        function_type_registry: &FunctionTypeRegistry,
+        component_dependency: &ComponentDependencies,
         type_spec: &Vec<GlobalVariableTypeSpec>,
-    ) -> Result<InferredExpr, RibTypeError> {
+    ) -> Result<InferredExpr, RibTypeErrorInternal> {
         let mut mutable_expr = expr;
 
-        mutable_expr.infer_types(function_type_registry, type_spec)?;
+        mutable_expr.infer_types(component_dependency, type_spec)?;
 
         Ok(InferredExpr(mutable_expr))
     }
@@ -60,14 +60,14 @@ impl InferredExpr {
         worker_calls
     }
 
-    pub fn worker_invoke_registry_keys(&self) -> HashSet<RegistryKey> {
+    pub fn worker_invoke_registry_keys(&self) -> HashSet<FunctionName> {
         let worker_calls = self.worker_invoke_calls();
 
         let mut registry_keys = HashSet::new();
 
         for call in worker_calls {
-            let keys = RegistryKey::registry_keys_of_function(&call);
-            registry_keys.extend(keys)
+            let keys = FunctionName::from_dynamic_parsed_function_name(&call);
+            registry_keys.insert(keys);
         }
 
         registry_keys
