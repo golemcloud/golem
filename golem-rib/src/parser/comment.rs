@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::parser::char::{char, spaces, string};
+use combine::parser::char::{alpha_num, char, newline, spaces, string};
 use combine::{
     any, attempt, choice, eof, many, none_of, not_followed_by, optional, Parser, Stream,
 };
-use poem_openapi::__private::poem::EndpointExt;
 
 pub fn comments<Input>() -> impl Parser<Input, Output = Option<()>>
 where
@@ -41,7 +40,15 @@ where
 {
     (
         choice!(attempt(string("/**")), attempt(string("/*"))).map(|_| ()),
-        many(none_of(vec!['*']).map(|_| ())),
+        many(
+            attempt(
+                choice((
+                    (char('*'), not_followed_by(char('/'))).map(|_| ()),
+                    any().map(|_| ()),
+                ))
+            )
+        )
+        .map(|_: Vec<_>| ()),
         string("*/").map(|_| ()),
     )
         .map(|(_, _, _): ((), (), ())| ())

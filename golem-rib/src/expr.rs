@@ -3375,15 +3375,15 @@ mod tests {
     #[test]
     fn test_rib_with_comments_2() {
         let sample_rib = r#"
-         /** hello */
-         let x = 1; /** hello */
+         /** single line comment style 1 */
+         let x = 1; /**  single line comment style 1 */
 
-         /* hello */
-         let y = 2; /* hello */
+         /*  single line comment style 2 */
+         let y = 2; /*  single line comment style 2 */
 
-         /* hello
+         /* multi line comment one line
           */
-         let result = x > y; /* hello
+         let result = x > y; /* multi line comment with one line
           */
 
          /** */
@@ -3403,6 +3403,10 @@ mod tests {
 
          if /**foo*/ 1 then /* 0 */ 0 else /***/ 1;
 
+         /**
+            * this is a comment
+            * that spans multiple lines
+            */
          let result = ns:name/interface.{[static]resource1.do-something-static}(baz, qux);
 
          result
