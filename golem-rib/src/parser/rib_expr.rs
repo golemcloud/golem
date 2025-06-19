@@ -41,7 +41,7 @@ use crate::TypeName;
 use bigdecimal::BigDecimal;
 use combine::parser::char;
 use combine::parser::char::{char, digit, spaces};
-use combine::{attempt, choice, eof, many, many1, none_of, optional, parser, position, Stream};
+use combine::{attempt, choice, many, many1, optional, parser, position, Stream};
 use combine::{ParseError, Parser};
 use std::str::FromStr;
 

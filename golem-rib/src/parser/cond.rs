@@ -16,7 +16,6 @@ use combine::parser::char::{alpha_num, char, spaces, string};
 use combine::{attempt, not_followed_by, ParseError, Parser};
 
 use crate::expr::Expr;
-use crate::parser::comment::comments;
 use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;
 use crate::rib_source_span::GetSourcePosition;

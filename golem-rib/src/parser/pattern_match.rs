@@ -50,7 +50,7 @@ where
 }
 
 mod match_arm {
-    use combine::parser::char::spaces;
+
     use combine::{parser::char::string, ParseError, Parser};
 
     use super::arm_pattern::*;

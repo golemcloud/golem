@@ -25,9 +25,9 @@ use crate::{
     InstanceIdentifier, ParsedFunctionName, VariableId,
 };
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
-use combine::parser::char::{newline, spaces};
+use combine::parser::char::spaces;
 use combine::stream::position;
-use combine::{choice, look_ahead, token, Parser};
+use combine::Parser;
 use combine::{eof, EasyParser};
 use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 use golem_wasm_ast::analysis::AnalysedType;
