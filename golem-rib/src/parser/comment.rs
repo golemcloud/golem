@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::parser::char::{char, spaces, string};
+use combine::parser::char::{char, newline, spaces, string};
 use combine::{
     any, attempt, choice, eof, many, none_of, not_followed_by, optional, parser, Parser, Stream,
 };
@@ -70,7 +70,7 @@ where
     (
         spaces().with(choice!(attempt(string("///")), attempt(string("//"))).map(|_| ())),
         many(none_of(vec!['\n']).map(|_| ())),
-        choice((string("\r\n").map(|_| ()), string("\n").map(|_| ()), eof())),
+        choice((newline().map(|_| ()), eof())),
         optional(comments()).map(|_: Option<_>| ()),
     )
         .map(|(_, _, _, _): ((), (), (), ())| ())
