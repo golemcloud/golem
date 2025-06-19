@@ -41,3 +41,4 @@ pub(crate) mod rib_expr;
 mod sequence;
 mod tuple;
 pub(crate) mod type_name;
+mod comment;

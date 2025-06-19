@@ -25,9 +25,9 @@ use crate::{
     InstanceIdentifier, ParsedFunctionName, VariableId,
 };
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
-use combine::parser::char::spaces;
+use combine::parser::char::{newline, spaces};
 use combine::stream::position;
-use combine::Parser;
+use combine::{choice, look_ahead, token, Parser};
 use combine::{eof, EasyParser};
 use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 use golem_wasm_ast::analysis::AnalysedType;
@@ -2480,7 +2480,7 @@ impl<'de> Deserialize<'de> for Expr {
     where
         D: serde::Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
+        let value = Value::deserialize(deserializer)?;
         match value {
             Value::String(expr_string) => match from_string(expr_string.as_str()) {
                 Ok(expr) => Ok(expr),
@@ -2501,7 +2501,7 @@ impl Serialize for Expr {
         S: Serializer,
     {
         match text::to_string(self) {
-            Ok(value) => serde_json::Value::serialize(&Value::String(value), serializer),
+            Ok(value) => Value::serialize(&Value::String(value), serializer),
             Err(error) => Err(serde::ser::Error::custom(error.to_string())),
         }
     }
@@ -3302,21 +3302,32 @@ mod tests {
     #[test]
     fn test_rib() {
         let sample_rib = r#"
+         // this is x
          let x = 1;
+
+         // this is y
          let y = 2;
-         let result = x > y;
+
+         // this is result
+         let result = x > y; // this is a comment
+
+         // this is foo
          let foo = some(result);
          let bar = ok(result);
 
+         // this is baz
          let baz = match foo {
            some(x) => x,
            none => false
          };
 
+         // this is qux
          let qux = match bar {
            ok(x) => x,
+           // this is a comment
            err(msg) => false
          };
+
 
          let result = ns:name/interface.{[static]resource1.do-something-static}(baz, qux);
 
