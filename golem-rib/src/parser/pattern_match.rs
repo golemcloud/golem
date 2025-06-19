@@ -18,7 +18,7 @@ use combine::{attempt, not_followed_by, sep_end_by1, ParseError, Parser};
 use match_arm::*;
 
 use crate::expr::Expr;
-use crate::parser::comment::{comment, discard};
+use crate::parser::comment::comments;
 use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;
 use crate::rib_source_span::GetSourcePosition;
@@ -31,10 +31,7 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    let arms = sep_end_by1(
-        match_arm().skip(discard()),
-        char(',').skip(discard()),
-    );
+    let arms = sep_end_by1(match_arm().skip(comments()), char(',').skip(comments()));
 
     attempt(
         string("match")
@@ -44,8 +41,8 @@ where
     .with(
         (
             rib_expr(),
-            char('{').skip(discard()),
-            arms.skip(discard()),
+            char('{').skip(comments()),
+            arms.skip(comments()),
             char('}'),
         )
             .map(|(expr, _, arms, _)| Expr::pattern_match(expr, arms)),
@@ -58,7 +55,7 @@ mod match_arm {
 
     use super::arm_pattern::*;
     use crate::expr::MatchArm;
-    use crate::parser::comment::discard;
+    use crate::parser::comment::comments;
     use crate::parser::errors::RibParseError;
     use crate::parser::rib_expr::rib_expr;
     use crate::rib_source_span::GetSourcePosition;
@@ -74,8 +71,8 @@ mod match_arm {
     {
         (
             //LHS
-            arm_pattern().skip(discard()),
-            string("=>").skip(discard()),
+            arm_pattern().skip(comments()),
+            string("=>").skip(comments()),
             //RHS
             rib_expr(),
         )

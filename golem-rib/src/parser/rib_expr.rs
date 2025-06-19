@@ -16,6 +16,7 @@ use super::binary_op::{binary_op, BinaryOp};
 use crate::expr::Expr;
 use crate::parser::boolean::boolean_literal;
 use crate::parser::call::call;
+use crate::parser::comment::comments;
 use crate::parser::cond::conditional;
 use crate::parser::errors::RibParseError;
 use crate::parser::flag::flag;
@@ -39,11 +40,10 @@ use crate::rib_source_span::{GetSourcePosition, SourceSpan};
 use crate::TypeName;
 use bigdecimal::BigDecimal;
 use combine::parser::char;
-use combine::parser::char::{char, digit, spaces, string};
+use combine::parser::char::{char, digit, spaces};
 use combine::{attempt, choice, eof, many, many1, none_of, optional, parser, position, Stream};
 use combine::{ParseError, Parser};
 use std::str::FromStr;
-use crate::parser::comment::{comment, discard};
 
 // A rib expression := (simple_expr, rib_expr_rest*)
 // A simple_expr never has any expression that starts with rib_expression
@@ -150,7 +150,7 @@ where
     >,
     Input::Position: GetSourcePosition,
 {
-    (position(), discard(), parser, discard(), position()).map(|(start, _, expr, _, end)| {
+    (position(), comments(), parser, comments(), position()).map(|(start, _, expr, _, end)| {
         let start_pos: Input::Position = start;
         let start = start_pos.get_source_position();
         let end_pos: Input::Position = end;
@@ -159,7 +159,6 @@ where
         expr.with_source_span(span)
     })
 }
-
 
 fn flag_or_record<Input>() -> impl Parser<Input, Output = Expr>
 where

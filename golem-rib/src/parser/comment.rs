@@ -12,40 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::{attempt, choice, eof, many, none_of, optional, Parser, Stream};
 use combine::parser::char::{char, spaces, string};
+use combine::{
+    any, attempt, choice, eof, many, none_of, not_followed_by, optional, Parser, Stream,
+};
+use poem_openapi::__private::poem::EndpointExt;
 
-pub fn comment<Input>() -> impl Parser<Input, Output = Option<()>>
+pub fn comments<Input>() -> impl Parser<Input, Output = Option<()>>
 where
     Input: Stream<Token = char>,
 {
-  optional(comment_1())
+    spaces()
+        .silent()
+        .with(line_or_block_comments().silent().skip(spaces().silent()))
+        .map(|_| None)
 }
 
+fn line_or_block_comments<Input>() -> impl Parser<Input, Output = Option<()>>
+where
+    Input: Stream<Token = char>,
+{
+    optional(choice!(line_comment(), block_comment()))
+}
 
-pub fn comment_1<Input>() -> impl Parser<Input, Output = ()>
+fn block_comment<Input>() -> impl Parser<Input, Output = ()>
 where
     Input: Stream<Token = char>,
 {
     (
-        attempt(string("//")).map(|_| ()),
-        many(
-            none_of(vec!['\n']).map(|_| ()),
-        ),
-        choice((
-            string("\r\n").map(|_| ()),
-            string("\n").map(|_| ()),
-            eof()
-        )),
+        choice!(attempt(string("/**")), attempt(string("/*"))).map(|_| ()),
+        many(none_of(vec!['*']).map(|_| ())),
+        string("*/").map(|_| ()),
     )
         .map(|(_, _, _): ((), (), ())| ())
 }
-
-pub fn discard<Input>() -> impl Parser<Input, Output = Option<()>>
+fn line_comment<Input>() -> impl Parser<Input, Output = ()>
 where
     Input: Stream<Token = char>,
 {
-    spaces().silent()
-        .with(comment().silent().skip(spaces().silent()))
-        .map(|_| None)
+    (
+        attempt(string("//").map(|_| ())),
+        many(none_of(vec!['\n']).map(|_| ())),
+        choice((string("\r\n").map(|_| ()), string("\n").map(|_| ()), eof())),
+    )
+        .map(|(_, _, _): ((), (), ())| ())
 }
