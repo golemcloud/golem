@@ -211,13 +211,6 @@ impl TransactionFailOn {
             }
         }
     }
-
-    fn fail_count(&self) -> u8 {
-        match self {
-            TransactionFailOn::OplogAdd(_, ec) => *ec,
-            TransactionFailOn::OplogAddAndTx(_, ec, _, _) => *ec,
-        }
-    }
 }
 
 #[test]
@@ -336,7 +329,7 @@ async fn rdbms_postgres_crud(
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
-    check_transaction_oplog_entries::<PostgresType>(oplog, None, None);
+    check_transaction_oplog_entries::<PostgresType>(oplog, None);
 
     workers_interrupt_test(&executor, worker_ids1.clone()).await;
     workers_interrupt_test(&executor, worker_ids3.clone()).await;
@@ -476,7 +469,13 @@ async fn rdbms_postgres_idempotency(
     check!(oplog_json.is_ok());
     // println!("{}", oplog_json.unwrap());
 
-    check_transaction_oplog_entries::<PostgresType>(oplog, Some(2), None);
+    check_transaction_oplog_entries::<PostgresType>(
+        oplog,
+        Some(vec![
+            TransactionOplogBlockEnd::Committed,
+            TransactionOplogBlockEnd::Committed,
+        ]),
+    );
 
     drop(executor);
 }
@@ -487,7 +486,7 @@ async fn postgres_transaction_recovery_test(
     postgres: &DockerPostgresRdb,
     fail_on: TransactionFailOn,
     transaction_end: TransactionEnd,
-    expected_restart: bool,
+    expected_oplog_ends: Vec<TransactionOplogBlockEnd>,
 ) {
     let db_address = postgres.public_connection_string();
     let context = TestContext::new(last_unique_id);
@@ -611,15 +610,7 @@ async fn postgres_transaction_recovery_test(
 
     // println!("{}", oplog_json.unwrap());
 
-    check_transaction_oplog_entries::<PostgresType>(
-        oplog,
-        Some(1),
-        if expected_restart {
-            Some(fail_on.fail_count() as usize)
-        } else {
-            None
-        },
-    );
+    check_transaction_oplog_entries::<PostgresType>(oplog, Some(expected_oplog_ends));
 
     drop(executor);
 }
@@ -639,7 +630,7 @@ async fn rdbms_postgres_commit_recovery(
             postgres,
             TransactionFailOn::oplog_add("CommittedRemoteTransaction", fail_count),
             TransactionEnd::Commit,
-            false,
+            vec![TransactionOplogBlockEnd::Committed],
         )
         .await;
     }
@@ -653,17 +644,31 @@ async fn rdbms_postgres_pre_commit_recovery(
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
-    for fail_count in 1..=2 {
-        postgres_transaction_recovery_test(
-            last_unique_id,
-            deps,
-            postgres,
-            TransactionFailOn::oplog_add("PreCommitRemoteTransaction", fail_count),
-            TransactionEnd::Commit,
-            true,
-        )
-        .await;
-    }
+    postgres_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        postgres,
+        TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 1),
+        TransactionEnd::Commit,
+        vec![
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::Committed,
+        ],
+    )
+    .await;
+    postgres_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        postgres,
+        TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 2),
+        TransactionEnd::Commit,
+        vec![
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::Committed,
+        ],
+    )
+    .await;
 }
 
 #[test]
@@ -681,7 +686,7 @@ async fn rdbms_postgres_rollback_recovery(
             postgres,
             TransactionFailOn::oplog_add("RolledBackRemoteTransaction", fail_count),
             TransactionEnd::Rollback,
-            false,
+            vec![TransactionOplogBlockEnd::RolledBack],
         )
         .await;
     }
@@ -695,17 +700,32 @@ async fn rdbms_postgres_pre_rollback_recovery(
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
-    for fail_count in 1..=2 {
-        postgres_transaction_recovery_test(
-            last_unique_id,
-            deps,
-            postgres,
-            TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", fail_count),
-            TransactionEnd::Rollback,
-            false,
-        )
-        .await;
-    }
+    postgres_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        postgres,
+        TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 1),
+        TransactionEnd::Rollback,
+        vec![
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::RolledBack,
+        ],
+    )
+    .await;
+
+    postgres_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        postgres,
+        TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 2),
+        TransactionEnd::Rollback,
+        vec![
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::RolledBack,
+        ],
+    )
+    .await;
 }
 
 #[test]
@@ -727,7 +747,10 @@ async fn rdbms_postgres_commit_and_tx_status_not_found_recovery(
             1,
         ),
         TransactionEnd::Commit,
-        true,
+        vec![
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::RolledBack,
+        ],
     )
     .await;
 }
@@ -1029,7 +1052,7 @@ async fn rdbms_mysql_crud(
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
-    check_transaction_oplog_entries::<MysqlType>(oplog, None, None);
+    check_transaction_oplog_entries::<MysqlType>(oplog, None);
 
     workers_interrupt_test(&executor, worker_ids1.clone()).await;
     workers_interrupt_test(&executor, worker_ids3.clone()).await;
@@ -1163,7 +1186,13 @@ async fn rdbms_mysql_idempotency(
     check!(oplog_json.is_ok());
     // println!("{}", oplog.unwrap());
 
-    check_transaction_oplog_entries::<MysqlType>(oplog, Some(2), None);
+    check_transaction_oplog_entries::<MysqlType>(
+        oplog,
+        Some(vec![
+            TransactionOplogBlockEnd::Committed,
+            TransactionOplogBlockEnd::Committed,
+        ]),
+    );
 
     drop(executor);
 }
@@ -1174,7 +1203,7 @@ async fn mysql_transaction_recovery_test(
     mysql: &DockerMysqlRdb,
     fail_on: TransactionFailOn,
     transaction_end: TransactionEnd,
-    expected_restart: bool,
+    expected_oplog_ends: Vec<TransactionOplogBlockEnd>,
 ) {
     let db_address = mysql.public_connection_string();
     let context = TestContext::new(last_unique_id);
@@ -1290,15 +1319,7 @@ async fn mysql_transaction_recovery_test(
     check!(oplog_json.is_ok());
     // println!("{}", oplog_json.unwrap());
 
-    check_transaction_oplog_entries::<MysqlType>(
-        oplog,
-        Some(1),
-        if expected_restart {
-            Some(fail_on.fail_count() as usize)
-        } else {
-            None
-        },
-    );
+    check_transaction_oplog_entries::<MysqlType>(oplog, Some(expected_oplog_ends));
 
     drop(executor);
 }
@@ -1318,7 +1339,7 @@ async fn rdbms_mysql_commit_recovery(
             mysql,
             TransactionFailOn::oplog_add("CommittedRemoteTransaction", fail_count),
             TransactionEnd::Commit,
-            false,
+            vec![TransactionOplogBlockEnd::Committed],
         )
         .await;
     }
@@ -1332,17 +1353,32 @@ async fn rdbms_mysql_pre_commit_recovery(
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
-    for fail_count in 1..=2 {
-        mysql_transaction_recovery_test(
-            last_unique_id,
-            deps,
-            mysql,
-            TransactionFailOn::oplog_add("PreCommitRemoteTransaction", fail_count),
-            TransactionEnd::Commit,
-            true,
-        )
-        .await;
-    }
+    mysql_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        mysql,
+        TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 1),
+        TransactionEnd::Commit,
+        vec![
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::Committed,
+        ],
+    )
+    .await;
+
+    mysql_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        mysql,
+        TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 2),
+        TransactionEnd::Commit,
+        vec![
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::Committed,
+        ],
+    )
+    .await;
 }
 
 #[test]
@@ -1360,7 +1396,7 @@ async fn rdbms_mysql_rollback_recovery(
             mysql,
             TransactionFailOn::oplog_add("RolledBackRemoteTransaction", fail_count),
             TransactionEnd::Rollback,
-            false,
+            vec![TransactionOplogBlockEnd::RolledBack],
         )
         .await;
     }
@@ -1374,17 +1410,32 @@ async fn rdbms_mysql_pre_rollback_recovery(
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
-    for fail_count in 1..=2 {
-        mysql_transaction_recovery_test(
-            last_unique_id,
-            deps,
-            mysql,
-            TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", fail_count),
-            TransactionEnd::Rollback,
-            false,
-        )
-        .await;
-    }
+    mysql_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        mysql,
+        TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 1),
+        TransactionEnd::Rollback,
+        vec![
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::RolledBack,
+        ],
+    )
+    .await;
+
+    mysql_transaction_recovery_test(
+        last_unique_id,
+        deps,
+        mysql,
+        TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 2),
+        TransactionEnd::Rollback,
+        vec![
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::RolledBack,
+        ],
+    )
+    .await;
 }
 
 #[test]
@@ -1406,7 +1457,10 @@ async fn rdbms_mysql_commit_and_tx_status_not_found_recovery(
             1,
         ),
         TransactionEnd::Commit,
-        true,
+        vec![
+            TransactionOplogBlockEnd::Jump,
+            TransactionOplogBlockEnd::RolledBack,
+        ],
     )
     .await;
 }
@@ -1925,15 +1979,23 @@ fn query_empty_response() -> serde_json::Value {
     query_response(vec![], vec![])
 }
 
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+enum TransactionOplogBlockEnd {
+    Jump,
+    Committed,
+    RolledBack,
+}
+
 fn check_transaction_oplog_entries<T: RdbmsType>(
     entries: Vec<PublicOplogEntry>,
-    tx_blocks_expected: Option<usize>,
-    jump_blocks_expected: Option<usize>,
+    expected_ends: Option<Vec<TransactionOplogBlockEnd>>,
 ) {
-    fn check_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>) -> bool {
+    fn check_entries<T: RdbmsType>(entries: Vec<PublicOplogEntry>) -> TransactionOplogBlockEnd {
         let mut begin_entry: Option<(usize, BeginRemoteTransactionParameters)> = None;
-        let mut pre_entry: Option<(usize, RemoteTransactionParameters)> = None;
-        let mut end_entry: Option<(usize, RemoteTransactionParameters)> = None;
+        let mut pre_entry: Option<(usize, RemoteTransactionParameters, TransactionOplogBlockEnd)> =
+            None;
+        let mut end_entry: Option<(usize, RemoteTransactionParameters, TransactionOplogBlockEnd)> =
+            None;
         let mut jump_entry: Option<(usize, JumpParameters)> = None;
         let mut imported_function_invoked: Vec<(usize, ImportedFunctionInvokedParameters)> = vec![];
 
@@ -1942,13 +2004,14 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
                 Some(_) => {
                     if pre_entry.is_none() {
                         pre_entry =
-                            try_match!(e.clone(), PublicOplogEntry::PreCommitRemoteTransaction(v1))
+                            try_match!(e.clone(), PublicOplogEntry::PreCommitRemoteTransaction(v))
+                                .map(|v| (i, v, TransactionOplogBlockEnd::Committed))
                                 .or(try_match!(
                                     e.clone(),
-                                    PublicOplogEntry::PreRollbackRemoteTransaction(v2)
-                                ))
-                                .ok()
-                                .map(|v| (i, v));
+                                    PublicOplogEntry::PreRollbackRemoteTransaction(v)
+                                )
+                                .map(|v| (i, v, TransactionOplogBlockEnd::RolledBack)))
+                                .ok();
                     }
 
                     if end_entry.is_none() {
@@ -1960,12 +2023,13 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
 
                         end_entry =
                             try_match!(e.clone(), PublicOplogEntry::CommittedRemoteTransaction(v))
+                                .map(|v| (i, v, TransactionOplogBlockEnd::Committed))
                                 .or(try_match!(
                                     e.clone(),
                                     PublicOplogEntry::RolledBackRemoteTransaction(v)
-                                ))
-                                .ok()
-                                .map(|v| (i, v));
+                                )
+                                .map(|v| (i, v, TransactionOplogBlockEnd::RolledBack)))
+                                .ok();
                     }
 
                     if jump_entry.is_none() {
@@ -1987,22 +2051,27 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
 
         let (begin_index, _) = begin_entry.unwrap();
 
-        let (end_index, oplog_begin_index) =
+        let (end_index, oplog_begin_index, end_type) =
             if let Some((end_index, jump_entry)) = jump_entry.clone() {
                 check!(pre_entry.is_none() || end_entry.is_none());
-                (end_index, jump_entry.jump.start.previous())
+                (
+                    end_index,
+                    jump_entry.jump.start.previous(),
+                    TransactionOplogBlockEnd::Jump,
+                )
             } else {
                 check!(pre_entry.is_some());
                 check!(end_entry.is_some());
 
-                let (pre_index, pre_entry) = pre_entry.unwrap();
-                let (end_index, end_entry) = end_entry.unwrap();
+                let (pre_index, pre_entry, pre_type) = pre_entry.unwrap();
+                let (end_index, end_entry, end_type) = end_entry.clone().unwrap();
 
                 check!(pre_index > begin_index);
                 check!(end_index > pre_index);
                 check!(end_entry.begin_index == pre_entry.begin_index);
+                check!(pre_type == end_type);
 
-                (end_index, end_entry.begin_index)
+                (end_index, end_entry.begin_index, end_type)
             };
 
         check!(!imported_function_invoked.is_empty());
@@ -2028,7 +2097,7 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
             );
         }
 
-        jump_entry.is_none()
+        end_type
     }
 
     let mut grouped: Vec<Vec<PublicOplogEntry>> = Vec::new();
@@ -2054,28 +2123,19 @@ fn check_transaction_oplog_entries<T: RdbmsType>(
         grouped.push(group.clone());
     }
 
-    let mut tx_checked_count = 0;
-    let mut jump_checked_count = 0;
+    let mut block_ends: Vec<TransactionOplogBlockEnd> = Vec::new();
 
     for group in grouped {
         if group
             .iter()
             .any(|e| matches!(e, PublicOplogEntry::BeginRemoteTransaction(_)))
         {
-            let tx = check_entries::<T>(group);
-            if tx {
-                tx_checked_count += 1;
-            } else {
-                jump_checked_count += 1;
-            }
+            let block_end = check_entries::<T>(group);
+            block_ends.push(block_end);
         }
     }
 
-    if let Some(expected) = tx_blocks_expected {
-        check!(tx_checked_count == expected);
-    }
-
-    if let Some(expected) = jump_blocks_expected {
-        check!(jump_checked_count == expected);
+    if let Some(expected) = expected_ends {
+        check!(block_ends == expected);
     }
 }
