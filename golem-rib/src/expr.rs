@@ -3361,10 +3361,11 @@ mod tests {
            err(msg) => false // the result is false
          };
 
-
+         // this is a bad function currently and will fail during compilation
          let result = ns:name/interface.{[static]resource1.do-something-static}(baz, qux);
 
          result
+         // the final result is result
        "#;
 
         let result = Expr::from_text(sample_rib);
