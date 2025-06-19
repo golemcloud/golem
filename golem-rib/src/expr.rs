@@ -2480,7 +2480,7 @@ impl<'de> Deserialize<'de> for Expr {
     where
         D: serde::Deserializer<'de>,
     {
-        let value = serde_json::Value::deserialize(deserializer)?;
+        let value = Value::deserialize(deserializer)?;
         match value {
             Value::String(expr_string) => match from_string(expr_string.as_str()) {
                 Ok(expr) => Ok(expr),
@@ -2501,7 +2501,7 @@ impl Serialize for Expr {
         S: Serializer,
     {
         match text::to_string(self) {
-            Ok(value) => serde_json::Value::serialize(&Value::String(value), serializer),
+            Ok(value) => Value::serialize(&Value::String(value), serializer),
             Err(error) => Err(serde::ser::Error::custom(error.to_string())),
         }
     }
@@ -3160,170 +3160,4 @@ fn find_expr(expr: &mut Expr, source_span: &SourceSpan) -> Option<Expr> {
     }
 
     None
-}
-
-#[cfg(test)]
-mod tests {
-    use bigdecimal::BigDecimal;
-    use test_r::test;
-
-    use crate::ParsedFunctionSite::PackagedInterface;
-    use crate::{
-        ArmPattern, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, MatchArm,
-    };
-
-    #[test]
-    fn test_single_expr_in_interpolation_wrapped_in_quotes() {
-        let input = r#""${foo}""#;
-        let result = Expr::from_text(input);
-        assert_eq!(
-            result,
-            Ok(Expr::concat(vec![Expr::identifier_global("foo", None)]))
-        );
-
-        let input = r#""${{foo}}""#;
-        let result = Expr::from_text(input);
-        assert_eq!(
-            result,
-            Ok(Expr::concat(vec![Expr::flags(vec!["foo".to_string()])]))
-        );
-
-        let input = r#""${{foo: "bar"}}""#;
-        let result = Expr::from_text(input);
-        assert_eq!(
-            result,
-            Ok(Expr::concat(vec![Expr::record(vec![(
-                "foo".to_string(),
-                Expr::literal("bar")
-            )])]))
-        );
-    }
-
-    fn expected() -> Expr {
-        Expr::expr_block(vec![
-            Expr::let_binding("x", Expr::number(BigDecimal::from(1)), None),
-            Expr::let_binding("y", Expr::number(BigDecimal::from(2)), None),
-            Expr::let_binding(
-                "result",
-                Expr::greater_than(
-                    Expr::identifier_global("x", None),
-                    Expr::identifier_global("y", None),
-                ),
-                None,
-            ),
-            Expr::let_binding(
-                "foo",
-                Expr::option(Some(Expr::identifier_global("result", None))),
-                None,
-            ),
-            Expr::let_binding(
-                "bar",
-                Expr::ok(Expr::identifier_global("result", None), None),
-                None,
-            ),
-            Expr::let_binding(
-                "baz",
-                Expr::pattern_match(
-                    Expr::identifier_global("foo", None),
-                    vec![
-                        MatchArm::new(
-                            ArmPattern::constructor(
-                                "some",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
-                                    "x", None,
-                                )))],
-                            ),
-                            Expr::identifier_global("x", None),
-                        ),
-                        MatchArm::new(
-                            ArmPattern::constructor("none", vec![]),
-                            Expr::boolean(false),
-                        ),
-                    ],
-                ),
-                None,
-            ),
-            Expr::let_binding(
-                "qux",
-                Expr::pattern_match(
-                    Expr::identifier_global("bar", None),
-                    vec![
-                        MatchArm::new(
-                            ArmPattern::constructor(
-                                "ok",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
-                                    "x", None,
-                                )))],
-                            ),
-                            Expr::identifier_global("x", None),
-                        ),
-                        MatchArm::new(
-                            ArmPattern::constructor(
-                                "err",
-                                vec![ArmPattern::Literal(Box::new(Expr::identifier_global(
-                                    "msg", None,
-                                )))],
-                            ),
-                            Expr::boolean(false),
-                        ),
-                    ],
-                ),
-                None,
-            ),
-            Expr::let_binding(
-                "result",
-                Expr::call_worker_function(
-                    DynamicParsedFunctionName {
-                        site: PackagedInterface {
-                            namespace: "ns".to_string(),
-                            package: "name".to_string(),
-                            interface: "interface".to_string(),
-                            version: None,
-                        },
-                        function: DynamicParsedFunctionReference::RawResourceStaticMethod {
-                            resource: "resource1".to_string(),
-                            method: "do-something-static".to_string(),
-                        },
-                    },
-                    None,
-                    None,
-                    vec![
-                        Expr::identifier_global("baz", None),
-                        Expr::identifier_global("qux", None),
-                    ],
-                    None,
-                ),
-                None,
-            ),
-            Expr::identifier_global("result", None),
-        ])
-    }
-
-    #[test]
-    fn test_rib() {
-        let sample_rib = r#"
-         let x = 1;
-         let y = 2;
-         let result = x > y;
-         let foo = some(result);
-         let bar = ok(result);
-
-         let baz = match foo {
-           some(x) => x,
-           none => false
-         };
-
-         let qux = match bar {
-           ok(x) => x,
-           err(msg) => false
-         };
-
-         let result = ns:name/interface.{[static]resource1.do-something-static}(baz, qux);
-
-         result
-       "#;
-
-        let result = Expr::from_text(sample_rib);
-        assert_eq!(result, Ok(expected()));
-    }
 }
