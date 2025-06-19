@@ -3412,7 +3412,6 @@ mod tests {
          result
 
          /** the result should never end with ; */
-
        "#;
 
         let result = Expr::from_text(sample_rib);
