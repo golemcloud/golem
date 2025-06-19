@@ -3302,11 +3302,43 @@ mod tests {
     #[test]
     fn test_rib() {
         let sample_rib = r#"
+         let x = 1;
+
+         let y = 2;
+
+         let result = x > y; // this is a comment
+
+         let foo = some(result);
+         let bar = ok(result);
+
+         let baz = match foo {
+           some(x) => x,
+           none => false
+         };
+
+         let qux = match bar {
+           ok(x) => x,
+           err(msg) => false
+         };
+
+
+         let result = ns:name/interface.{[static]resource1.do-something-static}(baz, qux);
+
+         result
+       "#;
+
+        let result = Expr::from_text(sample_rib);
+        assert_eq!(result, Ok(expected()));
+    }
+
+    #[test]
+    fn test_rib_with_comments_1() {
+        let sample_rib = r#"
          // this is x
          let x = 1;
 
          // this is y
-         let y = 2;
+         let y = 2; // the result is 2
 
          // this is result
          let result = x > y; // this is a comment
@@ -3317,15 +3349,16 @@ mod tests {
 
          // this is baz
          let baz = match foo {
-           some(x) => x,
+           some(x) => x, // the result is x
            none => false
          };
 
          // this is qux
          let qux = match bar {
+           // this is ok
            ok(x) => x,
-           // this is a comment
-           err(msg) => false
+           // this is err
+           err(msg) => false // the result is false
          };
 
 
