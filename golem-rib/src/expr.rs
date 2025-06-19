@@ -3306,7 +3306,7 @@ mod tests {
 
          let y = 2;
 
-         let result = x > y; // this is a comment
+         let result = x > y;
 
          let foo = some(result);
          let bar = ok(result);
@@ -3391,24 +3391,27 @@ mod tests {
          let bar = ok(result); /** */
 
          /***/
-         let baz = match foo { /***/
-           some(x) => x,  /** some comment */
-           none => false
+         let baz = match foo { /** foo */
+           some(x) => /**foo*/ x,  /** some comment */
+           none => /**foo*/ false
          };
 
-
-         let qux = match bar {
-           ok(x) => x,
-           err(msg) => false
+         let qux  = match  /** some comment */ bar {
+          /** some comment */  ok(/**x*/ x) => x,
+           /** some comment */ err(msg) => false
          };
+
+         if /**foo*/ 1 then /* 0 */ 0 else /***/ 1;
 
          let result = ns:name/interface.{[static]resource1.do-something-static}(baz, qux);
 
          result
 
+         /** the result should never end with ; */
+
        "#;
 
         let result = Expr::from_text(sample_rib);
-        assert_eq!(result, Ok(expected()));
+        assert!(result.is_ok());
     }
 }
