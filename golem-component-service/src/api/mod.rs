@@ -51,13 +51,13 @@ pub fn combined_routes(prometheus_registry: Registry, services: &Services) -> Ro
         .nest("/metrics", metrics)
 }
 
-pub type ApiServices = (
+pub type Apis = (
     component::ComponentApi,
     healthcheck::HealthcheckApi,
     plugin::PluginApi,
 );
 
-pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices, ()> {
+pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
     OpenApiService::new(
         (
             component::ComponentApi::new(

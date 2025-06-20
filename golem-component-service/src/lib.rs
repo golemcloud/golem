@@ -23,7 +23,7 @@ pub mod model;
 pub mod repo;
 pub mod service;
 
-use crate::api::{make_open_api_service, ApiServices};
+use crate::api::Apis;
 use crate::bootstrap::Services;
 use crate::config::ComponentServiceConfig;
 use anyhow::{anyhow, Context};
@@ -35,7 +35,7 @@ use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
 use poem::listener::Listener;
 use poem::middleware::{CookieJarManager, Cors};
-use poem::{EndpointExt, IntoEndpoint, Route};
+use poem::{EndpointExt, Route};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -105,7 +105,7 @@ impl ComponentService {
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> Result<RunDetails, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
-        let http_port = self.start_standalone_http_server(join_set).await?;
+        let http_port = self.start_http_server(join_set).await?;
         self.services
             .compilation_service
             .set_self_grpc_port(grpc_port);
@@ -121,7 +121,7 @@ impl ComponentService {
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
-        let endpoint = self.main_endpoint();
+        let endpoint = api::make_open_api_service(&self.services).boxed();
         self.services
             .compilation_service
             .set_self_grpc_port(grpc_port);
@@ -131,8 +131,8 @@ impl ComponentService {
         })
     }
 
-    pub fn http_service(&self) -> OpenApiService<ApiServices, ()> {
-        make_open_api_service(&self.services)
+    pub fn http_service(&self) -> OpenApiService<Apis, ()> {
+        api::make_open_api_service(&self.services)
     }
 
     async fn start_grpc_server(
@@ -148,13 +148,7 @@ impl ComponentService {
         .map_err(|err| anyhow!(err).context("gRPC server failed"))
     }
 
-    fn main_endpoint(&self) -> BoxEndpoint<'static> {
-        api::make_open_api_service(&self.services)
-            .into_endpoint()
-            .boxed()
-    }
-
-    async fn start_standalone_http_server(
+    async fn start_http_server(
         &self,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> Result<u16, anyhow::Error> {
