@@ -38,7 +38,7 @@ use tracing::Instrument;
 
 pub async fn start_grpc_server(
     addr: SocketAddr,
-    services: Services,
+    services: &Services,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> anyhow::Result<u16> {
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -56,27 +56,24 @@ pub async fn start_grpc_server(
         .unwrap();
 
     join_set.spawn(
-        async move {
-            Server::builder()
-                .add_service(reflection_service)
-                .add_service(health_service)
-                .add_service(
-                    ComponentServiceServer::new(ComponentGrpcApi::new(
-                        services.component_service.clone(),
-                    ))
+        Server::builder()
+            .add_service(reflection_service)
+            .add_service(health_service)
+            .add_service(
+                ComponentServiceServer::new(ComponentGrpcApi::new(
+                    services.component_service.clone(),
+                ))
+                .send_compressed(CompressionEncoding::Gzip)
+                .accept_compressed(CompressionEncoding::Gzip),
+            )
+            .add_service(
+                PluginServiceServer::new(PluginGrpcApi::new(services.plugin_service.clone()))
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip),
-                )
-                .add_service(
-                    PluginServiceServer::new(PluginGrpcApi::new(services.plugin_service.clone()))
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip),
-                )
-                .serve_with_incoming(TcpListenerStream::new(listener))
-                .map_err(anyhow::Error::from)
-                .await
-        }
-        .in_current_span(),
+            )
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .map_err(anyhow::Error::from)
+            .in_current_span(),
     );
 
     Ok(port)

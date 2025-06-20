@@ -141,7 +141,7 @@ impl ComponentService {
     ) -> Result<u16, anyhow::Error> {
         grpcapi::start_grpc_server(
             SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), self.config.grpc_port).into(),
-            self.services.clone(),
+            &self.services,
             join_set,
         )
         .await

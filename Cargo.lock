@@ -1588,6 +1588,7 @@ dependencies = [
 name = "cloud-service"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "aws-config",
  "aws-sdk-s3",
@@ -1606,6 +1607,7 @@ dependencies = [
  "http 1.3.1",
  "humantime-serde",
  "hyper 1.6.0",
+ "include_dir",
  "jsonwebtoken",
  "lazy_static",
  "mappable-rc",

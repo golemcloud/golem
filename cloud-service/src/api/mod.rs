@@ -352,7 +352,7 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
         .nest("/metrics", metrics)
 }
 
-type ApiServices = (
+pub type Apis = (
     account::AccountApi,
     account_summary::AccountSummaryApi,
     grant::GrantApi,
@@ -365,7 +365,7 @@ type ApiServices = (
     token::TokenApi,
 );
 
-pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices, ()> {
+pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
     OpenApiService::new(
         (
             account::AccountApi {
