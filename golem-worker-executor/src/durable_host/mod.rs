@@ -2496,7 +2496,7 @@ impl PrivateDurableWorkerState {
 
                 let mut restart = false;
 
-                if let Some((_pre_index, pre_entry)) = pre_entry {
+                if let Some((_, pre_entry)) = pre_entry {
                     let end_entry = self
                         .replay_state
                         .lookup_oplog_entry_with_condition(
@@ -2506,28 +2506,17 @@ impl PrivateDurableWorkerState {
                         )
                         .await;
 
-                    // println!(
-                    //     "begin_transaction_function tx_id {tx_id}, pre_index {pre_index} end_entry {} jumped {jumped}",
-                    //     end_entry.clone().map(|(i, _)| i.to_string()).unwrap_or("None".to_string())
-                    // );
+                    // if end entry is not found and the commit was executed,
+                    // we need to check if the remote transaction was committed
                     if end_entry.is_none()
                         && pre_entry.is_pre_commit_remote_transaction(begin_index)
                     {
                         let committed = handler.is_committed(&tx_id).await?;
-                        // println!(
-                        //     "begin_transaction_function tx_id {tx_id}, pre commit - committed: {committed}",
-                        // );
+                        // if the remote transaction was not committed, we need to restart
                         restart = !committed;
                     }
-                    // else if end_entry.is_none()
-                    //     && pre_entry.is_pre_rollback_remote_transaction(begin_index)
-                    // {
-                    //     let rolled_back = handler.is_rolled_back(&tx_id).await?;
-                    //     // println!(
-                    //     //     "begin_transaction_function tx_id {tx_id}, pre rollback - rolled_back: {rolled_back}",
-                    //     // );
-                    //     restart = !rolled_back;
-                    // }
+                    // NOTE: rollback is not checked, because by default transaction is rolled back
+                    // it is not optimal to restart transaction which will end with rollback
                 } else {
                     restart = true;
                 }
