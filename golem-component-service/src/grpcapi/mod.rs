@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod component;
+mod plugin;
+
 use crate::bootstrap::Services;
 use crate::grpcapi::component::ComponentGrpcApi;
 use crate::grpcapi::plugin::PluginGrpcApi;
+use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentServiceServer;
@@ -24,15 +28,23 @@ use golem_common::model::auth::AuthCtx;
 use golem_common::model::{ComponentId, ProjectId};
 use golem_service_base::clients::get_authorisation_token;
 use std::net::SocketAddr;
+use tokio::net::TcpListener;
+use tokio::task::JoinSet;
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
 use tonic::metadata::MetadataMap;
-use tonic::transport::{Error, Server};
+use tonic::transport::Server;
+use tracing::Instrument;
 
-mod component;
-mod plugin;
-
-pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<(), Error> {
+pub async fn start_grpc_server(
+    addr: SocketAddr,
+    services: &Services,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> anyhow::Result<u16> {
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+
+    let listener = TcpListener::bind(addr).await?;
+    let port = listener.local_addr()?.port();
 
     health_reporter
         .set_serving::<ComponentServiceServer<ComponentGrpcApi>>()
@@ -43,21 +55,28 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
         .build_v1()
         .unwrap();
 
-    Server::builder()
-        .add_service(reflection_service)
-        .add_service(health_service)
-        .add_service(
-            ComponentServiceServer::new(ComponentGrpcApi::new(services.component_service.clone()))
+    join_set.spawn(
+        Server::builder()
+            .add_service(reflection_service)
+            .add_service(health_service)
+            .add_service(
+                ComponentServiceServer::new(ComponentGrpcApi::new(
+                    services.component_service.clone(),
+                ))
                 .send_compressed(CompressionEncoding::Gzip)
                 .accept_compressed(CompressionEncoding::Gzip),
-        )
-        .add_service(
-            PluginServiceServer::new(PluginGrpcApi::new(services.plugin_service.clone()))
-                .send_compressed(CompressionEncoding::Gzip)
-                .accept_compressed(CompressionEncoding::Gzip),
-        )
-        .serve(addr)
-        .await
+            )
+            .add_service(
+                PluginServiceServer::new(PluginGrpcApi::new(services.plugin_service.clone()))
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip),
+            )
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .map_err(anyhow::Error::from)
+            .in_current_span(),
+    );
+
+    Ok(port)
 }
 
 fn bad_request_error(error: &str) -> ComponentError {

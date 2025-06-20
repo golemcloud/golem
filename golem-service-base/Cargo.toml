@@ -45,6 +45,7 @@ http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 humantime-serde = { workspace = true }
+include_dir = { workspace = true }
 lazy_static = { workspace = true }
 pin-project = "1.1.10"
 poem = { workspace = true }

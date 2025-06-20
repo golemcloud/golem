@@ -24,7 +24,6 @@ use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
 use poem::error::ReadBodyError;
-use poem::Route;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, OpenApiService, Tags};
 
@@ -35,25 +34,13 @@ enum ApiTags {
     Plugin,
 }
 
-pub fn combined_routes(services: &Services) -> Route {
-    let api_service = make_open_api_service(services);
-
-    let ui = api_service.swagger_ui();
-    let spec = api_service.spec_endpoint_yaml();
-
-    Route::new()
-        .nest("/", api_service)
-        .nest("/docs", ui)
-        .nest("/specs", spec)
-}
-
-type ApiServices = (
+pub type Apis = (
     component::ComponentApi,
     healthcheck::HealthcheckApi,
     plugin::PluginApi,
 );
 
-pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices, ()> {
+pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
     OpenApiService::new(
         (
             component::ComponentApi::new(

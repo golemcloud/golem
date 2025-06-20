@@ -84,7 +84,7 @@ use tonic::codec::CompressionEncoding;
 use tracing::{error, info};
 
 #[derive(Clone)]
-pub struct ApiServices {
+pub struct Services {
     pub worker_auth_service: Arc<dyn AuthService>,
     pub project_service: Arc<dyn ProjectService>,
     pub limit_service: Arc<dyn LimitService>,
@@ -103,7 +103,7 @@ pub struct ApiServices {
     pub gateway_session_store: Arc<dyn GatewaySession>,
 }
 
-impl ApiServices {
+impl Services {
     pub async fn new(config: &WorkerServiceConfig) -> Result<Self, String> {
         let project_service: Arc<dyn ProjectService> =
             Arc::new(ProjectServiceDefault::new(&config.cloud_service));

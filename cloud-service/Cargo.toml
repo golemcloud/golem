@@ -21,10 +21,11 @@ golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
 golem-common = { path = "../golem-common", version = "=0.0.0" }
 golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
 
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
-bigdecimal = "0.4.2"
+bigdecimal = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
@@ -36,9 +37,10 @@ futures-util = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
-jsonwebtoken = "9.2.0"
+include_dir = { workspace = true }
+jsonwebtoken = { workspace = true }
 lazy_static = { workspace = true }
-mappable-rc = "0.1.1"
+mappable-rc = { workspace = true }
 num-traits = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
@@ -56,8 +58,8 @@ prometheus = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_with = "3.5.0"
-sqlx = { version = "0.8", features = [
+serde_with = { workspace = true }
+sqlx = { workspace = true, features = [
     "runtime-tokio",
     "sqlite",
     "postgres",

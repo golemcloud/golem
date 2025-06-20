@@ -27,12 +27,12 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct ApiCertificateApi {
-    certificate_service: Arc<dyn CertificateService + Sync + Send>,
+    certificate_service: Arc<dyn CertificateService>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/certificates", tag = ApiTags::ApiCertificate)]
 impl ApiCertificateApi {
-    pub fn new(certificate_service: Arc<dyn CertificateService + Sync + Send>) -> Self {
+    pub fn new(certificate_service: Arc<dyn CertificateService>) -> Self {
         Self {
             certificate_service,
         }

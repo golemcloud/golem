@@ -25,13 +25,8 @@ use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
 use golem_service_base::clients::plugin::PluginError;
-use poem::endpoint::PrometheusExporter;
-use poem::Route;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, OpenApiService, Tags};
-use prometheus::Registry;
-use std::ops::Deref;
-use std::sync::Arc;
 
 mod account;
 mod account_summary;
@@ -338,21 +333,7 @@ impl From<PluginError> for ApiError {
     }
 }
 
-pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) -> Route {
-    let api_service = make_open_api_service(services);
-
-    let ui = api_service.swagger_ui();
-    let spec = api_service.spec_endpoint_yaml();
-    let metrics = PrometheusExporter::new(prometheus_registry.deref().clone());
-
-    Route::new()
-        .nest("/", api_service)
-        .nest("/docs", ui)
-        .nest("/specs", spec)
-        .nest("/metrics", metrics)
-}
-
-type ApiServices = (
+pub type Apis = (
     account::AccountApi,
     account_summary::AccountSummaryApi,
     grant::GrantApi,
@@ -365,7 +346,7 @@ type ApiServices = (
     token::TokenApi,
 );
 
-pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices, ()> {
+pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
     OpenApiService::new(
         (
             account::AccountApi {
