@@ -1,10 +1,10 @@
 use crate::debug_mode::debug_worker_executor::DebugWorkerExecutorClient;
 use crate::regular_mode::regular_worker_executor::TestRegularWorkerExecutor;
 use crate::*;
-use cloud_debugging_service::model::params::PlaybackOverride;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionCompletedParameters, PublicOplogEntry};
 use golem_common::model::{Timestamp, WorkerId};
+use golem_debugging_service::model::params::PlaybackOverride;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm_ast::analysis::analysed_type::{record, str, variant};
 use golem_wasm_ast::analysis::{NameOptionTypePair, NameTypePair};
