@@ -370,7 +370,7 @@ script = '''
 cargo test --package golem-service-base --test integration -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo test --package cloud-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
-cargo test --package cloud-debugging-service --test 'integration' -- --report-time $JUNIT_OPTS
+cargo test --package golem-debugging-service --test 'integration' -- --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group5]
@@ -1040,8 +1040,8 @@ export RUST_BACKTRACE=1
 ./target/debug/golem-worker-service --dump-config-default-env-var > golem-worker-service/config/worker-service.sample.env
 ./target/debug/worker-executor --dump-config-default-toml > golem-worker-executor/config/worker-executor.toml
 ./target/debug/worker-executor --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
-./target/debug/cloud-debugging-service --dump-config-default-toml > cloud-debugging-service/config/debug-worker-executor.toml
-./target/debug/cloud-debugging-service --dump-config-default-env-var > cloud-debugging-service/config/debug-worker-executor.sample.env
+./target/debug/golem-debugging-service --dump-config-default-toml > golem-debugging-service/config/debug-worker-executor.toml
+./target/debug/golem-debugging-service --dump-config-default-env-var > golem-debugging-service/config/debug-worker-executor.sample.env
 ./target/debug/cloud-service --dump-config-default-toml > cloud-service/config/cloud-service.toml
 ./target/debug/cloud-service --dump-config-default-env-var > cloud-service/config/cloud-service.sample.env
 '''
@@ -1064,8 +1064,8 @@ git diff --exit-code \
     golem-worker-service/config/worker-service.sample.env \
     golem-worker-executor/config/worker-executor.toml \
     golem-worker-executor/config/worker-executor.sample.env \
-    cloud-debugging-service/config/debug-worker-executor.toml \
-    cloud-debugging-service/config/debug-worker-executor.sample.env \
+    golem-debugging-service/config/debug-worker-executor.toml \
+    golem-debugging-service/config/debug-worker-executor.sample.env \
     cloud-service/config/cloud-service.toml \
     cloud-service/config/cloud-service.sample.env
 '''

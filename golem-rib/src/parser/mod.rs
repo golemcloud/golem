@@ -20,6 +20,7 @@ pub(crate) mod block;
 mod block_without_return;
 mod boolean;
 pub(crate) mod call;
+mod comment;
 mod cond;
 mod errors;
 mod flag;

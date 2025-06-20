@@ -1585,45 +1585,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cloud-debugging-service"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-dropper",
- "async-dropper-simple",
- "async-trait",
- "axum",
- "axum-jrpc",
- "bincode",
- "futures-util",
- "gethostname 0.5.0",
- "golem-api-grpc",
- "golem-common",
- "golem-service-base",
- "golem-test-framework",
- "golem-wasm-ast",
- "golem-wasm-rpc",
- "golem-worker-executor",
- "log",
- "prometheus 0.13.4",
- "serde",
- "serde_json",
- "tempfile",
- "test-r",
- "thiserror 2.0.12",
- "tokio",
- "tokio-tungstenite 0.25.0",
- "tonic",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "wasmtime",
- "wasmtime-wasi",
- "wasmtime-wasi-http",
-]
-
-[[package]]
 name = "cloud-service"
 version = "0.0.0"
 dependencies = [
@@ -3554,6 +3515,45 @@ dependencies = [
  "url",
  "uuid",
  "wac-graph",
+]
+
+[[package]]
+name = "golem-debugging-service"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-dropper",
+ "async-dropper-simple",
+ "async-trait",
+ "axum",
+ "axum-jrpc",
+ "bincode",
+ "futures-util",
+ "gethostname 0.5.0",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-service-base",
+ "golem-test-framework",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "golem-worker-executor",
+ "log",
+ "prometheus 0.13.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "test-r",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-tungstenite 0.25.0",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
 ]
 
 [[package]]
