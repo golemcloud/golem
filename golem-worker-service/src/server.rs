@@ -22,11 +22,12 @@ use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use prometheus::Registry;
 use tracing::info;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
-        println!("{}", dump_openapi_yaml().await.map_err(|err| anyhow!(err))?);
-        Ok(())
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(dump_openapi_yaml())
     } else if let Some(config) = make_worker_service_config_loader().load_or_dump_config() {
         init_tracing_with_default_env_filter(&config.tracing);
 
@@ -58,10 +59,14 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-pub async fn dump_openapi_yaml() -> Result<String, String> {
+pub async fn dump_openapi_yaml() -> anyhow::Result<()> {
     let config = WorkerServiceConfig::default();
-    let services = Services::new(&config).await?;
-    Ok(golem_worker_service::api::make_open_api_service(&services).spec_yaml())
+    let services = Services::new(&config)
+        .await
+        .map_err(|e| anyhow!("Services - init error: {}", e))?;
+    let open_api_service = golem_worker_service::api::make_open_api_service(&services);
+    println!("{}", open_api_service.spec_yaml());
+    Ok(())
 }
 
 async fn async_main(config: WorkerServiceConfig, prometheus: Registry) -> anyhow::Result<()> {

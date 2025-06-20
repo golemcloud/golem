@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::anyhow;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_component_service::api::make_open_api_service;
 use golem_component_service::bootstrap::Services;
@@ -20,7 +21,6 @@ use golem_component_service::{metrics, ComponentService};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use prometheus::Registry;
-use tracing::error;
 
 fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
@@ -54,10 +54,9 @@ fn main() -> anyhow::Result<()> {
 
 async fn dump_openapi_yaml() -> anyhow::Result<()> {
     let config = ComponentServiceConfig::default();
-    let services = Services::new(&config).await.map_err(|e| {
-        error!("Services - init error: {}", e);
-        std::io::Error::other(e)
-    })?;
+    let services = Services::new(&config)
+        .await
+        .map_err(|e| anyhow!("Services - init error: {}", e))?;
     let open_api_service = make_open_api_service(&services);
     println!("{}", open_api_service.spec_yaml());
     Ok(())

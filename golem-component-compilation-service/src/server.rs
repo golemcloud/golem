@@ -26,8 +26,7 @@ pub fn main() -> anyhow::Result<()> {
 
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
-                .build()
-                .unwrap()
+                .build()?
                 .block_on(async_main(config, prometheus))
         }
         None => Ok(()),
