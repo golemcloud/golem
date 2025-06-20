@@ -94,6 +94,7 @@ use tempfile::TempDir;
 use tokio::sync::RwLock as TRwLock;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{debug, info, span, warn, Instrument, Level};
+use try_match::try_match;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
@@ -2434,6 +2435,232 @@ impl PrivateDurableWorkerState {
         }
     }
 
+    pub async fn begin_transaction_function<Tx, Err>(
+        &mut self,
+        function_type: &DurableFunctionType,
+        handler: impl RemoteTransactionHandler<Tx, Err>,
+    ) -> Result<(OplogIndex, Tx), Err>
+    where
+        Err: From<GolemError>,
+    {
+        if matches!(
+            *function_type,
+            DurableFunctionType::WriteRemoteTransaction(None)
+        ) {
+            if self.is_live() {
+                let (tx_id, tx) = handler.create_new().await?;
+                self.oplog
+                    .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
+                    .await
+                    .map_err(GolemError::runtime)?;
+                let begin_index = self.oplog.current_oplog_index().await;
+                Ok((begin_index, tx))
+            } else {
+                let (begin_index, begin_entry) =
+                    crate::get_oplog_entry!(self.replay_state, OplogEntry::BeginRemoteTransaction)?;
+
+                let pre_entry = self
+                    .replay_state
+                    .lookup_oplog_entry_with_condition(
+                        begin_index,
+                        OplogEntry::is_pre_remote_transaction,
+                        OplogEntry::no_concurrent_side_effect,
+                    )
+                    .await;
+
+                let jumped = self
+                    .replay_state
+                    .is_in_skipped_region(begin_index.next())
+                    .await;
+
+                let begin_entry = if jumped {
+                    let (_, entry) = crate::get_oplog_entry!(
+                        self.replay_state,
+                        OplogEntry::BeginRemoteTransaction
+                    )?;
+                    entry
+                } else {
+                    begin_entry
+                };
+
+                let tx_id = try_match!(
+                    begin_entry,
+                    OplogEntry::BeginRemoteTransaction {
+                        timestamp: _,
+                        transaction_id,
+                    }
+                )
+                .map_err(|_| GolemError::runtime("Unexpected oplog entry"))?;
+
+                let (tx_id, tx) = handler.create_replay(&tx_id).await?;
+
+                let mut restart = false;
+
+                if let Some((_, pre_entry)) = pre_entry {
+                    let end_entry = self
+                        .replay_state
+                        .lookup_oplog_entry_with_condition(
+                            begin_index,
+                            OplogEntry::is_end_remote_transaction,
+                            OplogEntry::no_concurrent_side_effect,
+                        )
+                        .await;
+
+                    // if end entry is not found and the commit was executed,
+                    // we need to check if the remote transaction was committed
+                    if end_entry.is_none()
+                        && pre_entry.is_pre_commit_remote_transaction(begin_index)
+                    {
+                        let committed = handler.is_committed(&tx_id).await?;
+                        // if the remote transaction was not committed, we need to restart
+                        restart = !committed;
+                    }
+                    // NOTE: rollback is not checked, because by default transaction is rolled back
+                    // it is not optimal to restart transaction which will end with rollback
+                } else {
+                    restart = true;
+                }
+
+                if restart {
+                    // We need to jump to the end of the oplog
+                    self.replay_state.switch_to_live().await;
+
+                    // But this is not enough, because if the retried batched write operation succeeds,
+                    // and later we replay it, we need to skip the first attempt and only replay the second.
+                    // Se we add a Jump entry to the oplog that registers a deleted region.
+                    let deleted_region = OplogRegion {
+                        start: begin_index.next(), // need to keep the BeginAtomicRegion entry
+                        end: self.replay_state.replay_target().next(), // skipping the Jump entry too
+                    };
+                    self.replay_state
+                        .add_skipped_region(deleted_region.clone())
+                        .await;
+                    self.oplog
+                        .add_and_commit(OplogEntry::jump(deleted_region))
+                        .await;
+
+                    let (tx_id, tx) = handler.create_new().await?;
+                    self.oplog
+                        .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
+                        .await
+                        .map_err(GolemError::runtime)?;
+
+                    Ok((begin_index, tx))
+                } else {
+                    Ok((begin_index, tx))
+                }
+            }
+        } else {
+            Err(GolemError::runtime("Unexpected durable function type").into())
+        }
+    }
+
+    pub async fn pre_commit_transaction_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+    ) -> Result<(), GolemError> {
+        if let Ok(Some(begin_index)) = try_match!(
+            function_type,
+            DurableFunctionType::WriteRemoteTransaction(i)
+        ) {
+            if self.is_live() {
+                self.oplog
+                    .add_and_commit_safe(OplogEntry::pre_commit_remote_transaction(*begin_index))
+                    .await
+                    .map_err(GolemError::runtime)?;
+                Ok(())
+            } else {
+                let (_, _) = crate::get_oplog_entry!(
+                    self.replay_state,
+                    OplogEntry::PreCommitRemoteTransaction
+                )?;
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn pre_rollback_transaction_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+    ) -> Result<(), GolemError> {
+        if let Ok(Some(begin_index)) = try_match!(
+            function_type,
+            DurableFunctionType::WriteRemoteTransaction(i)
+        ) {
+            if self.is_live() {
+                self.oplog
+                    .add_and_commit_safe(OplogEntry::pre_rollback_remote_transaction(*begin_index))
+                    .await
+                    .map_err(GolemError::runtime)?;
+                Ok(())
+            } else {
+                let (_, _) = crate::get_oplog_entry!(
+                    self.replay_state,
+                    OplogEntry::PreRollbackRemoteTransaction
+                )?;
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn committed_transaction_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError> {
+        if matches!(
+            *function_type,
+            DurableFunctionType::WriteRemoteTransaction(None)
+        ) {
+            if self.is_live() {
+                self.oplog
+                    .add_and_commit_safe(OplogEntry::committed_remote_transaction(begin_index))
+                    .await
+                    .map_err(GolemError::runtime)?;
+                Ok(())
+            } else {
+                let (_, _) = crate::get_oplog_entry!(
+                    self.replay_state,
+                    OplogEntry::CommittedRemoteTransaction
+                )?;
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn rolled_back_transaction_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), GolemError> {
+        if matches!(
+            *function_type,
+            DurableFunctionType::WriteRemoteTransaction(None)
+        ) {
+            if self.is_live() {
+                self.oplog
+                    .add_and_commit_safe(OplogEntry::rolled_back_remote_transaction(begin_index))
+                    .await
+                    .map_err(GolemError::runtime)?;
+                Ok(())
+            } else {
+                let (_, _) = crate::get_oplog_entry!(
+                    self.replay_state,
+                    OplogEntry::RolledBackRemoteTransaction
+                )?;
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
     /// In live mode it returns the last oplog index (index of the entry last added).
     /// In replay mode it returns the current replay index (index of the entry last read).
     pub async fn current_oplog_index(&self) -> OplogIndex {
@@ -2921,4 +3148,18 @@ macro_rules! get_oplog_entry {
             }
         }
     };
+}
+
+#[async_trait]
+pub trait RemoteTransactionHandler<Tx, Err>
+where
+    Err: From<GolemError>,
+{
+    async fn create_new(&self) -> Result<(String, Tx), Err>;
+
+    async fn create_replay(&self, transaction_id: &str) -> Result<(String, Tx), Err>;
+
+    async fn is_committed(&self, transaction_id: &str) -> Result<bool, Err>;
+
+    async fn is_rolled_back(&self, transaction_id: &str) -> Result<bool, Err>;
 }
