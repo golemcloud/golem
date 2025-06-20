@@ -121,9 +121,6 @@ pub trait LabelledPoolApi: PoolApi {
     type LabelledTransaction: LabelledPoolTransaction;
 
     async fn begin(&self) -> Result<Self::LabelledTransaction, RepoError>;
-
-    async fn commit(&self, tx: Self::LabelledTransaction) -> Result<(), RepoError>;
-    async fn rollback(&self, tx: Self::LabelledTransaction) -> Result<(), RepoError>;
 }
 
 #[async_trait]

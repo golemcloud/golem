@@ -124,10 +124,7 @@ impl AccountFuelRepo for DbAccountFuelRepo<golem_service_base::db::postgres::Pos
 
         transaction.execute(query).await?;
 
-        self.db_pool
-            .with_rw("account_fuel", "update")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
 
         Ok(())
     }
@@ -173,10 +170,7 @@ impl AccountFuelRepo for DbAccountFuelRepo<golem_service_base::db::postgres::Pos
 
         transaction.execute(query).await?;
 
-        self.db_pool
-            .with_rw("account_fuel", "update")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
 
         Ok(())
     }

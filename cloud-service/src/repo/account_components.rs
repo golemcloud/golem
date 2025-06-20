@@ -87,10 +87,7 @@ impl AccountComponentsRepo
 
         let result = transaction.fetch_optional_as(query).await?;
 
-        self.db_pool
-            .with_rw("account_components", "update")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
 
         Ok(result.map(|r| r.counter).unwrap_or_default())
     }

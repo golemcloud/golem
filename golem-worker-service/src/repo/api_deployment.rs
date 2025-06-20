@@ -235,10 +235,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
                 transaction.execute(query).await?;
             }
 
-            self.db_pool
-                .with_rw("api_deployment", "create")
-                .commit(transaction)
-                .await?;
+            transaction.commit().await?;
         }
         Ok(())
     }
@@ -264,10 +261,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<golem_service_base::db::postgres:
                 .bind(deployment.definition_version.clone());
                 transaction.execute(query).await?;
             }
-            self.db_pool
-                .with_rw("api_deployment", "delete")
-                .commit(transaction)
-                .await?;
+            transaction.commit().await?;
             Ok(true)
         } else {
             Ok(false)

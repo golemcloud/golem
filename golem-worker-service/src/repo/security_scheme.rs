@@ -190,10 +190,8 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<golem_service_base::db::postgre
 
         transaction.execute(query).await?;
 
-        self.db_pool
-            .with_rw("security_scheme", "create")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
+
         Ok(())
     }
 
