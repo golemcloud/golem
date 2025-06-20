@@ -22,7 +22,7 @@ use sqlx::postgres::{PgArguments, PgPoolOptions, PgQueryResult, PgRow};
 use sqlx::query::{Query, QueryAs};
 use sqlx::{Connection, Error, Executor, FromRow, IntoArguments, PgConnection, Postgres};
 use std::time::Instant;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 #[derive(Clone, Debug)]
 pub struct PostgresPool {
@@ -140,6 +140,11 @@ impl PostgresLabelledTransaction {
     }
 
     pub async fn rollback(self) -> Result<(), RepoError> {
+        warn!(
+            svc_name = self.svc_name,
+            api_name = self.api_name,
+            "DB transaction rollback",
+        );
         PostgresLabelledApi::record(
             self.svc_name,
             self.api_name,

@@ -22,7 +22,7 @@ use sqlx::query::{Query, QueryAs};
 use sqlx::sqlite::{SqliteArguments, SqlitePoolOptions, SqliteQueryResult, SqliteRow};
 use sqlx::{Connection, Error, FromRow, IntoArguments, Sqlite, SqliteConnection};
 use std::time::Instant;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[derive(Clone, Debug)]
 pub struct SqlitePool {
@@ -144,6 +144,11 @@ impl SqliteLabelledTransaction {
     }
 
     pub async fn rollback(self) -> Result<(), RepoError> {
+        warn!(
+            svc_name = self.svc_name,
+            api_name = self.api_name,
+            "DB transaction rollback",
+        );
         SqliteLabelledApi::record(
             self.svc_name,
             self.api_name,
