@@ -88,10 +88,7 @@ impl AccountConnectionsRepo
 
         let result = transaction.fetch_optional_as(query).await?;
 
-        self.db_pool
-            .with_rw("account_connections", "update")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
 
         Ok(result.map(|r| r.counter).unwrap_or_default())
     }

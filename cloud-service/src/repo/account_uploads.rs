@@ -128,10 +128,7 @@ impl AccountUploadsRepo for DbAccountUploadsRepo<golem_service_base::db::postgre
 
         transaction.execute(query).await?;
 
-        self.db_pool
-            .with_rw("account_uploads", "update")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
 
         Ok(())
     }
@@ -177,10 +174,7 @@ impl AccountUploadsRepo for DbAccountUploadsRepo<golem_service_base::db::postgre
 
         transaction.execute(query).await?;
 
-        self.db_pool
-            .with_rw("account_uploads", "update")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
 
         Ok(())
     }
