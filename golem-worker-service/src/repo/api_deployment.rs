@@ -17,7 +17,7 @@ use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
-use golem_service_base::db::Pool;
+use golem_service_base::db::{LabelledPoolTransaction, Pool};
 use golem_service_base::repo::RepoError;
 use std::fmt::Display;
 use tracing::{info_span, Instrument, Span};

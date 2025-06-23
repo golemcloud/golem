@@ -18,7 +18,7 @@ use crate::gateway_security::{
 };
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
-use golem_service_base::db::Pool;
+use golem_service_base::db::{LabelledPoolTransaction, Pool};
 use golem_service_base::repo::RepoError;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::fmt::Display;
