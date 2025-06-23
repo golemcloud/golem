@@ -18,8 +18,8 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::text::project::{ProjectPolicyGetView, ProjectPolicyNewView};
 use crate::model::{ProjectPermission, ProjectPolicyId};
-use golem_cloud_client::api::ProjectPolicyClient;
-use golem_cloud_client::model::{ProjectActions, ProjectPolicyData};
+use golem_client::api::ProjectPolicyClient;
+use golem_client::model::{ProjectActions, ProjectPolicyData};
 use std::sync::Arc;
 
 pub struct CloudProjectPolicyCommandHandler {
@@ -48,7 +48,7 @@ impl CloudProjectPolicyCommandHandler {
     ) -> anyhow::Result<()> {
         let policy = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .project_policy
             .create_project_policy(&ProjectPolicyData {
@@ -70,7 +70,7 @@ impl CloudProjectPolicyCommandHandler {
     async fn cmd_get(&self, policy_id: ProjectPolicyId) -> anyhow::Result<()> {
         let policy = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .project_policy
             .get_project_policies(&policy_id.0)

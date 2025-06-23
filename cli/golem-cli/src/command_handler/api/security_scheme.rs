@@ -15,13 +15,11 @@
 use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
 use crate::command::shared_args::ProjectOptionalFlagArg;
 use crate::command_handler::Handlers;
-use crate::context::{Context, GolemClients};
+use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::api::{ApiSecurityScheme, IdentityProviderType};
-use golem_client::api::ApiSecurityClient as ApiSecurityClientOss;
-use golem_client::model::{Provider as ProviderOss, SecuritySchemeData as SecuritySchemeDataOss};
-use golem_cloud_client::api::ApiSecurityClient as ApiSecurityClientCloud;
-use golem_cloud_client::model::{
+use golem_client::api::ApiSecurityClient;
+use golem_client::model::{
     Provider as ProviderCloud, SecuritySchemeData as SecuritySchemeDataCloud,
 };
 use std::sync::Arc;
@@ -80,52 +78,34 @@ impl ApiSecuritySchemeCommandHandler {
             .opt_select_project(project.project.as_ref())
             .await?;
 
-        let result: ApiSecurityScheme = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_security
-                .create(&SecuritySchemeDataOss {
+        let clients = self.ctx.golem_clients().await?;
+
+        let result: ApiSecurityScheme = clients
+            .api_security
+            .create(
+                &self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project.as_ref())
+                    .await?
+                    .0,
+                &SecuritySchemeDataCloud {
                     provider_type: match provider_type {
-                        IdentityProviderType::Google => ProviderOss::Google,
-                        IdentityProviderType::Facebook => ProviderOss::Facebook,
-                        IdentityProviderType::Gitlab => ProviderOss::Gitlab,
-                        IdentityProviderType::Microsoft => ProviderOss::Microsoft,
+                        IdentityProviderType::Google => ProviderCloud::Google,
+                        IdentityProviderType::Facebook => ProviderCloud::Facebook,
+                        IdentityProviderType::Gitlab => ProviderCloud::Gitlab,
+                        IdentityProviderType::Microsoft => ProviderCloud::Microsoft,
                     },
                     scheme_identifier,
                     client_id,
                     client_secret,
                     redirect_url,
                     scopes,
-                })
-                .await
-                .map_service_error()?
-                .into(),
-            GolemClients::Cloud(clients) => clients
-                .api_security
-                .create(
-                    &self
-                        .ctx
-                        .cloud_project_handler()
-                        .selected_project_id_or_default(project.as_ref())
-                        .await?
-                        .0,
-                    &SecuritySchemeDataCloud {
-                        provider_type: match provider_type {
-                            IdentityProviderType::Google => ProviderCloud::Google,
-                            IdentityProviderType::Facebook => ProviderCloud::Facebook,
-                            IdentityProviderType::Gitlab => ProviderCloud::Gitlab,
-                            IdentityProviderType::Microsoft => ProviderCloud::Microsoft,
-                        },
-                        scheme_identifier,
-                        client_id,
-                        client_secret,
-                        redirect_url,
-                        scopes,
-                    },
-                )
-                .await
-                .map_service_error()?
-                .into(),
-        };
+                },
+            )
+            .await
+            .map_service_error()?
+            .into();
 
         self.ctx.log_handler().log_view(&result);
 
@@ -143,28 +123,22 @@ impl ApiSecuritySchemeCommandHandler {
             .opt_select_project(project.project.as_ref())
             .await?;
 
-        let result: ApiSecurityScheme = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_security
-                .get(&security_scheme_id)
-                .await
-                .map_service_error()?
-                .into(),
-            GolemClients::Cloud(clients) => clients
-                .api_security
-                .get(
-                    &self
-                        .ctx
-                        .cloud_project_handler()
-                        .selected_project_id_or_default(project.as_ref())
-                        .await?
-                        .0,
-                    &security_scheme_id,
-                )
-                .await
-                .map_service_error()?
-                .into(),
-        };
+        let clients = self.ctx.golem_clients().await?;
+
+        let result: ApiSecurityScheme = clients
+            .api_security
+            .get(
+                &self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project.as_ref())
+                    .await?
+                    .0,
+                &security_scheme_id,
+            )
+            .await
+            .map_service_error()?
+            .into();
 
         self.ctx.log_handler().log_view(&result);
 

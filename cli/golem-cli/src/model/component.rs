@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::ProjectId;
-use crate::model::to_oss::ToOss;
 use crate::model::wave::function_wave_compatible;
 use crate::model::ComponentName;
+use crate::model::ProjectId;
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use golem_client::model::{
@@ -80,24 +79,8 @@ impl From<golem_client::model::Component> for Component {
             versioned_component_id: value.versioned_component_id,
             component_name: value.component_name.into(),
             component_size: value.component_size,
-            component_type: value.component_type,
             metadata: value.metadata,
-            project_id: None,
-            created_at: Some(value.created_at),
-            files: value.files,
-            env: value.env.into_iter().collect(),
-        }
-    }
-}
-
-impl From<golem_cloud_client::model::Component> for Component {
-    fn from(value: golem_cloud_client::model::Component) -> Self {
-        Component {
-            versioned_component_id: value.versioned_component_id.to_oss(),
-            component_name: value.component_name.into(),
-            component_size: value.component_size,
-            metadata: value.metadata,
-            project_id: None, // TODO Some(ProjectId(value.project_id)),
+            project_id: Some(ProjectId(value.project_id)),
             created_at: Some(value.created_at),
             component_type: value.component_type,
             files: value.files,

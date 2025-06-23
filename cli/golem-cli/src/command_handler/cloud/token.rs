@@ -20,8 +20,8 @@ use crate::log::{log_warn_action, LogColorize};
 use crate::model::text::token::{TokenListView, TokenNewView};
 use crate::model::TokenId;
 use chrono::{DateTime, Utc};
-use golem_cloud_client::api::TokenClient;
-use golem_cloud_client::model::CreateTokenDto;
+use golem_client::api::TokenClient;
+use golem_client::model::CreateTokenDto;
 use std::sync::Arc;
 
 pub struct CloudTokenCommandHandler {
@@ -42,7 +42,7 @@ impl CloudTokenCommandHandler {
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {
-        let clients = self.ctx.golem_clients_cloud().await?;
+        let clients = self.ctx.golem_clients().await?;
 
         let tokens = clients
             .token
@@ -56,7 +56,7 @@ impl CloudTokenCommandHandler {
     }
 
     async fn cmd_new(&self, expires_at: DateTime<Utc>) -> anyhow::Result<()> {
-        let clients = self.ctx.golem_clients_cloud().await?;
+        let clients = self.ctx.golem_clients().await?;
 
         let token = clients
             .token
@@ -70,7 +70,7 @@ impl CloudTokenCommandHandler {
     }
 
     async fn cmd_delete(&self, token_id: TokenId) -> anyhow::Result<()> {
-        let clients = self.ctx.golem_clients_cloud().await?;
+        let clients = self.ctx.golem_clients().await?;
 
         clients
             .token

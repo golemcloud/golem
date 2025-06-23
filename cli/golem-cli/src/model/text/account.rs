@@ -14,7 +14,7 @@
 
 use crate::log::logln;
 use crate::model::text::fmt::*;
-use golem_cloud_client::model::{Account, Role};
+use golem_client::model::{Account, Role};
 use serde::{Deserialize, Serialize};
 
 fn account_fields(account: &Account) -> Vec<(String, String)> {

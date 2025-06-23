@@ -16,7 +16,7 @@ use crate::model::text::fmt::*;
 use chrono::{DateTime, Utc};
 use cli_table::Table;
 use colored::Colorize;
-use golem_cloud_client::model::{Token, UnsafeToken};
+use golem_client::model::{Token, UnsafeToken};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash, HashFromString};
-use crate::cloud::ProjectId;
 use crate::fs;
 use crate::log::log_warn_action;
 use crate::model::app::{AppComponentName, DependentComponent};
+use crate::model::ProjectId;
 use crate::model::{app_raw, ComponentName};
 use anyhow::{anyhow, bail, Context};
 use itertools::Itertools;

@@ -16,13 +16,13 @@ use prometheus::Registry;
 
 pub mod command_handler;
 pub mod launch;
-mod migration;
 mod router;
 
 #[cfg(test)]
 test_r::enable!();
 
 pub struct StartedComponents {
+    pub cloud_service: cloud_service::TrafficReadyEndpoints,
     pub component_service: golem_component_service::TrafficReadyEndpoints,
     pub shard_manager: golem_shard_manager::RunDetails,
     pub worker_executor: golem_worker_executor::RunDetails,

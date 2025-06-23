@@ -16,7 +16,7 @@ use crate::app::yaml_edit::AppYamlEditor;
 use crate::command::api::definition::ApiDefinitionSubcommand;
 use crate::command::shared_args::{ProjectOptionalFlagArg, UpdateOrRedeployArgs};
 use crate::command_handler::Handlers;
-use crate::context::{Context, GolemClients};
+use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
 use crate::log::{
@@ -35,9 +35,8 @@ use crate::model::text::api_definition::{
 use crate::model::text::fmt::{log_deploy_diff, log_error, log_warn};
 use crate::model::{ComponentName, ProjectRefAndId};
 use anyhow::{bail, Context as AnyhowContext};
-use golem_client::api::ApiDefinitionClient as ApiDefinitionClientOss;
+use golem_client::api::ApiDefinitionClient;
 use golem_client::model::{HttpApiDefinitionRequest, HttpApiDefinitionResponseData};
-use golem_cloud_client::api::ApiDefinitionClient as ApiDefinitionClientCloud;
 use itertools::Itertools;
 use serde::de::DeserializeOwned;
 use std::collections::{BTreeMap, BTreeSet};
@@ -191,26 +190,21 @@ impl ApiDefinitionCommandHandler {
             .opt_select_project(project.project.as_ref())
             .await?;
 
-        let definitions = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_definition
-                .list_definitions(api_definition_id.as_ref().map(|id| id.0.as_str()))
-                .await
-                .map_service_error()?,
-            GolemClients::Cloud(clients) => clients
-                .api_definition
-                .list_definitions(
-                    &self
-                        .ctx
-                        .cloud_project_handler()
-                        .selected_project_id_or_default(project.as_ref())
-                        .await?
-                        .0,
-                    api_definition_id.as_ref().map(|id| id.0.as_str()),
-                )
-                .await
-                .map_service_error()?,
-        };
+        let clients = self.ctx.golem_clients().await?;
+
+        let definitions = clients
+            .api_definition
+            .list_definitions(
+                &self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project.as_ref())
+                    .await?
+                    .0,
+                api_definition_id.as_ref().map(|id| id.0.as_str()),
+            )
+            .await
+            .map_service_error()?;
 
         self.ctx.log_handler().log_view(&definitions);
 
@@ -229,27 +223,22 @@ impl ApiDefinitionCommandHandler {
             .opt_select_project(project.project.as_ref())
             .await?;
 
-        match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_definition
-                .delete_definition(&api_def_id.0, &version.0)
-                .await
-                .map_service_error()?,
-            GolemClients::Cloud(clients) => clients
-                .api_definition
-                .delete_definition(
-                    &self
-                        .ctx
-                        .cloud_project_handler()
-                        .selected_project_id_or_default(project.as_ref())
-                        .await?
-                        .0,
-                    &api_def_id.0,
-                    &version.0,
-                )
-                .await
-                .map_service_error()?,
-        };
+        let clients = self.ctx.golem_clients().await?;
+
+        clients
+            .api_definition
+            .delete_definition(
+                &self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project.as_ref())
+                    .await?
+                    .0,
+                &api_def_id.0,
+                &version.0,
+            )
+            .await
+            .map_service_error()?;
 
         log_warn_action(
             "Deleted",
@@ -584,27 +573,22 @@ impl ApiDefinitionCommandHandler {
         name: &str,
         version: &str,
     ) -> anyhow::Result<Option<HttpApiDefinitionResponseData>> {
-        match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_definition
-                .get_definition(name, version)
-                .await
-                .map_service_error_not_found_as_opt(),
-            GolemClients::Cloud(clients) => clients
-                .api_definition
-                .get_definition(
-                    &self
-                        .ctx
-                        .cloud_project_handler()
-                        .selected_project_id_or_default(project)
-                        .await?
-                        .0,
-                    name,
-                    version,
-                )
-                .await
-                .map_service_error_not_found_as_opt(),
-        }
+        let clients = self.ctx.golem_clients().await?;
+
+        clients
+            .api_definition
+            .get_definition(
+                &self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project)
+                    .await?
+                    .0,
+                name,
+                version,
+            )
+            .await
+            .map_service_error_not_found_as_opt()
     }
 
     async fn update_api_definition(
@@ -612,35 +596,24 @@ impl ApiDefinitionCommandHandler {
         project: Option<&ProjectRefAndId>,
         manifest_api_definition: &HttpApiDefinitionRequest,
     ) -> anyhow::Result<HttpApiDefinitionResponseData> {
-        match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_definition
-                .update_definition_json(
-                    &manifest_api_definition.id,
-                    &manifest_api_definition.version,
-                    manifest_api_definition,
-                )
-                .await
-                .map_service_error(),
-            GolemClients::Cloud(clients) => {
-                clients
-                    .api_definition
-                    .update_definition_json(
-                        &self
-                            .ctx
-                            .cloud_project_handler()
-                            .selected_project_id_or_default(project)
-                            .await?
-                            .0,
-                        &manifest_api_definition.id,
-                        &manifest_api_definition.version,
-                        // TODO: would be nice to share the model between oss and cloud instead of "re-encoding"
-                        &parse_api_definition(&serde_yaml::to_string(&manifest_api_definition)?)?,
-                    )
-                    .await
-                    .map_service_error()
-            }
-        }
+        let clients = self.ctx.golem_clients().await?;
+
+        clients
+            .api_definition
+            .update_definition_json(
+                &self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project)
+                    .await?
+                    .0,
+                &manifest_api_definition.id,
+                &manifest_api_definition.version,
+                // TODO: would be nice to share the model between oss and cloud instead of "re-encoding"
+                &parse_api_definition(&serde_yaml::to_string(&manifest_api_definition)?)?,
+            )
+            .await
+            .map_service_error()
     }
 
     async fn new_api_definition(
@@ -648,29 +621,22 @@ impl ApiDefinitionCommandHandler {
         project: Option<&ProjectRefAndId>,
         api_definition: &HttpApiDefinitionRequest,
     ) -> anyhow::Result<HttpApiDefinitionResponseData> {
-        match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_definition
-                .create_definition_json(api_definition)
-                .await
-                .map_service_error(),
-            GolemClients::Cloud(clients) => {
-                clients
-                    .api_definition
-                    .create_definition_json(
-                        &self
-                            .ctx
-                            .cloud_project_handler()
-                            .selected_project_id_or_default(project)
-                            .await?
-                            .0,
-                        // TODO: would be nice to share the model between oss and cloud instead of "re-encoding"
-                        &parse_api_definition(&serde_yaml::to_string(&api_definition)?)?,
-                    )
-                    .await
-                    .map_service_error()
-            }
-        }
+        let clients = self.ctx.golem_clients().await?;
+
+        clients
+            .api_definition
+            .create_definition_json(
+                &self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project)
+                    .await?
+                    .0,
+                // TODO: would be nice to share the model between oss and cloud instead of "re-encoding"
+                &parse_api_definition(&serde_yaml::to_string(&api_definition)?)?,
+            )
+            .await
+            .map_service_error()
     }
 }
 

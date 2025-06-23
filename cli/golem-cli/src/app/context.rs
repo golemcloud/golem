@@ -33,7 +33,6 @@ use crate::wasm_rpc_stubgen::wit_resolve::{ResolvedWitApplication, WitDepsResolv
 use anyhow::{anyhow, bail, Context};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
-use golem_wasm_rpc::WASM_RPC_VERSION;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -183,7 +182,7 @@ impl ApplicationContext {
                         .component_generated_base_wit(component_name),
                     client_root: self.application.client_temp_build_dir(component_name),
                     selected_world: None,
-                    stub_crate_version: WASM_RPC_VERSION.to_string(),
+                    stub_crate_version: golem_common::golem_version().to_string(),
                     golem_rust_override: self.config.golem_rust_override.clone(),
                     extract_source_exports_package: false,
                     seal_cargo_workspace: true,

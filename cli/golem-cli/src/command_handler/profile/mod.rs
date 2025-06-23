@@ -17,8 +17,7 @@ pub mod config;
 use crate::command::profile::ProfileSubcommand;
 use crate::command_handler::Handlers;
 use crate::config::{
-    CloudProfile, Config, NamedProfile, OssProfile, Profile, ProfileConfig, ProfileKind,
-    ProfileName, DEFAULT_OSS_URL,
+    AuthenticationConfig, Config, NamedProfile, Profile, ProfileConfig, ProfileName,
 };
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
@@ -29,6 +28,7 @@ use anyhow::bail;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use url::Url;
+use uuid::Uuid;
 
 pub struct ProfileCommandHandler {
     ctx: Arc<Context>,
@@ -42,7 +42,6 @@ impl ProfileCommandHandler {
     pub async fn handle_command(&self, subcommand: ProfileSubcommand) -> anyhow::Result<()> {
         match subcommand {
             ProfileSubcommand::New {
-                profile_kind,
                 name,
                 set_active,
                 component_url,
@@ -50,8 +49,8 @@ impl ProfileCommandHandler {
                 cloud_url,
                 default_format,
                 allow_insecure,
+                static_token,
             } => self.cmd_new(
-                profile_kind,
                 name,
                 set_active,
                 component_url,
@@ -59,6 +58,7 @@ impl ProfileCommandHandler {
                 cloud_url,
                 default_format,
                 allow_insecure,
+                static_token,
             ),
             ProfileSubcommand::List => self.cmd_list(),
             ProfileSubcommand::Switch { profile_name } => self.cmd_switch(profile_name),
@@ -78,7 +78,6 @@ impl ProfileCommandHandler {
 
     fn cmd_new(
         &self,
-        kind: ProfileKind,
         name: Option<ProfileName>,
         set_active: bool,
         component_url: Option<Url>,
@@ -86,6 +85,7 @@ impl ProfileCommandHandler {
         cloud_url: Option<Url>,
         default_format: Format,
         allow_insecure: bool,
+        static_token: Option<Uuid>,
     ) -> anyhow::Result<()> {
         let (name, profile, set_active) = match name {
             Some(name) => {
@@ -94,26 +94,20 @@ impl ProfileCommandHandler {
                     bail!(NonSuccessfulExit);
                 }
 
-                if cloud_url.is_some() {
-                    log_error("cloud_url is not allowed for OSS profile.");
-                    bail!(NonSuccessfulExit);
-                }
+                let auth = if let Some(static_token) = static_token {
+                    // TODO: we may want to read from prompt instead of reading parameter
+                    AuthenticationConfig::static_token(static_token)
+                } else {
+                    AuthenticationConfig::empty_oauth2()
+                };
 
-                let profile = match kind {
-                    ProfileKind::Oss => Profile::Golem(OssProfile {
-                        url: component_url.unwrap_or(Url::parse(DEFAULT_OSS_URL)?),
-                        worker_url,
-                        allow_insecure,
-                        config: ProfileConfig { default_format },
-                    }),
-                    ProfileKind::Cloud => Profile::GolemCloud(CloudProfile {
-                        custom_url: component_url,
-                        custom_cloud_url: None,
-                        custom_worker_url: None,
-                        allow_insecure,
-                        config: Default::default(),
-                        auth: None,
-                    }),
+                let profile = Profile {
+                    custom_url: component_url,
+                    custom_cloud_url: cloud_url,
+                    custom_worker_url: worker_url,
+                    allow_insecure,
+                    config: ProfileConfig { default_format },
+                    auth,
                 };
 
                 (name, profile, set_active)

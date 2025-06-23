@@ -12,23 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::CloudAuthenticationConfig;
-use crate::model::{Format, HasFormatConfig};
+use crate::model::Format;
 use anyhow::{anyhow, bail, Context};
+use chrono::{DateTime, Utc};
+use golem_client::model::TokenSecret;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::fmt::{Display, Formatter};
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::time::Duration;
-use strum_macros::EnumIter;
 use url::Url;
+use uuid::Uuid;
 
 pub const CLOUD_URL: &str = "https://release.api.golem.cloud";
 pub const DEFAULT_OSS_URL: &str = "http://localhost:9881";
+const PROFILE_NAME_LOCAL: &str = "local";
+const PROFILE_NAME_CLOUD: &str = "cloud";
+pub const LOCAL_WELL_KNOWN_TOKEN: Uuid = uuid::uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1");
 
 // TODO: review and separate model, config and serialization parts
 // TODO: when doing the serialization we can do a legacy migration
@@ -38,15 +42,7 @@ pub struct Config {
     pub profiles: HashMap<ProfileName, Profile>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub default_profile: Option<ProfileName>,
-    // TODO: these are deprecated now, remove them properly
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub active_profile: Option<ProfileName>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub active_cloud_profile: Option<ProfileName>,
 }
-
-const PROFILE_NAME_LOCAL: &str = "local";
-const PROFILE_NAME_CLOUD: &str = "cloud";
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct ProfileName(pub String);
@@ -118,85 +114,8 @@ pub struct NamedProfile {
     pub profile: Profile,
 }
 
-#[derive(Debug, Eq, PartialEq, Copy, Clone, EnumIter, Serialize, Deserialize)]
-pub enum ProfileKind {
-    Oss,
-    Cloud,
-}
-
-impl Display for ProfileKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProfileKind::Oss => write!(f, "OSS"),
-            ProfileKind::Cloud => write!(f, "Cloud"),
-        }
-    }
-}
-
-impl FromStr for ProfileKind {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "oss" => Ok(Self::Oss),
-            "cloud" => Ok(Self::Cloud),
-            _ => Err(format!(
-                "unknown profile kind: {}, available profile kinds: cloud, oss",
-                s
-            )),
-        }
-    }
-}
-
-// TODO: cannot rename enum cases without migration, as that breaks the format,
-//       if we have to migrate once, we should use a more "user-friendly" format
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Profile {
-    Golem(OssProfile),
-    GolemCloud(CloudProfile),
-}
-
-impl Profile {
-    pub fn config(self) -> ProfileConfig {
-        match self {
-            Profile::Golem(p) => p.config,
-            Profile::GolemCloud(p) => p.config,
-        }
-    }
-
-    pub fn get_config(&self) -> &ProfileConfig {
-        match self {
-            Profile::Golem(p) => &p.config,
-            Profile::GolemCloud(p) => &p.config,
-        }
-    }
-
-    pub fn get_config_mut(&mut self) -> &mut ProfileConfig {
-        match self {
-            Profile::Golem(p) => &mut p.config,
-            Profile::GolemCloud(p) => &mut p.config,
-        }
-    }
-
-    pub fn kind(&self) -> ProfileKind {
-        match self {
-            Profile::Golem(_) => ProfileKind::Oss,
-            Profile::GolemCloud(_) => ProfileKind::Cloud,
-        }
-    }
-}
-
-impl HasFormatConfig for Profile {
-    fn format(&self) -> Option<Format> {
-        match self {
-            Profile::Golem(profile) => profile.format(),
-            Profile::GolemCloud(profile) => profile.format(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CloudProfile {
+pub struct Profile {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub custom_url: Option<Url>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -207,42 +126,22 @@ pub struct CloudProfile {
     pub allow_insecure: bool,
     #[serde(default)]
     pub config: ProfileConfig,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub auth: Option<CloudAuthenticationConfig>,
+    pub auth: AuthenticationConfig,
 }
 
-impl HasFormatConfig for CloudProfile {
-    fn format(&self) -> Option<Format> {
-        Some(self.config.default_format)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OssProfile {
-    pub url: Url,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub worker_url: Option<Url>,
-    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
-    pub allow_insecure: bool,
-    #[serde(default)]
-    pub config: ProfileConfig,
-}
-
-impl Default for OssProfile {
-    fn default() -> Self {
+impl Profile {
+    pub fn default_local_profile() -> Self {
         let url = Url::parse(DEFAULT_OSS_URL).unwrap();
-        OssProfile {
-            url,
-            worker_url: None,
+        Self {
+            custom_url: Some(url),
+            custom_worker_url: None,
+            custom_cloud_url: None,
             allow_insecure: false,
             config: ProfileConfig::default(),
+            auth: AuthenticationConfig::Static(StaticAuthenticationConfig {
+                secret: AuthSecret(LOCAL_WELL_KNOWN_TOKEN),
+            }),
         }
-    }
-}
-
-impl HasFormatConfig for OssProfile {
-    fn format(&self) -> Option<Format> {
-        Some(self.config.default_format)
     }
 }
 
@@ -254,7 +153,7 @@ pub struct ProfileConfig {
 
 impl Config {
     fn config_path(config_dir: &Path) -> PathBuf {
-        config_dir.join("config.json")
+        config_dir.join("config-v2.json")
     }
 
     pub fn default_profile_name(&self) -> ProfileName {
@@ -320,11 +219,9 @@ impl Config {
     fn with_local_and_cloud_profiles(mut self) -> Self {
         self.profiles
             .entry(ProfileName::local())
-            .or_insert_with(|| Profile::Golem(OssProfile::default()));
+            .or_insert_with(Profile::default_local_profile);
 
-        self.profiles
-            .entry(ProfileName::cloud())
-            .or_insert_with(|| Profile::GolemCloud(CloudProfile::default()));
+        self.profiles.entry(ProfileName::cloud()).or_default();
 
         if self.default_profile.is_none() {
             self.default_profile = Some(ProfileName::local())
@@ -412,74 +309,39 @@ impl Config {
 pub struct ClientConfig {
     pub component_url: Url,
     pub worker_url: Url,
-    pub cloud_url: Option<Url>,
+    pub cloud_url: Url,
     pub service_http_client_config: HttpClientConfig,
     pub invoke_http_client_config: HttpClientConfig,
     pub health_check_http_client_config: HttpClientConfig,
-    pub local_health_check_http_client_config: HttpClientConfig,
     pub file_download_http_client_config: HttpClientConfig,
 }
 
 impl From<&Profile> for ClientConfig {
     fn from(profile: &Profile) -> Self {
-        match profile {
-            Profile::Golem(profile) => {
-                let allow_insecure = profile.allow_insecure;
+        let default_cloud_url = Url::parse(CLOUD_URL).unwrap();
+        let component_url = profile.custom_url.clone().unwrap_or(default_cloud_url);
+        let cloud_url = profile
+            .custom_cloud_url
+            .clone()
+            .unwrap_or_else(|| component_url.clone());
 
-                ClientConfig {
-                    component_url: profile.url.clone(),
-                    worker_url: profile
-                        .worker_url
-                        .clone()
-                        .unwrap_or_else(|| profile.url.clone()),
-                    cloud_url: None,
-                    service_http_client_config: HttpClientConfig::new_for_service_calls(
-                        allow_insecure,
-                    ),
-                    invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
-                    health_check_http_client_config: HttpClientConfig::new_for_health_check(
-                        allow_insecure,
-                    ),
-                    local_health_check_http_client_config:
-                        HttpClientConfig::new_for_local_health_check(allow_insecure),
-                    file_download_http_client_config: HttpClientConfig::new_for_file_download(
-                        allow_insecure,
-                    ),
-                }
-            }
-            Profile::GolemCloud(profile) => {
-                let default_cloud_url = Url::parse(CLOUD_URL).unwrap();
-                let component_url = profile.custom_url.clone().unwrap_or(default_cloud_url);
-                let cloud_url = Some(
-                    profile
-                        .custom_cloud_url
-                        .clone()
-                        .unwrap_or_else(|| component_url.clone()),
-                );
-                let worker_url = profile
-                    .custom_worker_url
-                    .clone()
-                    .unwrap_or_else(|| component_url.clone());
-                let allow_insecure = profile.allow_insecure;
+        let worker_url = profile
+            .custom_worker_url
+            .clone()
+            .unwrap_or_else(|| component_url.clone());
 
-                ClientConfig {
-                    component_url,
-                    worker_url,
-                    cloud_url,
-                    service_http_client_config: HttpClientConfig::new_for_service_calls(
-                        allow_insecure,
-                    ),
-                    invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
-                    health_check_http_client_config: HttpClientConfig::new_for_health_check(
-                        allow_insecure,
-                    ),
-                    local_health_check_http_client_config:
-                        HttpClientConfig::new_for_local_health_check(allow_insecure),
-                    file_download_http_client_config: HttpClientConfig::new_for_file_download(
-                        allow_insecure,
-                    ),
-                }
-            }
+        let allow_insecure = profile.allow_insecure;
+
+        ClientConfig {
+            component_url,
+            worker_url,
+            cloud_url,
+            service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
+            invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
+            health_check_http_client_config: HttpClientConfig::new_for_health_check(allow_insecure),
+            file_download_http_client_config: HttpClientConfig::new_for_file_download(
+                allow_insecure,
+            ),
         }
     }
 }
@@ -523,16 +385,6 @@ impl HttpClientConfig {
         .with_env_overrides("GOLEM_HTTP_HEALTHCHECK")
     }
 
-    pub fn new_for_local_health_check(allow_insecure: bool) -> Self {
-        Self {
-            allow_insecure,
-            timeout: Some(Duration::from_millis(200)),
-            connect_timeout: Some(Duration::from_millis(200)),
-            read_timeout: Some(Duration::from_millis(200)),
-        }
-        .with_env_overrides("GOLEM_HTTP_LOCAL_HEALTHCHECK")
-    }
-
     pub fn new_for_file_download(allow_insecure: bool) -> Self {
         Self {
             allow_insecure,
@@ -562,5 +414,72 @@ impl HttpClientConfig {
         }
 
         self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AuthenticationConfig {
+    OAuth2(OAuth2AuthenticationConfig),
+    Static(StaticAuthenticationConfig),
+}
+
+impl AuthenticationConfig {
+    pub fn empty_oauth2() -> Self {
+        Self::OAuth2(OAuth2AuthenticationConfig { data: None })
+    }
+
+    pub fn static_token(token: Uuid) -> Self {
+        Self::Static(StaticAuthenticationConfig {
+            secret: AuthSecret(token),
+        })
+    }
+}
+
+impl Default for AuthenticationConfig {
+    fn default() -> Self {
+        Self::empty_oauth2()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2AuthenticationConfig {
+    pub data: Option<OAuth2AuthenticationData>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2AuthenticationData {
+    pub id: Uuid,
+    pub account_id: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub secret: AuthSecret,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaticAuthenticationConfig {
+    pub secret: AuthSecret,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct AuthSecret(pub Uuid);
+
+impl Display for AuthSecret {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("*******")
+    }
+}
+
+impl Debug for AuthSecret {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("AuthSecret").field(&"*******").finish()
+    }
+}
+
+impl From<AuthSecret> for TokenSecret {
+    fn from(value: AuthSecret) -> Self {
+        Self { value: value.0 }
     }
 }

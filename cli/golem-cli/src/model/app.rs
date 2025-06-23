@@ -1698,8 +1698,7 @@ mod app_builder {
                                 vec![("profile", profile_name.to_string())],
                                 |validation| {
                                     let is_builtin_local = profile_name.is_builtin_local();
-                                    let is_cloud =
-                                        profile_name.is_builtin_cloud() || profile.is_cloud();
+                                    let is_cloud = profile_name.is_builtin_cloud();
                                     if is_builtin_local || is_cloud {
                                         check_not_allowed_for_profile(
                                             &format!("{} profiles", "Cloud".log_color_highlight()),

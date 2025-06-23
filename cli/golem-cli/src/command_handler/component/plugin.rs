@@ -14,18 +14,17 @@
 
 use crate::command::component::plugin::ComponentPluginSubcommand;
 use crate::command_handler::Handlers;
-use crate::context::{Context, GolemClients};
+use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, log_error_action, log_warn_action, LogIndent};
 use crate::model::text::fmt::log_warn;
 use crate::model::ComponentName;
 use anyhow::bail;
-use golem_client::api::ComponentClient as ComponentClientOss;
+use golem_client::api::ComponentClient;
 use golem_client::model::{
     PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
 };
-use golem_cloud_client::api::ComponentClient as ComponentClientCloud;
 use golem_common::base_model::PluginInstallationId;
 use std::sync::Arc;
 
@@ -121,38 +120,25 @@ impl ComponentPluginCommandHandler {
                 .await?;
 
             let result = match component {
-                Some(component) => match self.ctx.golem_clients().await? {
-                    GolemClients::Oss(clients) => Some(
-                        clients
-                            .component
-                            .install_plugin(
-                                &component.versioned_component_id.component_id,
-                                &PluginInstallationCreation {
-                                    name: plugin_name.clone(),
-                                    version: plugin_version.clone(),
-                                    priority,
-                                    parameters: parameters.clone().into_iter().collect(),
-                                },
-                            )
-                            .await
-                            .map_service_error()?,
-                    ),
-                    GolemClients::Cloud(clients) => Some(
-                        clients
-                            .component
-                            .install_plugin(
-                                &component.versioned_component_id.component_id,
-                                &PluginInstallationCreation {
-                                    name: plugin_name.clone(),
-                                    version: plugin_version.clone(),
-                                    priority,
-                                    parameters: parameters.clone().into_iter().collect(),
-                                },
-                            )
-                            .await
-                            .map_service_error()?,
-                    ),
-                },
+                Some(component) => {
+                    let clients = self.ctx.golem_clients().await?;
+
+                    let result = clients
+                        .component
+                        .install_plugin(
+                            &component.versioned_component_id.component_id,
+                            &PluginInstallationCreation {
+                                name: plugin_name.clone(),
+                                version: plugin_version.clone(),
+                                priority,
+                                parameters: parameters.clone().into_iter().collect(),
+                            },
+                        )
+                        .await
+                        .map_service_error()?;
+
+                    Some(result)
+                }
                 None => {
                     log_warn(format!("Component {} not found", component_name));
                     any_error = true;
@@ -198,28 +184,19 @@ impl ComponentPluginCommandHandler {
                 .await?;
 
             let result = match component {
-                Some(component) => match self.ctx.golem_clients().await? {
-                    GolemClients::Oss(clients) => clients
-                        .component
-                        .get_installed_plugins(
-                            &component.versioned_component_id.component_id,
-                            &version
-                                .unwrap_or(component.versioned_component_id.version)
-                                .to_string(),
-                        )
-                        .await
-                        .map_service_error()?,
-                    GolemClients::Cloud(clients) => clients
-                        .component
-                        .get_installed_plugins(
-                            &component.versioned_component_id.component_id,
-                            &version
-                                .unwrap_or(component.versioned_component_id.version)
-                                .to_string(),
-                        )
-                        .await
-                        .map_service_error()?,
-                },
+                Some(component) => self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .component
+                    .get_installed_plugins(
+                        &component.versioned_component_id.component_id,
+                        &version
+                            .unwrap_or(component.versioned_component_id.version)
+                            .to_string(),
+                    )
+                    .await
+                    .map_service_error()?,
                 None => {
                     log_warn(format!("Component {} not found", component_name));
                     vec![]
@@ -269,34 +246,22 @@ impl ComponentPluginCommandHandler {
 
             match component {
                 Some(component) => {
-                    match self.ctx.golem_clients().await? {
-                        GolemClients::Oss(clients) => clients
-                            .component
-                            .update_installed_plugin(
-                                &component.versioned_component_id.component_id,
-                                &plugin_installation_id.0,
-                                &PluginInstallationUpdate {
-                                    priority,
-                                    parameters: parameters.clone().into_iter().collect(),
-                                },
-                            )
-                            .await
-                            .map(|_| ())
-                            .map_service_error()?,
-                        GolemClients::Cloud(clients) => clients
-                            .component
-                            .update_installed_plugin(
-                                &component.versioned_component_id.component_id,
-                                &plugin_installation_id.0,
-                                &PluginInstallationUpdate {
-                                    priority,
-                                    parameters: parameters.clone().into_iter().collect(),
-                                },
-                            )
-                            .await
-                            .map(|_| ())
-                            .map_service_error()?,
-                    }
+                    self.ctx
+                        .golem_clients()
+                        .await?
+                        .component
+                        .update_installed_plugin(
+                            &component.versioned_component_id.component_id,
+                            &plugin_installation_id.0,
+                            &PluginInstallationUpdate {
+                                priority,
+                                parameters: parameters.clone().into_iter().collect(),
+                            },
+                        )
+                        .await
+                        .map(|_| ())
+                        .map_service_error()?;
+
                     log_action("Updated", "plugin");
                 }
                 None => {
@@ -346,26 +311,18 @@ impl ComponentPluginCommandHandler {
                 .await?;
 
             let result = match component {
-                Some(component) => match self.ctx.golem_clients().await? {
-                    GolemClients::Oss(clients) => clients
-                        .component
-                        .uninstall_plugin(
-                            &component.versioned_component_id.component_id,
-                            &plugin_installation_id.0,
-                        )
-                        .await
-                        .map(|_| ())
-                        .map_service_error(),
-                    GolemClients::Cloud(clients) => clients
-                        .component
-                        .uninstall_plugin(
-                            &component.versioned_component_id.component_id,
-                            &plugin_installation_id.0,
-                        )
-                        .await
-                        .map(|_| ())
-                        .map_service_error(),
-                },
+                Some(component) => self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .component
+                    .uninstall_plugin(
+                        &component.versioned_component_id.component_id,
+                        &plugin_installation_id.0,
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_service_error(),
                 None => {
                     log_warn(format!("Component {} not found", component_name));
                     any_error = true;

@@ -18,8 +18,8 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::{log_action, log_warn_action, logln};
 use crate::model::ProjectReference;
+use golem_client::api::ProjectClient;
 use golem_client::model::{PluginInstallationCreation, PluginInstallationUpdate};
-use golem_cloud_client::api::ProjectClient;
 use golem_common::base_model::PluginInstallationId;
 use std::sync::Arc;
 
@@ -92,7 +92,7 @@ impl CloudProjectPluginCommandHandler {
 
         let result = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .project
             .install_plugin_to_project(
@@ -121,7 +121,7 @@ impl CloudProjectPluginCommandHandler {
 
         let results = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .project
             .get_installed_plugins_of_project(&project.project_id.0)
@@ -155,7 +155,7 @@ impl CloudProjectPluginCommandHandler {
         );
 
         self.ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .project
             .update_installed_plugin_in_project(
@@ -194,7 +194,7 @@ impl CloudProjectPluginCommandHandler {
         );
 
         self.ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .project
             .uninstall_plugin_from_project(&project.project_id.0, &plugin_installation_id.0)

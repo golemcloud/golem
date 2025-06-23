@@ -12,13 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::ProjectId;
 use crate::command::cloud::project::{ProjectActionsOrPolicyId, ProjectSubcommand};
 use crate::command_handler::Handlers;
-use crate::config::ProfileKind;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
-use crate::error::HintError;
 use crate::error::NonSuccessfulExit;
 use crate::log::{logln, LogColorize};
 use crate::model::project::ProjectView;
@@ -26,10 +23,11 @@ use crate::model::text::fmt::{log_error, log_text_view};
 use crate::model::text::project::{
     ProjectCreatedView, ProjectGetView, ProjectGrantView, ProjectListView,
 };
+use crate::model::ProjectId;
 use crate::model::{ProjectName, ProjectRefAndId, ProjectReference};
 use anyhow::{anyhow, bail};
-use golem_cloud_client::api::{ProjectClient, ProjectGrantClient};
-use golem_cloud_client::model::{Project, ProjectDataRequest, ProjectGrantDataRequest};
+use golem_client::api::{ProjectClient, ProjectGrantClient};
+use golem_client::model::{Project, ProjectDataRequest, ProjectGrantDataRequest};
 use std::sync::Arc;
 
 pub mod plugin;
@@ -84,7 +82,7 @@ impl CloudProjectCommandHandler {
         project_name: ProjectName,
         description: Option<String>,
     ) -> anyhow::Result<()> {
-        let clients = self.ctx.golem_clients_cloud().await?;
+        let clients = self.ctx.golem_clients().await?;
         let project = clients
             .project
             .create_project(&ProjectDataRequest {
@@ -103,7 +101,7 @@ impl CloudProjectCommandHandler {
     async fn cmd_list(&self, project_name: Option<ProjectName>) -> anyhow::Result<()> {
         let projects = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .project
             .get_projects(project_name.as_ref().map(|name| name.0.as_str()))
@@ -118,7 +116,7 @@ impl CloudProjectCommandHandler {
     async fn cmd_get_default(&self) -> anyhow::Result<()> {
         let project = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .project
             .get_default_project()
@@ -138,7 +136,7 @@ impl CloudProjectCommandHandler {
             ProjectReference::JustName(project_name) => {
                 let mut projects = self
                     .ctx
-                    .golem_clients_cloud()
+                    .golem_clients()
                     .await?
                     .project
                     .get_projects(Some(&project_name.0))
@@ -171,7 +169,7 @@ impl CloudProjectCommandHandler {
 
                 let mut projects = self
                     .ctx
-                    .golem_clients_cloud()
+                    .golem_clients()
                     .await?
                     .project
                     .get_projects(Some(&project_name.0))
@@ -202,16 +200,7 @@ impl CloudProjectCommandHandler {
         &self,
         project_reference: Option<&ProjectReference>,
     ) -> anyhow::Result<Option<ProjectRefAndId>> {
-        let project_reference = match (self.ctx.profile_kind(), project_reference) {
-            (ProfileKind::Oss, Some(_)) => {
-                log_error("Cannot use projects with OSS profile!");
-                logln("");
-                bail!(HintError::ExpectedCloudProfile);
-            }
-            (ProfileKind::Oss, None) => None,
-            (ProfileKind::Cloud, Some(project_reference)) => Some(project_reference),
-            (ProfileKind::Cloud, None) => self.ctx.profile_project(),
-        };
+        let project_reference = project_reference.or_else(|| self.ctx.profile_project());
 
         let ref_and_id = match project_reference {
             Some(project_reference) => {
@@ -246,7 +235,7 @@ impl CloudProjectCommandHandler {
             Some(project) => Ok(project.project_id),
             None => self
                 .ctx
-                .golem_clients_cloud()
+                .golem_clients()
                 .await?
                 .project
                 .get_default_project()
@@ -264,7 +253,7 @@ impl CloudProjectCommandHandler {
     ) -> anyhow::Result<()> {
         let grant = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .project_grant
             .create_project_grant(

@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::AccountId;
 use crate::command::cloud::account::grant::GrantSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::text::account::GrantGetView;
+use crate::model::AccountId;
 use crate::model::Role;
 
 use crate::log::log_action;
-use golem_cloud_client::api::GrantClient;
+use golem_client::api::GrantClient;
 use std::sync::Arc;
 
 pub struct CloudAccountGrantCommandHandler {
@@ -48,7 +48,7 @@ impl CloudAccountGrantCommandHandler {
     async fn cmd_get(&self, account_id: Option<AccountId>) -> anyhow::Result<()> {
         let roles = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .grant
             .get_account_grants(
@@ -69,7 +69,7 @@ impl CloudAccountGrantCommandHandler {
 
     async fn cmd_new(&self, account_id: Option<AccountId>, role: Role) -> anyhow::Result<()> {
         self.ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .grant
             .create_account_grant(
@@ -91,7 +91,7 @@ impl CloudAccountGrantCommandHandler {
 
     async fn cmd_delete(&self, account_id: Option<AccountId>, role: Role) -> anyhow::Result<()> {
         self.ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .grant
             .delete_account_grant(

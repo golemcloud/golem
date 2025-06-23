@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command_handler::Handlers;
-use crate::context::{Context, GolemClients};
+use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
 use crate::log::LogColorize;
@@ -21,8 +21,7 @@ use crate::model::app::{AppComponentName, BuildProfileName, PluginInstallation};
 use crate::model::component::Component;
 use anyhow::bail;
 use async_trait::async_trait;
-use golem_client::api::ComponentClient as OssComponentClient;
-use golem_cloud_client::api::ComponentClient as CloudComponentClient;
+use golem_client::api::ComponentClient;
 use golem_common::model::plugin::{
     PluginInstallationAction, PluginInstallationCreation, PluginInstallationUpdateWithId,
     PluginUninstallation,
@@ -475,24 +474,16 @@ impl PluginInstallationTarget for ComponentPluginInstallationTarget {
     async fn get_all_existing_plugin_installations(
         &self,
     ) -> anyhow::Result<Vec<golem_client::model::PluginInstallation>> {
-        let mut installations = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .component
-                .get_installed_plugins(
-                    &self.component.versioned_component_id.component_id,
-                    &self.component.versioned_component_id.version.to_string(),
-                )
-                .await
-                .map_service_error(),
-            GolemClients::Cloud(clients) => clients
-                .component
-                .get_installed_plugins(
-                    &self.component.versioned_component_id.component_id,
-                    &self.component.versioned_component_id.version.to_string(),
-                )
-                .await
-                .map_service_error(),
-        }?;
+        let clients = self.ctx.golem_clients().await?;
+
+        let mut installations = clients
+            .component
+            .get_installed_plugins(
+                &self.component.versioned_component_id.component_id,
+                &self.component.versioned_component_id.version.to_string(),
+            )
+            .await
+            .map_service_error()?;
 
         installations.sort_by_key(|i| i.priority);
         Ok(installations)
@@ -539,32 +530,19 @@ impl PluginInstallationTarget for ComponentPluginInstallationTarget {
     }
 
     async fn finish(&mut self) -> anyhow::Result<()> {
-        match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => {
-                let _ = clients
-                    .component
-                    .bath_update_installed_plugins(
-                        &self.component.versioned_component_id.component_id,
-                        &golem_client::model::BatchPluginInstallationUpdates {
-                            actions: self.actions.drain(..).collect(),
-                        },
-                    )
-                    .await
-                    .map_service_error()?;
-            }
-            GolemClients::Cloud(clients) => {
-                let _ = clients
-                    .component
-                    .bath_update_installed_plugins(
-                        &self.component.versioned_component_id.component_id,
-                        &golem_cloud_client::model::BatchPluginInstallationUpdates {
-                            actions: self.actions.drain(..).collect(),
-                        },
-                    )
-                    .await
-                    .map_service_error()?;
-            }
-        }
+        let clients = self.ctx.golem_clients().await?;
+
+        clients
+            .component
+            .bath_update_installed_plugins(
+                &self.component.versioned_component_id.component_id,
+                &golem_client::model::BatchPluginInstallationUpdates {
+                    actions: self.actions.drain(..).collect(),
+                },
+            )
+            .await
+            .map_service_error()?;
+
         Ok(())
     }
 }

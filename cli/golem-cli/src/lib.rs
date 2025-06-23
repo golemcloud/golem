@@ -18,7 +18,6 @@ use tracing_subscriber::FmtSubscriber;
 
 pub mod app;
 pub mod auth;
-pub mod cloud;
 pub mod command;
 pub mod command_handler;
 pub mod config;

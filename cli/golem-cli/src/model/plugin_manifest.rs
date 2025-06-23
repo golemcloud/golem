@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use golem_client::model::{
-    PluginDefinitionCreationDefaultPluginScope, PluginTypeSpecificCreation,
-    PluginTypeSpecificDefinition,
+    PluginDefinitionCreation, PluginTypeSpecificCreation, PluginTypeSpecificDefinition,
 };
-use golem_common::model::plugin::DefaultPluginScope;
+use golem_common::model::plugin::PluginScope;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -90,8 +89,8 @@ pub trait FromPluginManifest {
     ) -> Self;
 }
 
-impl FromPluginManifest for PluginDefinitionCreationDefaultPluginScope {
-    type PluginScope = DefaultPluginScope;
+impl FromPluginManifest for PluginDefinitionCreation {
+    type PluginScope = PluginScope;
 
     fn from_plugin_manifest(
         manifest: PluginManifest,
@@ -99,7 +98,7 @@ impl FromPluginManifest for PluginDefinitionCreationDefaultPluginScope {
         specs: PluginTypeSpecificDefinition,
         icon: Vec<u8>,
     ) -> Self {
-        PluginDefinitionCreationDefaultPluginScope {
+        PluginDefinitionCreation {
             name: manifest.name,
             version: manifest.version,
             description: manifest.description,

@@ -14,7 +14,7 @@
 
 use crate::model::text::fmt::*;
 use cli_table::Table;
-use golem_cloud_client::model::ApiDomain;
+use golem_client::model::ApiDomain;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

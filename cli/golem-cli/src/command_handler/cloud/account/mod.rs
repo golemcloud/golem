@@ -14,7 +14,6 @@
 
 pub mod grant;
 
-use crate::cloud::AccountId;
 use crate::command::cloud::account::AccountSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
@@ -24,9 +23,10 @@ use crate::log::log_warn_action;
 use crate::model::text::account::{AccountGetView, AccountNewView};
 use crate::model::text::fmt::log_error;
 use crate::model::AccountDetails;
+use crate::model::AccountId;
 use anyhow::bail;
-use golem_cloud_client::api::AccountClient;
-use golem_cloud_client::model::{Account, AccountData};
+use golem_client::api::AccountClient;
+use golem_client::model::{Account, AccountData};
 use std::sync::Arc;
 
 pub struct CloudAccountCommandHandler {
@@ -87,7 +87,7 @@ impl CloudAccountCommandHandler {
         let account = self.get(account_id).await?;
         let account = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .account
             .update_account(
@@ -108,7 +108,7 @@ impl CloudAccountCommandHandler {
     async fn cmd_new(&self, account_name: String, account_email: String) -> anyhow::Result<()> {
         let account = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .account
             .create_account(&AccountData {
@@ -134,7 +134,7 @@ impl CloudAccountCommandHandler {
         }
 
         self.ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .account
             .delete_account(&account.id)
@@ -148,7 +148,7 @@ impl CloudAccountCommandHandler {
 
     async fn get(&self, account_id: Option<AccountId>) -> anyhow::Result<Account> {
         self.ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .account
             .get_account(&self.select_account_id_or_err(account_id).await?.0)
@@ -157,7 +157,7 @@ impl CloudAccountCommandHandler {
     }
 
     pub async fn account_id_or_err(&self) -> anyhow::Result<AccountId> {
-        Ok(self.ctx.golem_clients_cloud().await?.account_id())
+        Ok(self.ctx.golem_clients().await?.account_id())
     }
 
     pub async fn select_account_id_or_err(
@@ -176,7 +176,7 @@ impl CloudAccountCommandHandler {
     ) -> anyhow::Result<AccountDetails> {
         let mut result = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .account
             .find_accounts(Some(email))

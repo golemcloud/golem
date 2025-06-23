@@ -14,7 +14,7 @@
 
 use crate::model::text::fmt::*;
 use cli_table::Table;
-use golem_cloud_client::model::Certificate;
+use golem_client::model::Certificate;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

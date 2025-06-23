@@ -23,11 +23,12 @@ use crate::model::{ComponentName, ComponentNameMatchKind, IdempotencyKey, Worker
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use golem_rib_repl::{
-    ReplDependencies, RibComponentMetadata, RibDependencyManager, RibRepl, RibReplConfig,
-    WorkerFunctionInvoke,
+    ReplComponentDependencies, RibDependencyManager, RibRepl, RibReplConfig, WorkerFunctionInvoke,
 };
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use golem_wasm_rpc::ValueAndType;
+use rib::{ComponentDependency, ComponentDependencyKey};
 use std::path::Path;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -76,13 +77,19 @@ impl RibReplHandler {
             )
             .await?;
 
+        let component_dependency_key = ComponentDependencyKey {
+            component_name: component.component_name.0.clone(),
+            component_id: component.versioned_component_id.component_id,
+            root_package_name: component.metadata.root_package_name.clone(),
+            root_package_version: component.metadata.root_package_version.clone(),
+        };
+
         self.ctx
-            .set_rib_repl_dependencies(ReplDependencies {
-                component_dependencies: vec![RibComponentMetadata {
-                    component_id: component.versioned_component_id.component_id,
-                    component_name: component.component_name.0.clone(),
-                    metadata: component.metadata.exports.clone(),
-                }],
+            .set_rib_repl_dependencies(ReplComponentDependencies {
+                component_dependencies: vec![ComponentDependency::new(
+                    component_dependency_key,
+                    component.metadata.exports.clone(),
+                )],
             })
             .await;
 
@@ -115,7 +122,7 @@ impl RibReplHandler {
 
 #[async_trait]
 impl RibDependencyManager for RibReplHandler {
-    async fn get_dependencies(&self) -> anyhow::Result<ReplDependencies> {
+    async fn get_dependencies(&self) -> anyhow::Result<ReplComponentDependencies> {
         Ok(self.ctx.get_rib_repl_dependencies().await)
     }
 
@@ -123,7 +130,7 @@ impl RibDependencyManager for RibReplHandler {
         &self,
         _source_path: &Path,
         _component_name: String,
-    ) -> anyhow::Result<RibComponentMetadata> {
+    ) -> anyhow::Result<ComponentDependency> {
         unreachable!("add_component should not be used in CLI")
     }
 }
@@ -137,6 +144,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
         worker_name: Option<String>,
         function_name: &str,
         args: Vec<ValueAndType>,
+        _return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>> {
         let worker_name = worker_name.map(WorkerName::from);
 

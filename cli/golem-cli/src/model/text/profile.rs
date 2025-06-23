@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{ProfileConfig, ProfileKind};
+use crate::config::ProfileConfig;
 use crate::log::{logln, LogColorize};
 use crate::model::text::fmt::*;
 use crate::model::ProfileView;
@@ -23,10 +23,9 @@ impl TextView for Vec<ProfileView> {
         logln("Available profiles:".log_color_help_group().to_string());
         for profile in self {
             logln(format!(
-                " {} {}, {}{}",
+                " {} {}{}",
                 if profile.is_active { "*" } else { " " },
                 format_id(&profile.name),
-                profile.kind,
                 if profile.name.is_builtin() {
                     ", builtin"
                 } else {
@@ -39,14 +38,7 @@ impl TextView for Vec<ProfileView> {
 
 impl MessageWithFields for ProfileView {
     fn message(&self) -> String {
-        match self.kind {
-            ProfileKind::Oss => {
-                format!("OSS profile {}", format_message_highlight(&self.name))
-            }
-            ProfileKind::Cloud => {
-                format!("Cloud profile {}", format_message_highlight(&self.name))
-            }
-        }
+        format!("Profile {}", format_message_highlight(&self.name))
     }
 
     fn fields(&self) -> Vec<(String, String)> {

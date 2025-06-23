@@ -51,7 +51,7 @@ impl WorkerConnection {
     /// Initializes a worker stream. Use `run_forever` to connect and output worker events.
     pub async fn new(
         worker_service_url: Url,
-        auth_token: Option<String>,
+        auth_token: String,
         component_id: Uuid,
         worker_name: String,
         connect_options: WorkerConnectOptions,
@@ -142,7 +142,7 @@ impl WorkerConnection {
 
     fn create_request(
         worker_service_url: Url,
-        auth_token: Option<String>,
+        auth_token: String,
         component_id: Uuid,
         worker_name: String,
         allow_insecure: bool,
@@ -169,9 +169,9 @@ impl WorkerConnection {
             .into_client_request()
             .context("Failed to create request")?;
 
-        if let Some(token) = auth_token {
+        {
             let headers = request.headers_mut();
-            headers.insert("Authorization", format!("Bearer {}", token).parse()?);
+            headers.insert("Authorization", format!("Bearer {}", auth_token).parse()?);
         }
 
         let connector = if allow_insecure {

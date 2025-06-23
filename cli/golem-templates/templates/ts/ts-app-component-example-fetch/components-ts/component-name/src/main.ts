@@ -1,3 +1,4 @@
+/// <reference path="./generated/wit-generated.d.ts" />
 import type * as bindings from "pack:name/component-name"
 
 let result: any;

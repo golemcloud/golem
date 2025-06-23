@@ -18,8 +18,8 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::text::api_domain::{ApiDomainListView, ApiDomainNewView};
 use crate::model::ProjectReference;
-use golem_cloud_client::api::ApiDomainClient;
-use golem_cloud_client::model::DomainRequest;
+use golem_client::api::ApiDomainClient;
+use golem_client::model::DomainRequest;
 
 use crate::log::log_warn_action;
 use std::sync::Arc;
@@ -50,7 +50,7 @@ impl ApiCloudDomainCommandHandler {
     async fn cmd_get(&self, project_reference: ProjectReference) -> anyhow::Result<()> {
         let domains = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .api_domain
             .get_domains(
@@ -77,7 +77,7 @@ impl ApiCloudDomainCommandHandler {
     ) -> anyhow::Result<()> {
         let domain = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .api_domain
             .create_or_update_domain(&DomainRequest {
@@ -104,7 +104,7 @@ impl ApiCloudDomainCommandHandler {
         domain_name: String,
     ) -> anyhow::Result<()> {
         self.ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .api_domain
             .delete_domain(

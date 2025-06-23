@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{
-    CloudProfile, OssProfile, Profile, ProfileConfig, ProfileKind, ProfileName, CLOUD_URL,
-    DEFAULT_OSS_URL,
-};
+use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, log_warn_action, logln, LogColorize};
@@ -27,8 +24,8 @@ use crate::model::text::fmt::{log_error, log_warn};
 use crate::model::{ComponentName, Format, NewInteractiveApp, WorkerName};
 use anyhow::bail;
 use colored::Colorize;
+use golem_client::model::Account;
 use golem_client::model::HttpApiDefinitionRequest;
-use golem_cloud_client::model::Account;
 use golem_common::model::ComponentVersion;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, PackageName};
 use inquire::error::InquireResult;
@@ -43,6 +40,7 @@ use std::sync::Arc;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use url::Url;
+use uuid::Uuid;
 
 // NOTE: in the interactive handler is it okay to _read_ context (e.g. read selected component names)
 //       but mutations of state or the app should be done in other handlers
@@ -217,15 +215,7 @@ impl InteractiveHandler {
             })
             .prompt()?;
 
-        let profile_kind =
-            Select::new("Profile kind:", ProfileKind::iter().collect::<Vec<_>>()).prompt()?;
-
-        let component_service_url = CustomType::<Url>::new("Component service URL:")
-            .with_default(match profile_kind {
-                ProfileKind::Oss => Url::parse(DEFAULT_OSS_URL)?,
-                ProfileKind::Cloud => Url::parse(CLOUD_URL)?,
-            })
-            .prompt()?;
+        let component_service_url = CustomType::<Url>::new("Component service URL:").prompt()?;
 
         let worker_service_url = CustomType::<OptionalUrl>::new(
             "Worker service URL (empty to use component service url):",
@@ -233,37 +223,36 @@ impl InteractiveHandler {
         .prompt()?
         .0;
 
-        let cloud_service_url = match profile_kind {
-            ProfileKind::Oss => None,
-            ProfileKind::Cloud => {
-                CustomType::<OptionalUrl>::new(
-                    "Cloud service URL (empty to use component service url)",
-                )
-                .prompt()?
-                .0
-            }
-        };
+        let cloud_service_url = CustomType::<OptionalUrl>::new(
+            "Cloud service URL (empty to use component service url)",
+        )
+        .prompt()?
+        .0;
 
         let default_format =
             Select::new("Default output format:", Format::iter().collect::<Vec<_>>())
                 .with_starting_cursor(2)
                 .prompt()?;
 
-        let profile = match profile_kind {
-            ProfileKind::Oss => Profile::Golem(OssProfile {
-                url: component_service_url,
-                worker_url: worker_service_url,
-                allow_insecure: false,
-                config: ProfileConfig { default_format },
-            }),
-            ProfileKind::Cloud => Profile::GolemCloud(CloudProfile {
-                custom_url: Some(component_service_url),
-                custom_cloud_url: cloud_service_url,
-                custom_worker_url: worker_service_url,
-                allow_insecure: false,
-                config: ProfileConfig { default_format },
-                auth: None,
-            }),
+        let static_token = CustomType::<OptionalAuthSecret>::new(
+            "Static token for authentication (empty to use interactive authentication via OAuth2):",
+        )
+        .prompt()?
+        .0;
+
+        let auth = if let Some(static_token) = static_token {
+            AuthenticationConfig::static_token(static_token.0)
+        } else {
+            AuthenticationConfig::empty_oauth2()
+        };
+
+        let profile = Profile {
+            custom_url: Some(component_service_url),
+            custom_cloud_url: cloud_service_url,
+            custom_worker_url: worker_service_url,
+            allow_insecure: false,
+            config: ProfileConfig { default_format },
+            auth,
         };
 
         let set_as_active = Confirm::new("Set as active profile?")
@@ -697,6 +686,30 @@ impl FromStr for OptionalUrl {
             Ok(OptionalUrl(None))
         } else {
             Ok(OptionalUrl(Some(Url::from_str(s)?)))
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct OptionalAuthSecret(Option<AuthSecret>);
+
+impl Display for OptionalAuthSecret {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            None => Ok(()),
+            Some(value) => write!(f, "{}", value),
+        }
+    }
+}
+
+impl FromStr for OptionalAuthSecret {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.trim().is_empty() {
+            Ok(Self(None))
+        } else {
+            Ok(Self(Some(AuthSecret(Uuid::from_str(s)?))))
         }
     }
 }

@@ -12,47 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::{
-    AccountId, AuthSecret, CloudAuthenticationConfig, CloudAuthenticationConfigData,
+use crate::config::{
+    AuthSecret, AuthenticationConfig, OAuth2AuthenticationConfig, OAuth2AuthenticationData,
 };
-use crate::config::{Config, Profile, ProfileName};
+use crate::config::{Config, ProfileName};
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::LogColorize;
+use crate::model::AccountId;
 use anyhow::{anyhow, bail, Context};
 use colored::Colorize;
-use golem_cloud_client::api::{LoginClient, LoginClientLive, LoginOauth2WebFlowPollError};
-use golem_cloud_client::model::{Token, TokenSecret, UnsafeToken, WebFlowAuthorizeUrlResponse};
-use golem_cloud_client::Security;
+use golem_client::api::{LoginClient, LoginClientLive, LoginOauth2WebFlowPollError};
+use golem_client::model::{Token, TokenSecret, UnsafeToken, WebFlowAuthorizeUrlResponse};
+use golem_client::Security;
 use indoc::printdoc;
 use std::path::Path;
 use tracing::info;
 use uuid::Uuid;
 
-impl From<&CloudAuthenticationConfig> for CloudAuthentication {
-    fn from(val: &CloudAuthenticationConfig) -> Self {
-        CloudAuthentication(UnsafeToken {
+#[derive(Clone, PartialEq, Debug)]
+pub struct Authentication(pub UnsafeToken);
+
+impl Authentication {
+    pub fn header(&self) -> String {
+        token_header(&self.0.secret)
+    }
+
+    pub fn account_id(&self) -> AccountId {
+        AccountId(self.0.data.account_id.clone())
+    }
+}
+
+impl From<&OAuth2AuthenticationData> for Authentication {
+    fn from(val: &OAuth2AuthenticationData) -> Self {
+        Authentication(UnsafeToken {
             data: Token {
-                id: val.data.id,
-                account_id: val.data.account_id.to_string(),
-                created_at: val.data.created_at,
-                expires_at: val.data.expires_at,
+                id: val.id,
+                account_id: val.account_id.to_string(),
+                created_at: val.created_at,
+                expires_at: val.expires_at,
             },
             secret: TokenSecret {
                 value: val.secret.0,
             },
         })
-    }
-}
-
-pub fn unsafe_token_to_auth_config(value: &UnsafeToken) -> CloudAuthenticationConfig {
-    CloudAuthenticationConfig {
-        data: CloudAuthenticationConfigData {
-            id: value.data.id,
-            account_id: value.data.account_id.to_string(),
-            created_at: value.data.created_at,
-            expires_at: value.data.expires_at,
-        },
-        secret: AuthSecret(value.secret.value),
     }
 }
 
@@ -68,17 +70,17 @@ impl Auth {
     pub async fn authenticate(
         &self,
         token_override: Option<Uuid>,
-        auth_config: Option<&CloudAuthenticationConfig>,
+        auth_config: &AuthenticationConfig,
         config_dir: &Path,
         profile_name: &ProfileName,
-    ) -> anyhow::Result<CloudAuthentication> {
+    ) -> anyhow::Result<Authentication> {
         if let Some(token_override) = token_override {
             let secret = TokenSecret {
                 value: token_override,
             };
             let data = self.token_details(secret.clone()).await?;
 
-            Ok(CloudAuthentication(UnsafeToken { data, secret }))
+            Ok(Authentication(UnsafeToken { data, secret }))
         } else {
             self.profile_authentication(auth_config, config_dir, profile_name)
                 .await
@@ -91,52 +93,53 @@ impl Auth {
         profile_name: &ProfileName,
         config_dir: &Path,
     ) -> anyhow::Result<()> {
-        let profile = Config::get_profile(config_dir, profile_name)?.ok_or(anyhow!(
+        let named_profile = Config::get_profile(config_dir, profile_name)?.ok_or(anyhow!(
             "Can't find profile {} in config",
             profile_name.0.log_color_highlight()
         ))?;
 
-        match profile.profile {
-            Profile::Golem(_) => Err(anyhow!(
-                "Profile {} is an OSS profile. Cloud profile expected.",
-                profile_name.0.log_color_highlight()
-            )),
-            Profile::GolemCloud(mut profile) => {
-                profile.auth = Some(unsafe_token_to_auth_config(token));
-                Config::set_profile(
-                    profile_name.clone(),
-                    Profile::GolemCloud(profile),
-                    config_dir,
-                )
-                .with_context(|| "Failed to save auth token")?;
+        let mut profile = named_profile.profile;
 
-                Ok(())
-            }
-        }
+        profile.auth = AuthenticationConfig::OAuth2(OAuth2AuthenticationConfig {
+            data: Some(unsafe_token_to_auth_data(token)),
+        });
+        Config::set_profile(profile_name.clone(), profile, config_dir)
+            .with_context(|| "Failed to save auth token")?;
+
+        Ok(())
     }
 
     async fn oauth2(
         &self,
         profile_name: &ProfileName,
         config_dir: &Path,
-    ) -> anyhow::Result<CloudAuthentication> {
+    ) -> anyhow::Result<Authentication> {
         let data = self.start_oauth2().await?;
         inform_user(&data);
         let token = self.complete_oauth2(data.state).await?;
         self.save_auth(&token, profile_name, config_dir)?;
-        Ok(CloudAuthentication(token))
+        Ok(Authentication(token))
     }
 
     async fn profile_authentication(
         &self,
-        auth_config: Option<&CloudAuthenticationConfig>,
+        auth_config: &AuthenticationConfig,
         config_dir: &Path,
         profile_name: &ProfileName,
-    ) -> anyhow::Result<CloudAuthentication> {
-        if let Some(data) = auth_config {
-            Ok(data.into())
-        } else {
-            self.oauth2(profile_name, config_dir).await
+    ) -> anyhow::Result<Authentication> {
+        match auth_config {
+            AuthenticationConfig::Static(inner) => {
+                let secret: TokenSecret = inner.secret.into();
+                let data = self.token_details(secret.clone()).await?;
+                Ok(Authentication(UnsafeToken { data, secret }))
+            }
+            AuthenticationConfig::OAuth2(inner) => {
+                if let Some(data) = &inner.data {
+                    Ok(data.into())
+                } else {
+                    self.oauth2(profile_name, config_dir).await
+                }
+            }
         }
     }
 
@@ -171,7 +174,7 @@ impl Auth {
             match status {
                 Ok(token) => return Ok(token),
                 Err(err) => match err {
-                    golem_cloud_client::Error::Item(LoginOauth2WebFlowPollError::Error202(_)) => {
+                    golem_client::Error::Item(LoginOauth2WebFlowPollError::Error202(_)) => {
                         attempts += 1;
                         if attempts >= max_attempts {
                             bail!("OAuth2 workflow timeout")
@@ -205,19 +208,16 @@ fn inform_user(data: &WebFlowAuthorizeUrlResponse) {
     println!("Waiting for authentication...");
 }
 
-#[derive(Clone, PartialEq, Debug)]
-pub struct CloudAuthentication(pub UnsafeToken);
-
-impl CloudAuthentication {
-    pub fn header(&self) -> String {
-        token_header(&self.0.secret)
-    }
-
-    pub fn account_id(&self) -> AccountId {
-        AccountId(self.0.data.account_id.clone())
-    }
+fn token_header(secret: &TokenSecret) -> String {
+    format!("bearer {}", secret.value)
 }
 
-pub fn token_header(secret: &TokenSecret) -> String {
-    format!("bearer {}", secret.value)
+fn unsafe_token_to_auth_data(value: &UnsafeToken) -> OAuth2AuthenticationData {
+    OAuth2AuthenticationData {
+        id: value.data.id,
+        account_id: value.data.account_id.to_string(),
+        created_at: value.data.created_at,
+        expires_at: value.data.expires_at,
+        secret: AuthSecret(value.secret.value),
+    }
 }

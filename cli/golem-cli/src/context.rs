@@ -13,50 +13,41 @@
 // limitations under the License.
 
 use crate::app::context::ApplicationContext;
-use crate::auth::{Auth, CloudAuthentication};
-use crate::cloud::{AccountId, CloudAuthenticationConfig};
+use crate::auth::{Auth, Authentication};
 use crate::command::shared_args::UpdateOrRedeployArgs;
 use crate::command::GolemCliGlobalFlags;
 use crate::command_handler::interactive::InteractiveHandler;
-use crate::config::{
-    ClientConfig, CloudProfile, Config, HttpClientConfig, NamedProfile, OssProfile, Profile,
-    ProfileConfig, ProfileKind, ProfileName,
-};
+use crate::config::AuthenticationConfig;
+use crate::config::{ClientConfig, Config, HttpClientConfig, NamedProfile, Profile, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
 use crate::model::app::{AppBuildStep, ApplicationSourceMode};
 use crate::model::app::{ApplicationConfig, BuildProfileName as AppBuildProfileName};
-use crate::model::{app_raw, Format, HasFormatConfig, ProjectReference};
+use crate::model::AccountId;
+use crate::model::{app_raw, Format, ProjectReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use futures_util::future::BoxFuture;
-use golem_client::api::ApiDefinitionClientLive as ApiDefinitionClientOss;
-use golem_client::api::ApiDeploymentClientLive as ApiDeploymentClientOss;
-use golem_client::api::ApiSecurityClientLive as ApiSecurityClientOss;
-use golem_client::api::ComponentClientLive as ComponentClientOss;
-use golem_client::api::HealthCheckClientLive as HealthCheckClientOss;
-use golem_client::api::PluginClientLive as PluginClientOss;
-use golem_client::api::WorkerClientLive as WorkerClientOss;
-use golem_client::Context as ContextOss;
-use golem_cloud_client::api::AccountSummaryClientLive as AccountSummaryClientCloud;
-use golem_cloud_client::api::ApiCertificateClientLive as ApiCertificateClientCloud;
-use golem_cloud_client::api::ApiDefinitionClientLive as ApiDefinitionClientCloud;
-use golem_cloud_client::api::ApiDeploymentClientLive as ApiDeploymentClientCloud;
-use golem_cloud_client::api::ApiDomainClientLive as ApiDomainClientCloud;
-use golem_cloud_client::api::ApiSecurityClientLive as ApiSecurityClientCloud;
-use golem_cloud_client::api::ComponentClientLive as ComponentClientCloud;
-use golem_cloud_client::api::GrantClientLive as GrantClientCloud;
-use golem_cloud_client::api::LimitsClientLive as LimitsClientCloud;
-use golem_cloud_client::api::LoginClientLive as LoginClientCloud;
-use golem_cloud_client::api::PluginClientLive as PluginClientCloud;
-use golem_cloud_client::api::ProjectClientLive as ProjectClientCloud;
-use golem_cloud_client::api::ProjectGrantClientLive as ProjectGrantClientCloud;
-use golem_cloud_client::api::ProjectPolicyClientLive as ProjectPolicyClientCloud;
-use golem_cloud_client::api::TokenClientLive as TokenClientCloud;
-use golem_cloud_client::api::WorkerClientLive as WorkerClientCloud;
-use golem_cloud_client::api::{AccountClientLive as AccountClientCloud, LoginClientLive};
-use golem_cloud_client::{Context as ContextCloud, Security};
-use golem_rib_repl::ReplDependencies;
+use golem_client::api::AccountSummaryClientLive as AccountSummaryClientCloud;
+use golem_client::api::ApiCertificateClientLive as ApiCertificateClientCloud;
+use golem_client::api::ApiDefinitionClientLive as ApiDefinitionClientCloud;
+use golem_client::api::ApiDeploymentClientLive as ApiDeploymentClientCloud;
+use golem_client::api::ApiDomainClientLive as ApiDomainClientCloud;
+use golem_client::api::ApiSecurityClientLive as ApiSecurityClientCloud;
+use golem_client::api::ComponentClientLive as ComponentClientCloud;
+use golem_client::api::GrantClientLive as GrantClientCloud;
+use golem_client::api::HealthCheckClientLive;
+use golem_client::api::LimitsClientLive as LimitsClientCloud;
+use golem_client::api::LoginClientLive as LoginClientCloud;
+use golem_client::api::PluginClientLive as PluginClientCloud;
+use golem_client::api::ProjectClientLive as ProjectClientCloud;
+use golem_client::api::ProjectGrantClientLive as ProjectGrantClientCloud;
+use golem_client::api::ProjectPolicyClientLive as ProjectPolicyClientCloud;
+use golem_client::api::TokenClientLive as TokenClientCloud;
+use golem_client::api::WorkerClientLive as WorkerClientCloud;
+use golem_client::api::{AccountClientLive as AccountClientCloud, LoginClientLive};
+use golem_client::{Context as ContextCloud, Security};
+use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
 use golem_templates::ComposableAppTemplate;
 use std::borrow::Cow;
@@ -77,10 +68,8 @@ pub struct Context {
     local_server_auto_start: bool,
     update_or_redeploy: UpdateOrRedeployArgs,
     profile_name: ProfileName,
-    profile_kind: ProfileKind,
     profile: Profile,
     available_profile_names: BTreeSet<ProfileName>,
-    custom_cloud_profile_name: Option<ProfileName>,
     app_context_config: ApplicationContextConfig,
     http_batch_size: u64,
     auth_token_override: Option<Uuid>,
@@ -115,7 +104,6 @@ impl Context {
         let http_batch_size = global_flags.http_batch_size;
         let auth_token = global_flags.auth_token;
         let config_dir = global_flags.config_dir();
-        let custom_cloud_profile_name = global_flags.custom_global_cloud_profile.clone();
         let local_server_auto_start = global_flags.local_server_auto_start;
         let show_sensitive = global_flags.show_sensitive;
 
@@ -140,7 +128,6 @@ impl Context {
 
         let (available_profile_names, profile, manifest_profile) = load_merged_profiles(
             &config_dir,
-            custom_cloud_profile_name.as_ref(),
             app_context_config.requested_profile_name.as_ref(),
             manifest_profiles,
         )?;
@@ -187,7 +174,8 @@ impl Context {
             None => None,
         };
 
-        let format = format.unwrap_or_else(|| profile.profile.format().unwrap_or(Format::Text));
+        let format = format.unwrap_or(profile.profile.config.default_format);
+
         let log_output = log_output_for_help.unwrap_or(match format {
             Format::Json => Output::Stderr,
             Format::Yaml => Output::Stderr,
@@ -221,10 +209,8 @@ impl Context {
             local_server_auto_start,
             update_or_redeploy,
             profile_name: profile.name,
-            profile_kind: profile.profile.kind(),
             profile: profile.profile,
             available_profile_names,
-            custom_cloud_profile_name,
             app_context_config,
             http_batch_size: http_batch_size.unwrap_or(50),
             auth_token_override: auth_token,
@@ -282,10 +268,6 @@ impl Context {
         state.silent_init = true;
     }
 
-    pub fn profile_kind(&self) -> ProfileKind {
-        self.profile_kind
-    }
-
     pub fn profile_name(&self) -> &ProfileName {
         &self.profile_name
     }
@@ -312,19 +294,8 @@ impl Context {
                 let clients = GolemClients::new(
                     self.client_config.clone(),
                     self.auth_token_override,
-                    {
-                        if self.profile_name.is_builtin_cloud() {
-                            self.custom_cloud_profile_name
-                                .as_ref()
-                                .unwrap_or(&self.profile_name)
-                        } else {
-                            &self.profile_name
-                        }
-                    },
-                    match &self.profile {
-                        Profile::Golem(_) => None,
-                        Profile::GolemCloud(profile) => profile.auth.as_ref(),
-                    },
+                    &self.profile_name,
+                    &self.profile.auth,
                     self.config_dir(),
                 )
                 .await?;
@@ -341,10 +312,6 @@ impl Context {
     #[cfg(feature = "server-commands")]
     async fn start_local_server_if_needed(&self, clients: &GolemClients) -> anyhow::Result<()> {
         if !self.profile_name.is_builtin_local() {
-            return Ok(());
-        };
-
-        let GolemClients::Oss(clients) = &clients else {
             return Ok(());
         };
 
@@ -371,13 +338,6 @@ impl Context {
         &self.file_download_client
     }
 
-    pub async fn golem_clients_cloud(&self) -> anyhow::Result<&GolemClientsCloud> {
-        match &self.golem_clients().await? {
-            GolemClients::Oss(_) => Err(anyhow!(HintError::ExpectedCloudProfile)),
-            GolemClients::Cloud(clients) => Ok(clients),
-        }
-    }
-
     pub fn worker_service_url(&self) -> &Url {
         &self.client_config.worker_url
     }
@@ -386,11 +346,8 @@ impl Context {
         self.client_config.service_http_client_config.allow_insecure
     }
 
-    pub async fn auth_token(&self) -> anyhow::Result<Option<String>> {
-        match self.golem_clients().await? {
-            GolemClients::Oss(_) => Ok(None),
-            GolemClients::Cloud(clients) => Ok(Some(clients.auth_token())),
-        }
+    pub async fn auth_token(&self) -> anyhow::Result<String> {
+        Ok(self.golem_clients().await?.auth_token())
     }
 
     pub async fn app_context_lock(
@@ -471,14 +428,14 @@ impl Context {
         Ok(app_ctx.application.task_result_marker_dir())
     }
 
-    pub async fn set_rib_repl_dependencies(&self, dependencies: ReplDependencies) {
+    pub async fn set_rib_repl_dependencies(&self, dependencies: ReplComponentDependencies) {
         let mut rib_repl_state = self.rib_repl_state.write().await;
         rib_repl_state.dependencies = dependencies;
     }
 
-    pub async fn get_rib_repl_dependencies(&self) -> ReplDependencies {
+    pub async fn get_rib_repl_dependencies(&self) -> ReplComponentDependencies {
         let rib_repl_state = self.rib_repl_state.read().await;
-        ReplDependencies {
+        ReplComponentDependencies {
             component_dependencies: rib_repl_state.dependencies.component_dependencies.clone(),
         }
     }
@@ -491,199 +448,8 @@ impl Context {
     }
 }
 
-pub enum GolemClients {
-    Oss(Box<GolemClientsOss>),
-    Cloud(Box<GolemClientsCloud>),
-}
-
-impl GolemClients {
-    pub async fn new(
-        config: ClientConfig,
-        token_override: Option<Uuid>,
-        profile_name: &ProfileName,
-        auth_config: Option<&CloudAuthenticationConfig>,
-        config_dir: &Path,
-    ) -> anyhow::Result<Self> {
-        let healthcheck_http_client = new_reqwest_client(&config.health_check_http_client_config)?;
-        let local_healthcheck_http_client =
-            new_reqwest_client(&config.local_health_check_http_client_config)?;
-        let service_http_client = new_reqwest_client(&config.service_http_client_config)?;
-        let invoke_http_client = new_reqwest_client(&config.invoke_http_client_config)?;
-
-        match &config.cloud_url {
-            Some(cloud_url) => {
-                let auth = Auth::new(LoginClientLive {
-                    context: ContextCloud {
-                        client: service_http_client.clone(),
-                        base_url: cloud_url.clone(),
-                        security_token: Security::Empty,
-                    },
-                });
-
-                let authentication = auth
-                    .authenticate(token_override, auth_config, config_dir, profile_name)
-                    .await?;
-                let security_token = Security::Bearer(authentication.0.secret.value.to_string());
-
-                let component_context = || ContextCloud {
-                    client: service_http_client.clone(),
-                    base_url: config.component_url.clone(),
-                    security_token: security_token.clone(),
-                };
-
-                let worker_context = || ContextCloud {
-                    client: service_http_client.clone(),
-                    base_url: config.worker_url.clone(),
-                    security_token: security_token.clone(),
-                };
-
-                let worker_invoke_context = || ContextCloud {
-                    client: invoke_http_client.clone(),
-                    base_url: config.worker_url.clone(),
-                    security_token: security_token.clone(),
-                };
-
-                let cloud_context = || ContextCloud {
-                    client: service_http_client.clone(),
-                    base_url: cloud_url.clone(),
-                    security_token: security_token.clone(),
-                };
-
-                let login_context = || ContextCloud {
-                    client: service_http_client.clone(),
-                    base_url: cloud_url.clone(),
-                    security_token: security_token.clone(),
-                };
-
-                Ok(GolemClients::Cloud(Box::new(GolemClientsCloud {
-                    authentication,
-                    account: AccountClientCloud {
-                        context: cloud_context(),
-                    },
-                    account_summary: AccountSummaryClientCloud {
-                        context: worker_context(),
-                    },
-                    api_certificate: ApiCertificateClientCloud {
-                        context: worker_context(),
-                    },
-                    api_definition: ApiDefinitionClientCloud {
-                        context: worker_context(),
-                    },
-                    api_deployment: ApiDeploymentClientCloud {
-                        context: worker_context(),
-                    },
-                    api_domain: ApiDomainClientCloud {
-                        context: worker_context(),
-                    },
-                    api_security: ApiSecurityClientCloud {
-                        context: worker_context(),
-                    },
-                    component: ComponentClientCloud {
-                        context: component_context(),
-                    },
-                    grant: GrantClientCloud {
-                        context: cloud_context(),
-                    },
-                    limits: LimitsClientCloud {
-                        context: worker_context(),
-                    },
-                    login: LoginClientCloud {
-                        context: login_context(),
-                    },
-                    plugin: PluginClientCloud {
-                        context: component_context(),
-                    },
-                    project: ProjectClientCloud {
-                        context: cloud_context(),
-                    },
-                    project_grant: ProjectGrantClientCloud {
-                        context: cloud_context(),
-                    },
-                    project_policy: ProjectPolicyClientCloud {
-                        context: cloud_context(),
-                    },
-                    token: TokenClientCloud {
-                        context: cloud_context(),
-                    },
-                    worker: WorkerClientCloud {
-                        context: worker_context(),
-                    },
-                    worker_invoke: WorkerClientCloud {
-                        context: worker_invoke_context(),
-                    },
-                })))
-            }
-            None => {
-                let component_context = || ContextOss {
-                    client: service_http_client.clone(),
-                    base_url: config.component_url.clone(),
-                };
-
-                let component_healthcheck_context = || ContextOss {
-                    client: {
-                        if profile_name.is_builtin_local() {
-                            local_healthcheck_http_client.clone()
-                        } else {
-                            healthcheck_http_client.clone()
-                        }
-                    },
-                    base_url: config.component_url.clone(),
-                };
-
-                let worker_context = || ContextOss {
-                    client: service_http_client.clone(),
-                    base_url: config.worker_url.clone(),
-                };
-
-                let worker_invoke_context = || ContextOss {
-                    client: invoke_http_client.clone(),
-                    base_url: config.worker_url.clone(),
-                };
-
-                Ok(GolemClients::Oss(Box::new(GolemClientsOss {
-                    api_definition: ApiDefinitionClientOss {
-                        context: worker_context(),
-                    },
-                    api_deployment: ApiDeploymentClientOss {
-                        context: worker_context(),
-                    },
-                    api_security: ApiSecurityClientOss {
-                        context: worker_context(),
-                    },
-                    component: ComponentClientOss {
-                        context: component_context(),
-                    },
-                    component_healthcheck: HealthCheckClientOss {
-                        context: component_healthcheck_context(),
-                    },
-                    plugin: PluginClientOss {
-                        context: component_context(),
-                    },
-                    worker: WorkerClientOss {
-                        context: worker_context(),
-                    },
-                    worker_invoke: WorkerClientOss {
-                        context: worker_invoke_context(),
-                    },
-                })))
-            }
-        }
-    }
-}
-
-pub struct GolemClientsOss {
-    pub api_definition: ApiDefinitionClientOss,
-    pub api_deployment: ApiDeploymentClientOss,
-    pub api_security: ApiSecurityClientOss,
-    pub component: ComponentClientOss,
-    pub component_healthcheck: HealthCheckClientOss,
-    pub plugin: PluginClientOss,
-    pub worker: WorkerClientOss,
-    pub worker_invoke: WorkerClientOss,
-}
-
-pub struct GolemClientsCloud {
-    authentication: CloudAuthentication,
+pub struct GolemClients {
+    authentication: Authentication,
 
     pub account: AccountClientCloud,
     pub account_summary: AccountSummaryClientCloud,
@@ -693,6 +459,7 @@ pub struct GolemClientsCloud {
     pub api_domain: ApiDomainClientCloud,
     pub api_security: ApiSecurityClientCloud,
     pub component: ComponentClientCloud,
+    pub component_healthcheck: HealthCheckClientLive,
     pub grant: GrantClientCloud,
     pub limits: LimitsClientCloud,
     pub login: LoginClientCloud,
@@ -705,7 +472,131 @@ pub struct GolemClientsCloud {
     pub worker_invoke: WorkerClientCloud,
 }
 
-impl GolemClientsCloud {
+impl GolemClients {
+    pub async fn new(
+        config: ClientConfig,
+        token_override: Option<Uuid>,
+        profile_name: &ProfileName,
+        auth_config: &AuthenticationConfig,
+        config_dir: &Path,
+    ) -> anyhow::Result<Self> {
+        let healthcheck_http_client = new_reqwest_client(&config.health_check_http_client_config)?;
+
+        let service_http_client = new_reqwest_client(&config.service_http_client_config)?;
+        let invoke_http_client = new_reqwest_client(&config.invoke_http_client_config)?;
+
+        let auth = Auth::new(LoginClientLive {
+            context: ContextCloud {
+                client: service_http_client.clone(),
+                base_url: config.cloud_url.clone(),
+                security_token: Security::Empty,
+            },
+        });
+
+        let authentication = auth
+            .authenticate(token_override, auth_config, config_dir, profile_name)
+            .await?;
+
+        let security_token = Security::Bearer(authentication.0.secret.value.to_string());
+
+        let component_context = || ContextCloud {
+            client: service_http_client.clone(),
+            base_url: config.component_url.clone(),
+            security_token: security_token.clone(),
+        };
+
+        let component_healthcheck_context = || ContextCloud {
+            client: healthcheck_http_client,
+            base_url: config.component_url.clone(),
+            security_token: Security::Empty,
+        };
+
+        let worker_context = || ContextCloud {
+            client: service_http_client.clone(),
+            base_url: config.worker_url.clone(),
+            security_token: security_token.clone(),
+        };
+
+        let worker_invoke_context = || ContextCloud {
+            client: invoke_http_client.clone(),
+            base_url: config.worker_url.clone(),
+            security_token: security_token.clone(),
+        };
+
+        let cloud_context = || ContextCloud {
+            client: service_http_client.clone(),
+            base_url: config.cloud_url.clone(),
+            security_token: security_token.clone(),
+        };
+
+        let login_context = || ContextCloud {
+            client: service_http_client.clone(),
+            base_url: config.cloud_url.clone(),
+            security_token: security_token.clone(),
+        };
+
+        Ok(GolemClients {
+            authentication,
+            account: AccountClientCloud {
+                context: cloud_context(),
+            },
+            account_summary: AccountSummaryClientCloud {
+                context: worker_context(),
+            },
+            api_certificate: ApiCertificateClientCloud {
+                context: worker_context(),
+            },
+            api_definition: ApiDefinitionClientCloud {
+                context: worker_context(),
+            },
+            api_deployment: ApiDeploymentClientCloud {
+                context: worker_context(),
+            },
+            api_domain: ApiDomainClientCloud {
+                context: worker_context(),
+            },
+            api_security: ApiSecurityClientCloud {
+                context: worker_context(),
+            },
+            component: ComponentClientCloud {
+                context: component_context(),
+            },
+            component_healthcheck: HealthCheckClientLive {
+                context: component_healthcheck_context(),
+            },
+            grant: GrantClientCloud {
+                context: cloud_context(),
+            },
+            limits: LimitsClientCloud {
+                context: worker_context(),
+            },
+            login: LoginClientCloud {
+                context: login_context(),
+            },
+            plugin: PluginClientCloud {
+                context: component_context(),
+            },
+            project: ProjectClientCloud {
+                context: cloud_context(),
+            },
+            project_grant: ProjectGrantClientCloud {
+                context: cloud_context(),
+            },
+            project_policy: ProjectPolicyClientCloud {
+                context: cloud_context(),
+            },
+            token: TokenClientCloud {
+                context: cloud_context(),
+            },
+            worker: WorkerClientCloud {
+                context: worker_context(),
+            },
+            worker_invoke: WorkerClientCloud {
+                context: worker_invoke_context(),
+            },
+        })
+    }
+
     pub fn account_id(&self) -> AccountId {
         self.authentication.account_id()
     }
@@ -875,13 +766,13 @@ impl ApplicationContextState {
 }
 
 pub struct RibReplState {
-    dependencies: ReplDependencies,
+    dependencies: ReplComponentDependencies,
 }
 
 impl Default for RibReplState {
     fn default() -> Self {
         Self {
-            dependencies: ReplDependencies {
+            dependencies: ReplComponentDependencies {
                 component_dependencies: vec![],
             },
         }
@@ -917,7 +808,6 @@ fn new_reqwest_client(config: &HttpClientConfig) -> anyhow::Result<reqwest::Clie
 ///       config changes and migration.
 fn load_merged_profiles(
     config_dir: &Path,
-    custom_cloud_profile_name: Option<&ProfileName>,
     profile_name: Option<&ProfileName>,
     manifest_profiles: BTreeMap<ProfileName, app_raw::Profile>,
 ) -> anyhow::Result<(
@@ -925,10 +815,6 @@ fn load_merged_profiles(
     NamedProfile,
     Option<app_raw::Profile>,
 )> {
-    let cloud_profile_name = custom_cloud_profile_name
-        .cloned()
-        .unwrap_or_else(ProfileName::cloud);
-
     let mut available_profile_names = BTreeSet::new();
 
     let mut config = Config::from_dir(config_dir)?;
@@ -949,13 +835,7 @@ fn load_merged_profiles(
     let global_profile = match profile_name {
         Some(profile_name) => config
             .profiles
-            .remove({
-                if profile_name.is_builtin_cloud() {
-                    &cloud_profile_name
-                } else {
-                    profile_name
-                }
-            })
+            .remove(profile_name)
             .map(|profile| NamedProfile {
                 name: profile_name.clone(),
                 profile,
@@ -977,40 +857,27 @@ fn load_merged_profiles(
     let (profile, manifest_profile) = match (global_profile, manifest_profile) {
         (Some(mut profile), Some(manifest_profile)) => {
             let profile_name = &profile.name;
-            let manifest_is_cloud = profile_name.is_builtin_cloud() || manifest_profile.is_cloud();
-            match &mut profile.profile {
-                Profile::Golem(ref mut profile) => {
-                    if manifest_is_cloud {
-                        bail!("Profile {} is a global OSS profile, cannot be used as Cloud profile in the manifest.", profile_name);
-                    }
-                    if let Some(format) = &manifest_profile.format {
-                        profile.config.default_format = *format;
-                    }
+            {
+                let profile = &mut profile.profile;
 
-                    // TODO: should we allow these? or show only warn logs?
-                    if manifest_profile.url.is_some() {
-                        bail!(
-                            "Cannot override {} for global profile {} in application manifest!",
-                            "url".log_color_highlight(),
-                            profile_name.0.log_color_highlight()
-                        );
-                    }
-                    if manifest_profile.worker_url.is_some() {
-                        bail!(
-                            "Cannot override {} for global profile {} in application manifest!",
-                            "worker url".log_color_highlight(),
-                            profile_name.0.log_color_highlight()
-                        );
-                    }
+                if let Some(format) = &manifest_profile.format {
+                    profile.config.default_format = *format;
                 }
-                Profile::GolemCloud(ref mut profile) => {
-                    if !manifest_is_cloud {
-                        bail!("Profile {} is a global Cloud profile, cannot be used as OSS profile in the manifest.", profile_name);
-                    }
-                    if let Some(format) = &manifest_profile.format {
-                        profile.config.default_format = *format;
-                    }
-                    // NOTE: no need to check urls, those are validated and forbidden for cloud
+
+                // TODO: should we allow these? or show only warn logs?
+                if manifest_profile.url.is_some() {
+                    bail!(
+                        "Cannot override {} for global profile {} in application manifest!",
+                        "url".log_color_highlight(),
+                        profile_name.0.log_color_highlight()
+                    );
+                }
+                if manifest_profile.worker_url.is_some() {
+                    bail!(
+                        "Cannot override {} for global profile {} in application manifest!",
+                        "worker url".log_color_highlight(),
+                        profile_name.0.log_color_highlight()
+                    );
                 }
             }
             (profile, Some(manifest_profile.clone()))
@@ -1019,56 +886,29 @@ fn load_merged_profiles(
         (None, Some(manifest_profile)) => {
             // If we only found manifest profile, then it must be found by name
             let profile_name = profile_name.unwrap();
-            let manifest_is_cloud = profile_name.is_builtin_cloud() || manifest_profile.is_cloud();
 
-            let profile_config = {
-                let mut config = ProfileConfig::default();
+            let profile = {
+                let mut profile = Profile::default_local_profile();
+
                 if let Some(format) = &manifest_profile.format {
-                    config.default_format = *format
+                    profile.config.default_format = *format
                 }
-                config
+
+                if let Some(url) = &manifest_profile.url {
+                    profile.custom_url = Some(url.clone());
+                }
+                if let Some(worker_url) = &manifest_profile.worker_url {
+                    profile.custom_worker_url = Some(worker_url.clone());
+                }
+                profile
             };
-
-            if manifest_is_cloud {
-                let base_cloud_profile_with_name =
-                    Config::get_profile(config_dir, &cloud_profile_name)?
-                        .expect("Missing default cloud profile");
-
-                let Profile::GolemCloud(base_cloud_profile) = base_cloud_profile_with_name.profile
-                else {
-                    unreachable!("Default cloud profile has wrong kind")
-                };
-
-                let profile = CloudProfile {
-                    config: profile_config,
-                    ..base_cloud_profile
-                };
-                (
-                    NamedProfile {
-                        name: profile_name,
-                        profile: Profile::GolemCloud(profile),
-                    },
-                    Some(manifest_profile.clone()),
-                )
-            } else {
-                let profile = {
-                    let mut profile = OssProfile::default();
-                    if let Some(url) = &manifest_profile.url {
-                        profile.url = url.clone();
-                    }
-                    if let Some(worker_url) = &manifest_profile.worker_url {
-                        profile.worker_url = Some(worker_url.clone());
-                    }
-                    profile
-                };
-                (
-                    NamedProfile {
-                        name: profile_name,
-                        profile: Profile::Golem(profile),
-                    },
-                    Some(manifest_profile.clone()),
-                )
-            }
+            (
+                NamedProfile {
+                    name: profile_name,
+                    profile,
+                },
+                Some(manifest_profile.clone()),
+            )
         }
         (None, None) => {
             // If no profile is found, then its name must be defined, as otherwise the global

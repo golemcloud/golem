@@ -23,18 +23,13 @@ pub mod plugin_manifest;
 pub mod project;
 pub mod template;
 pub mod text;
-pub mod to_cloud;
-pub mod to_oss;
 pub mod wave;
 pub mod worker;
 
-use crate::cloud::{AccountId, ProjectId};
 use crate::command::shared_args::{ComponentTemplateName, StreamArgs};
-use crate::config::{
-    CloudProfile, NamedProfile, OssProfile, Profile, ProfileConfig, ProfileKind, ProfileName,
-};
+use crate::config::AuthenticationConfig;
+use crate::config::{NamedProfile, ProfileConfig, ProfileName};
 use crate::log::LogColorize;
-use crate::model::to_oss::ToOss;
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use clap::builder::{StringValueParser, TypedValueParser};
@@ -42,10 +37,7 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, Error};
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
-use golem_client::model::{
-    PluginDefinitionDefaultPluginOwnerDefaultPluginScope, PluginTypeSpecificDefinition,
-};
-use golem_cloud_client::model::PluginDefinitionCloudPluginOwnerCloudPluginScope;
+use golem_client::model::PluginTypeSpecificDefinition;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_templates::model::{
     GuestLanguage, GuestLanguageTier, PackageName, Template, TemplateName,
@@ -474,24 +466,24 @@ impl WorkerMetadata {
 
     pub fn from_cloud(
         component_name: ComponentName,
-        value: golem_cloud_client::model::WorkerMetadata,
+        value: golem_client::model::WorkerMetadata,
     ) -> Self {
         WorkerMetadata {
-            worker_id: value.worker_id.to_oss(),
+            worker_id: value.worker_id,
             component_name,
             account_id: Some(AccountId(value.account_id)),
             args: value.args,
             env: value.env,
-            status: value.status.to_oss(),
+            status: value.status,
             component_version: value.component_version,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
-            updates: value.updates.to_oss(),
+            updates: value.updates,
             created_at: value.created_at,
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
-            owned_resources: value.owned_resources.to_oss(),
+            owned_resources: value.owned_resources,
         }
     }
 }
@@ -536,7 +528,6 @@ impl From<StreamArgs> for WorkerConnectOptions {
 pub struct ProfileView {
     pub is_active: bool,
     pub name: ProfileName,
-    pub kind: ProfileKind,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub url: Option<Url>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -554,41 +545,20 @@ impl ProfileView {
     pub fn from_profile(active: &ProfileName, profile: NamedProfile) -> Self {
         let NamedProfile { name, profile } = profile;
 
-        match profile {
-            Profile::Golem(OssProfile {
-                url,
-                worker_url,
-                allow_insecure,
-                config,
-            }) => ProfileView {
-                is_active: &name == active,
-                name,
-                kind: ProfileKind::Oss,
-                url: Some(url),
-                cloud_url: None,
-                worker_url,
-                allow_insecure,
-                authenticated: None,
-                config,
-            },
-            Profile::GolemCloud(CloudProfile {
-                custom_url,
-                custom_cloud_url,
-                custom_worker_url,
-                allow_insecure,
-                auth,
-                config,
-            }) => ProfileView {
-                is_active: &name == active,
-                name,
-                kind: ProfileKind::Cloud,
-                url: custom_url,
-                cloud_url: custom_cloud_url,
-                worker_url: custom_worker_url,
-                allow_insecure,
-                authenticated: Some(auth.is_some()),
-                config,
-            },
+        let authenticated = match &profile.auth {
+            AuthenticationConfig::OAuth2(inner) => Some(inner.data.is_some()),
+            AuthenticationConfig::Static(_) => None,
+        };
+
+        ProfileView {
+            is_active: &name == active,
+            name,
+            url: profile.custom_url,
+            cloud_url: profile.custom_cloud_url,
+            worker_url: profile.custom_worker_url,
+            allow_insecure: profile.allow_insecure,
+            authenticated,
+            config: profile.config,
         }
     }
 }
@@ -611,8 +581,8 @@ pub struct AccountDetails {
     pub email: String,
 }
 
-impl From<golem_cloud_client::model::Account> for AccountDetails {
-    fn from(value: golem_cloud_client::model::Account) -> Self {
+impl From<golem_client::model::Account> for AccountDetails {
+    fn from(value: golem_client::model::Account) -> Self {
         Self {
             account_id: value.id.into(),
             email: value.email,
@@ -691,20 +661,20 @@ impl FromStr for Role {
     }
 }
 
-impl From<Role> for golem_cloud_client::model::Role {
+impl From<Role> for golem_client::model::Role {
     fn from(value: Role) -> Self {
         match value {
-            Role::Admin => golem_cloud_client::model::Role::Admin,
-            Role::MarketingAdmin => golem_cloud_client::model::Role::MarketingAdmin,
+            Role::Admin => golem_client::model::Role::Admin,
+            Role::MarketingAdmin => golem_client::model::Role::MarketingAdmin,
         }
     }
 }
 
-impl From<golem_cloud_client::model::Role> for Role {
-    fn from(value: golem_cloud_client::model::Role) -> Self {
+impl From<golem_client::model::Role> for Role {
+    fn from(value: golem_client::model::Role) -> Self {
         match value {
-            golem_cloud_client::model::Role::Admin => Role::Admin,
-            golem_cloud_client::model::Role::MarketingAdmin => Role::MarketingAdmin,
+            golem_client::model::Role::Admin => Role::Admin,
+            golem_client::model::Role::MarketingAdmin => Role::MarketingAdmin,
         }
     }
 }
@@ -801,9 +771,9 @@ impl FromStr for ProjectPermission {
     }
 }
 
-impl From<ProjectPermission> for golem_cloud_client::model::ProjectPermisison {
+impl From<ProjectPermission> for golem_client::model::ProjectPermisison {
     fn from(value: ProjectPermission) -> Self {
-        use golem_cloud_client::model::ProjectPermisison as ClientProjectPermission;
+        use golem_client::model::ProjectPermisison as ClientProjectPermission;
 
         match value {
             ProjectPermission::ViewComponent => ClientProjectPermission::ViewComponent,
@@ -864,45 +834,8 @@ pub struct PluginDefinition {
     pub oplog_processor_component_version: Option<u64>,
 }
 
-impl From<PluginDefinitionDefaultPluginOwnerDefaultPluginScope> for PluginDefinition {
-    fn from(value: PluginDefinitionDefaultPluginOwnerDefaultPluginScope) -> Self {
-        let mut plugin_definition = Self {
-            name: value.name,
-            version: value.version,
-            description: value.description,
-            homepage: value.homepage,
-            scope: value.scope.to_string(),
-            typ: "".to_string(),
-            component_transformer_validate_url: None,
-            component_transformer_transform_url: None,
-            oplog_processor_component_id: None,
-            oplog_processor_component_version: None,
-        };
-
-        match value.specs {
-            PluginTypeSpecificDefinition::ComponentTransformer(specs) => {
-                plugin_definition.typ = "Component Transformer".to_string();
-                plugin_definition.component_transformer_validate_url = Some(specs.validate_url);
-                plugin_definition.component_transformer_transform_url = Some(specs.transform_url);
-            }
-            PluginTypeSpecificDefinition::OplogProcessor(specs) => {
-                plugin_definition.typ = "Oplog Processor".to_string();
-                plugin_definition.oplog_processor_component_id =
-                    Some(specs.component_id.to_string());
-                plugin_definition.oplog_processor_component_version = Some(specs.component_version);
-            }
-            PluginTypeSpecificDefinition::Library(_) => {
-                plugin_definition.typ = "Library".to_string();
-            }
-            PluginTypeSpecificDefinition::App(_) => plugin_definition.typ = "App".to_string(),
-        };
-
-        plugin_definition
-    }
-}
-
-impl From<PluginDefinitionCloudPluginOwnerCloudPluginScope> for PluginDefinition {
-    fn from(value: PluginDefinitionCloudPluginOwnerCloudPluginScope) -> Self {
+impl From<golem_client::model::PluginDefinition> for PluginDefinition {
+    fn from(value: golem_client::model::PluginDefinition) -> Self {
         let mut plugin_definition = Self {
             name: value.name,
             version: value.version,
@@ -941,4 +874,40 @@ impl From<PluginDefinitionCloudPluginOwnerCloudPluginScope> for PluginDefinition
 pub struct NewInteractiveApp {
     pub app_name: String,
     pub templated_component_names: Vec<(ComponentTemplateName, PackageName)>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct AccountId(pub String);
+
+impl From<String> for AccountId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
+}
+
+impl From<&str> for AccountId {
+    fn from(value: &str) -> Self {
+        Self(value.into())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectId(pub Uuid);
+
+impl From<Uuid> for ProjectId {
+    fn from(uuid: Uuid) -> Self {
+        ProjectId(uuid)
+    }
+}
+
+impl From<ProjectId> for Uuid {
+    fn from(project_id: ProjectId) -> Self {
+        project_id.0
+    }
+}
+
+impl Display for ProjectId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }

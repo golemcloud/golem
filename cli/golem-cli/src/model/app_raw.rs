@@ -216,8 +216,6 @@ pub struct Profile {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub default: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub cloud: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub url: Option<Url>,
@@ -235,12 +233,6 @@ pub struct Profile {
     pub redeploy_http_api: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub redeploy_all: Option<bool>,
-}
-
-impl Profile {
-    pub fn is_cloud(&self) -> bool {
-        self.cloud == Some(true) || self.project.is_some()
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

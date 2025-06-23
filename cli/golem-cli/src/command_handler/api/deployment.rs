@@ -15,7 +15,7 @@
 use crate::command::api::deployment::ApiDeploymentSubcommand;
 use crate::command::shared_args::{ProjectOptionalFlagArg, UpdateOrRedeployArgs};
 use crate::command_handler::Handlers;
-use crate::context::{Context, GolemClients};
+use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
 use crate::log::{
@@ -30,13 +30,8 @@ use crate::model::deploy_diff::api_deployment::DiffableHttpApiDeployment;
 use crate::model::text::fmt::{log_deploy_diff, log_error, log_warn};
 use crate::model::ProjectRefAndId;
 use anyhow::bail;
-use golem_client::api::ApiDeploymentClient as ApiDeploymentClientOss;
+use golem_client::api::ApiDeploymentClient;
 use golem_client::model::{
-    ApiDefinitionInfo as ApiDefinitionInfoOss, ApiDeploymentRequest as ApiDeploymentRequestOss,
-    ApiSite as ApiSiteOss,
-};
-use golem_cloud_client::api::ApiDeploymentClient as ApiDeploymentClientCloud;
-use golem_cloud_client::model::{
     ApiDefinitionInfo as ApiDefinitionInfoCloud, ApiDeploymentRequest as ApiDeploymentRequestCloud,
     ApiSite as ApiSiteCloud,
 };
@@ -163,39 +158,29 @@ impl ApiDeploymentCommandHandler {
             .opt_select_project(project.project.as_ref())
             .await?;
 
-        let result: Vec<ApiDeployment> = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
+        let clients = self.ctx.golem_clients().await?;
+
+        let result: Vec<ApiDeployment> = match id {
+            Some(id) => clients
                 .api_deployment
-                .list_deployments(id)
+                .list_deployments(
+                    &self
+                        .ctx
+                        .cloud_project_handler()
+                        .selected_project_id_or_default(project.as_ref())
+                        .await?
+                        .0,
+                    Some(id),
+                )
                 .await
                 .map_service_error()?
                 .into_iter()
                 .map(ApiDeployment::from)
                 .collect::<Vec<_>>(),
-            GolemClients::Cloud(clients) => {
-                match id {
-                    Some(id) => clients
-                        .api_deployment
-                        .list_deployments(
-                            &self
-                                .ctx
-                                .cloud_project_handler()
-                                .selected_project_id_or_default(project.as_ref())
-                                .await?
-                                .0,
-                            id,
-                        )
-                        .await
-                        .map_service_error()?
-                        .into_iter()
-                        .map(ApiDeployment::from)
-                        .collect::<Vec<_>>(),
-                    None => {
-                        // TODO: update in cloud to allow listing without id
-                        log_error("API definition ID for Cloud is required");
-                        bail!(NonSuccessfulExit);
-                    }
-                }
+            None => {
+                // TODO: update in cloud to allow listing without id
+                log_error("API definition ID for Cloud is required");
+                bail!(NonSuccessfulExit);
             }
         };
 
@@ -215,28 +200,22 @@ impl ApiDeploymentCommandHandler {
             .opt_select_project(project.project.as_ref())
             .await?;
 
-        match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_deployment
-                .delete_deployment(&site)
-                .await
-                .map(|_| ())
-                .map_service_error()?,
-            GolemClients::Cloud(clients) => clients
-                .api_deployment
-                .delete_deployment(
-                    &self
-                        .ctx
-                        .cloud_project_handler()
-                        .selected_project_id_or_default(project.as_ref())
-                        .await?
-                        .0,
-                    &site,
-                )
-                .await
-                .map(|_| ())
-                .map_service_error()?,
-        };
+        let clients = self.ctx.golem_clients().await?;
+
+        clients
+            .api_deployment
+            .delete_deployment(
+                &self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project.as_ref())
+                    .await?
+                    .0,
+                &site,
+            )
+            .await
+            .map(|_| ())
+            .map_service_error()?;
 
         log_warn_action("Deleted", format!("site {}", site.log_color_highlight()));
 
@@ -493,28 +472,22 @@ impl ApiDeploymentCommandHandler {
         project: Option<&ProjectRefAndId>,
         site: &str,
     ) -> anyhow::Result<Option<ApiDeployment>> {
-        let result = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_deployment
-                .get_deployment(site)
-                .await
-                .map_service_error_not_found_as_opt()?
-                .map(ApiDeployment::from),
-            GolemClients::Cloud(clients) => clients
-                .api_deployment
-                .get_deployment(
-                    &self
-                        .ctx
-                        .cloud_project_handler()
-                        .selected_project_id_or_default(project)
-                        .await?
-                        .0,
-                    site,
-                )
-                .await
-                .map_service_error_not_found_as_opt()?
-                .map(ApiDeployment::from),
-        };
+        let clients = self.ctx.golem_clients().await?;
+
+        let result = clients
+            .api_deployment
+            .get_deployment(
+                &self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project)
+                    .await?
+                    .0,
+                site,
+            )
+            .await
+            .map_service_error_not_found_as_opt()?
+            .map(ApiDeployment::from);
 
         Ok(result)
     }
@@ -525,50 +498,32 @@ impl ApiDeploymentCommandHandler {
         site: &HttpApiDeploymentSite,
         api_deployment: &DiffableHttpApiDeployment,
     ) -> anyhow::Result<ApiDeployment> {
-        let result: ApiDeployment = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_deployment
-                .deploy(&ApiDeploymentRequestOss {
-                    api_definitions: api_deployment
-                        .definitions()
-                        .map(|(name, version)| ApiDefinitionInfoOss {
-                            id: name.to_string(),
-                            version: version.to_string(),
-                        })
-                        .collect::<Vec<_>>(),
-                    site: ApiSiteOss {
-                        host: site.host.clone(),
-                        subdomain: site.subdomain.clone(),
-                    },
-                })
-                .await
-                .map_service_error()?
-                .into(),
-            GolemClients::Cloud(clients) => clients
-                .api_deployment
-                .deploy(&ApiDeploymentRequestCloud {
-                    project_id: self
-                        .ctx
-                        .cloud_project_handler()
-                        .selected_project_id_or_default(project)
-                        .await?
-                        .0,
-                    api_definitions: api_deployment
-                        .definitions()
-                        .map(|(name, version)| ApiDefinitionInfoCloud {
-                            id: name.to_string(),
-                            version: version.to_string(),
-                        })
-                        .collect::<Vec<_>>(),
-                    site: ApiSiteCloud {
-                        host: site.host.clone(),
-                        subdomain: site.subdomain.clone(),
-                    },
-                })
-                .await
-                .map_service_error()?
-                .into(),
-        };
+        let clients = self.ctx.golem_clients().await?;
+
+        let result: ApiDeployment = clients
+            .api_deployment
+            .deploy(&ApiDeploymentRequestCloud {
+                project_id: self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project)
+                    .await?
+                    .0,
+                api_definitions: api_deployment
+                    .definitions()
+                    .map(|(name, version)| ApiDefinitionInfoCloud {
+                        id: name.to_string(),
+                        version: version.to_string(),
+                    })
+                    .collect::<Vec<_>>(),
+                site: ApiSiteCloud {
+                    host: site.host.clone(),
+                    subdomain: site.subdomain.clone(),
+                },
+            })
+            .await
+            .map_service_error()?
+            .into();
 
         Ok(result)
     }
@@ -580,30 +535,24 @@ impl ApiDeploymentCommandHandler {
         id: &str,
         version: &str,
     ) -> anyhow::Result<()> {
-        match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_deployment
-                .undeploy_api(&site.to_string(), id, version)
-                .await
-                .map_service_error()
-                .map(|_| ()),
-            GolemClients::Cloud(clients) => clients
-                .api_deployment
-                .undeploy_api(
-                    &self
-                        .ctx
-                        .cloud_project_handler()
-                        .selected_project_id_or_default(project)
-                        .await?
-                        .0,
-                    &site.to_string(),
-                    id,
-                    version,
-                )
-                .await
-                .map_service_error()
-                .map(|_| ()),
-        }
+        let clients = self.ctx.golem_clients().await?;
+
+        clients
+            .api_deployment
+            .undeploy_api(
+                &self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project)
+                    .await?
+                    .0,
+                &site.to_string(),
+                id,
+                version,
+            )
+            .await
+            .map_service_error()
+            .map(|_| ())
     }
 
     pub async fn undeploy_api_from_all_sites_for_redeploy(
@@ -611,62 +560,37 @@ impl ApiDeploymentCommandHandler {
         project: Option<&ProjectRefAndId>,
         api_definition_name: &HttpApiDefinitionName,
     ) -> anyhow::Result<()> {
-        let targets: Vec<(HttpApiDeploymentSite, String)> = match self.ctx.golem_clients().await? {
-            GolemClients::Oss(clients) => clients
-                .api_deployment
-                .list_deployments(Some(api_definition_name.as_str()))
-                .await
-                .map_service_error()?
-                .into_iter()
-                .filter_map(|dep| {
-                    dep.api_definitions
-                        .into_iter()
-                        .find_map(|def| {
-                            (def.id == api_definition_name.as_str()).then_some(def.version)
-                        })
-                        .map(|version| {
-                            (
-                                HttpApiDeploymentSite {
-                                    host: dep.site.host,
-                                    subdomain: dep.site.subdomain,
-                                },
-                                version,
-                            )
-                        })
-                })
-                .collect(),
-            GolemClients::Cloud(clients) => clients
-                .api_deployment
-                .list_deployments(
-                    &self
-                        .ctx
-                        .cloud_project_handler()
-                        .selected_project_id_or_default(project)
-                        .await?
-                        .0,
-                    api_definition_name.as_str(),
-                )
-                .await
-                .map_service_error()?
-                .into_iter()
-                .filter_map(|dep| {
-                    dep.api_definitions
-                        .into_iter()
-                        .find_map(|def| {
-                            (def.id == api_definition_name.as_str()).then_some(def.version)
-                        })
-                        .map(|version| {
-                            (
-                                HttpApiDeploymentSite {
-                                    host: dep.site.host,
-                                    subdomain: dep.site.subdomain,
-                                },
-                                version,
-                            )
-                        })
-                })
-                .collect(),
-        };
+        let clients = self.ctx.golem_clients().await?;
+
+        let targets: Vec<(HttpApiDeploymentSite, String)> = clients
+            .api_deployment
+            .list_deployments(
+                &self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project)
+                    .await?
+                    .0,
+                Some(api_definition_name.as_str()),
+            )
+            .await
+            .map_service_error()?
+            .into_iter()
+            .filter_map(|dep| {
+                dep.api_definitions
+                    .into_iter()
+                    .find_map(|def| (def.id == api_definition_name.as_str()).then_some(def.version))
+                    .map(|version| {
+                        (
+                            HttpApiDeploymentSite {
+                                host: dep.site.host,
+                                subdomain: dep.site.subdomain,
+                            },
+                            version,
+                        )
+                    })
+            })
+            .collect();
 
         if targets.is_empty() {
             log_warn(format!(

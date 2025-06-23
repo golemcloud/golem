@@ -15,7 +15,7 @@
 use crate::model::project::ProjectView;
 use crate::model::text::fmt::*;
 use cli_table::Table;
-use golem_cloud_client::model::{Project, ProjectGrant, ProjectPolicy, ProjectType};
+use golem_client::model::{Project, ProjectGrant, ProjectPolicy, ProjectType};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cloud::{AccountId, ProjectId};
 use crate::model::ProjectName;
-use golem_cloud_client::model::{Project, ProjectType};
+use crate::model::{AccountId, ProjectId};
+use golem_client::model::{Project, ProjectType};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]

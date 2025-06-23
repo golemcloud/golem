@@ -22,8 +22,8 @@ use crate::model::text::certificate::{CertificateListView, CertificateNewView};
 use crate::model::text::fmt::log_error;
 use crate::model::{PathBufOrStdin, ProjectReference};
 use anyhow::bail;
-use golem_cloud_client::api::ApiCertificateClient;
-use golem_cloud_client::model::CertificateRequest;
+use golem_client::api::ApiCertificateClient;
+use golem_client::model::CertificateRequest;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -70,7 +70,7 @@ impl ApiCloudCertificateCommandHandler {
     ) -> anyhow::Result<()> {
         let certificates = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .api_certificate
             .get_certificates(
@@ -107,7 +107,7 @@ impl ApiCloudCertificateCommandHandler {
 
         let certificate = self
             .ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .api_certificate
             .create_certificate(&CertificateRequest {
@@ -138,7 +138,7 @@ impl ApiCloudCertificateCommandHandler {
         certificate_id: Uuid,
     ) -> anyhow::Result<()> {
         self.ctx
-            .golem_clients_cloud()
+            .golem_clients()
             .await?
             .api_certificate
             .delete_certificate(

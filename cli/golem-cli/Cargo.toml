@@ -34,7 +34,6 @@ golem-templates = { path = "../golem-templates", version = "=0.0.0" }
 
 # Golem deps
 golem-client = { workspace = true }
-golem-cloud-client = { workspace = true }
 golem-common = { workspace = true }
 golem-rib = { workspace = true }
 golem-rib-repl = { workspace = true }

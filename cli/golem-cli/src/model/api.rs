@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::to_oss::ToOss;
 use anyhow::bail;
 use chrono::{DateTime, Utc};
 use golem_client::model::{ApiDefinitionInfo, ApiSite, MethodPattern, Provider};
@@ -163,19 +162,8 @@ impl From<golem_client::model::ApiDeployment> for ApiDeployment {
     fn from(value: golem_client::model::ApiDeployment) -> Self {
         ApiDeployment {
             api_definitions: value.api_definitions,
-            project_id: None,
-            site: value.site,
-            created_at: value.created_at,
-        }
-    }
-}
-
-impl From<golem_cloud_client::model::ApiDeployment> for ApiDeployment {
-    fn from(value: golem_cloud_client::model::ApiDeployment) -> Self {
-        ApiDeployment {
-            api_definitions: value.api_definitions.to_oss(),
             project_id: Some(value.project_id),
-            site: value.site.to_oss(),
+            site: value.site,
             created_at: value.created_at,
         }
     }
@@ -196,18 +184,6 @@ pub struct ApiSecurityScheme {
 
 impl From<golem_client::model::SecuritySchemeData> for ApiSecurityScheme {
     fn from(value: golem_client::model::SecuritySchemeData) -> Self {
-        ApiSecurityScheme {
-            scheme_identifier: value.scheme_identifier,
-            client_id: value.client_id,
-            client_secret: value.client_secret,
-            redirect_url: value.redirect_url,
-            scopes: value.scopes,
-        }
-    }
-}
-
-impl From<golem_cloud_client::model::SecuritySchemeData> for ApiSecurityScheme {
-    fn from(value: golem_cloud_client::model::SecuritySchemeData) -> Self {
         ApiSecurityScheme {
             scheme_identifier: value.scheme_identifier,
             client_id: value.client_id,
