@@ -97,6 +97,7 @@ pub enum ViewableProjects {
     /// Special case for admins, they can see all projects even if no grant is present.
     All,
     OwnedAndAdditional {
+        owner_account_id: AccountId,
         additional_project_ids: Vec<ProjectId>,
     },
 }
@@ -284,6 +285,12 @@ impl AuthService for AuthServiceDefault {
                 limit_to_account_or_roles(auth, account_id, &[Role::Admin])
             }
             AccountAction::UpdateLimits => limit_to_roles(auth, &[Role::Admin]),
+            AccountAction::ViewTokens => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
+            AccountAction::CreateToken => {
+                limit_to_account_or_roles(auth, account_id, &[Role::Admin])
+            }
             AccountAction::DeleteToken => {
                 limit_to_account_or_roles(auth, account_id, &[Role::Admin])
             }
@@ -357,6 +364,7 @@ impl AuthService for AuthServiceDefault {
             .collect();
 
         Ok(ViewableProjects::OwnedAndAdditional {
+            owner_account_id: auth.token.account_id.clone(),
             additional_project_ids,
         })
     }
