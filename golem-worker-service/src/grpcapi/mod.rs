@@ -16,7 +16,8 @@ mod error;
 mod worker;
 
 use crate::grpcapi::worker::WorkerGrpcApi;
-use crate::service::ApiServices;
+use crate::service::Services;
+use futures_util::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerServiceServer;
@@ -26,12 +27,23 @@ use golem_api_grpc::proto::golem::worker::v1::{
 use golem_common::model::{ComponentFilePath, TargetWorkerId, WorkerId};
 use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use std::net::SocketAddr;
+use tokio::net::TcpListener;
+use tokio::task::JoinSet;
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
-use tonic::transport::{Error, Server};
+use tonic::transport::Server;
 use tonic::Status;
+use tracing::Instrument;
 
-pub async fn start_grpc_server(addr: SocketAddr, services: ApiServices) -> Result<(), Error> {
+pub async fn start_grpc_server(
+    addr: SocketAddr,
+    services: Services,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> anyhow::Result<u16> {
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+
+    let listener = TcpListener::bind(addr).await?;
+    let port = listener.local_addr()?.port();
 
     health_reporter
         .set_serving::<WorkerServiceServer<WorkerGrpcApi>>()
@@ -42,20 +54,28 @@ pub async fn start_grpc_server(addr: SocketAddr, services: ApiServices) -> Resul
         .build_v1()
         .unwrap();
 
-    Server::builder()
-        .add_service(reflection_service)
-        .add_service(health_service)
-        .add_service(
-            WorkerServiceServer::new(WorkerGrpcApi::new(
-                services.component_service.clone(),
-                services.worker_service.clone(),
-                services.worker_auth_service.clone(),
-            ))
-            .send_compressed(CompressionEncoding::Gzip)
-            .accept_compressed(CompressionEncoding::Gzip),
-        )
-        .serve(addr)
-        .await
+    join_set.spawn(
+        async move {
+            Server::builder()
+                .add_service(reflection_service)
+                .add_service(health_service)
+                .add_service(
+                    WorkerServiceServer::new(WorkerGrpcApi::new(
+                        services.component_service.clone(),
+                        services.worker_service.clone(),
+                        services.worker_auth_service.clone(),
+                    ))
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip),
+                )
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .map_err(anyhow::Error::from)
+                .await
+        }
+        .in_current_span(),
+    );
+
+    Ok(port)
 }
 
 pub fn validated_worker_id(
