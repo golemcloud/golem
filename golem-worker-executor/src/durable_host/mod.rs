@@ -2473,6 +2473,7 @@ impl PrivateDurableWorkerState {
                     .is_in_skipped_region(begin_index.next())
                     .await;
 
+                // if there was jump, we need to get the begin transaction entry
                 let begin_entry = if jumped {
                     let (_, entry) = crate::get_oplog_entry!(
                         self.replay_state,
@@ -2494,7 +2495,7 @@ impl PrivateDurableWorkerState {
 
                 let (tx_id, tx) = handler.create_replay(&tx_id).await?;
 
-                let mut restart = false;
+                let mut should_restart = false;
 
                 if let Some((_, pre_entry)) = pre_entry {
                     let end_entry = self
@@ -2511,17 +2512,17 @@ impl PrivateDurableWorkerState {
                     if end_entry.is_none()
                         && pre_entry.is_pre_commit_remote_transaction(begin_index)
                     {
-                        let committed = handler.is_committed(&tx_id).await?;
                         // if the remote transaction was not committed, we need to restart
-                        restart = !committed;
+                        should_restart = !handler.is_committed(&tx_id).await?;
                     }
                     // NOTE: rollback is not checked, because by default transaction is rolled back
                     // it is not optimal to restart transaction which will end with rollback
                 } else {
-                    restart = true;
+                    // if pre entry is not found, we need to restart
+                    should_restart = true;
                 }
 
-                if restart {
+                if should_restart {
                     // We need to jump to the end of the oplog
                     self.replay_state.switch_to_live().await;
 
