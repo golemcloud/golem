@@ -69,7 +69,6 @@ impl PostgresPool {
 #[async_trait]
 impl super::Pool for PostgresPool {
     type LabelledApi = PostgresLabelledApi;
-    type LabelledTransaction = ();
     type QueryResult = PgQueryResult;
     type Db = Postgres;
     type Args<'a> = PgArguments;
@@ -129,29 +128,6 @@ impl PostgresLabelledTransaction {
     {
         Ok(query_as.fetch_all(&mut *self.tx).await?)
     }
-
-    pub async fn commit(self) -> Result<(), RepoError> {
-        PostgresLabelledApi::record(
-            self.svc_name,
-            self.api_name,
-            self.start,
-            self.tx.commit().await,
-        )
-    }
-
-    pub async fn rollback(self) -> Result<(), RepoError> {
-        warn!(
-            svc_name = self.svc_name,
-            api_name = self.api_name,
-            "DB transaction rollback",
-        );
-        PostgresLabelledApi::record(
-            self.svc_name,
-            self.api_name,
-            self.start,
-            self.tx.rollback().await,
-        )
-    }
 }
 
 #[async_trait]
@@ -202,7 +178,30 @@ impl super::PoolApi for PostgresLabelledTransaction {
 }
 
 #[async_trait]
-impl super::LabelledPoolTransaction for PostgresLabelledTransaction {}
+impl super::LabelledPoolTransaction for PostgresLabelledTransaction {
+    async fn commit(self) -> Result<(), RepoError> {
+        PostgresLabelledApi::record(
+            self.svc_name,
+            self.api_name,
+            self.start,
+            self.tx.commit().await,
+        )
+    }
+
+    async fn rollback(self) -> Result<(), RepoError> {
+        warn!(
+            svc_name = self.svc_name,
+            api_name = self.api_name,
+            "DB transaction rollback",
+        );
+        PostgresLabelledApi::record(
+            self.svc_name,
+            self.api_name,
+            self.start,
+            self.tx.rollback().await,
+        )
+    }
+}
 
 pub struct PostgresLabelledApi {
     svc_name: &'static str,

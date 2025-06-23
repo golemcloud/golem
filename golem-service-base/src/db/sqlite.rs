@@ -73,7 +73,6 @@ impl SqlitePool {
 #[async_trait]
 impl super::Pool for SqlitePool {
     type LabelledApi = SqliteLabelledApi;
-    type LabelledTransaction = SqliteLabelledTransaction;
     type QueryResult = SqliteQueryResult;
     type Db = Sqlite;
     type Args<'a> = SqliteArguments<'a>;
@@ -206,7 +205,30 @@ impl super::PoolApi for SqliteLabelledTransaction {
 }
 
 #[async_trait]
-impl super::LabelledPoolTransaction for SqliteLabelledTransaction {}
+impl super::LabelledPoolTransaction for SqliteLabelledTransaction {
+    async fn commit(self) -> Result<(), RepoError> {
+        SqliteLabelledApi::record(
+            self.svc_name,
+            self.api_name,
+            self.start,
+            self.tx.commit().await,
+        )
+    }
+
+    async fn rollback(self) -> Result<(), RepoError> {
+        warn!(
+            svc_name = self.svc_name,
+            api_name = self.api_name,
+            "DB transaction rollback",
+        );
+        SqliteLabelledApi::record(
+            self.svc_name,
+            self.api_name,
+            self.start,
+            self.tx.rollback().await,
+        )
+    }
+}
 
 pub struct SqliteLabelledApi {
     svc_name: &'static str,

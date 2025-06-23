@@ -28,7 +28,7 @@ use golem_common::model::{
 use golem_common::repo::ComponentOwnerRow;
 use golem_common::repo::ComponentPluginInstallationRow;
 use golem_common::repo::PluginOwnerRow;
-use golem_service_base::db::{Pool, PoolApi};
+use golem_service_base::db::{LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::model::ComponentName;
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
@@ -38,7 +38,6 @@ use sqlx::types::Json;
 use sqlx::{Postgres, QueryBuilder, Row, Sqlite};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
-use std::mem::transmute;
 use std::result::Result;
 use std::str::FromStr;
 use std::sync::Arc;

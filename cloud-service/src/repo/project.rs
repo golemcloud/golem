@@ -19,7 +19,7 @@ use conditional_trait_gen::trait_gen;
 use futures::{future, TryFutureExt};
 use golem_common::model::ProjectId;
 use golem_common::repo::PluginOwnerRow;
-use golem_service_base::db::Pool;
+use golem_service_base::db::{LabelledPoolTransaction, Pool};
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
 };
