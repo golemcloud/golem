@@ -2334,6 +2334,21 @@ impl PrivateDurableWorkerState {
         }
     }
 
+    async fn add_deleted_region(&mut self, index: OplogIndex) {
+        if self.is_live() {
+            let deleted_region = OplogRegion {
+                start: index.next(), // need to keep the BeginAtomicRegion entry
+                end: self.replay_state.replay_target().next(), // skipping the Jump entry too
+            };
+            self.replay_state
+                .add_skipped_region(deleted_region.clone())
+                .await;
+            self.oplog
+                .add_and_commit(OplogEntry::jump(deleted_region))
+                .await;
+        }
+    }
+
     pub async fn begin_function(
         &mut self,
         function_type: &DurableFunctionType,
@@ -2386,16 +2401,7 @@ impl PrivateDurableWorkerState {
                         // But this is not enough, because if the retried batched write operation succeeds,
                         // and later we replay it, we need to skip the first attempt and only replay the second.
                         // Se we add a Jump entry to the oplog that registers a deleted region.
-                        let deleted_region = OplogRegion {
-                            start: begin_index.next(), // need to keep the BeginAtomicRegion entry
-                            end: self.replay_state.replay_target().next(), // skipping the Jump entry too
-                        };
-                        self.replay_state
-                            .add_skipped_region(deleted_region.clone())
-                            .await;
-                        self.oplog
-                            .add_and_commit(OplogEntry::jump(deleted_region))
-                            .await;
+                        self.add_deleted_region(begin_index).await;
                     }
 
                     Ok(begin_index)
@@ -2529,16 +2535,7 @@ impl PrivateDurableWorkerState {
                     // But this is not enough, because if the retried batched write operation succeeds,
                     // and later we replay it, we need to skip the first attempt and only replay the second.
                     // Se we add a Jump entry to the oplog that registers a deleted region.
-                    let deleted_region = OplogRegion {
-                        start: begin_index.next(), // need to keep the BeginAtomicRegion entry
-                        end: self.replay_state.replay_target().next(), // skipping the Jump entry too
-                    };
-                    self.replay_state
-                        .add_skipped_region(deleted_region.clone())
-                        .await;
-                    self.oplog
-                        .add_and_commit(OplogEntry::jump(deleted_region))
-                        .await;
+                    self.add_deleted_region(begin_index).await;
 
                     let (tx_id, tx) = handler.create_new().await?;
                     self.oplog
