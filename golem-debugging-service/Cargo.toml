@@ -1,5 +1,5 @@
 [package]
-name = "cloud-debugging-service"
+name = "golem-debugging-service"
 version = "0.0.0"
 edition = "2021"
 
@@ -9,7 +9,7 @@ autotests = false
 harness = false
 
 [[bin]]
-name = "cloud-debugging-service"
+name = "golem-debugging-service"
 path = "src/server.rs"
 
 [dependencies]

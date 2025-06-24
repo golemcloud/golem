@@ -2,11 +2,11 @@
 resolver = "2"
 
 members = [
-    "cloud-debugging-service",
     "cloud-service",
     "golem-api-grpc",
     "golem-client",
     "golem-common",
+    "golem-debugging-service",
     "golem-service-base",
     "golem-component-service",
     "golem-component-compilation-service",
@@ -146,6 +146,7 @@ include_dir = "0.7.4"
 indoc = "2.0.6"
 iso8601-timestamp = "0.3.3"
 itertools = "0.14.0"
+jsonwebtoken = "9.2.0"
 k8s-openapi = { version = "0.24.0", features = ["earliest"] }
 kube = { version = "0.98.0", features = ["runtime", "derive"] }
 kube-derive = "0.98.0"
@@ -210,6 +211,7 @@ sanitize-filename = "0.6.0"
 semver = "1.0.26"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
+serde_with = "3.5.0"
 serde_yaml = { version = "0.9.34" }
 sha2 = "0.10.8"
 shadow-rs = "1.2.0"

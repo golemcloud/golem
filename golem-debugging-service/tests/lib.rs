@@ -246,7 +246,7 @@ impl RegularWorkerExecutorTestDependencies {
         let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
         let component_directory =
-            Path::new("../cloud-debugging-service/test-components").to_path_buf();
+            Path::new("../golem-debugging-service/test-components").to_path_buf();
 
         let component_service: Arc<dyn ComponentService + Send + Sync> = Arc::new(
             FileSystemComponentService::new(
