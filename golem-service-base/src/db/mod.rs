@@ -36,7 +36,7 @@ impl DBValue {
 }
 
 #[async_trait]
-pub trait Pool: Debug {
+pub trait Pool: Debug + Sync {
     type LabelledApi: LabelledPoolApi;
     type QueryResult;
     type Db: Database + Sync;
