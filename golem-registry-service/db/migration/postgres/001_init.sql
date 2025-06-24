@@ -1,0 +1,298 @@
+CREATE TABLE plans
+(
+    plan_id uuid NOT NULL,
+    name    TEXT NOT NULL,
+    CONSTRAINT plans_pk
+        PRIMARY KEY (plan_id)
+);
+
+CREATE TABLE usage_types
+(
+    usage_type INT  NOT NULL,
+    name       TEXT NOT NULL,
+    CONSTRAINT plan_usage_types_pk
+        PRIMARY KEY (usage_type)
+);
+
+INSERT INTO usage_types (usage_type, name)
+VALUES (0, 'TOTAL_APP_COUNT'),
+       (1, 'TOTAL_ENV_COUNT'),
+       (2, 'TOTAL_COMPONENT_COUNT'),
+       (3, 'TOTAL_WORKER_COUNT'),
+       (4, 'TOTAL_COMPONENT_STORAGE_BYTES'),
+       (5, 'MONTHLY_GAS_LIMIT'),
+       (6, 'MONTHLY_COMPONENT_UPLOAD_LIMIT_BYTES');
+
+CREATE TABLE plan_usage_limits
+(
+    plan_id    uuid   NOT NULL,
+    usage_type INT    NOT NULL,
+    usage_key  TEXT   NOT NULL,
+    value      BIGINT NOT NULL,
+    CONSTRAINT plan_usage_limits_pk
+        PRIMARY KEY (plan_id, usage_type, usage_key),
+    CONSTRAINT plan_usage_limits_plans
+        FOREIGN KEY (plan_id) REFERENCES plans,
+    CONSTRAINT plan_usage_limits_usage_types
+        FOREIGN KEY (usage_type) REFERENCES usage_types
+);
+
+CREATE INDEX plan_usage_limits_usage_type_idx ON plan_usage_limits (usage_type);
+
+CREATE TABLE accounts
+(
+    account_id uuid    NOT NULL,
+    name       TEXT    NOT NULL,
+    email      TEXT    NOT NULL,
+    plan_id    uuid    NOT NULL,
+    deleted    BOOLEAN NOT NULL,
+    CONSTRAINT accounts_pk
+        PRIMARY KEY (account_id),
+    CONSTRAINT accounts_email_uk
+        UNIQUE (name),
+    CONSTRAINT accounts_plans_fk
+        FOREIGN KEY (plan_id) REFERENCES plans
+);
+
+CREATE INDEX accounts_plan_id_idx ON accounts (plan_id);
+
+CREATE TABLE tokens
+(
+    token_id   uuid      NOT NULL,
+    secret     uuid      NOT NULL,
+    account_id uuid      NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    CONSTRAINT tokens_pk
+        PRIMARY KEY (token_id),
+    CONSTRAINT tokens_secret_uk
+        UNIQUE (secret),
+    CONSTRAINT tokens_account_fk
+        FOREIGN KEY (account_id)
+            REFERENCES accounts
+);
+
+CREATE INDEX tokens_account
+    ON tokens (account_id);
+
+CREATE TABLE oauth2_tokens
+(
+    provider    TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    token_id    uuid NOT NULL,
+    account_id  uuid NOT NULL,
+    CONSTRAINT oauth2_tokens_pk PRIMARY KEY (provider, external_id),
+    CONSTRAINT oauth2_tokens_token_fk FOREIGN KEY (token_id) REFERENCES tokens,
+    CONSTRAINT oauth2_tokens_account_fk FOREIGN KEY (account_id) REFERENCES accounts
+);
+
+CREATE INDEX oauth2_tokens_token_idx
+    ON oauth2_tokens (token_id);
+
+CREATE INDEX oauth2_tokens_account_idx
+    ON oauth2_tokens (account_id);
+
+CREATE TABLE oauth2_web_flow_state
+(
+    oauth2_state TEXT      NOT NULL,
+    metadata     bytea     NOT NULL,
+    token_id     uuid      NOT NULL,
+    created_at   TIMESTAMP NOT NULL,
+    CONSTRAINT oauth2_web_flow_state_pk PRIMARY KEY (oauth2_state),
+    CONSTRAINT oauth2_web_flow_state_token_fk FOREIGN KEY (token_id) REFERENCES tokens
+);
+
+CREATE INDEX oauth2_web_flow_state_token_idx
+    ON oauth2_web_flow_state (token_id);
+
+CREATE TABLE account_creation_attempts
+(
+    oauth2_provider TEXT      NOT NULL,
+    external_id     TEXT      NOT NULL,
+    name            TEXT      NOT NULL,
+    email           TEXT      NOT NULL,
+    all_emails      jsonb     NOT NULL,
+    first_attempt   TIMESTAMP NOT NULL,
+    latest_attempt  TIMESTAMP NOT NULL,
+    attempts_count  INTEGER   NOT NULL,
+    PRIMARY KEY (oauth2_provider, external_id)
+);
+
+
+CREATE TABLE account_usage_stats
+(
+    account_id uuid   NOT NULL,
+    usage_type INT    NOT NULL,
+    usage_key  TEXT   NOT NULL,
+    value      BIGINT NOT NULL,
+    CONSTRAINT account_usage_stats_pk
+        PRIMARY KEY (account_id, usage_type, usage_key),
+    CONSTRAINT account_usage_stats_accounts_fk
+        FOREIGN KEY (account_id) REFERENCES accounts,
+    CONSTRAINT plan_usage_limits_usage_types
+        FOREIGN KEY (usage_type) REFERENCES usage_types
+);
+
+CREATE INDEX account_usage_stats_usage_type_idx ON account_usage_stats (usage_type);
+
+
+CREATE TABLE applications
+(
+    application_id uuid      NOT NULL,
+    name           TEXT      NOT NULL,
+    account_id     uuid      NOT NULL,
+    created_at     TIMESTAMP NOT NULL,
+    created_by     uuid      NOT NULL,
+    CONSTRAINT applications_pk
+        PRIMARY KEY (application_id),
+    CONSTRAINT applications_name_uk
+        UNIQUE (account_id, name),
+    CONSTRAINT applications_accounts_fk
+        FOREIGN KEY (account_id) REFERENCES accounts
+);
+
+CREATE TABLE environments
+(
+    environment_id uuid      NOT NULL,
+    name           TEXT      NOT NULL,
+    application_id uuid      NOT NULL,
+    created_at     TIMESTAMP NOT NULL,
+    created_by     uuid      NOT NULL,
+    CONSTRAINT environments_pk
+        PRIMARY KEY (environment_id),
+    CONSTRAINT environments_app_name_uk
+        UNIQUE (application_id, name),
+    CONSTRAINT environments_applications_fk
+        FOREIGN KEY (application_id) REFERENCES applications
+);
+
+CREATE TABLE component_revisions
+(
+    environment_id               uuid      NOT NULL,
+    component_id                 uuid      NOT NULL,
+    name                         TEXT      NOT NULL,
+    revision                     BIGINT    NOT NULL,
+    version                      TEXT      NOT NULL,
+    created_at                   TIMESTAMP NOT NULL,
+    created_by                   uuid      NOT NULL,
+    component_type               INTEGER   NOT NULL,
+    size                         INTEGER   NOT NULL,
+    metadata                     bytea     NOT NULL,
+    env                          jsonb,
+    status                       INTEGER   NOT NULL,
+    object_store_key             TEXT,
+    transformed_object_store_key TEXT,
+    hash                         bytea     NOT NULL,
+    CONSTRAINT component_revisions_pk
+        PRIMARY KEY (component_id, revision),
+    CONSTRAINT component_revisions_environments_fk
+        FOREIGN KEY (environment_id) REFERENCES environments,
+    CONSTRAINT component_revisions_id_uk
+        UNIQUE (environment_id, component_id, revision),
+    CONSTRAINT component_revisions_name_uk
+        UNIQUE (environment_id, component_id, revision, name)
+);
+
+CREATE INDEX component_revisions_latest_revision_by_id_idx
+    ON component_revisions (environment_id, component_id, revision DESC);
+
+CREATE INDEX component_revisions_latest_revision_by_name_idx
+    ON component_revisions (environment_id, name, revision DESC);
+
+CREATE TABLE component_files
+(
+    component_id     uuid      NOT NULL,
+    revision         BIGINT    NOT NULL,
+    file_path        TEXT      NOT NULL,
+    created_at       TIMESTAMP NOT NULL,
+    created_by       uuid      NOT NULL,
+    file_key         TEXT      NOT NULL,
+    file_permissions TEXT      NOT NULL,
+    hash             bytea     NOT NULL,
+    CONSTRAINT component_files_pk
+        PRIMARY KEY (component_id, revision, file_path),
+    CONSTRAINT component_files_components_fk
+        FOREIGN KEY (component_id, revision) REFERENCES component_revisions
+);
+
+CREATE TABLE deployment_revisions
+(
+    environment_id  uuid      NOT NULL,
+    revision        BIGINT    NOT NULL,
+    version         TEXT      NOT NULL,
+    created_at      TIMESTAMP NOT NULL,
+    created_by      uuid      NOT NULL,
+    deployment_kind INTEGER   NOT NULL,
+    hash            bytea     NOT NULL,
+    CONSTRAINT deployments_pk
+        PRIMARY KEY (environment_id, revision),
+    CONSTRAINT deployments_environments_fk
+        FOREIGN KEY (environment_id) REFERENCES environments
+);
+
+CREATE TABLE active_deployment_revisions
+(
+    environment_id  uuid      NOT NULL,
+    revision        BIGINT    NOT NULL,
+    created_at      TIMESTAMP NOT NULL,
+    created_by      uuid      NOT NULL,
+    active_revision BIGINT    NOT NULL,
+    CONSTRAINT active_deployment_revisions_pk
+        PRIMARY KEY (environment_id, revision),
+    CONSTRAINT active_deployment_revisions_deployment_revisions_fk
+        FOREIGN KEY (environment_id, active_revision) REFERENCES deployment_revisions (environment_id, revision)
+);
+
+CREATE INDEX active_deployment_revisions_active_idx
+    ON active_deployment_revisions (environment_id, active_revision);
+
+CREATE INDEX active_deployment_revisions_latest_idx
+    ON active_deployment_revisions (environment_id, revision DESC);
+
+CREATE TABLE active_deployments
+(
+    environment_id uuid   NOT NULL,
+    revision       BIGINT NOT NULL,
+    CONSTRAINT active_deployments_pk
+        PRIMARY KEY (environment_id, revision),
+    CONSTRAINT active_deployments_deployment_revisions_fk
+        FOREIGN KEY (environment_id, revision) REFERENCES deployment_revisions (environment_id, revision)
+);
+
+CREATE TABLE environment_revisions
+(
+    environment_id     uuid      NOT NULL,
+    revision           BIGINT    NOT NULL,
+    created_at         TIMESTAMP NOT NULL,
+    created_by         uuid      NOT NULL,
+    compatibilty_check bool      NOT NULL,
+    version_check      bool      NOT NULL,
+    security_overrides bool      NOT NULL,
+    hash               bytea     NOT NULL,
+    CONSTRAINT environment_revisions_pk
+        PRIMARY KEY (environment_id, revision),
+    CONSTRAINT environment_revisions_fk
+        FOREIGN KEY (environment_id) REFERENCES environments
+);
+
+CREATE INDEX environment_revisions_latest_idx
+    ON environment_revisions (environment_id, revision DESC);
+
+CREATE TABLE deployment_component_revisions
+(
+    environment_id      uuid   NOT NULL,
+    deployment_revision BIGINT NOT NULL,
+    component_id        uuid   NOT NULL,
+    component_revision  BIGINT NOT NULL,
+    CONSTRAINT deployment_component_revisions_pk
+        PRIMARY KEY (environment_id, deployment_revision, component_id, component_revision),
+    CONSTRAINT deployment_component_revisions_deployment_fk
+        FOREIGN KEY (environment_id, deployment_revision)
+            REFERENCES deployment_revisions (environment_id, revision),
+    CONSTRAINT deployment_component_revisions_component_fk
+        FOREIGN KEY (environment_id, component_id, component_revision)
+            REFERENCES component_revisions (environment_id, component_id, revision)
+);
+
+CREATE INDEX deployment_component_revisions_component_idx
+    ON deployment_component_revisions (environment_id, component_id, component_revision);
