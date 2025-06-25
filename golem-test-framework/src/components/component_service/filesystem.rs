@@ -15,7 +15,6 @@
 use super::ComponentServiceGrpcClient;
 use super::PluginServiceGrpcClient;
 use crate::components::component_service::{AddComponentError, ComponentService};
-use crate::components::{PLACEHOLDER_ACCOUNT, PLACEHOLDER_PROJECT};
 use crate::config::GolemClientProtocol;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -35,9 +34,11 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tonic::transport::Channel;
 use tracing::{debug, info};
-use uuid::Uuid;
+use uuid::{uuid, Uuid};
 
 const WASMS_DIRNAME: &str = "wasms";
+const PLACEHOLDER_ACCOUNT: uuid::Uuid = uuid!("91879a4b-6c62-4dd1-91fe-9dcd29ebe178");
+const PLACEHOLDER_PROJECT: uuid::Uuid = uuid!("6dfe5ca7-ab78-46b2-a98d-41098bb29c98");
 
 pub struct FileSystemComponentService {
     root: PathBuf,
@@ -119,11 +120,15 @@ impl FileSystemComponentService {
             })?
             .len();
 
+        let account_id = AccountId {
+            value: PLACEHOLDER_ACCOUNT.to_string(),
+        };
+
+        let project_id = ProjectId(PLACEHOLDER_PROJECT);
+
         let metadata = LocalFileSystemComponentMetadata {
-            account_id: AccountId {
-                value: PLACEHOLDER_ACCOUNT.to_string(),
-            },
-            project_id: ProjectId(PLACEHOLDER_PROJECT),
+            account_id: account_id.clone(),
+            project_id: project_id.clone(),
             component_id: component_id.clone(),
             component_name: component_name.to_string(),
             version: component_version,
@@ -163,8 +168,8 @@ impl FileSystemComponentService {
                 root_package_name: raw_component_metadata.root_package_name,
                 root_package_version: raw_component_metadata.root_package_version,
             }),
-            account_id: None,
-            project_id: None,
+            account_id: Some(account_id.into()),
+            project_id: Some(project_id.into()),
             created_at: Some(SystemTime::now().into()),
             component_type: Some(component_type as i32),
             files: files.iter().map(|file| file.clone().into()).collect(),

@@ -17,7 +17,6 @@ pub mod k8s;
 pub mod provided;
 pub mod spawned;
 
-use super::{ADMIN_ACCOUNT_ID, ADMIN_TOKEN};
 use crate::components::rdb::Rdb;
 use crate::components::{wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder};
 use crate::config::GolemClientProtocol;
@@ -45,7 +44,10 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::Level;
 use url::Url;
-use uuid::Uuid;
+use uuid::{uuid, Uuid};
+
+const ADMIN_TOKEN: uuid::Uuid = uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1");
+const ADMIN_ACCOUNT_ID: uuid::Uuid = uuid!("24a9f0e2-f491-4e96-974e-b9fbf78c924e");
 
 #[async_trait]
 pub trait CloudService: Send + Sync {
