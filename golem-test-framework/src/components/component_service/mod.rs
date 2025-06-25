@@ -80,7 +80,6 @@ use uuid::Uuid;
 pub trait ComponentService: Send + Sync {
     fn component_directory(&self) -> &Path;
 
-    fn cloud_service(&self) -> Arc<dyn CloudService>;
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService>;
 
     fn client_protocol(&self) -> GolemClientProtocol;
@@ -211,7 +210,7 @@ pub trait ComponentService: Send + Sync {
             GolemClientProtocol::Grpc => {
                 let mut client = self.component_grpc_client().await;
 
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+                let request = authorised_request(request, token);
 
                 match client
                     .get_components(request)

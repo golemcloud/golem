@@ -86,10 +86,6 @@ impl WorkerService for ForwardingWorkerService {
         &self.component_service
     }
 
-    fn cloud_service(&self) -> &Arc<dyn CloudService> {
-        &self.cloud_service
-    }
-
     fn client_protocol(&self) -> GolemClientProtocol {
         panic!("There is no worker-service, cannot get client protocol")
     }

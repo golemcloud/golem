@@ -224,10 +224,6 @@ impl WorkerService for K8sWorkerService {
         &self.component_service
     }
 
-    fn cloud_service(&self) -> &Arc<dyn CloudService> {
-        &self.cloud_service
-    }
-
     fn client_protocol(&self) -> GolemClientProtocol {
         self.client_protocol
     }

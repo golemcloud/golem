@@ -14,7 +14,6 @@
 
 use super::ComponentServiceGrpcClient;
 use super::PluginServiceGrpcClient;
-use crate::components::cloud_service::CloudService;
 use crate::components::component_service::{AddComponentError, ComponentService};
 use crate::components::{PLACEHOLDER_ACCOUNT, PLACEHOLDER_PROJECT};
 use crate::config::GolemClientProtocol;
@@ -215,10 +214,6 @@ impl FileSystemComponentService {
 
 #[async_trait]
 impl ComponentService for FileSystemComponentService {
-    fn cloud_service(&self) -> Arc<dyn CloudService> {
-        panic!("No real cloud service running")
-    }
-
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
     }

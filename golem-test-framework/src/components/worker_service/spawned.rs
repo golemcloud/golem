@@ -127,10 +127,6 @@ impl WorkerService for SpawnedWorkerService {
         &self.component_service
     }
 
-    fn cloud_service(&self) -> &Arc<dyn CloudService> {
-        &self.cloud_service
-    }
-
     fn client_protocol(&self) -> GolemClientProtocol {
         self.client_protocol
     }

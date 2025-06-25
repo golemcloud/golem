@@ -125,10 +125,6 @@ impl ComponentService for SpawnedComponentService {
         &self.component_directory
     }
 
-    fn cloud_service(&self) -> Arc<dyn CloudService> {
-        self.cloud_service.clone()
-    }
-
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
     }

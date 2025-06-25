@@ -111,7 +111,6 @@ use uuid::Uuid;
 #[async_trait]
 pub trait WorkerService: Send + Sync {
     fn component_service(&self) -> &Arc<dyn ComponentService>;
-    fn cloud_service(&self) -> &Arc<dyn CloudService>;
 
     fn client_protocol(&self) -> GolemClientProtocol;
     async fn base_http_client(&self) -> reqwest::Client;
@@ -949,7 +948,7 @@ pub trait WorkerService: Send + Sync {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => {
                 let mut client = self.worker_grpc_client().await;
-                let request = authorised_request(request, &self.cloud_service().admin_token());
+                let request = authorised_request(request, token);
                 Ok(client.revert_worker(request).await?.into_inner())
             }
             GolemClientProtocol::Http => {
