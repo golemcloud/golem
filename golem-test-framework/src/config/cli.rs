@@ -81,15 +81,15 @@ use uuid::Uuid;
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct CliTestDependencies {
-    rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-    redis: Arc<dyn Redis + Send + Sync + 'static>,
-    redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
-    shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-    component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync + 'static>,
-    worker_service: Arc<dyn WorkerService + 'static>,
-    worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
-    blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
+    rdb: Arc<dyn Rdb>,
+    redis: Arc<dyn Redis>,
+    redis_monitor: Arc<dyn RedisMonitor>,
+    shard_manager: Arc<dyn ShardManager>,
+    component_service: Arc<dyn ComponentService>,
+    component_compilation_service: Arc<dyn ComponentCompilationService>,
+    worker_service: Arc<dyn WorkerService>,
+    worker_executor_cluster: Arc<dyn WorkerExecutorCluster>,
+    blob_storage: Arc<dyn BlobStorage>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     cloud_service: Arc<dyn CloudService>,
@@ -376,20 +376,19 @@ impl CliTestDependencies {
 
         let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
-        let rdb: Arc<dyn Rdb + Send + Sync> =
-            Arc::new(DockerPostgresRdb::new(&unique_network_id).await);
+        let rdb: Arc<dyn Rdb> = Arc::new(DockerPostgresRdb::new(&unique_network_id).await);
 
         let cloud_service: Arc<dyn CloudService> = Arc::new(
             DockerCloudService::new(
                 &unique_network_id,
                 rdb.clone(),
-                params.service_verbosity(),
                 params.golem_client_protocol,
+                params.service_verbosity(),
             )
             .await,
         );
 
-        let component_service: Arc<dyn ComponentService + Send + Sync> = Arc::new(
+        let component_service: Arc<dyn ComponentService> = Arc::new(
             DockerComponentService::new(
                 &unique_network_id,
                 PathBuf::from(&params.component_directory),
@@ -408,25 +407,26 @@ impl CliTestDependencies {
             .await,
         );
 
-        let component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> =
-            Arc::new(
-                DockerComponentCompilationService::new(
-                    &unique_network_id,
-                    component_service.clone(),
-                    params_clone.service_verbosity(),
-                    cloud_service.clone(),
-                )
-                .await,
-            );
-
-        let redis: Arc<dyn Redis + Send + Sync> =
-            Arc::new(DockerRedis::new(&unique_network_id, redis_prefix.to_string()).await);
-
-        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync> = Arc::new(
-            SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
+        let component_compilation_service: Arc<dyn ComponentCompilationService> = Arc::new(
+            DockerComponentCompilationService::new(
+                &unique_network_id,
+                component_service.clone(),
+                params_clone.service_verbosity(),
+                cloud_service.clone(),
+            )
+            .await,
         );
 
-        let shard_manager: Arc<dyn ShardManager + Send + Sync> = Arc::new(
+        let redis: Arc<dyn Redis> =
+            Arc::new(DockerRedis::new(&unique_network_id, redis_prefix.to_string()).await);
+
+        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
+            redis.clone(),
+            Level::DEBUG,
+            Level::ERROR,
+        ));
+
+        let shard_manager: Arc<dyn ShardManager> = Arc::new(
             DockerShardManager::new(
                 &unique_network_id,
                 redis.clone(),
@@ -449,21 +449,20 @@ impl CliTestDependencies {
             .await,
         );
 
-        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> =
-            Arc::new(
-                DockerWorkerExecutorCluster::new(
-                    cluster_size,
-                    &unique_network_id,
-                    redis.clone(),
-                    component_service.clone(),
-                    shard_manager.clone(),
-                    worker_service.clone(),
-                    params.service_verbosity(),
-                    true,
-                    cloud_service.clone(),
-                )
-                .await,
-            );
+        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster> = Arc::new(
+            DockerWorkerExecutorCluster::new(
+                cluster_size,
+                &unique_network_id,
+                redis.clone(),
+                component_service.clone(),
+                shard_manager.clone(),
+                worker_service.clone(),
+                params.service_verbosity(),
+                true,
+                cloud_service.clone(),
+            )
+            .await,
+        );
 
         Self {
             rdb,
@@ -526,7 +525,7 @@ impl CliTestDependencies {
 
         let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
-        let rdb: Arc<dyn Rdb + Send + Sync> = {
+        let rdb: Arc<dyn Rdb> = {
             let unique_network_id = Uuid::new_v4().to_string();
             Arc::new(DockerPostgresRdb::new(&unique_network_id).await)
         };
@@ -538,15 +537,15 @@ impl CliTestDependencies {
                 cloud_service_http_port,
                 cloud_service_grpc_port,
                 rdb.clone(),
+                params.golem_client_protocol,
                 params.service_verbosity(),
                 out_level,
                 Level::ERROR,
-                params.golem_client_protocol,
             )
             .await,
         );
 
-        let component_service: Arc<dyn ComponentService + Send + Sync> = {
+        let component_service: Arc<dyn ComponentService> = {
             Arc::new(
                 SpawnedComponentService::new(
                     PathBuf::from(&params.component_directory),
@@ -568,34 +567,35 @@ impl CliTestDependencies {
             )
         };
 
-        let component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> =
-            Arc::new(
-                SpawnedComponentCompilationService::new(
-                    &build_root.join("golem-component-compilation-service"),
-                    &workspace_root.join("golem-component-compilation-service"),
-                    component_compilation_service_http_port,
-                    component_compilation_service_grpc_port,
-                    component_service.clone(),
-                    params.service_verbosity(),
-                    out_level,
-                    Level::ERROR,
-                    cloud_service.clone(),
-                )
-                .await,
-            );
+        let component_compilation_service: Arc<dyn ComponentCompilationService> = Arc::new(
+            SpawnedComponentCompilationService::new(
+                &build_root.join("golem-component-compilation-service"),
+                &workspace_root.join("golem-component-compilation-service"),
+                component_compilation_service_http_port,
+                component_compilation_service_grpc_port,
+                component_service.clone(),
+                params.service_verbosity(),
+                out_level,
+                Level::ERROR,
+                cloud_service.clone(),
+            )
+            .await,
+        );
 
-        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
+        let redis: Arc<dyn Redis> = Arc::new(SpawnedRedis::new(
             redis_port,
             redis_prefix.to_string(),
             out_level,
             Level::ERROR,
         ));
 
-        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
-            SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
-        );
+        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
+            redis.clone(),
+            Level::DEBUG,
+            Level::ERROR,
+        ));
 
-        let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
+        let shard_manager: Arc<dyn ShardManager> = Arc::new(
             SpawnedShardManager::new(
                 &build_root.join("golem-shard-manager"),
                 &workspace_root.join("golem-shard-manager"),
@@ -610,7 +610,7 @@ impl CliTestDependencies {
             .await,
         );
 
-        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
+        let worker_service: Arc<dyn WorkerService> = Arc::new(
             SpawnedWorkerService::new(
                 &build_root.join("golem-worker-service"),
                 &workspace_root.join("golem-worker-service"),
@@ -628,26 +628,25 @@ impl CliTestDependencies {
             )
             .await,
         );
-        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> =
-            Arc::new(
-                SpawnedWorkerExecutorCluster::new(
-                    cluster_size,
-                    worker_executor_base_http_port,
-                    worker_executor_base_grpc_port,
-                    &build_root.join("worker-executor"),
-                    &workspace_root.join("golem-worker-executor"),
-                    redis.clone(),
-                    component_service.clone(),
-                    shard_manager.clone(),
-                    worker_service.clone(),
-                    params.service_verbosity(),
-                    out_level,
-                    Level::ERROR,
-                    true,
-                    cloud_service.clone(),
-                )
-                .await,
-            );
+        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster> = Arc::new(
+            SpawnedWorkerExecutorCluster::new(
+                cluster_size,
+                worker_executor_base_http_port,
+                worker_executor_base_grpc_port,
+                &build_root.join("worker-executor"),
+                &workspace_root.join("golem-worker-executor"),
+                redis.clone(),
+                component_service.clone(),
+                shard_manager.clone(),
+                worker_service.clone(),
+                params.service_verbosity(),
+                out_level,
+                Level::ERROR,
+                true,
+                cloud_service.clone(),
+            )
+            .await,
+        );
 
         Self {
             rdb,
@@ -688,23 +687,23 @@ impl CliTestDependencies {
 
         let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
-        let rdb: Arc<dyn Rdb + Send + Sync> =
+        let rdb: Arc<dyn Rdb> =
             Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, timeout, None).await);
 
         let cloud_service: Arc<dyn CloudService> = Arc::new(
             K8sCloudService::new(
                 &namespace,
                 &routing_type,
+                params.golem_client_protocol,
                 Level::INFO,
                 rdb.clone(),
                 timeout,
                 None,
-                params.golem_client_protocol,
             )
             .await,
         );
 
-        let component_service: Arc<dyn ComponentService + Send + Sync> = Arc::new(
+        let component_service: Arc<dyn ComponentService> = Arc::new(
             K8sComponentService::new(
                 PathBuf::from(&params.component_directory),
                 &namespace,
@@ -724,9 +723,7 @@ impl CliTestDependencies {
             .await,
         );
 
-        let component_compilation_service: Arc<
-            dyn ComponentCompilationService + Send + Sync + 'static,
-        > = Arc::new(
+        let component_compilation_service: Arc<dyn ComponentCompilationService> = Arc::new(
             K8sComponentCompilationService::new(
                 &namespace,
                 &routing_type,
@@ -739,7 +736,7 @@ impl CliTestDependencies {
             .await,
         );
 
-        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(
+        let redis: Arc<dyn Redis> = Arc::new(
             K8sRedis::new(
                 &namespace,
                 &routing_type,
@@ -750,11 +747,13 @@ impl CliTestDependencies {
             .await,
         );
 
-        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
-            SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
-        );
+        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
+            redis.clone(),
+            Level::DEBUG,
+            Level::ERROR,
+        ));
 
-        let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
+        let shard_manager: Arc<dyn ShardManager> = Arc::new(
             K8sShardManager::new(
                 &namespace,
                 &routing_type,
@@ -782,24 +781,23 @@ impl CliTestDependencies {
             .await,
         );
 
-        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> =
-            Arc::new(
-                K8sWorkerExecutorCluster::new(
-                    cluster_size,
-                    &namespace,
-                    &routing_type,
-                    redis.clone(),
-                    component_service.clone(),
-                    shard_manager.clone(),
-                    worker_service.clone(),
-                    Level::INFO,
-                    timeout,
-                    None,
-                    true,
-                    cloud_service.clone(),
-                )
-                .await,
-            );
+        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster> = Arc::new(
+            K8sWorkerExecutorCluster::new(
+                cluster_size,
+                &namespace,
+                &routing_type,
+                redis.clone(),
+                component_service.clone(),
+                shard_manager.clone(),
+                worker_service.clone(),
+                Level::INFO,
+                timeout,
+                None,
+                true,
+                cloud_service.clone(),
+            )
+            .await,
+        );
 
         Self {
             rdb,
@@ -841,7 +839,7 @@ impl CliTestDependencies {
 
         let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
-        let rdb: Arc<dyn Rdb + Send + Sync> = Arc::new(
+        let rdb: Arc<dyn Rdb> = Arc::new(
             K8sPostgresRdb::new(
                 &namespace,
                 &routing_type,
@@ -855,16 +853,16 @@ impl CliTestDependencies {
             K8sCloudService::new(
                 &namespace,
                 &routing_type,
+                params.golem_client_protocol,
                 Level::INFO,
                 rdb.clone(),
                 timeout,
                 service_annotations.clone(),
-                params.golem_client_protocol,
             )
             .await,
         );
 
-        let component_service: Arc<dyn ComponentService + Send + Sync> = {
+        let component_service: Arc<dyn ComponentService> = {
             let component_directory = PathBuf::from(&params.component_directory);
 
             Arc::new(
@@ -888,21 +886,20 @@ impl CliTestDependencies {
             )
         };
 
-        let component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync> =
-            Arc::new(
-                K8sComponentCompilationService::new(
-                    &namespace,
-                    &routing_type,
-                    Level::INFO,
-                    component_service.clone(),
-                    timeout,
-                    service_annotations.clone(),
-                    cloud_service.clone(),
-                )
-                .await,
-            );
+        let component_compilation_service: Arc<dyn ComponentCompilationService> = Arc::new(
+            K8sComponentCompilationService::new(
+                &namespace,
+                &routing_type,
+                Level::INFO,
+                component_service.clone(),
+                timeout,
+                service_annotations.clone(),
+                cloud_service.clone(),
+            )
+            .await,
+        );
 
-        let redis: Arc<dyn Redis + Send + Sync> = Arc::new(
+        let redis: Arc<dyn Redis> = Arc::new(
             K8sRedis::new(
                 &namespace,
                 &routing_type,
@@ -913,11 +910,13 @@ impl CliTestDependencies {
             .await,
         );
 
-        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync> = Arc::new(
-            SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
-        );
+        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
+            redis.clone(),
+            Level::DEBUG,
+            Level::ERROR,
+        ));
 
-        let shard_manager: Arc<dyn ShardManager + Send + Sync> = Arc::new(
+        let shard_manager: Arc<dyn ShardManager> = Arc::new(
             K8sShardManager::new(
                 &namespace,
                 &routing_type,
@@ -944,7 +943,7 @@ impl CliTestDependencies {
             )
             .await,
         );
-        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync> = Arc::new(
+        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster> = Arc::new(
             K8sWorkerExecutorCluster::new(
                 cluster_size,
                 &namespace,
@@ -1019,18 +1018,19 @@ impl CliTestDependencies {
                 let plugin_wasm_files_service =
                     Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
-                let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(ProvidedPostgresRdb::new(postgres.clone()));
+                let rdb: Arc<dyn Rdb> = Arc::new(ProvidedPostgresRdb::new(postgres.clone()));
 
-                let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(ProvidedRedis::new(
+                let redis: Arc<dyn Redis> = Arc::new(ProvidedRedis::new(
                     redis_host.clone(),
                     *redis_port,
                     redis_prefix.clone(),
                 ));
 
-                let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
-                    SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
-                );
+                let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
+                    redis.clone(),
+                    Level::DEBUG,
+                    Level::ERROR,
+                ));
 
                 let cloud_service: Arc<dyn CloudService> = Arc::new(
                     ProvidedCloudService::new(
@@ -1042,14 +1042,13 @@ impl CliTestDependencies {
                     .await,
                 );
 
-                let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> =
-                    Arc::new(ProvidedShardManager::new(
-                        shard_manager_host.clone(),
-                        *shard_manager_http_port,
-                        *shard_manager_grpc_port,
-                    ));
+                let shard_manager: Arc<dyn ShardManager> = Arc::new(ProvidedShardManager::new(
+                    shard_manager_host.clone(),
+                    *shard_manager_http_port,
+                    *shard_manager_grpc_port,
+                ));
 
-                let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+                let component_service: Arc<dyn ComponentService> = Arc::new(
                     ProvidedComponentService::new(
                         params.component_directory.clone().into(),
                         component_service_host.clone(),
@@ -1062,13 +1061,12 @@ impl CliTestDependencies {
                     .await,
                 );
 
-                let component_compilation_service: Arc<
-                    dyn ComponentCompilationService + Send + Sync,
-                > = Arc::new(ProvidedComponentCompilationService::new(
-                    component_compilation_service_host.clone(),
-                    *component_compilation_service_http_port,
-                    *component_compilation_service_grpc_port,
-                ));
+                let component_compilation_service: Arc<dyn ComponentCompilationService> =
+                    Arc::new(ProvidedComponentCompilationService::new(
+                        component_compilation_service_host.clone(),
+                        *component_compilation_service_http_port,
+                        *component_compilation_service_grpc_port,
+                    ));
 
                 let worker_service: Arc<dyn WorkerService> = Arc::new(
                     ProvidedWorkerService::new(
@@ -1082,14 +1080,13 @@ impl CliTestDependencies {
                     )
                     .await,
                 );
-                let worker_executor_cluster: Arc<
-                    dyn WorkerExecutorCluster + Send + Sync + 'static,
-                > = Arc::new(ProvidedWorkerExecutorCluster::new(
-                    worker_executor_host.clone(),
-                    *worker_executor_http_port,
-                    *worker_executor_grpc_port,
-                    true,
-                ));
+                let worker_executor_cluster: Arc<dyn WorkerExecutorCluster> =
+                    Arc::new(ProvidedWorkerExecutorCluster::new(
+                        worker_executor_host.clone(),
+                        *worker_executor_http_port,
+                        *worker_executor_grpc_port,
+                        true,
+                    ));
 
                 Self {
                     rdb,
@@ -1200,23 +1197,23 @@ impl CliTestDependencies {
 
 #[async_trait]
 impl TestDependencies for CliTestDependencies {
-    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync> {
+    fn rdb(&self) -> Arc<dyn Rdb> {
         self.rdb.clone()
     }
 
-    fn redis(&self) -> Arc<dyn Redis + Send + Sync> {
+    fn redis(&self) -> Arc<dyn Redis> {
         self.redis.clone()
     }
 
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
+    fn blob_storage(&self) -> Arc<dyn BlobStorage> {
         self.blob_storage.clone()
     }
 
-    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync> {
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor> {
         self.redis_monitor.clone()
     }
 
-    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync> {
+    fn shard_manager(&self) -> Arc<dyn ShardManager> {
         self.shard_manager.clone()
     }
 
@@ -1232,7 +1229,7 @@ impl TestDependencies for CliTestDependencies {
         self.component_service.clone()
     }
 
-    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService + Send + Sync> {
+    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService> {
         self.component_compilation_service.clone()
     }
 
@@ -1240,7 +1237,7 @@ impl TestDependencies for CliTestDependencies {
         self.worker_service.clone()
     }
 
-    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync> {
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster> {
         self.worker_executor_cluster.clone()
     }
 
@@ -1260,7 +1257,7 @@ impl TestDependencies for CliTestDependencies {
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct CliTestService {
-    service: Arc<dyn Service + Send + Sync + 'static>,
+    service: Arc<dyn Service>,
 }
 
 impl CliTestService {
@@ -1286,16 +1283,15 @@ impl CliTestService {
 
                 let build_root = workspace_root.join(build_target);
 
-                let service: Arc<dyn Service + Send + Sync + 'static> =
-                    Arc::new(SpawnedService::new(
-                        name.clone(),
-                        &build_root.join(name.clone()),
-                        &workspace_root.join(name.clone()),
-                        env_vars,
-                        params.service_verbosity(),
-                        Level::INFO,
-                        Level::ERROR,
-                    ));
+                let service: Arc<dyn Service> = Arc::new(SpawnedService::new(
+                    name.clone(),
+                    &build_root.join(name.clone()),
+                    &workspace_root.join(name.clone()),
+                    env_vars,
+                    params.service_verbosity(),
+                    Level::INFO,
+                    Level::ERROR,
+                ));
 
                 Self { service }
             }
@@ -1307,7 +1303,7 @@ impl CliTestService {
 }
 
 impl TestService for CliTestService {
-    fn service(&self) -> Arc<dyn Service + Send + Sync + 'static> {
+    fn service(&self) -> Arc<dyn Service> {
         self.service.clone()
     }
 }

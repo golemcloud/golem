@@ -12,16 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{new_worker_grpc_client, WorkerServiceGrpcClient};
 use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
+use crate::components::new_reqwest_client;
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_service::{
-    new_api_definition_client, new_api_deployment_client, new_api_security_client,
-    new_worker_client, ApiDefinitionServiceClient, ApiDeploymentServiceClient,
-    ApiSecurityServiceClient, WorkerService, WorkerServiceClient,
-};
+use crate::components::worker_service::WorkerService;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use std::borrow::Cow;
@@ -30,9 +28,9 @@ use std::sync::Arc;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{Image, ImageExt};
+use tokio::sync::OnceCell;
+use tonic::transport::Channel;
 use tracing::{info, Level};
-
-use super::WorkerServiceInternal;
 
 pub struct DockerWorkerService {
     container: ContainerHandle<GolemWorkerServiceImage>,
@@ -40,13 +38,11 @@ pub struct DockerWorkerService {
     public_http_port: u16,
     public_grpc_port: u16,
     public_custom_request_port: u16,
-    client_protocol: GolemClientProtocol,
-    worker_client: WorkerServiceClient,
-    api_definition_client: ApiDefinitionServiceClient,
-    api_deployment_client: ApiDeploymentServiceClient,
-    api_security_client: ApiSecurityServiceClient,
     component_service: Arc<dyn ComponentService>,
     cloud_service: Arc<dyn CloudService>,
+    client_protocol: GolemClientProtocol,
+    base_http_client: OnceCell<reqwest::Client>,
+    worker_grpc_client: OnceCell<WorkerServiceGrpcClient<Channel>>,
 }
 
 impl DockerWorkerService {
@@ -57,8 +53,8 @@ impl DockerWorkerService {
     pub async fn new(
         unique_network_id: &str,
         component_service: Arc<dyn ComponentService>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync>,
-        rdb: Arc<dyn Rdb + Send + Sync>,
+        shard_manager: Arc<dyn ShardManager>,
+        rdb: Arc<dyn Rdb>,
         verbosity: Level,
         client_protocol: GolemClientProtocol,
         cloud_service: Arc<dyn CloudService>,
@@ -113,63 +109,16 @@ impl DockerWorkerService {
             public_grpc_port,
             public_custom_request_port,
             client_protocol,
-            worker_client: new_worker_client(
-                client_protocol,
-                "localhost",
-                public_grpc_port,
-                public_http_port,
-                &cloud_service,
-            )
-            .await,
-            api_definition_client: new_api_definition_client(
-                client_protocol,
-                "localhost",
-                public_grpc_port,
-                public_http_port,
-                &cloud_service,
-            )
-            .await,
-            api_deployment_client: new_api_deployment_client(
-                client_protocol,
-                "localhost",
-                public_http_port,
-                &cloud_service,
-            )
-            .await,
-            api_security_client: new_api_security_client(
-                client_protocol,
-                "localhost",
-                public_http_port,
-                &cloud_service,
-            )
-            .await,
             component_service,
             cloud_service,
+            base_http_client: OnceCell::new(),
+            worker_grpc_client: OnceCell::new(),
         }
     }
 }
 
-impl WorkerServiceInternal for DockerWorkerService {
-    fn client_protocol(&self) -> GolemClientProtocol {
-        self.client_protocol
-    }
-
-    fn worker_client(&self) -> WorkerServiceClient {
-        self.worker_client.clone()
-    }
-
-    fn api_definition_client(&self) -> ApiDefinitionServiceClient {
-        self.api_definition_client.clone()
-    }
-
-    fn api_deployment_client(&self) -> ApiDeploymentServiceClient {
-        self.api_deployment_client.clone()
-    }
-
-    fn api_security_client(&self) -> ApiSecurityServiceClient {
-        self.api_security_client.clone()
-    }
-
+#[async_trait]
+impl WorkerService for DockerWorkerService {
     fn component_service(&self) -> &Arc<dyn ComponentService> {
         &self.component_service
     }
@@ -177,10 +126,27 @@ impl WorkerServiceInternal for DockerWorkerService {
     fn cloud_service(&self) -> &Arc<dyn CloudService> {
         &self.cloud_service
     }
-}
 
-#[async_trait]
-impl WorkerService for DockerWorkerService {
+    fn client_protocol(&self) -> GolemClientProtocol {
+        self.client_protocol
+    }
+
+    async fn base_http_client(&self) -> reqwest::Client {
+        self.base_http_client
+            .get_or_init(async || new_reqwest_client())
+            .await
+            .clone()
+    }
+
+    async fn worker_grpc_client(&self) -> WorkerServiceGrpcClient<Channel> {
+        self.worker_grpc_client
+            .get_or_init(async || {
+                new_worker_grpc_client(&self.public_host(), self.public_grpc_port()).await
+            })
+            .await
+            .clone()
+    }
+
     fn private_host(&self) -> String {
         self.private_host.clone()
     }

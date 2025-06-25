@@ -168,15 +168,15 @@ impl Default for EnvBasedTestDependenciesConfig {
 #[derive(Clone)]
 pub struct EnvBasedTestDependencies {
     config: Arc<EnvBasedTestDependenciesConfig>,
-    rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-    redis: Arc<dyn Redis + Send + Sync + 'static>,
-    redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
-    shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-    component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync + 'static>,
-    worker_service: Arc<dyn WorkerService + 'static>,
-    worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
-    blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
+    rdb: Arc<dyn Rdb>,
+    redis: Arc<dyn Redis>,
+    redis_monitor: Arc<dyn RedisMonitor>,
+    shard_manager: Arc<dyn ShardManager>,
+    component_service: Arc<dyn ComponentService>,
+    component_compilation_service: Arc<dyn ComponentCompilationService>,
+    worker_service: Arc<dyn WorkerService>,
+    worker_executor_cluster: Arc<dyn WorkerExecutorCluster>,
+    blob_storage: Arc<dyn BlobStorage>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_temp_directory: Arc<TempDir>,
@@ -190,9 +190,7 @@ impl Debug for EnvBasedTestDependencies {
 }
 
 impl EnvBasedTestDependencies {
-    async fn make_rdb(
-        config: Arc<EnvBasedTestDependenciesConfig>,
-    ) -> Arc<dyn Rdb + Send + Sync + 'static> {
+    async fn make_rdb(config: Arc<EnvBasedTestDependenciesConfig>) -> Arc<dyn Rdb> {
         match config.db_type {
             DbType::Sqlite => {
                 let sqlite_path = Path::new("../target/golem_test_db");
@@ -202,9 +200,7 @@ impl EnvBasedTestDependencies {
         }
     }
 
-    async fn make_redis(
-        config: Arc<EnvBasedTestDependenciesConfig>,
-    ) -> Arc<dyn Redis + Send + Sync + 'static> {
+    async fn make_redis(config: Arc<EnvBasedTestDependenciesConfig>) -> Arc<dyn Redis> {
         let prefix = config.redis_key_prefix.clone();
         if config.golem_docker_services {
             Arc::new(DockerRedis::new(&config.unique_network_id, prefix).await)
@@ -227,8 +223,8 @@ impl EnvBasedTestDependencies {
 
     async fn make_redis_monitor(
         config: Arc<EnvBasedTestDependenciesConfig>,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-    ) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
+        redis: Arc<dyn Redis>,
+    ) -> Arc<dyn RedisMonitor> {
         Arc::new(SpawnedRedisMonitor::new(
             redis,
             config.redis_monitor_stdout_level(),
@@ -238,15 +234,15 @@ impl EnvBasedTestDependencies {
 
     async fn make_cloud_service(
         config: Arc<EnvBasedTestDependenciesConfig>,
-        rdb: Arc<dyn Rdb + Send + Sync>,
+        rdb: Arc<dyn Rdb>,
     ) -> Arc<dyn CloudService> {
         if config.golem_docker_services {
             Arc::new(
                 DockerCloudService::new(
                     &config.unique_network_id,
                     rdb,
-                    config.default_verbosity(),
                     config.golem_client_protocol,
+                    config.default_verbosity(),
                 )
                 .await,
             )
@@ -258,10 +254,10 @@ impl EnvBasedTestDependencies {
                     8084,
                     9095,
                     rdb,
+                    config.golem_client_protocol,
                     config.default_verbosity(),
                     config.default_stdout_level(),
                     config.default_stderr_level(),
-                    config.golem_client_protocol,
                 )
                 .await,
             )
@@ -270,8 +266,8 @@ impl EnvBasedTestDependencies {
 
     async fn make_shard_manager(
         config: Arc<EnvBasedTestDependenciesConfig>,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-    ) -> Arc<dyn ShardManager + Send + Sync + 'static> {
+        redis: Arc<dyn Redis>,
+    ) -> Arc<dyn ShardManager> {
         if config.golem_docker_services {
             Arc::new(
                 DockerShardManager::new(
@@ -302,10 +298,10 @@ impl EnvBasedTestDependencies {
 
     async fn make_component_service(
         config: Arc<EnvBasedTestDependenciesConfig>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        rdb: Arc<dyn Rdb>,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
         cloud_service: Arc<dyn CloudService>,
-    ) -> Arc<dyn ComponentService + Send + Sync + 'static> {
+    ) -> Arc<dyn ComponentService> {
         if config.golem_docker_services {
             Arc::new(
                 DockerComponentService::new(
@@ -347,9 +343,9 @@ impl EnvBasedTestDependencies {
 
     async fn make_component_compilation_service(
         config: Arc<EnvBasedTestDependenciesConfig>,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
+        component_service: Arc<dyn ComponentService>,
         cloud_service: Arc<dyn CloudService>,
-    ) -> Arc<dyn ComponentCompilationService + Send + Sync> {
+    ) -> Arc<dyn ComponentCompilationService> {
         if config.golem_docker_services {
             Arc::new(
                 DockerComponentCompilationService::new(
@@ -380,11 +376,11 @@ impl EnvBasedTestDependencies {
 
     async fn make_worker_service(
         config: Arc<EnvBasedTestDependenciesConfig>,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService>,
+        shard_manager: Arc<dyn ShardManager>,
+        rdb: Arc<dyn Rdb>,
         cloud_service: Arc<dyn CloudService>,
-    ) -> Arc<dyn WorkerService + 'static> {
+    ) -> Arc<dyn WorkerService> {
         if config.golem_docker_services {
             Arc::new(
                 DockerWorkerService::new(
@@ -422,12 +418,12 @@ impl EnvBasedTestDependencies {
 
     async fn make_worker_executor_cluster(
         config: Arc<EnvBasedTestDependenciesConfig>,
-        component_service: Arc<dyn ComponentService + Send + Sync>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync>,
+        component_service: Arc<dyn ComponentService>,
+        shard_manager: Arc<dyn ShardManager>,
         worker_service: Arc<dyn WorkerService>,
-        redis: Arc<dyn Redis + Send + Sync>,
+        redis: Arc<dyn Redis>,
         cloud_service: Arc<dyn CloudService>,
-    ) -> Arc<dyn WorkerExecutorCluster + Send + Sync> {
+    ) -> Arc<dyn WorkerExecutorCluster> {
         if config.golem_docker_services {
             Arc::new(
                 DockerWorkerExecutorCluster::new(
@@ -550,23 +546,23 @@ impl EnvBasedTestDependencies {
 
 #[async_trait]
 impl TestDependencies for EnvBasedTestDependencies {
-    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
+    fn rdb(&self) -> Arc<dyn Rdb> {
         self.rdb.clone()
     }
 
-    fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static> {
+    fn redis(&self) -> Arc<dyn Redis> {
         self.redis.clone()
     }
 
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+    fn blob_storage(&self) -> Arc<dyn BlobStorage> {
         self.blob_storage.clone()
     }
 
-    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor> {
         self.redis_monitor.clone()
     }
 
-    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static> {
+    fn shard_manager(&self) -> Arc<dyn ShardManager> {
         self.shard_manager.clone()
     }
 
@@ -582,17 +578,15 @@ impl TestDependencies for EnvBasedTestDependencies {
         self.component_service.clone()
     }
 
-    fn component_compilation_service(
-        &self,
-    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService> {
         self.component_compilation_service.clone()
     }
 
-    fn worker_service(&self) -> Arc<dyn WorkerService + 'static> {
+    fn worker_service(&self) -> Arc<dyn WorkerService> {
         self.worker_service.clone()
     }
 
-    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster> {
         self.worker_executor_cluster.clone()
     }
 

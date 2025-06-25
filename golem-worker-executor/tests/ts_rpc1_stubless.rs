@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
-
 use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
 use golem_common::model::ComponentType;
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
+use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -39,7 +39,7 @@ async fn counter_resource_test_1(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
     let caller_component_id = executor
@@ -110,7 +110,7 @@ async fn counter_resource_test_1_with_restart(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
     let caller_component_id = executor
@@ -159,7 +159,7 @@ async fn counter_resource_test_1_with_restart(
         .await;
 
     drop(executor);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let result2 = executor
         .invoke_and_await(
@@ -185,7 +185,7 @@ async fn context_inheritance(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap().into_admin();
 
     let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
     let caller_component_id = executor

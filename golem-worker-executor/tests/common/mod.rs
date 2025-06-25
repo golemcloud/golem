@@ -198,23 +198,23 @@ impl Clone for TestWorkerExecutor {
 
 #[async_trait]
 impl TestDependencies for TestWorkerExecutor {
-    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync> {
+    fn rdb(&self) -> Arc<dyn Rdb> {
         self.deps.rdb()
     }
 
-    fn redis(&self) -> Arc<dyn Redis + Send + Sync> {
+    fn redis(&self) -> Arc<dyn Redis> {
         self.deps.redis()
     }
 
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
+    fn blob_storage(&self) -> Arc<dyn BlobStorage> {
         self.deps.blob_storage()
     }
 
-    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync> {
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor> {
         self.deps.redis_monitor()
     }
 
-    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync> {
+    fn shard_manager(&self) -> Arc<dyn ShardManager> {
         self.deps.shard_manager()
     }
 
@@ -232,7 +232,7 @@ impl TestDependencies for TestWorkerExecutor {
         self.deps.component_service()
     }
 
-    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService + Send + Sync> {
+    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService> {
         self.deps.component_compilation_service()
     }
 
@@ -242,7 +242,7 @@ impl TestDependencies for TestWorkerExecutor {
         self.deps.worker_service()
     }
 
-    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync> {
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster> {
         self.deps.worker_executor_cluster()
     }
 

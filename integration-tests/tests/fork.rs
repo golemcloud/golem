@@ -19,7 +19,7 @@ use axum::{Json, Router};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{IdempotencyKey, WorkerId, WorkerStatus};
-use golem_test_framework::config::EnvBasedTestDependencies;
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::collections::HashMap;
@@ -37,6 +37,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let admin = deps.admin();
     let response = Arc::new(Mutex::new("initial".to_string()));
     let host_http_port = 8586;
 
@@ -44,11 +45,11 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
 
     let http_server = run_http_server(&response, host_http_port);
 
-    let component_id = deps.component("http-client-2").store().await;
+    let component_id = admin.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let worker_id = deps
+    let worker_id = admin
         .start_worker_with(&component_id, source_worker_name.as_str(), vec![], env)
         .await;
 
@@ -59,26 +60,29 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
         worker_name: target_worker_name,
     };
 
-    deps.log_output(&worker_id).await;
+    admin.log_output(&worker_id).await;
 
-    deps.invoke(
-        &worker_id,
-        "golem:it/api.{start-polling}",
-        vec!["first".into_value_and_type()],
-    )
-    .await
-    .unwrap();
+    admin
+        .invoke(
+            &worker_id,
+            "golem:it/api.{start-polling}",
+            vec!["first".into_value_and_type()],
+        )
+        .await
+        .unwrap();
 
-    deps.wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+    admin
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
 
-    deps.interrupt(&worker_id).await;
+    admin.interrupt(&worker_id).await;
 
-    let oplog = deps.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = admin.get_oplog(&worker_id, OplogIndex::INITIAL).await;
 
     let last_index = OplogIndex::from_u64(oplog.len() as u64);
 
-    deps.fork_worker(&worker_id, &target_worker_id, last_index)
+    admin
+        .fork_worker(&worker_id, &target_worker_id, last_index)
         .await;
 
     {
@@ -86,14 +90,17 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
         *response = "first".to_string();
     }
 
-    deps.wait_for_status(
-        &target_worker_id,
-        WorkerStatus::Idle,
-        Duration::from_secs(10),
-    )
-    .await;
+    admin
+        .wait_for_status(
+            &target_worker_id,
+            WorkerStatus::Idle,
+            Duration::from_secs(10),
+        )
+        .await;
 
-    let result = deps.search_oplog(&target_worker_id, "Received first").await;
+    let result = admin
+        .search_oplog(&target_worker_id, "Received first")
+        .await;
 
     http_server.abort();
 
@@ -104,7 +111,9 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.component("shopping-cart").store().await;
+    let admin = deps.admin();
+
+    let component_id = admin.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
@@ -113,7 +122,7 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         worker_name: source_worker_name,
     };
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &source_worker_id,
             "golem:it/api.{initialize-cart}",
@@ -121,7 +130,7 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         )
         .await;
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &source_worker_id,
             "golem:it/api.{add-item}",
@@ -142,7 +151,9 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         worker_name: target_worker_name,
     };
 
-    let source_oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
+    let source_oplog = admin
+        .get_oplog(&source_worker_id, OplogIndex::INITIAL)
+        .await;
 
     let oplog_index_of_function_invoked: OplogIndex = OplogIndex::from_u64(3);
 
@@ -155,7 +166,7 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         PublicOplogEntry::ExportedFunctionInvoked(_)
     ));
 
-    let _ = deps
+    let _ = admin
         .fork_worker(
             &source_worker_id,
             &target_worker_id,
@@ -163,14 +174,15 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         )
         .await;
 
-    deps.wait_for_status(
-        &target_worker_id,
-        WorkerStatus::Idle,
-        Duration::from_secs(10),
-    )
-    .await;
+    admin
+        .wait_for_status(
+            &target_worker_id,
+            WorkerStatus::Idle,
+            Duration::from_secs(10),
+        )
+        .await;
 
-    let total_cart_initialisation = deps
+    let total_cart_initialisation = admin
         .search_oplog(&target_worker_id, "initialize-cart AND NOT pending")
         .await;
 
@@ -185,16 +197,17 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
 #[flaky(5)]
 #[timeout(120000)]
 async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let admin = deps.admin();
     let response = Arc::new(Mutex::new("initial".to_string()));
     let host_http_port = 8587;
     let http_server = run_http_server(&response, host_http_port);
 
-    let component_id = deps.component("http-client-2").store().await;
+    let component_id = admin.component("http-client-2").store().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let source_worker_name = Uuid::new_v4().to_string();
-    let source_worker_id = deps
+    let source_worker_id = admin
         .start_worker_with(&component_id, source_worker_name.as_str(), vec![], env)
         .await;
 
@@ -205,28 +218,33 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
         worker_name: target_worker_name,
     };
 
-    deps.log_output(&source_worker_id).await;
+    admin.log_output(&source_worker_id).await;
 
-    deps.invoke(
-        &source_worker_id,
-        "golem:it/api.{start-polling}",
-        vec!["first".into_value_and_type()],
-    )
-    .await
-    .unwrap();
+    admin
+        .invoke(
+            &source_worker_id,
+            "golem:it/api.{start-polling}",
+            vec!["first".into_value_and_type()],
+        )
+        .await
+        .unwrap();
 
-    deps.wait_for_status(
-        &source_worker_id,
-        WorkerStatus::Running,
-        Duration::from_secs(10),
-    )
-    .await;
+    admin
+        .wait_for_status(
+            &source_worker_id,
+            WorkerStatus::Running,
+            Duration::from_secs(10),
+        )
+        .await;
 
-    let oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
+    let oplog = admin
+        .get_oplog(&source_worker_id, OplogIndex::INITIAL)
+        .await;
 
     let last_index = OplogIndex::from_u64(oplog.len() as u64);
 
-    deps.fork_worker(&source_worker_id, &target_worker_id, last_index)
+    admin
+        .fork_worker(&source_worker_id, &target_worker_id, last_index)
         .await;
 
     {
@@ -234,22 +252,28 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
         *response = "first".to_string();
     }
 
-    deps.wait_for_status(
-        &target_worker_id,
-        WorkerStatus::Idle,
-        Duration::from_secs(20),
-    )
-    .await;
+    admin
+        .wait_for_status(
+            &target_worker_id,
+            WorkerStatus::Idle,
+            Duration::from_secs(20),
+        )
+        .await;
 
-    deps.wait_for_status(
-        &source_worker_id,
-        WorkerStatus::Idle,
-        Duration::from_secs(20),
-    )
-    .await;
+    admin
+        .wait_for_status(
+            &source_worker_id,
+            WorkerStatus::Idle,
+            Duration::from_secs(20),
+        )
+        .await;
 
-    let target_result = deps.search_oplog(&target_worker_id, "Received first").await;
-    let source_result = deps.search_oplog(&source_worker_id, "Received first").await;
+    let target_result = admin
+        .search_oplog(&target_worker_id, "Received first")
+        .await;
+    let source_result = admin
+        .search_oplog(&source_worker_id, "Received first")
+        .await;
 
     http_server.abort();
 
@@ -261,7 +285,8 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.component("shopping-cart").store().await;
+    let admin = deps.admin();
+    let component_id = admin.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
@@ -270,7 +295,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         worker_name: source_worker_name,
     };
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &source_worker_id,
             "golem:it/api.{initialize-cart}",
@@ -278,7 +303,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &source_worker_id,
             "golem:it/api.{add-item}",
@@ -292,7 +317,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &source_worker_id,
             "golem:it/api.{add-item}",
@@ -313,7 +338,9 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         worker_name: target_worker_name,
     };
 
-    let source_oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
+    let source_oplog = admin
+        .get_oplog(&source_worker_id, OplogIndex::INITIAL)
+        .await;
 
     let log_record = source_oplog
         .last()
@@ -324,7 +351,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         PublicOplogEntry::ExportedFunctionCompleted(_)
     ));
 
-    let _ = deps
+    let _ = admin
         .fork_worker(
             &source_worker_id,
             &target_worker_id,
@@ -333,7 +360,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .await;
 
     //Invoking G1002 again in forked worker
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &target_worker_id,
             "golem:it/api.{add-item}",
@@ -347,7 +374,7 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &target_worker_id,
             "golem:it/api.{update-item-quantity}",
@@ -355,10 +382,10 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let result1 = deps
+    let result1 = admin
         .search_oplog(&target_worker_id, "G1002 AND NOT pending")
         .await;
-    let result2 = deps
+    let result2 = admin
         .search_oplog(&target_worker_id, "G1001 AND NOT pending")
         .await;
 
@@ -373,7 +400,8 @@ async fn fork_worker_when_target_already_exists(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
-    let component_id = deps.component("shopping-cart").store().await;
+    let admin = deps.admin();
+    let component_id = admin.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
@@ -382,7 +410,7 @@ async fn fork_worker_when_target_already_exists(
         worker_name: source_worker_name,
     };
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &source_worker_id,
             "golem:it/api.{initialize-cart}",
@@ -390,7 +418,7 @@ async fn fork_worker_when_target_already_exists(
         )
         .await;
 
-    let second_call_oplogs = deps
+    let second_call_oplogs = admin
         .search_oplog(&source_worker_id, "initialize-cart")
         .await;
 
@@ -400,7 +428,7 @@ async fn fork_worker_when_target_already_exists(
         .oplog_index;
 
     let error = golem_test_framework::dsl::TestDsl::fork_worker(
-        deps,
+        &admin,
         &source_worker_id,
         &source_worker_id,
         index,
@@ -419,7 +447,8 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
-    let component_id = deps.component("shopping-cart").store().await;
+    let admin = deps.admin();
+    let component_id = admin.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
@@ -428,7 +457,7 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
         worker_name: source_worker_name,
     };
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &source_worker_id,
             "golem:it/api.{initialize-cart}",
@@ -444,7 +473,7 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
     };
 
     let error = golem_test_framework::dsl::TestDsl::fork_worker(
-        deps,
+        &admin,
         &source_worker_id,
         &target_worker_id,
         OplogIndex::INITIAL,
@@ -460,7 +489,8 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_invalid_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.component("shopping-cart").store().await;
+    let admin = deps.admin();
+    let component_id = admin.component("shopping-cart").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
@@ -475,7 +505,7 @@ async fn fork_invalid_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing
     };
 
     let error = golem_test_framework::dsl::TestDsl::fork_worker(
-        deps,
+        &admin,
         &source_worker_id,
         &target_worker_id,
         OplogIndex::from_u64(14),
@@ -497,7 +527,8 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) {
-    let component_id = deps.component("environment-service").store().await;
+    let admin = deps.admin();
+    let component_id = admin.component("environment-service").store().await;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
@@ -506,7 +537,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         worker_name: source_worker_name.clone(),
     };
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(&source_worker_id, "golem:it/api.{get-environment}", vec![])
         .await
         .unwrap();
@@ -534,13 +565,15 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         worker_name: target_worker_name,
     };
 
-    let oplog = deps.get_oplog(&source_worker_id, OplogIndex::INITIAL).await;
+    let oplog = admin
+        .get_oplog(&source_worker_id, OplogIndex::INITIAL)
+        .await;
 
     // We fork the worker post the completion and see if oplog corresponding to environment value
     // has the same value as foo. As far as the fork cut off point is post the completion, there
     // shouldn't be any divergence for worker information even if forked worker name
     // is different from the source worker name
-    let _ = deps
+    let _ = admin
         .fork_worker(
             &source_worker_id,
             &target_worker_id,
@@ -591,7 +624,8 @@ fn run_http_server(
 #[tracing::instrument]
 #[timeout(120000)]
 async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.component("golem-rust-tests").store().await;
+    let admin = deps.admin();
+    let component_id = admin.component("golem-rust-tests").store().await;
 
     let (port_tx, port_rx) = tokio::sync::oneshot::channel::<u16>();
     let http_server = tokio::spawn(
@@ -627,14 +661,14 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     info!("Using environment: {:?}", env);
 
-    let worker_id = deps
+    let worker_id = admin
         .start_worker_with(&component_id, "source-worker", vec![], env)
         .await;
 
-    let _ = deps.log_output(&worker_id).await;
+    let _ = admin.log_output(&worker_id).await;
 
     let idempotency_key = IdempotencyKey::fresh();
-    let source_result = deps
+    let source_result = admin
         .invoke_and_await_with_key(
             &worker_id,
             &idempotency_key,
@@ -648,7 +682,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         component_id: component_id.clone(),
         worker_name: "forked-worker".to_string(),
     };
-    let target_result = deps
+    let target_result = admin
         .invoke_and_await_with_key(
             &target_worker_id,
             &idempotency_key,

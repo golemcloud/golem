@@ -22,7 +22,7 @@ use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
 use golem_common::model::{
-    AccountId, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
+    ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
@@ -37,11 +37,14 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
+    let admin = deps.admin();
+
     // Create some components
     let (counter_1_id, counter_2_id, caller_id, ephemeral_id) = join!(
-        deps.component("counters").unique().store(),
-        deps.component("counters").unique().store(),
-        deps.component("caller")
+        admin.component("counters").unique().store(),
+        admin.component("counters").unique().store(),
+        admin
+            .component("caller")
             .unique()
             .with_dynamic_linking(&[
                 (
@@ -82,7 +85,7 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                 ),
             ])
             .store(),
-        deps.component("ephemeral").unique().ephemeral().store()
+        admin.component("ephemeral").unique().ephemeral().store()
     );
 
     let counter_1_id = common_component_id_to_str(&counter_1_id);
@@ -93,10 +96,13 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
     // Get components
     let components = deps
         .component_service()
-        .get_components(GetComponentsRequest {
-            project_id: None,
-            component_name: None,
-        })
+        .get_components(
+            &admin.token,
+            GetComponentsRequest {
+                project_id: None,
+                component_name: None,
+            },
+        )
         .await
         .unwrap();
 
@@ -212,8 +218,10 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_components_many_versions(deps: &EnvBasedTestDependencies) {
+    let admin = deps.admin();
+
     // Create component
-    let (component_id, component_name) = deps
+    let (component_id, component_name) = admin
         .component("counters")
         .unique()
         .store_and_get_name()
@@ -222,10 +230,13 @@ async fn get_components_many_versions(deps: &EnvBasedTestDependencies) {
     // Search for the component by name
     let components = deps
         .component_service()
-        .get_components(GetComponentsRequest {
-            project_id: None,
-            component_name: Some(component_name.0.clone()),
-        })
+        .get_components(
+            &admin.token,
+            GetComponentsRequest {
+                project_id: None,
+                component_name: Some(component_name.0.clone()),
+            },
+        )
         .await
         .unwrap();
 
@@ -234,16 +245,19 @@ async fn get_components_many_versions(deps: &EnvBasedTestDependencies) {
     check_versioned_id(&components[0], &component_id, 0);
 
     // Update component two times
-    deps.update_component(&component_id, "counters").await;
-    deps.update_component(&component_id, "counters").await;
+    admin.update_component(&component_id, "counters").await;
+    admin.update_component(&component_id, "counters").await;
 
     // Search for the component by name again
     let components = deps
         .component_service()
-        .get_components(GetComponentsRequest {
-            project_id: None,
-            component_name: Some(component_name.0.clone()),
-        })
+        .get_components(
+            &admin.token,
+            GetComponentsRequest {
+                project_id: None,
+                component_name: Some(component_name.0.clone()),
+            },
+        )
         .await
         .unwrap();
 
@@ -257,24 +271,29 @@ async fn get_components_many_versions(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_component_latest_version(deps: &EnvBasedTestDependencies) {
+    let admin = deps.admin();
+
     // Create component
-    let (component_id, _) = deps
+    let (component_id, _) = admin
         .component("counters")
         .unique()
         .store_and_get_name()
         .await;
 
     // Update component three times
-    deps.update_component(&component_id, "counters").await;
-    deps.update_component(&component_id, "counters").await;
-    deps.update_component(&component_id, "counters").await;
+    admin.update_component(&component_id, "counters").await;
+    admin.update_component(&component_id, "counters").await;
+    admin.update_component(&component_id, "counters").await;
 
     // Get all versions
     let result = deps
         .component_service()
-        .get_latest_component_metadata(GetLatestComponentRequest {
-            component_id: Some(component_id.clone().into()),
-        })
+        .get_latest_component_metadata(
+            &admin.token,
+            GetLatestComponentRequest {
+                component_id: Some(component_id.clone().into()),
+            },
+        )
         .await
         .unwrap();
 
@@ -285,30 +304,29 @@ async fn get_component_latest_version(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
+    let admin = deps.admin();
+
     // Create component
-    let (component_id, component_name) = deps
+    let (component_id, component_name) = admin
         .component("counters")
         .unique()
         .store_and_get_name()
         .await;
 
     // Update component a few times while changing type, ifs, dynamic link
-    let files = deps
-        .add_initial_component_files(
-            &AccountId::placeholder(),
-            &[
-                (
-                    "initial-file-read-write/files/foo.txt",
-                    "/test-file-readonly",
-                    ComponentFilePermissions::ReadOnly,
-                ),
-                (
-                    "initial-file-read-write/files/baz.txt",
-                    "/test-file-readwrite",
-                    ComponentFilePermissions::ReadOnly,
-                ),
-            ],
-        )
+    let files = admin
+        .add_initial_component_files(&[
+            (
+                "initial-file-read-write/files/foo.txt",
+                "/test-file-readonly",
+                ComponentFilePermissions::ReadOnly,
+            ),
+            (
+                "initial-file-read-write/files/baz.txt",
+                "/test-file-readwrite",
+                ComponentFilePermissions::ReadOnly,
+            ),
+        ])
         .await;
 
     let link = (
@@ -326,6 +344,7 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
     );
     deps.component_service()
         .update_component(
+            &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
@@ -338,6 +357,7 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
 
     deps.component_service()
         .update_component(
+            &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Ephemeral,
@@ -350,6 +370,7 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
 
     deps.component_service()
         .update_component(
+            &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
@@ -363,9 +384,12 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
     // Get all versions
     let result = deps
         .component_service()
-        .get_component_metadata_all_versions(GetComponentRequest {
-            component_id: Some(component_id.clone().into()),
-        })
+        .get_component_metadata_all_versions(
+            &admin.token,
+            GetComponentRequest {
+                component_id: Some(component_id.clone().into()),
+            },
+        )
         .await
         .unwrap();
 

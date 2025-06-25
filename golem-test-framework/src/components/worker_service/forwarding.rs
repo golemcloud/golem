@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::WorkerServiceGrpcClient;
 use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::worker_executor::WorkerExecutor;
-use crate::components::worker_service::{
-    ApiDefinitionServiceClient, ApiDeploymentServiceClient, ApiSecurityServiceClient,
-    WorkerLogEventStream, WorkerService, WorkerServiceClient,
-};
+use crate::components::worker_service::{WorkerLogEventStream, WorkerService};
 use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -46,19 +44,19 @@ use golem_api_grpc::proto::golem::{worker, workerexecutor};
 use golem_common::model::AccountId;
 use golem_wasm_rpc::ValueAndType;
 use std::sync::Arc;
+use tonic::transport::Channel;
 use tonic::Streaming;
-
-use super::WorkerServiceInternal;
+use uuid::Uuid;
 
 pub struct ForwardingWorkerService {
-    worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
+    worker_executor: Arc<dyn WorkerExecutor>,
     component_service: Arc<dyn ComponentService>,
     cloud_service: Arc<dyn CloudService>,
 }
 
 impl ForwardingWorkerService {
     pub fn new(
-        worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
+        worker_executor: Arc<dyn WorkerExecutor>,
         component_service: Arc<dyn ComponentService>,
         cloud_service: Arc<dyn CloudService>,
     ) -> Self {
@@ -82,27 +80,8 @@ impl ForwardingWorkerService {
     const RETRY_COUNT: usize = 5;
 }
 
-impl WorkerServiceInternal for ForwardingWorkerService {
-    fn client_protocol(&self) -> GolemClientProtocol {
-        panic!("There is no worker-service, cannot get client protocol")
-    }
-
-    fn worker_client(&self) -> WorkerServiceClient {
-        panic!("There is no worker-service, cannot create worker client")
-    }
-
-    fn api_definition_client(&self) -> ApiDefinitionServiceClient {
-        panic!("There is no worker-service, cannot create api-definition client")
-    }
-
-    fn api_deployment_client(&self) -> ApiDeploymentServiceClient {
-        panic!("There is no worker-service, cannot create api-deployment client")
-    }
-
-    fn api_security_client(&self) -> ApiSecurityServiceClient {
-        panic!("There is no worker-service, cannot create api-security client")
-    }
-
+#[async_trait]
+impl WorkerService for ForwardingWorkerService {
     fn component_service(&self) -> &Arc<dyn ComponentService> {
         &self.component_service
     }
@@ -110,12 +89,22 @@ impl WorkerServiceInternal for ForwardingWorkerService {
     fn cloud_service(&self) -> &Arc<dyn CloudService> {
         &self.cloud_service
     }
-}
 
-#[async_trait]
-impl WorkerService for ForwardingWorkerService {
+    fn client_protocol(&self) -> GolemClientProtocol {
+        panic!("There is no worker-service, cannot get client protocol")
+    }
+
+    async fn base_http_client(&self) -> reqwest::Client {
+        panic!("There is no worker-service, cannot get http client")
+    }
+
+    async fn worker_grpc_client(&self) -> WorkerServiceGrpcClient<Channel> {
+        panic!("There is no worker-service, cannot get grpc client")
+    }
+
     async fn create_worker(
         &self,
+        token: &Uuid,
         request: LaunchNewWorkerRequest,
     ) -> crate::Result<LaunchNewWorkerResponse> {
         let component_id = (*request
@@ -130,7 +119,7 @@ impl WorkerService for ForwardingWorkerService {
         };
         let latest_component_version = self
             .component_service
-            .get_latest_version(&component_id)
+            .get_latest_version(token, &component_id)
             .await;
 
         let mut retry_count = Self::RETRY_COUNT;
@@ -194,6 +183,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn delete_worker(
         &self,
+        _token: &Uuid,
         request: DeleteWorkerRequest,
     ) -> crate::Result<DeleteWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
@@ -247,6 +237,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn get_worker_metadata(
         &self,
+        _token: &Uuid,
         request: GetWorkerMetadataRequest,
     ) -> crate::Result<GetWorkerMetadataResponse> {
         let mut retry_count = Self::RETRY_COUNT;
@@ -305,6 +296,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn invoke(
         &self,
+        _token: &Uuid,
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
@@ -368,12 +360,17 @@ impl WorkerService for ForwardingWorkerService {
         }
     }
 
-    async fn invoke_json(&self, _request: InvokeJsonRequest) -> crate::Result<InvokeResponse> {
+    async fn invoke_json(
+        &self,
+        _token: &Uuid,
+        _request: InvokeJsonRequest,
+    ) -> crate::Result<InvokeResponse> {
         panic!("invoke_json can only be used through worker service");
     }
 
     async fn invoke_and_await(
         &self,
+        _token: &Uuid,
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
@@ -445,6 +442,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn invoke_and_await_typed(
         &self,
+        _token: &Uuid,
         worker_id: TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
@@ -518,6 +516,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn invoke_and_await_json(
         &self,
+        _token: &Uuid,
         _request: InvokeAndAwaitJsonRequest,
     ) -> crate::Result<InvokeAndAwaitJsonResponse> {
         panic!("invoke_and_await_json can only be used through worker service");
@@ -525,6 +524,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn connect_worker(
         &self,
+        _token: &Uuid,
         request: ConnectWorkerRequest,
     ) -> crate::Result<Box<dyn WorkerLogEventStream>> {
         let mut retry_count = Self::RETRY_COUNT;
@@ -564,6 +564,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn resume_worker(
         &self,
+        _token: &Uuid,
         request: ResumeWorkerRequest,
     ) -> crate::Result<ResumeWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
@@ -618,6 +619,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn interrupt_worker(
         &self,
+        _token: &Uuid,
         request: InterruptWorkerRequest,
     ) -> crate::Result<InterruptWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
@@ -672,6 +674,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn update_worker(
         &self,
+        _token: &Uuid,
         request: UpdateWorkerRequest,
     ) -> crate::Result<UpdateWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
@@ -725,7 +728,11 @@ impl WorkerService for ForwardingWorkerService {
         }
     }
 
-    async fn get_oplog(&self, request: GetOplogRequest) -> crate::Result<GetOplogResponse> {
+    async fn get_oplog(
+        &self,
+        _token: &Uuid,
+        request: GetOplogRequest,
+    ) -> crate::Result<GetOplogResponse> {
         let mut retry_count = Self::RETRY_COUNT;
         let result = loop {
             let result = self
@@ -783,6 +790,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn search_oplog(
         &self,
+        _token: &Uuid,
         request: SearchOplogRequest,
     ) -> crate::Result<SearchOplogResponse> {
         let result = self
@@ -833,6 +841,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn list_directory(
         &self,
+        _token: &Uuid,
         request: ListDirectoryRequest,
     ) -> crate::Result<ListDirectoryResponse> {
         let result = self
@@ -882,7 +891,11 @@ impl WorkerService for ForwardingWorkerService {
         }
     }
 
-    async fn get_file_contents(&self, request: GetFileContentsRequest) -> crate::Result<Bytes> {
+    async fn get_file_contents(
+        &self,
+        _token: &Uuid,
+        request: GetFileContentsRequest,
+    ) -> crate::Result<Bytes> {
         let mut stream = self
             .worker_executor
             .client()
@@ -935,6 +948,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn fork_worker(
         &self,
+        _token: &Uuid,
         fork_worker_request: ForkWorkerRequest,
     ) -> crate::Result<ForkWorkerResponse> {
         let mut retry_count = Self::RETRY_COUNT;
@@ -988,6 +1002,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn revert_worker(
         &self,
+        _token: &Uuid,
         request: RevertWorkerRequest,
     ) -> crate::Result<RevertWorkerResponse> {
         let result = self
@@ -1029,6 +1044,7 @@ impl WorkerService for ForwardingWorkerService {
 
     async fn cancel_invocation(
         &self,
+        _token: &Uuid,
         request: CancelInvocationRequest,
     ) -> crate::Result<CancelInvocationResponse> {
         let result = self

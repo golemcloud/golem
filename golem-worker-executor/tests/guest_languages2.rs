@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test, timeout};
-
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{check, let_assert};
 use chrono::Datelike;
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{events_to_lines, TestDslUnsafe};
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use std::time::{Duration, Instant};
+use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -35,7 +35,7 @@ async fn javascript_example_3(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("js-3").store().await;
     let worker_id = executor.start_worker(&component_id, "js-3").await;
@@ -66,7 +66,7 @@ async fn javascript_example_4(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("js-4").store().await;
     let worker_id = executor.start_worker(&component_id, "js-4").await;
@@ -91,7 +91,7 @@ async fn python_example_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("python-1").store().await;
     let worker_id = executor.start_worker(&component_id, "python-1").await;
@@ -135,7 +135,7 @@ async fn swift_example_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("swift-1").store().await;
     let worker_id = executor.start_worker(&component_id, "swift-1").await;

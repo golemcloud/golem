@@ -302,12 +302,14 @@ impl RibDependencyManager for TestRibReplDependencyManager {
     ) -> anyhow::Result<ComponentDependency> {
         let component_id = self
             .dependencies
+            .admin()
             .component(component_name.as_str())
             .store()
             .await;
 
         let metadata = self
             .dependencies
+            .admin()
             .get_latest_component_metadata(&component_id)
             .await;
 
@@ -361,6 +363,7 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
 
         let result = self
             .embedded_worker_executor
+            .admin()
             .invoke_and_await_typed(target_worker_id, function_name, args)
             .await;
 

@@ -33,7 +33,7 @@ pub mod provided;
 pub mod spawned;
 
 #[async_trait]
-pub trait WorkerExecutor {
+pub trait WorkerExecutor: Send + Sync {
     async fn client(&self) -> crate::Result<WorkerExecutorClient<Channel>>;
 
     fn private_host(&self) -> String;

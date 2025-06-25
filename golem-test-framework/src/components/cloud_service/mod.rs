@@ -12,21 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod docker;
+pub mod k8s;
+pub mod provided;
+pub mod spawned;
+
 use super::{ADMIN_ACCOUNT_ID, ADMIN_TOKEN, PLACEHOLDER_PROJECT};
 use crate::components::rdb::Rdb;
-use crate::components::{
-    new_reqwest_client, wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder,
-};
+use crate::components::{wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder};
 use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
+use chrono::{Months, Utc};
+pub use golem_api_grpc::proto::golem::account::v1::cloud_account_service_client::CloudAccountServiceClient as AccoutServiceGrpcClient;
+use golem_api_grpc::proto::golem::account::v1::AccountCreateRequest;
+pub use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient as ProjectServiceGrpcClient;
 use golem_api_grpc::proto::golem::project::v1::{
     get_default_project_response, GetDefaultProjectRequest,
 };
-use golem_client::api::ProjectClient;
+pub use golem_api_grpc::proto::golem::token::v1::cloud_token_service_client::CloudTokenServiceClient as TokenServiceGrpcClient;
+use golem_api_grpc::proto::golem::token::v1::CreateTokenRequest;
+use golem_api_grpc::proto::golem::token::CreateTokenDto;
+use golem_client::api::TokenClient;
+use golem_client::api::{AccountClient, ProjectClient};
 use golem_client::{Context, Security};
 use golem_common::model::{AccountId, ProjectId};
+use golem_service_base::clients::authorised_request;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,43 +47,146 @@ use tracing::Level;
 use url::Url;
 use uuid::Uuid;
 
-pub mod docker;
-pub mod k8s;
-pub mod provided;
-pub mod spawned;
-
-#[derive(Clone)]
-pub enum ProjectServiceClient {
-    Grpc(CloudProjectServiceClient<Channel>),
-    Http(Arc<golem_client::api::ProjectClientLive>),
-}
-
 #[async_trait]
-pub trait CloudServiceInternal: Send + Sync {
-    fn project_client(&self) -> ProjectServiceClient;
-}
+pub trait CloudService: Send + Sync {
+    fn client_protocol(&self) -> GolemClientProtocol;
 
-#[async_trait]
-pub trait CloudService: CloudServiceInternal {
-    async fn get_default_project(&self) -> crate::Result<ProjectId> {
-        match self.project_client() {
-            ProjectServiceClient::Grpc(mut client) => {
-                let result = client
-                    .get_default_project(GetDefaultProjectRequest {})
-                    .await?
-                    .into_inner()
-                    .result
-                    .ok_or_else(|| anyhow!("get_default_project: no result"))?;
+    async fn base_http_client(&self) -> reqwest::Client;
 
-                match result {
+    async fn account_http_client(&self, token: Uuid) -> golem_client::api::AccountClientLive {
+        let url = format!("http://{}:{}", self.public_host(), self.public_http_port());
+        golem_client::api::AccountClientLive {
+            context: Context {
+                client: self.base_http_client().await,
+                base_url: Url::parse(&url).expect("Failed to parse url"),
+                security_token: Security::Bearer(token.to_string()),
+            },
+        }
+    }
+    async fn account_grpc_client(&self) -> AccoutServiceGrpcClient<Channel>;
+
+    async fn token_http_client(&self, token: Uuid) -> golem_client::api::TokenClientLive {
+        let url = format!("http://{}:{}", self.public_host(), self.public_http_port());
+        golem_client::api::TokenClientLive {
+            context: Context {
+                client: self.base_http_client().await,
+                base_url: Url::parse(&url).expect("Failed to parse url"),
+                security_token: Security::Bearer(token.to_string()),
+            },
+        }
+    }
+    async fn token_grpc_client(&self) -> TokenServiceGrpcClient<Channel>;
+
+    async fn project_http_client(&self, token: Uuid) -> golem_client::api::ProjectClientLive {
+        let url = format!("http://{}:{}", self.public_host(), self.public_http_port());
+        golem_client::api::ProjectClientLive {
+            context: Context {
+                client: self.base_http_client().await,
+                base_url: Url::parse(&url).expect("Failed to parse url"),
+                security_token: Security::Bearer(token.to_string()),
+            },
+        }
+    }
+    async fn project_grpc_client(&self) -> ProjectServiceGrpcClient<Channel>;
+
+    async fn get_default_project(&self, token: &Uuid) -> crate::Result<ProjectId> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.project_grpc_client().await;
+                let request = authorised_request(GetDefaultProjectRequest {}, token);
+                let response = client.get_default_project(request).await?;
+                match response.into_inner().result.unwrap() {
                     get_default_project_response::Result::Success(result) => {
                         Ok(result.id.unwrap().try_into().unwrap())
                     }
                     get_default_project_response::Result::Error(error) => Err(anyhow!("{error:?}")),
                 }
             }
-            ProjectServiceClient::Http(client) => {
+            GolemClientProtocol::Http => {
+                let client = self.project_http_client(*token).await;
                 Ok(ProjectId(client.get_default_project().await?.project_id))
+            }
+        }
+    }
+
+    async fn create_account(
+        &self,
+        token: &Uuid,
+        account_data: &golem_client::model::AccountData,
+    ) -> crate::Result<AccountWithToken> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut account_client = self.account_grpc_client().await;
+                let mut token_client = self.token_grpc_client().await;
+
+                let account = {
+                    let request = authorised_request(
+                        AccountCreateRequest {
+                            account_data: Some(
+                                golem_api_grpc::proto::golem::account::AccountData {
+                                    name: account_data.name.clone(),
+                                    email: account_data.email.clone(),
+                                },
+                            ),
+                        },
+                        token,
+                    );
+
+                    let response = account_client.create_account(request).await?.into_inner();
+
+                    match response.result.unwrap() {
+                        golem_api_grpc::proto::golem::account::v1::account_create_response::Result::Account(inner) => inner,
+                        golem_api_grpc::proto::golem::account::v1::account_create_response::Result::Error(error) => Err(anyhow!("{error:?}"))?
+                    }
+                };
+
+                let account_id = account.id.unwrap();
+
+                let account_token = {
+                    let expires_at = Utc::now()
+                        .checked_add_months(Months::new(24))
+                        .expect("Failed to construct expiry date");
+                    let request = authorised_request(
+                        CreateTokenRequest {
+                            account_id: Some(account_id.clone()),
+                            create_token_dto: Some(CreateTokenDto {
+                                expires_at: expires_at.to_rfc3339(),
+                            }),
+                        },
+                        token,
+                    );
+                    let response = token_client.create_token(request).await?.into_inner();
+
+                    match response.result.unwrap() {
+                        golem_api_grpc::proto::golem::token::v1::create_token_response::Result::Success(inner) => inner.secret.unwrap(),
+                        golem_api_grpc::proto::golem::token::v1::create_token_response::Result::Error(error) => Err(anyhow!("{error:?}"))?
+                    }
+                };
+
+                Ok(AccountWithToken {
+                    account_id: account_id.into(),
+                    token: account_token.value.unwrap().into(),
+                })
+            }
+            GolemClientProtocol::Http => {
+                let account_client = self.account_http_client(*token).await;
+                let account = account_client.create_account(account_data).await?;
+
+                let token_client = self.token_http_client(*token).await;
+                let expires_at = Utc::now()
+                    .checked_add_months(Months::new(24))
+                    .expect("Failed to construct expiry date");
+                let account_token = token_client
+                    .create_token(
+                        &account.id,
+                        &golem_client::model::CreateTokenDto { expires_at },
+                    )
+                    .await?;
+
+                Ok(AccountWithToken {
+                    account_id: AccountId { value: account.id },
+                    token: account_token.secret.value,
+                })
             }
         }
     }
@@ -106,42 +220,28 @@ pub trait CloudService: CloudServiceInternal {
     async fn kill(&self);
 }
 
-async fn new_project_grpc_client(host: &str, grpc_port: u16) -> CloudProjectServiceClient<Channel> {
-    CloudProjectServiceClient::connect(format!("http://{host}:{grpc_port}"))
+async fn new_account_grpc_client(host: &str, grpc_port: u16) -> AccoutServiceGrpcClient<Channel> {
+    AccoutServiceGrpcClient::connect(format!("http://{host}:{grpc_port}"))
         .await
-        .expect("Failed to connect to golem-cloud-service")
+        .expect("Failed to connect to cloud-service")
         .send_compressed(CompressionEncoding::Gzip)
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-fn new_project_http_client(
-    host: &str,
-    http_port: u16,
-) -> Arc<golem_client::api::ProjectClientLive> {
-    Arc::new(golem_client::api::ProjectClientLive {
-        context: Context {
-            client: new_reqwest_client(),
-            base_url: Url::parse(&format!("http://{host}:{http_port}"))
-                .expect("Failed to parse url"),
-            security_token: Security::Bearer(ADMIN_TOKEN.to_string()),
-        },
-    })
+async fn new_token_grpc_client(host: &str, grpc_port: u16) -> TokenServiceGrpcClient<Channel> {
+    TokenServiceGrpcClient::connect(format!("http://{host}:{grpc_port}"))
+        .await
+        .expect("Failed to connect to cloud-service")
+        .send_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Gzip)
 }
 
-async fn new_project_client(
-    protocol: GolemClientProtocol,
-    host: &str,
-    grpc_port: u16,
-    http_port: u16,
-) -> ProjectServiceClient {
-    match protocol {
-        GolemClientProtocol::Grpc => {
-            ProjectServiceClient::Grpc(new_project_grpc_client(host, grpc_port).await)
-        }
-        GolemClientProtocol::Http => {
-            ProjectServiceClient::Http(new_project_http_client(host, http_port))
-        }
-    }
+async fn new_project_grpc_client(host: &str, grpc_port: u16) -> ProjectServiceGrpcClient<Channel> {
+    ProjectServiceGrpcClient::connect(format!("http://{host}:{grpc_port}"))
+        .await
+        .expect("Failed to connect to cloud-service")
+        .send_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Gzip)
 }
 
 async fn wait_for_startup(
@@ -181,14 +281,22 @@ async fn env_vars(
 pub struct StubCloudService;
 
 #[async_trait]
-impl CloudServiceInternal for StubCloudService {
-    fn project_client(&self) -> ProjectServiceClient {
+impl CloudService for StubCloudService {
+    fn client_protocol(&self) -> GolemClientProtocol {
         panic!("no cloud service running");
     }
-}
-
-#[async_trait]
-impl CloudService for StubCloudService {
+    async fn base_http_client(&self) -> reqwest::Client {
+        panic!("no cloud service running");
+    }
+    async fn account_grpc_client(&self) -> AccoutServiceGrpcClient<Channel> {
+        panic!("no cloud service running");
+    }
+    async fn token_grpc_client(&self) -> TokenServiceGrpcClient<Channel> {
+        panic!("no cloud service running");
+    }
+    async fn project_grpc_client(&self) -> ProjectServiceGrpcClient<Channel> {
+        panic!("no cloud service running");
+    }
     fn private_host(&self) -> String {
         panic!("no cloud service running");
     }
@@ -199,9 +307,14 @@ impl CloudService for StubCloudService {
         panic!("no cloud service running");
     }
 
-    async fn get_default_project(&self) -> crate::Result<ProjectId> {
+    async fn get_default_project(&self, _token: &Uuid) -> crate::Result<ProjectId> {
         Ok(ProjectId(PLACEHOLDER_PROJECT))
     }
 
     async fn kill(&self) {}
+}
+
+pub struct AccountWithToken {
+    pub account_id: AccountId,
+    pub token: Uuid,
 }

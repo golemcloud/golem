@@ -12,29 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ComponentServiceGrpcClient;
+use super::PluginServiceGrpcClient;
+use super::{new_component_grpc_client, new_plugin_grpc_client};
 use crate::components::cloud_service::CloudService;
-use crate::components::component_service::{
-    new_component_client, new_plugin_client, ComponentService, ComponentServiceClient,
-    PluginServiceClient,
-};
+use crate::components::component_service::ComponentService;
+use crate::components::new_reqwest_client;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::OnceCell;
+use tonic::transport::Channel;
 use tracing::info;
-
-use super::ComponentServiceInternal;
 
 pub struct ProvidedComponentService {
     component_directory: PathBuf,
     host: String,
     http_port: u16,
     grpc_port: u16,
-    component_client: ComponentServiceClient,
-    plugin_client: PluginServiceClient,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     cloud_service: Arc<dyn CloudService>,
+    client_protocol: GolemClientProtocol,
+    base_http_client: OnceCell<reqwest::Client>,
+    component_grpc_client: OnceCell<ComponentServiceGrpcClient<Channel>>,
+    plugin_grpc_client: OnceCell<PluginServiceGrpcClient<Channel>>,
 }
 
 impl ProvidedComponentService {
@@ -53,44 +56,13 @@ impl ProvidedComponentService {
             host: host.clone(),
             http_port,
             grpc_port,
-            component_client: new_component_client(
-                client_protocol,
-                &host,
-                grpc_port,
-                http_port,
-                &cloud_service,
-            )
-            .await,
-            plugin_client: new_plugin_client(
-                client_protocol,
-                &host,
-                grpc_port,
-                http_port,
-                &cloud_service,
-            )
-            .await,
             plugin_wasm_files_service,
             cloud_service,
+            client_protocol,
+            base_http_client: OnceCell::new(),
+            component_grpc_client: OnceCell::new(),
+            plugin_grpc_client: OnceCell::new(),
         }
-    }
-}
-
-#[async_trait]
-impl ComponentServiceInternal for ProvidedComponentService {
-    fn component_client(&self) -> ComponentServiceClient {
-        self.component_client.clone()
-    }
-
-    fn plugin_client(&self) -> PluginServiceClient {
-        self.plugin_client.clone()
-    }
-
-    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
-        self.plugin_wasm_files_service.clone()
-    }
-
-    fn cloud_service(&self) -> Arc<dyn CloudService> {
-        self.cloud_service.clone()
     }
 }
 
@@ -98,6 +70,43 @@ impl ComponentServiceInternal for ProvidedComponentService {
 impl ComponentService for ProvidedComponentService {
     fn component_directory(&self) -> &Path {
         &self.component_directory
+    }
+
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        self.cloud_service.clone()
+    }
+
+    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
+        self.plugin_wasm_files_service.clone()
+    }
+
+    fn client_protocol(&self) -> GolemClientProtocol {
+        self.client_protocol
+    }
+
+    async fn base_http_client(&self) -> reqwest::Client {
+        self.base_http_client
+            .get_or_init(async || new_reqwest_client())
+            .await
+            .clone()
+    }
+
+    async fn component_grpc_client(&self) -> ComponentServiceGrpcClient<Channel> {
+        self.component_grpc_client
+            .get_or_init(async || {
+                new_component_grpc_client(&self.public_host(), self.public_grpc_port()).await
+            })
+            .await
+            .clone()
+    }
+
+    async fn plugin_grpc_client(&self) -> PluginServiceGrpcClient<Channel> {
+        self.plugin_grpc_client
+            .get_or_init(async || {
+                new_plugin_grpc_client(&self.public_host(), self.public_grpc_port()).await
+            })
+            .await
+            .clone()
     }
 
     fn private_host(&self) -> String {

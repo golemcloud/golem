@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ComponentServiceInternal;
+use super::ComponentServiceGrpcClient;
+use super::PluginServiceGrpcClient;
 use crate::components::cloud_service::CloudService;
-use crate::components::component_service::{
-    AddComponentError, ComponentService, ComponentServiceClient, PluginServiceClient,
-};
+use crate::components::component_service::{AddComponentError, ComponentService};
 use crate::components::{PLACEHOLDER_ACCOUNT, PLACEHOLDER_PROJECT};
+use crate::config::GolemClientProtocol;
 use anyhow::Context;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::{Component, ComponentMetadata, VersionedComponentId};
@@ -34,6 +34,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
+use tonic::transport::Channel;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -213,28 +214,34 @@ impl FileSystemComponentService {
 }
 
 #[async_trait]
-impl ComponentServiceInternal for FileSystemComponentService {
-    fn component_client(&self) -> ComponentServiceClient {
-        panic!("No real component service running")
-    }
-
-    fn plugin_client(&self) -> PluginServiceClient {
-        panic!("No real component service running")
+impl ComponentService for FileSystemComponentService {
+    fn cloud_service(&self) -> Arc<dyn CloudService> {
+        panic!("No real cloud service running")
     }
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
     }
 
-    fn cloud_service(&self) -> Arc<dyn CloudService> {
-        panic!("No real cloud service running")
+    fn client_protocol(&self) -> GolemClientProtocol {
+        panic!("No real component service running")
     }
-}
 
-#[async_trait]
-impl ComponentService for FileSystemComponentService {
+    async fn base_http_client(&self) -> reqwest::Client {
+        panic!("No real component service running")
+    }
+
+    async fn component_grpc_client(&self) -> ComponentServiceGrpcClient<Channel> {
+        panic!("No real component service running")
+    }
+
+    async fn plugin_grpc_client(&self) -> PluginServiceGrpcClient<Channel> {
+        panic!("No real component service running")
+    }
+
     async fn get_or_add_component(
         &self,
+        token: &Uuid,
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
@@ -244,6 +251,7 @@ impl ComponentService for FileSystemComponentService {
         env: &HashMap<String, String>,
     ) -> Component {
         self.add_component(
+            token,
             local_path,
             name,
             component_type,
@@ -258,6 +266,7 @@ impl ComponentService for FileSystemComponentService {
 
     async fn add_component(
         &self,
+        _token: &Uuid,
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
@@ -307,6 +316,7 @@ impl ComponentService for FileSystemComponentService {
 
     async fn update_component(
         &self,
+        token: &Uuid,
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
@@ -326,7 +336,7 @@ impl ComponentService for FileSystemComponentService {
             std::panic!("Source file does not exist: {local_path:?}");
         }
 
-        let last_version = self.get_latest_version(component_id).await;
+        let last_version = self.get_latest_version(token, component_id).await;
         let new_version = last_version + 1;
 
         let old_metadata = self
@@ -358,7 +368,7 @@ impl ComponentService for FileSystemComponentService {
         Ok(new_version)
     }
 
-    async fn get_latest_version(&self, component_id: &ComponentId) -> u64 {
+    async fn get_latest_version(&self, _token: &Uuid, component_id: &ComponentId) -> u64 {
         let target_dir = &self.root;
 
         let component_id_str = component_id.to_string();
@@ -384,6 +394,7 @@ impl ComponentService for FileSystemComponentService {
 
     async fn get_component_size(
         &self,
+        _token: &Uuid,
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> crate::Result<u64> {

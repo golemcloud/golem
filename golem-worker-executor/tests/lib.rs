@@ -13,20 +13,12 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_test_framework::components::cloud_service::{CloudService, StubCloudService};
-use std::fmt::{Debug, Formatter};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU16;
-use std::sync::Arc;
-use tempfile::TempDir;
-use test_r::{tag_suite, test_dep};
-use tracing::Level;
-
-use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 use golem_test_framework::components::component_service::ComponentService;
@@ -44,6 +36,13 @@ use golem_test_framework::components::worker_service::forwarding::ForwardingWork
 use golem_test_framework::components::worker_service::WorkerService;
 use golem_test_framework::config::TestDependencies;
 use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
+use std::fmt::{Debug, Formatter};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU16;
+use std::sync::Arc;
+use tempfile::TempDir;
+use test_r::{tag_suite, test_dep};
+use tracing::Level;
 
 mod common;
 
@@ -103,12 +102,12 @@ tag_suite!(ts_rpc2_stubless, group8);
 
 #[derive(Clone)]
 pub struct WorkerExecutorPerTestDependencies {
-    redis: Arc<dyn Redis + Send + Sync + 'static>,
-    redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
-    worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
-    worker_service: Arc<dyn WorkerService + 'static>,
-    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-    blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
+    redis: Arc<dyn Redis>,
+    redis_monitor: Arc<dyn RedisMonitor>,
+    worker_executor: Arc<dyn WorkerExecutor>,
+    worker_service: Arc<dyn WorkerService>,
+    component_service: Arc<dyn ComponentService>,
+    blob_storage: Arc<dyn BlobStorage>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
@@ -117,19 +116,19 @@ pub struct WorkerExecutorPerTestDependencies {
 
 #[async_trait]
 impl TestDependencies for WorkerExecutorPerTestDependencies {
-    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
+    fn rdb(&self) -> Arc<dyn Rdb> {
         panic!("Not supported")
     }
 
-    fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static> {
+    fn redis(&self) -> Arc<dyn Redis> {
         self.redis.clone()
     }
 
-    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor> {
         self.redis_monitor.clone()
     }
 
-    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static> {
+    fn shard_manager(&self) -> Arc<dyn ShardManager> {
         panic!("Not supported")
     }
 
@@ -141,9 +140,7 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
         self.component_service.clone()
     }
 
-    fn component_compilation_service(
-        &self,
-    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService> {
         panic!("Not supported")
     }
 
@@ -151,11 +148,11 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
         self.worker_service.clone()
     }
 
-    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster> {
         panic!("Not supported")
     }
 
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+    fn blob_storage(&self) -> Arc<dyn BlobStorage> {
         self.blob_storage.clone()
     }
 
@@ -195,15 +192,17 @@ impl Debug for WorkerExecutorTestDependencies {
 
 impl WorkerExecutorTestDependencies {
     pub async fn new() -> Self {
-        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
+        let redis: Arc<dyn Redis> = Arc::new(SpawnedRedis::new(
             6379,
             "".to_string(),
             Level::INFO,
             Level::ERROR,
         ));
-        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
-            SpawnedRedisMonitor::new(redis.clone(), Level::TRACE, Level::ERROR),
-        );
+        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
+            redis.clone(),
+            Level::TRACE,
+            Level::ERROR,
+        ));
 
         let blob_storage = Arc::new(
             FileSystemBlobStorage::new(Path::new("data/blobs"))
@@ -276,19 +275,19 @@ impl WorkerExecutorTestDependencies {
 
 #[async_trait]
 impl TestDependencies for WorkerExecutorTestDependencies {
-    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
+    fn rdb(&self) -> Arc<dyn Rdb> {
         panic!("Not supported")
     }
 
-    fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static> {
+    fn redis(&self) -> Arc<dyn Redis> {
         self.redis.clone()
     }
 
-    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor> {
         self.redis_monitor.clone()
     }
 
-    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync + 'static> {
+    fn shard_manager(&self) -> Arc<dyn ShardManager> {
         panic!("Not supported")
     }
 
@@ -300,9 +299,7 @@ impl TestDependencies for WorkerExecutorTestDependencies {
         self.component_service.clone()
     }
 
-    fn component_compilation_service(
-        &self,
-    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService> {
         panic!("Not supported")
     }
 
@@ -310,7 +307,7 @@ impl TestDependencies for WorkerExecutorTestDependencies {
         panic!("Not supported")
     }
 
-    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster> {
         panic!("Not supported")
     }
 
@@ -318,7 +315,7 @@ impl TestDependencies for WorkerExecutorTestDependencies {
         self.initial_component_files_service.clone()
     }
 
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+    fn blob_storage(&self) -> Arc<dyn BlobStorage> {
         self.blob_storage.clone()
     }
 
