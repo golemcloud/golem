@@ -27,6 +27,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest,
     ForkWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse,
     GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
     InvokeAndAwaitJsonResponse, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse,
     InvokeJsonRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
@@ -272,6 +273,64 @@ impl WorkerService for ForwardingWorkerService {
             Some(workerexecutor::v1::get_worker_metadata_response::Result::Failure(error)) => {
                 Ok(GetWorkerMetadataResponse {
                     result: Some(worker::v1::get_worker_metadata_response::Result::Error(
+                        WorkerError {
+                            error: Some(worker::v1::worker_error::Error::InternalError(error)),
+                        },
+                    )),
+                })
+            }
+        }
+    }
+
+    async fn get_workers_metadata(
+        &self,
+        token: &Uuid,
+        request: GetWorkersMetadataRequest,
+    ) -> crate::Result<GetWorkersMetadataResponse> {
+        let mut retry_count = Self::RETRY_COUNT;
+        let account_id = self.cloud_service.get_account_id(token).await?;
+        let result = loop {
+            let account_id = account_id.clone();
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .get_workers_metadata(workerexecutor::v1::GetWorkersMetadataRequest {
+                    component_id: request.component_id,
+                    filter: request.filter.clone().clone(),
+                    cursor: request.cursor,
+                    count: request.count,
+                    precise: request.precise,
+                    account_id: Some(account_id.into()),
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let result = result?.into_inner();
+
+        match result.result {
+            None => Err(anyhow!(
+                "No response from golem-worker-executor get-worker-metadata call"
+            )),
+            Some(workerexecutor::v1::get_workers_metadata_response::Result::Success(metadata)) => {
+                Ok(GetWorkersMetadataResponse {
+                    result: Some(worker::v1::get_workers_metadata_response::Result::Success(
+                        GetWorkersMetadataSuccessResponse {
+                            workers: metadata.workers,
+                            cursor: metadata.cursor,
+                        },
+                    )),
+                })
+            }
+            Some(workerexecutor::v1::get_workers_metadata_response::Result::Failure(error)) => {
+                Ok(GetWorkersMetadataResponse {
+                    result: Some(worker::v1::get_workers_metadata_response::Result::Error(
                         WorkerError {
                             error: Some(worker::v1::worker_error::Error::InternalError(error)),
                         },
