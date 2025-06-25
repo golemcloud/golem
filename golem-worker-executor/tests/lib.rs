@@ -18,7 +18,7 @@ use golem_service_base::service::initial_component_files::InitialComponentFilesS
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_test_framework::components::cloud_service::{CloudService, StubCloudService};
+use golem_test_framework::components::cloud_service::CloudService;
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 use golem_test_framework::components::component_service::ComponentService;
@@ -252,12 +252,9 @@ impl WorkerExecutorTestDependencies {
             ProvidedWorkerExecutor::new("localhost".to_string(), http_port, grpc_port, true),
         );
         // Fake worker service forwarding all requests to the worker executor directly
-        let worker_service: Arc<dyn WorkerService + 'static> =
-            Arc::new(ForwardingWorkerService::new(
-                worker_executor.clone(),
-                self.component_service(),
-                Arc::new(StubCloudService),
-            ));
+        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
+            ForwardingWorkerService::new(worker_executor.clone(), self.component_service()),
+        );
         WorkerExecutorPerTestDependencies {
             redis,
             redis_monitor: self.redis_monitor.clone(),

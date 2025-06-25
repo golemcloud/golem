@@ -17,7 +17,7 @@ pub mod k8s;
 pub mod provided;
 pub mod spawned;
 
-use super::{ADMIN_ACCOUNT_ID, ADMIN_TOKEN, PLACEHOLDER_PROJECT};
+use super::{ADMIN_ACCOUNT_ID, ADMIN_TOKEN};
 use crate::components::rdb::Rdb;
 use crate::components::{wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder};
 use crate::config::GolemClientProtocol;
@@ -276,42 +276,6 @@ async fn env_vars(
         .with("GOLEM__LOGIN__TYPE", "Disabled".to_string())
         .with_all(rdb.info().env("cloud_service", private_rdb_connection))
         .build()
-}
-
-pub struct StubCloudService;
-
-#[async_trait]
-impl CloudService for StubCloudService {
-    fn client_protocol(&self) -> GolemClientProtocol {
-        panic!("no cloud service running");
-    }
-    async fn base_http_client(&self) -> reqwest::Client {
-        panic!("no cloud service running");
-    }
-    async fn account_grpc_client(&self) -> AccoutServiceGrpcClient<Channel> {
-        panic!("no cloud service running");
-    }
-    async fn token_grpc_client(&self) -> TokenServiceGrpcClient<Channel> {
-        panic!("no cloud service running");
-    }
-    async fn project_grpc_client(&self) -> ProjectServiceGrpcClient<Channel> {
-        panic!("no cloud service running");
-    }
-    fn private_host(&self) -> String {
-        panic!("no cloud service running");
-    }
-    fn private_http_port(&self) -> u16 {
-        panic!("no cloud service running");
-    }
-    fn private_grpc_port(&self) -> u16 {
-        panic!("no cloud service running");
-    }
-
-    async fn get_default_project(&self, _token: &Uuid) -> crate::Result<ProjectId> {
-        Ok(ProjectId(PLACEHOLDER_PROJECT))
-    }
-
-    async fn kill(&self) {}
 }
 
 pub struct AccountWithToken {

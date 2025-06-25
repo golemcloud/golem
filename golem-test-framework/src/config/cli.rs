@@ -1056,7 +1056,6 @@ impl CliTestDependencies {
                         *component_service_grpc_port,
                         params.golem_client_protocol,
                         plugin_wasm_files_service.clone(),
-                        cloud_service.clone(),
                     )
                     .await,
                 );
@@ -1076,7 +1075,6 @@ impl CliTestDependencies {
                         *worker_service_custom_request_port,
                         params.golem_client_protocol,
                         component_service.clone(),
-                        cloud_service.clone(),
                     )
                     .await,
                 );

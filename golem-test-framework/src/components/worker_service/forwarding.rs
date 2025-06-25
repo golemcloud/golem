@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::WorkerServiceGrpcClient;
-use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::worker_executor::WorkerExecutor;
 use crate::components::worker_service::{WorkerLogEventStream, WorkerService};
@@ -51,19 +50,16 @@ use uuid::Uuid;
 pub struct ForwardingWorkerService {
     worker_executor: Arc<dyn WorkerExecutor>,
     component_service: Arc<dyn ComponentService>,
-    cloud_service: Arc<dyn CloudService>,
 }
 
 impl ForwardingWorkerService {
     pub fn new(
         worker_executor: Arc<dyn WorkerExecutor>,
         component_service: Arc<dyn ComponentService>,
-        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         Self {
             worker_executor,
             component_service,
-            cloud_service,
         }
     }
 

@@ -38,7 +38,6 @@ pub struct SpawnedWorkerService {
     _logger: ChildProcessLogger,
     client_protocol: GolemClientProtocol,
     component_service: Arc<dyn ComponentService>,
-    cloud_service: Arc<dyn CloudService>,
     base_http_client: OnceCell<reqwest::Client>,
     worker_grpc_client: OnceCell<WorkerServiceGrpcClient<Channel>>,
 }
@@ -107,7 +106,6 @@ impl SpawnedWorkerService {
             _logger: logger,
             client_protocol,
             component_service,
-            cloud_service,
             base_http_client: OnceCell::new(),
             worker_grpc_client: OnceCell::new(),
         }

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::{new_worker_grpc_client, WorkerServiceGrpcClient};
-use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::new_reqwest_client;
 use crate::components::worker_service::WorkerService;
@@ -31,7 +30,6 @@ pub struct ProvidedWorkerService {
     custom_request_port: u16,
     client_protocol: GolemClientProtocol,
     component_service: Arc<dyn ComponentService>,
-    cloud_service: Arc<dyn CloudService>,
     base_http_client: OnceCell<reqwest::Client>,
     worker_grpc_client: OnceCell<WorkerServiceGrpcClient<Channel>>,
 }
@@ -44,7 +42,6 @@ impl ProvidedWorkerService {
         custom_request_port: u16,
         client_protocol: GolemClientProtocol,
         component_service: Arc<dyn ComponentService>,
-        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {
@@ -54,7 +51,6 @@ impl ProvidedWorkerService {
             custom_request_port,
             client_protocol,
             component_service,
-            cloud_service,
             base_http_client: OnceCell::new(),
             worker_grpc_client: OnceCell::new(),
         }

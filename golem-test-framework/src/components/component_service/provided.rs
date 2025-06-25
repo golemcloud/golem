@@ -15,7 +15,6 @@
 use super::ComponentServiceGrpcClient;
 use super::PluginServiceGrpcClient;
 use super::{new_component_grpc_client, new_plugin_grpc_client};
-use crate::components::cloud_service::CloudService;
 use crate::components::component_service::ComponentService;
 use crate::components::new_reqwest_client;
 use crate::config::GolemClientProtocol;
@@ -33,7 +32,6 @@ pub struct ProvidedComponentService {
     http_port: u16,
     grpc_port: u16,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-    cloud_service: Arc<dyn CloudService>,
     client_protocol: GolemClientProtocol,
     base_http_client: OnceCell<reqwest::Client>,
     component_grpc_client: OnceCell<ComponentServiceGrpcClient<Channel>>,
@@ -48,7 +46,6 @@ impl ProvidedComponentService {
         grpc_port: u16,
         client_protocol: GolemClientProtocol,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-        cloud_service: Arc<dyn CloudService>,
     ) -> Self {
         info!("Using already running golem-component-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {
@@ -57,7 +54,6 @@ impl ProvidedComponentService {
             http_port,
             grpc_port,
             plugin_wasm_files_service,
-            cloud_service,
             client_protocol,
             base_http_client: OnceCell::new(),
             component_grpc_client: OnceCell::new(),

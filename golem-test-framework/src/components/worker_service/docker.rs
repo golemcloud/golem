@@ -39,7 +39,6 @@ pub struct DockerWorkerService {
     public_grpc_port: u16,
     public_custom_request_port: u16,
     component_service: Arc<dyn ComponentService>,
-    cloud_service: Arc<dyn CloudService>,
     client_protocol: GolemClientProtocol,
     base_http_client: OnceCell<reqwest::Client>,
     worker_grpc_client: OnceCell<WorkerServiceGrpcClient<Channel>>,
@@ -110,7 +109,6 @@ impl DockerWorkerService {
             public_custom_request_port,
             client_protocol,
             component_service,
-            cloud_service,
             base_http_client: OnceCell::new(),
             worker_grpc_client: OnceCell::new(),
         }

@@ -46,7 +46,6 @@ pub struct K8sWorkerService {
     grpc_routing: Arc<Mutex<Option<K8sRouting>>>,
     http_routing: Arc<Mutex<Option<K8sRouting>>>,
     component_service: Arc<dyn ComponentService>,
-    cloud_service: Arc<dyn CloudService>,
     client_protocol: GolemClientProtocol,
     base_http_client: OnceCell<reqwest::Client>,
     worker_grpc_client: OnceCell<WorkerServiceGrpcClient<Channel>>,
@@ -211,7 +210,6 @@ impl K8sWorkerService {
             http_routing: Arc::new(Mutex::new(Some(http_routing.routing))),
             client_protocol,
             component_service,
-            cloud_service,
             base_http_client: OnceCell::new(),
             worker_grpc_client: OnceCell::new(),
         }
