@@ -67,6 +67,11 @@ impl SqlitePool {
             pool: self.write_pool.clone(),
         }
     }
+
+    pub async fn close(&self) {
+        self.write_pool.close().await;
+        self.read_pool.close().await;
+    }
 }
 
 #[async_trait]

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::env;
+use std::path::PathBuf;
 use crate::Tracing;
 use golem_common::config::DbSqliteConfig;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -20,6 +22,7 @@ use golem_service_base::{
     migration::{Migrations, MigrationsDir},
 };
 use test_r::{inherit_test_dep, sequential};
+use tracing::info;
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -116,7 +119,9 @@ pub struct SqliteDb {
 
 impl SqliteDb {
     pub async fn new() -> Self {
-        let db_path = format!("/tmp/golem-component-{}.db", Uuid::new_v4());
+        let temp_dir_path: PathBuf = env::temp_dir();
+
+        let db_path = format!("{}/golem-component-{}.db", temp_dir_path.as_path().display(), Uuid::new_v4());
         let db_config = DbSqliteConfig {
             database: db_path.clone(),
             max_connections: 10,
@@ -138,6 +143,8 @@ impl SqliteDb {
 
 impl Drop for SqliteDb {
     fn drop(&mut self) {
+        info!("DB close: sqlite://{}", self.db_path);
+        futures::executor::block_on(self.pool.close());
         std::fs::remove_file(&self.db_path).unwrap();
     }
 }
