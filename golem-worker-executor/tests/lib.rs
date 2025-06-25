@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use golem_common::model::{AccountId, ProjectId};
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -20,22 +19,17 @@ use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_test_framework::components::cloud_service::{AdminOnlyStubCloudService, CloudService};
-use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 use golem_test_framework::components::component_service::ComponentService;
-use golem_test_framework::components::rdb::Rdb;
 use golem_test_framework::components::redis::provided::ProvidedRedis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
-use golem_test_framework::components::shard_manager::ShardManager;
 use golem_test_framework::components::worker_executor::provided::ProvidedWorkerExecutor;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
-use golem_test_framework::components::worker_executor_cluster::WorkerExecutorCluster;
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
-use golem_test_framework::config::TestDependencies;
 use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -117,65 +111,6 @@ pub struct WorkerExecutorPerTestDependencies {
     cloud_service: Arc<dyn CloudService>,
 }
 
-#[async_trait]
-impl TestDependencies for WorkerExecutorPerTestDependencies {
-    fn rdb(&self) -> Arc<dyn Rdb> {
-        panic!("Not supported")
-    }
-
-    fn redis(&self) -> Arc<dyn Redis> {
-        self.redis.clone()
-    }
-
-    fn redis_monitor(&self) -> Arc<dyn RedisMonitor> {
-        self.redis_monitor.clone()
-    }
-
-    fn shard_manager(&self) -> Arc<dyn ShardManager> {
-        panic!("Not supported")
-    }
-
-    fn component_directory(&self) -> &Path {
-        &self.component_directory
-    }
-
-    fn component_service(&self) -> Arc<dyn ComponentService> {
-        self.component_service.clone()
-    }
-
-    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService> {
-        panic!("Not supported")
-    }
-
-    fn worker_service(&self) -> Arc<dyn WorkerService + 'static> {
-        self.worker_service.clone()
-    }
-
-    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster> {
-        panic!("Not supported")
-    }
-
-    fn blob_storage(&self) -> Arc<dyn BlobStorage> {
-        self.blob_storage.clone()
-    }
-
-    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
-        self.initial_component_files_service.clone()
-    }
-
-    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
-        self.plugin_wasm_files_service.clone()
-    }
-
-    fn component_temp_directory(&self) -> &Path {
-        self.component_temp_directory.path()
-    }
-
-    fn cloud_service(&self) -> Arc<dyn CloudService> {
-        self.cloud_service.clone()
-    }
-}
-
 pub struct WorkerExecutorTestDependencies {
     redis: Arc<dyn Redis>,
     redis_monitor: Arc<dyn RedisMonitor>,
@@ -220,6 +155,7 @@ impl WorkerExecutorTestDependencies {
 
         let component_directory = Path::new("../test-components").to_path_buf();
         let account_id = AccountId::generate();
+        println!("Using account_id {account_id}");
         let project_id = ProjectId::new_v4();
         let token = Uuid::new_v4();
         let component_service: Arc<dyn ComponentService> = Arc::new(
@@ -256,25 +192,29 @@ impl WorkerExecutorTestDependencies {
         grpc_port: u16,
     ) -> WorkerExecutorPerTestDependencies {
         // Connecting to the primary Redis but using a unique prefix
-        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(ProvidedRedis::new(
+        let redis: Arc<dyn Redis> = Arc::new(ProvidedRedis::new(
             self.redis.public_host().to_string(),
             self.redis.public_port(),
             redis_prefix.to_string(),
         ));
         // Connecting to the worker executor started in-process
-        let worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static> = Arc::new(
-            ProvidedWorkerExecutor::new("localhost".to_string(), http_port, grpc_port, true),
-        );
+        let worker_executor: Arc<dyn WorkerExecutor> = Arc::new(ProvidedWorkerExecutor::new(
+            "localhost".to_string(),
+            http_port,
+            grpc_port,
+            true,
+        ));
         // Fake worker service forwarding all requests to the worker executor directly
-        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
-            ForwardingWorkerService::new(worker_executor.clone(), self.component_service()),
-        );
+        let worker_service: Arc<dyn WorkerService> = Arc::new(ForwardingWorkerService::new(
+            worker_executor.clone(),
+            self.component_service.clone(),
+        ));
         WorkerExecutorPerTestDependencies {
             redis,
             redis_monitor: self.redis_monitor.clone(),
             worker_executor,
             worker_service,
-            component_service: self.component_service().clone(),
+            component_service: self.component_service.clone(),
             component_directory: self.component_directory.clone(),
             blob_storage: self.blob_storage.clone(),
             initial_component_files_service: self.initial_component_files_service.clone(),
@@ -282,65 +222,6 @@ impl WorkerExecutorTestDependencies {
             component_temp_directory: self.component_temp_directory.clone(),
             cloud_service: self.cloud_service.clone(),
         }
-    }
-}
-
-#[async_trait]
-impl TestDependencies for WorkerExecutorTestDependencies {
-    fn rdb(&self) -> Arc<dyn Rdb> {
-        panic!("Not supported")
-    }
-
-    fn redis(&self) -> Arc<dyn Redis> {
-        self.redis.clone()
-    }
-
-    fn redis_monitor(&self) -> Arc<dyn RedisMonitor> {
-        self.redis_monitor.clone()
-    }
-
-    fn shard_manager(&self) -> Arc<dyn ShardManager> {
-        panic!("Not supported")
-    }
-
-    fn component_directory(&self) -> &Path {
-        &self.component_directory
-    }
-
-    fn component_service(&self) -> Arc<dyn ComponentService> {
-        self.component_service.clone()
-    }
-
-    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService> {
-        panic!("Not supported")
-    }
-
-    fn worker_service(&self) -> Arc<dyn WorkerService + 'static> {
-        panic!("Not supported")
-    }
-
-    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster> {
-        panic!("Not supported")
-    }
-
-    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
-        self.initial_component_files_service.clone()
-    }
-
-    fn blob_storage(&self) -> Arc<dyn BlobStorage> {
-        self.blob_storage.clone()
-    }
-
-    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
-        self.plugin_wasm_files_service.clone()
-    }
-
-    fn component_temp_directory(&self) -> &Path {
-        self.component_temp_directory.path()
-    }
-
-    fn cloud_service(&self) -> Arc<dyn CloudService> {
-        self.cloud_service.clone()
     }
 }
 

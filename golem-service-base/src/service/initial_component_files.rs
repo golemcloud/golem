@@ -26,11 +26,11 @@ const INITIAL_COMPONENT_FILES_LABEL: &str = "initial_component_files";
 /// Service for storing initial component files.
 #[derive(Debug)]
 pub struct InitialComponentFilesService {
-    blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+    blob_storage: Arc<dyn BlobStorage>,
 }
 
 impl InitialComponentFilesService {
-    pub fn new(blob_storage: Arc<dyn BlobStorage + Send + Sync>) -> Self {
+    pub fn new(blob_storage: Arc<dyn BlobStorage>) -> Self {
         Self { blob_storage }
     }
 

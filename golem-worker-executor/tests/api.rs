@@ -517,12 +517,7 @@ async fn promise(
                 .into(),
             ),
             data: vec![42],
-            account_id: Some(
-                AccountId {
-                    value: "test-account".to_string(),
-                }
-                .into(),
-            ),
+            account_id: Some(executor.account_id.clone().into()),
         })
         .await
         .unwrap();
@@ -1489,7 +1484,6 @@ async fn get_worker_metadata(
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await;
-    drop(executor);
 
     check!(
         metadata1.last_known_status.status == WorkerStatus::Suspended || // it is sleeping - whether it is suspended or not is the server's decision
@@ -1498,12 +1492,7 @@ async fn get_worker_metadata(
     check!(metadata2.last_known_status.status == WorkerStatus::Idle);
     check!(metadata1.last_known_status.component_version == 0);
     check!(metadata1.worker_id == worker_id);
-    check!(
-        metadata1.account_id
-            == AccountId {
-                value: "test-account".to_string()
-            }
-    );
+    check!(metadata1.account_id == executor.account_id);
 
     check!(metadata2.last_known_status.component_size == expected_component_size);
     check!(metadata2.last_known_status.total_linear_memory_size == 1245184);
@@ -3265,12 +3254,7 @@ async fn cancelling_pending_invocations(
                 .into(),
             ),
             data: vec![42],
-            account_id: Some(
-                AccountId {
-                    value: "test-account".to_string(),
-                }
-                .into(),
-            ),
+            account_id: Some(executor.account_id.clone().into()),
         })
         .await
         .unwrap();
