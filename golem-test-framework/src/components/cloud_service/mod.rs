@@ -284,3 +284,75 @@ pub struct AccountWithToken {
     pub account_id: AccountId,
     pub token: Uuid,
 }
+
+pub struct AdminOnlyStubCloudService {
+    admin_account_id: AccountId,
+    admin_token: Uuid,
+    admin_default_project: ProjectId,
+}
+
+impl AdminOnlyStubCloudService {
+    pub fn new(
+        admin_account_id: AccountId,
+        admin_token: Uuid,
+        admin_default_project: ProjectId,
+    ) -> Self {
+        Self {
+            admin_account_id,
+            admin_token,
+            admin_default_project,
+        }
+    }
+}
+
+#[async_trait]
+impl CloudService for AdminOnlyStubCloudService {
+    fn admin_token(&self) -> Uuid {
+        self.admin_token
+    }
+
+    fn admin_account_id(&self) -> AccountId {
+        self.admin_account_id.clone()
+    }
+
+    async fn get_default_project(&self, token: &Uuid) -> crate::Result<ProjectId> {
+        if *token != self.admin_token {
+            Err(anyhow!("StubCloudService received unexpected token"))?
+        }
+        Ok(self.admin_default_project.clone())
+    }
+
+    fn client_protocol(&self) -> GolemClientProtocol {
+        panic!("no cloud service running");
+    }
+
+    async fn base_http_client(&self) -> reqwest::Client {
+        panic!("no cloud service running");
+    }
+
+    async fn account_grpc_client(&self) -> AccoutServiceGrpcClient<Channel> {
+        panic!("no cloud service running");
+    }
+
+    async fn token_grpc_client(&self) -> TokenServiceGrpcClient<Channel> {
+        panic!("no cloud service running");
+    }
+
+    async fn project_grpc_client(&self) -> ProjectServiceGrpcClient<Channel> {
+        panic!("no cloud service running");
+    }
+
+    fn private_host(&self) -> String {
+        panic!("no cloud service running");
+    }
+
+    fn private_http_port(&self) -> u16 {
+        panic!("no cloud service running");
+    }
+
+    fn private_grpc_port(&self) -> u16 {
+        panic!("no cloud service running");
+    }
+
+    async fn kill(&self) {}
+}

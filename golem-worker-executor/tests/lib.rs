@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use golem_common::model::{AccountId, ProjectId};
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_test_framework::components::cloud_service::CloudService;
+use golem_test_framework::components::cloud_service::{AdminOnlyStubCloudService, CloudService};
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 use golem_test_framework::components::component_service::ComponentService;
@@ -43,6 +44,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use test_r::{tag_suite, test_dep};
 use tracing::Level;
+use uuid::Uuid;
 
 mod common;
 
@@ -112,6 +114,7 @@ pub struct WorkerExecutorPerTestDependencies {
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
     component_temp_directory: Arc<TempDir>,
+    cloud_service: Arc<dyn CloudService>,
 }
 
 #[async_trait]
@@ -169,19 +172,20 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
     }
 
     fn cloud_service(&self) -> Arc<dyn CloudService> {
-        panic!("Not supported")
+        self.cloud_service.clone()
     }
 }
 
 pub struct WorkerExecutorTestDependencies {
-    redis: Arc<dyn Redis + Send + Sync + 'static>,
-    redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
-    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-    blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
+    redis: Arc<dyn Redis>,
+    redis_monitor: Arc<dyn RedisMonitor>,
+    component_service: Arc<dyn ComponentService>,
+    blob_storage: Arc<dyn BlobStorage>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
     component_temp_directory: Arc<TempDir>,
+    cloud_service: Arc<dyn CloudService>,
 }
 
 impl Debug for WorkerExecutorTestDependencies {
@@ -215,13 +219,22 @@ impl WorkerExecutorTestDependencies {
         let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
         let component_directory = Path::new("../test-components").to_path_buf();
-        let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
+        let account_id = AccountId::generate();
+        let project_id = ProjectId::new_v4();
+        let token = Uuid::new_v4();
+        let component_service: Arc<dyn ComponentService> = Arc::new(
             FileSystemComponentService::new(
                 Path::new("data/components"),
                 plugin_wasm_files_service.clone(),
+                account_id.clone(),
+                project_id.clone(),
             )
             .await,
         );
+
+        let cloud_service = Arc::new(AdminOnlyStubCloudService::new(
+            account_id, token, project_id,
+        ));
 
         Self {
             redis,
@@ -232,6 +245,7 @@ impl WorkerExecutorTestDependencies {
             initial_component_files_service,
             plugin_wasm_files_service,
             component_temp_directory: Arc::new(TempDir::new().unwrap()),
+            cloud_service,
         }
     }
 
@@ -266,6 +280,7 @@ impl WorkerExecutorTestDependencies {
             initial_component_files_service: self.initial_component_files_service.clone(),
             plugin_wasm_files_service: self.plugin_wasm_files_service.clone(),
             component_temp_directory: self.component_temp_directory.clone(),
+            cloud_service: self.cloud_service.clone(),
         }
     }
 }
@@ -325,7 +340,7 @@ impl TestDependencies for WorkerExecutorTestDependencies {
     }
 
     fn cloud_service(&self) -> Arc<dyn CloudService> {
-        panic!("Not supported")
+        self.cloud_service.clone()
     }
 }
 

@@ -34,19 +34,26 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tonic::transport::Channel;
 use tracing::{debug, info};
-use uuid::{uuid, Uuid};
+use uuid::Uuid;
 
 const WASMS_DIRNAME: &str = "wasms";
-const PLACEHOLDER_ACCOUNT: uuid::Uuid = uuid!("91879a4b-6c62-4dd1-91fe-9dcd29ebe178");
-const PLACEHOLDER_PROJECT: uuid::Uuid = uuid!("6dfe5ca7-ab78-46b2-a98d-41098bb29c98");
+// const PLACEHOLDER_ACCOUNT: uuid::Uuid = uuid!("91879a4b-6c62-4dd1-91fe-9dcd29ebe178");
+// const PLACEHOLDER_PROJECT: uuid::Uuid = uuid!("6dfe5ca7-ab78-46b2-a98d-41098bb29c98");
 
 pub struct FileSystemComponentService {
     root: PathBuf,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+    account_id: AccountId,
+    project_id: ProjectId,
 }
 
 impl FileSystemComponentService {
-    pub async fn new(root: &Path, plugin_wasm_files_service: Arc<PluginWasmFilesService>) -> Self {
+    pub async fn new(
+        root: &Path,
+        plugin_wasm_files_service: Arc<PluginWasmFilesService>,
+        account_id: AccountId,
+        project_id: ProjectId,
+    ) -> Self {
         info!("Using a directory for storing components: {root:?}");
 
         // If we keep metadata around for multiple runs invariants like unique name
@@ -57,6 +64,8 @@ impl FileSystemComponentService {
         Self {
             root: root.to_path_buf(),
             plugin_wasm_files_service,
+            account_id,
+            project_id,
         }
     }
 
@@ -120,15 +129,9 @@ impl FileSystemComponentService {
             })?
             .len();
 
-        let account_id = AccountId {
-            value: PLACEHOLDER_ACCOUNT.to_string(),
-        };
-
-        let project_id = ProjectId(PLACEHOLDER_PROJECT);
-
         let metadata = LocalFileSystemComponentMetadata {
-            account_id: account_id.clone(),
-            project_id: project_id.clone(),
+            account_id: self.account_id.clone(),
+            project_id: self.project_id.clone(),
             component_id: component_id.clone(),
             component_name: component_name.to_string(),
             version: component_version,
@@ -168,8 +171,8 @@ impl FileSystemComponentService {
                 root_package_name: raw_component_metadata.root_package_name,
                 root_package_version: raw_component_metadata.root_package_version,
             }),
-            account_id: Some(account_id.into()),
-            project_id: Some(project_id.into()),
+            account_id: Some(self.account_id.clone().into()),
+            project_id: Some(self.project_id.clone().into()),
             created_at: Some(SystemTime::now().into()),
             component_type: Some(component_type as i32),
             files: files.iter().map(|file| file.clone().into()).collect(),
