@@ -155,7 +155,6 @@ impl WorkerExecutorTestDependencies {
 
         let component_directory = Path::new("../test-components").to_path_buf();
         let account_id = AccountId::generate();
-        println!("Using account_id {account_id}");
         let project_id = ProjectId::new_v4();
         let token = Uuid::new_v4();
         let component_service: Arc<dyn ComponentService> = Arc::new(
@@ -208,6 +207,7 @@ impl WorkerExecutorTestDependencies {
         let worker_service: Arc<dyn WorkerService> = Arc::new(ForwardingWorkerService::new(
             worker_executor.clone(),
             self.component_service.clone(),
+            self.cloud_service.clone(),
         ));
         WorkerExecutorPerTestDependencies {
             redis,

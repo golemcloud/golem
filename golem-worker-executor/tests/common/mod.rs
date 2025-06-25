@@ -3,9 +3,8 @@ use anyhow::Error;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    get_running_workers_metadata_response, get_workers_metadata_response,
-    GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
+    get_running_workers_metadata_response, GetRunningWorkersMetadataRequest,
+    GetRunningWorkersMetadataSuccessResponse,
 };
 use golem_common::config::RedisConfig;
 use golem_common::model::invocation_context::{
@@ -15,8 +14,8 @@ use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    PluginInstallationId, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;

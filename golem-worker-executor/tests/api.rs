@@ -25,7 +25,7 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::oplog::{IndexedResourceKey, OplogIndex, WorkerResourceId};
 use golem_common::model::{
-    AccountId, ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
+    ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
     StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatus,
 };

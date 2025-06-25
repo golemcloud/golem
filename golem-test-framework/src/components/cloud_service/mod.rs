@@ -23,8 +23,10 @@ use crate::config::GolemClientProtocol;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{Months, Utc};
-pub use golem_api_grpc::proto::golem::account::v1::cloud_account_service_client::CloudAccountServiceClient as AccoutServiceGrpcClient;
+pub use golem_api_grpc::proto::golem::account::v1::cloud_account_service_client::CloudAccountServiceClient as AccountServiceGrpcClient;
 use golem_api_grpc::proto::golem::account::v1::AccountCreateRequest;
+pub use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::CloudAuthServiceClient as AuthServiceGrpcClient;
+use golem_api_grpc::proto::golem::auth::v1::{get_account_response, GetAccountRequest};
 pub use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient as ProjectServiceGrpcClient;
 use golem_api_grpc::proto::golem::project::v1::{
     get_default_project_response, GetDefaultProjectRequest,
@@ -32,8 +34,8 @@ use golem_api_grpc::proto::golem::project::v1::{
 pub use golem_api_grpc::proto::golem::token::v1::cloud_token_service_client::CloudTokenServiceClient as TokenServiceGrpcClient;
 use golem_api_grpc::proto::golem::token::v1::CreateTokenRequest;
 use golem_api_grpc::proto::golem::token::CreateTokenDto;
-use golem_client::api::TokenClient;
 use golem_client::api::{AccountClient, ProjectClient};
+use golem_client::api::{LoginClient, TokenClient};
 use golem_client::{Context, Security};
 use golem_common::model::{AccountId, ProjectId};
 use golem_service_base::clients::authorised_request;
@@ -65,7 +67,7 @@ pub trait CloudService: Send + Sync {
             },
         }
     }
-    async fn account_grpc_client(&self) -> AccoutServiceGrpcClient<Channel>;
+    async fn account_grpc_client(&self) -> AccountServiceGrpcClient<Channel>;
 
     async fn token_http_client(&self, token: Uuid) -> golem_client::api::TokenClientLive {
         let url = format!("http://{}:{}", self.public_host(), self.public_http_port());
@@ -90,6 +92,41 @@ pub trait CloudService: Send + Sync {
         }
     }
     async fn project_grpc_client(&self) -> ProjectServiceGrpcClient<Channel>;
+
+    async fn login_http_client(&self, token: Uuid) -> golem_client::api::LoginClientLive {
+        let url = format!("http://{}:{}", self.public_host(), self.public_http_port());
+        golem_client::api::LoginClientLive {
+            context: Context {
+                client: self.base_http_client().await,
+                base_url: Url::parse(&url).expect("Failed to parse url"),
+                security_token: Security::Bearer(token.to_string()),
+            },
+        }
+    }
+    async fn auth_grpc_client(&self) -> AuthServiceGrpcClient<Channel>;
+
+    async fn get_account_id(&self, token: &Uuid) -> crate::Result<AccountId> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                let mut client = self.auth_grpc_client().await;
+                let request = authorised_request(GetAccountRequest {}, token);
+                let response = client.get_account(request).await?;
+                match response.into_inner().result.unwrap() {
+                    get_account_response::Result::Success(result) => {
+                        Ok(result.account_id.unwrap().into())
+                    }
+                    get_account_response::Result::Error(error) => Err(anyhow!("{error:?}")),
+                }
+            }
+            GolemClientProtocol::Http => {
+                let client = self.login_http_client(*token).await;
+                let token_data = client.current_login_token().await?;
+                Ok(AccountId {
+                    value: token_data.account_id,
+                })
+            }
+        }
+    }
 
     async fn get_default_project(&self, token: &Uuid) -> crate::Result<ProjectId> {
         match self.client_protocol() {
@@ -222,8 +259,8 @@ pub trait CloudService: Send + Sync {
     async fn kill(&self);
 }
 
-async fn new_account_grpc_client(host: &str, grpc_port: u16) -> AccoutServiceGrpcClient<Channel> {
-    AccoutServiceGrpcClient::connect(format!("http://{host}:{grpc_port}"))
+async fn new_account_grpc_client(host: &str, grpc_port: u16) -> AccountServiceGrpcClient<Channel> {
+    AccountServiceGrpcClient::connect(format!("http://{host}:{grpc_port}"))
         .await
         .expect("Failed to connect to cloud-service")
         .send_compressed(CompressionEncoding::Gzip)
@@ -240,6 +277,14 @@ async fn new_token_grpc_client(host: &str, grpc_port: u16) -> TokenServiceGrpcCl
 
 async fn new_project_grpc_client(host: &str, grpc_port: u16) -> ProjectServiceGrpcClient<Channel> {
     ProjectServiceGrpcClient::connect(format!("http://{host}:{grpc_port}"))
+        .await
+        .expect("Failed to connect to cloud-service")
+        .send_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Gzip)
+}
+
+async fn new_auth_grpc_client(host: &str, grpc_port: u16) -> AuthServiceGrpcClient<Channel> {
+    AuthServiceGrpcClient::connect(format!("http://{host}:{grpc_port}"))
         .await
         .expect("Failed to connect to cloud-service")
         .send_compressed(CompressionEncoding::Gzip)
@@ -322,6 +367,13 @@ impl CloudService for AdminOnlyStubCloudService {
         Ok(self.admin_default_project.clone())
     }
 
+    async fn get_account_id(&self, token: &Uuid) -> crate::Result<AccountId> {
+        if *token != self.admin_token {
+            Err(anyhow!("StubCloudService received unexpected token"))?
+        }
+        Ok(self.admin_account_id.clone())
+    }
+
     fn client_protocol(&self) -> GolemClientProtocol {
         panic!("no cloud service running");
     }
@@ -330,7 +382,7 @@ impl CloudService for AdminOnlyStubCloudService {
         panic!("no cloud service running");
     }
 
-    async fn account_grpc_client(&self) -> AccoutServiceGrpcClient<Channel> {
+    async fn account_grpc_client(&self) -> AccountServiceGrpcClient<Channel> {
         panic!("no cloud service running");
     }
 
@@ -339,6 +391,10 @@ impl CloudService for AdminOnlyStubCloudService {
     }
 
     async fn project_grpc_client(&self) -> ProjectServiceGrpcClient<Channel> {
+        panic!("no cloud service running");
+    }
+
+    async fn auth_grpc_client(&self) -> AuthServiceGrpcClient<Channel> {
         panic!("no cloud service running");
     }
 

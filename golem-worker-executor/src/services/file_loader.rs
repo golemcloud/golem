@@ -73,12 +73,9 @@ impl FileLoader {
         key: &InitialComponentFileKey,
         target: &PathBuf,
     ) -> Result<FileUseToken, GolemError> {
-        let aid = account_id.clone();
         self.get_read_only_to_impl(account_id, key, target)
             .await
             .map_err(|e| {
-                println!("File not found for account {aid}");
-
                 GolemError::initial_file_download_failed(
                     target.display().to_string(),
                     e.to_string(),

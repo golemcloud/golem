@@ -19,7 +19,6 @@ use golem_common::model::AccountId;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
-use golem_test_framework::config::TestDependencies;
 use golem_worker_executor::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::redis::RedisKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;

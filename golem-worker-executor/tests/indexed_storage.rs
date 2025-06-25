@@ -19,7 +19,6 @@ use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
-use golem_test_framework::config::TestDependencies;
 use golem_worker_executor::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;

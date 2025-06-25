@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::AccoutServiceGrpcClient;
+use super::AuthServiceGrpcClient;
 use super::ProjectServiceGrpcClient;
 use super::TokenServiceGrpcClient;
 use super::{
     new_account_grpc_client, new_project_grpc_client, new_token_grpc_client, CloudService,
 };
+use super::{new_auth_grpc_client, AccountServiceGrpcClient};
 use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
 use crate::components::new_reqwest_client;
 use crate::components::rdb::Rdb;
@@ -40,9 +41,10 @@ pub struct DockerCloudService {
     public_grpc_port: u16,
     client_protocol: GolemClientProtocol,
     base_http_client: OnceCell<reqwest::Client>,
-    account_grpc_client: OnceCell<AccoutServiceGrpcClient<Channel>>,
+    account_grpc_client: OnceCell<AccountServiceGrpcClient<Channel>>,
     token_grpc_client: OnceCell<TokenServiceGrpcClient<Channel>>,
     project_grpc_client: OnceCell<ProjectServiceGrpcClient<Channel>>,
+    auth_grpc_client: OnceCell<AuthServiceGrpcClient<Channel>>,
 }
 
 impl DockerCloudService {
@@ -94,6 +96,7 @@ impl DockerCloudService {
             account_grpc_client: OnceCell::new(),
             token_grpc_client: OnceCell::new(),
             project_grpc_client: OnceCell::new(),
+            auth_grpc_client: OnceCell::new(),
         }
     }
 }
@@ -111,7 +114,7 @@ impl CloudService for DockerCloudService {
             .clone()
     }
 
-    async fn account_grpc_client(&self) -> AccoutServiceGrpcClient<Channel> {
+    async fn account_grpc_client(&self) -> AccountServiceGrpcClient<Channel> {
         self.account_grpc_client
             .get_or_init(async || {
                 new_account_grpc_client(&self.public_host(), self.public_grpc_port()).await
@@ -133,6 +136,15 @@ impl CloudService for DockerCloudService {
         self.project_grpc_client
             .get_or_init(async || {
                 new_project_grpc_client(&self.public_host(), self.public_grpc_port()).await
+            })
+            .await
+            .clone()
+    }
+
+    async fn auth_grpc_client(&self) -> AuthServiceGrpcClient<Channel> {
+        self.auth_grpc_client
+            .get_or_init(async || {
+                new_auth_grpc_client(&self.public_host(), self.public_grpc_port()).await
             })
             .await
             .clone()
