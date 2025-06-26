@@ -25,11 +25,7 @@ pub struct SpawnedRedisMonitor {
 }
 
 impl SpawnedRedisMonitor {
-    pub fn new(
-        redis: impl AsRef<dyn Redis + Send + Sync + 'static>,
-        out_level: Level,
-        err_level: Level,
-    ) -> Self {
+    pub fn new(redis: impl AsRef<dyn Redis>, out_level: Level, err_level: Level) -> Self {
         info!(
             "Starting Redis monitor on port {}",
             redis.as_ref().public_port()

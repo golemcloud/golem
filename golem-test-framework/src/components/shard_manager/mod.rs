@@ -29,7 +29,7 @@ pub mod provided;
 pub mod spawned;
 
 #[async_trait]
-pub trait ShardManager {
+pub trait ShardManager: Send + Sync {
     async fn client(&self) -> ShardManagerServiceClient<Channel> {
         new_client(&self.public_host(), self.public_grpc_port()).await
     }

@@ -18,7 +18,7 @@ use crate::Tracing;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, TargetWorkerId};
-use golem_test_framework::config::EnvBasedTestDependencies;
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
 use golem_wasm_ast::analysis::AnalysedType;
@@ -71,9 +71,10 @@ async fn test_rib_with_resource_methods_with_worker_param(deps: &EnvBasedTestDep
 }
 
 async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
-    let component_id = deps.component("shopping-cart").store().await;
+    let admin = deps.admin();
+    let component_id = admin.component("shopping-cart").store().await;
 
-    let metadata = deps.get_latest_component_metadata(&component_id).await;
+    let metadata = admin.get_latest_component_metadata(&component_id).await;
 
     let component_dependency_key = ComponentDependencyKey {
         component_name: "shopping-cart".to_string(),
@@ -154,9 +155,10 @@ async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&s
 }
 
 async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
-    let component_id = deps.component("shopping-cart").store().await;
+    let admin = deps.admin();
+    let component_id = admin.component("shopping-cart").store().await;
 
-    let metadata = deps.get_latest_component_metadata(&component_id).await;
+    let metadata = admin.get_latest_component_metadata(&component_id).await;
 
     let component_dependency_key = ComponentDependencyKey {
         component_name: "shopping-cart".to_string(),
@@ -256,9 +258,10 @@ async fn test_rib_with_resource_methods(
     deps: &EnvBasedTestDependencies,
     worker_name: Option<&str>,
 ) {
-    let component_id = deps.component("shopping-cart-resource").store().await;
+    let admin = deps.admin();
+    let component_id = admin.component("shopping-cart-resource").store().await;
 
-    let metadata = deps.get_latest_component_metadata(&component_id).await;
+    let metadata = admin.get_latest_component_metadata(&component_id).await;
 
     let component_dependency_key = ComponentDependencyKey {
         component_name: "shopping-cart".to_string(),
@@ -387,6 +390,7 @@ impl RibComponentFunctionInvoke for TestRibFunctionInvoke {
 
         let result = self
             .dependencies
+            .admin()
             .invoke_and_await_typed(target_worker_id, function_name.0.as_str(), args.0)
             .await;
 

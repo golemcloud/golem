@@ -5,9 +5,8 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    get_running_workers_metadata_response, get_workers_metadata_response,
-    GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
+    get_running_workers_metadata_response, GetRunningWorkersMetadataRequest,
+    GetRunningWorkersMetadataSuccessResponse,
 };
 use golem_common::config::RedisConfig;
 use golem_common::model::invocation_context::{
@@ -17,7 +16,7 @@ use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::oplog::{OplogEntry, OplogPayload, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OplogIndex,
-    OwnedWorkerId, PluginInstallationId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId,
+    OwnedWorkerId, PluginInstallationId, TargetWorkerId, WorkerFilter, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
@@ -152,51 +151,6 @@ impl TestWorkerExecutor {
             }
         }
     }
-
-    pub async fn get_workers_metadata(
-        &self,
-        component_id: &ComponentId,
-        filter: Option<WorkerFilter>,
-        cursor: ScanCursor,
-        count: u64,
-        precise: bool,
-    ) -> (Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>) {
-        let component_id: golem_api_grpc::proto::golem::component::ComponentId =
-            component_id.clone().into();
-        let response = self
-            .client()
-            .await
-            .expect("Failed to get client")
-            .get_workers_metadata(GetWorkersMetadataRequest {
-                component_id: Some(component_id),
-                filter: filter.map(|f| f.into()),
-                cursor: Some(cursor.into()),
-                count,
-                precise,
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-            })
-            .await
-            .expect("Failed to get workers metadata")
-            .into_inner();
-
-        match response.result {
-            None => panic!("No response from get_workers_metadata"),
-            Some(get_workers_metadata_response::Result::Success(
-                GetWorkersMetadataSuccessResponse { workers, cursor },
-            )) => (
-                cursor.map(|c| c.into()),
-                workers.iter().map(to_worker_metadata).collect(),
-            ),
-            Some(get_workers_metadata_response::Result::Failure(error)) => {
-                panic!("Failed to get workers metadata: {error:?}")
-            }
-        }
-    }
 }
 
 impl Clone for TestWorkerExecutor {
@@ -210,64 +164,64 @@ impl Clone for TestWorkerExecutor {
 
 #[async_trait]
 impl TestDependencies for TestWorkerExecutor {
-    fn rdb(&self) -> Arc<dyn Rdb + Send + Sync> {
-        self.deps.rdb()
+    fn rdb(&self) -> Arc<dyn Rdb> {
+        panic!("Not supported")
     }
 
-    fn redis(&self) -> Arc<dyn Redis + Send + Sync> {
-        self.deps.redis()
+    fn redis(&self) -> Arc<dyn Redis> {
+        self.deps.redis.clone()
     }
 
-    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
-        self.deps.blob_storage()
+    fn blob_storage(&self) -> Arc<dyn BlobStorage> {
+        self.deps.blob_storage.clone()
     }
 
-    fn redis_monitor(&self) -> Arc<dyn RedisMonitor + Send + Sync> {
-        self.deps.redis_monitor()
+    fn redis_monitor(&self) -> Arc<dyn RedisMonitor> {
+        self.deps.redis_monitor.clone()
     }
 
-    fn shard_manager(&self) -> Arc<dyn ShardManager + Send + Sync> {
-        self.deps.shard_manager()
+    fn shard_manager(&self) -> Arc<dyn ShardManager> {
+        panic!("Not supported")
     }
 
     fn component_directory(&self) -> &Path {
-        self.deps.component_directory()
+        &self.deps.component_directory
     }
 
     fn component_temp_directory(&self) -> &Path {
-        self.deps.component_temp_directory()
+        self.deps.component_temp_directory.path()
     }
 
     fn component_service(
         &self,
     ) -> Arc<dyn golem_test_framework::components::component_service::ComponentService> {
-        self.deps.component_service()
+        self.deps.component_service.clone()
     }
 
-    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService + Send + Sync> {
-        self.deps.component_compilation_service()
+    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService> {
+        panic!("Not supported")
     }
 
     fn worker_service(
         &self,
     ) -> Arc<dyn golem_test_framework::components::worker_service::WorkerService> {
-        self.deps.worker_service()
+        self.deps.worker_service.clone()
     }
 
-    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync> {
-        self.deps.worker_executor_cluster()
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster> {
+        panic!("Not supported")
     }
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
-        self.deps.initial_component_files_service()
+        self.deps.initial_component_files_service.clone()
     }
 
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
-        self.deps.plugin_wasm_files_service()
+        self.deps.plugin_wasm_files_service.clone()
     }
 
     fn cloud_service(&self) -> Arc<dyn CloudService> {
-        self.deps.cloud_service()
+        self.deps.cloud_service.clone()
     }
 }
 
@@ -303,8 +257,8 @@ pub async fn start_limited(
     context: &TestContext,
     system_memory_override: Option<u64>,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    let redis = deps.redis();
-    let redis_monitor = deps.redis_monitor();
+    let redis = deps.redis.clone();
+    let redis_monitor = deps.redis_monitor.clone();
     redis.assert_valid();
     redis_monitor.assert_valid();
     info!("Using Redis on port {}", redis.public_port());

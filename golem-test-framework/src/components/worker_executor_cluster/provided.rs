@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tracing::info;
 
 pub struct ProvidedWorkerExecutorCluster {
-    worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
+    worker_executor: Arc<dyn WorkerExecutor>,
 }
 
 impl ProvidedWorkerExecutorCluster {
@@ -52,7 +52,7 @@ impl WorkerExecutorCluster for ProvidedWorkerExecutorCluster {
 
     async fn start(&self, _index: usize) {}
 
-    fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>> {
+    fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor>> {
         vec![self.worker_executor.clone()]
     }
 

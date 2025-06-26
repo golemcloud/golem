@@ -946,12 +946,6 @@ pub struct AccountId {
 }
 
 impl AccountId {
-    pub fn placeholder() -> Self {
-        Self {
-            value: "-1".to_string(),
-        }
-    }
-
     pub fn generate() -> Self {
         Self {
             value: Uuid::new_v4().to_string(),

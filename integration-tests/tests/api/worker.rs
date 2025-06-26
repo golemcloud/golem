@@ -33,27 +33,34 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies) {
-    let (component_id, _) = deps
+    let admin = deps.admin();
+
+    let (component_id, _) = admin
         .component("environment-service")
         .unique()
         .store_and_get_name()
         .await;
-    let component_version = deps
+
+    let component_version = admin
         .update_component(&component_id, "environment-service")
         .await;
+
     check!(component_version == 1);
 
     let create_result = deps
         .worker_service()
-        .create_worker(LaunchNewWorkerRequest {
-            component_id: Some(component_id.clone().into()),
-            name: format!("worker-{}", Uuid::new_v4()),
-            args: vec!["test-arg".to_string()],
-            env: HashMap::from([
-                ("TEST_ENV_VAR_1".to_string(), "value_1".to_string()),
-                ("TEST_ENV_VAR_2".to_string(), "value_2".to_string()),
-            ]),
-        })
+        .create_worker(
+            &admin.token,
+            LaunchNewWorkerRequest {
+                component_id: Some(component_id.clone().into()),
+                name: format!("worker-{}", Uuid::new_v4()),
+                args: vec!["test-arg".to_string()],
+                env: HashMap::from([
+                    ("TEST_ENV_VAR_1".to_string(), "value_1".to_string()),
+                    ("TEST_ENV_VAR_2".to_string(), "value_2".to_string()),
+                ]),
+            },
+        )
         .await
         .unwrap()
         .unwrap();
@@ -63,6 +70,7 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
     let result: Vec<Value> = deps
         .worker_service()
         .invoke_and_await(
+            &admin.token,
             TargetWorkerId {
                 component_id: Some(component_id.clone().into()),
                 name: Some(create_result.worker_id.as_ref().unwrap().name.to_string()),
@@ -90,6 +98,7 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
     let result: Vec<Value> = deps
         .worker_service()
         .invoke_and_await(
+            &admin.token,
             TargetWorkerId {
                 component_id: Some(component_id.clone().into()),
                 name: Some(create_result.worker_id.as_ref().unwrap().name.to_string()),

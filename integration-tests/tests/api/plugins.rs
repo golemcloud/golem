@@ -24,7 +24,9 @@ use golem_common::model::plugin::{
     OplogProcessorDefinition, PluginTypeSpecificDefinition,
 };
 use golem_common::model::{Empty, ScanCursor};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::config::{
+    EnvBasedTestDependencies, TestDependencies, TestDependenciesDsl,
+};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_test_framework::model::PluginDefinitionCreation;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
@@ -93,6 +95,8 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies, _tracing: &Trac
             .expect("Failed to transform component") // TODO: error handling and returning a proper HTTP response with failed status code
     }
 
+    let admin = deps.admin();
+
     let app = Router::new().route("/transform", post(transform));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
@@ -101,25 +105,28 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies, _tracing: &Trac
 
     let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-    let component_id = deps.component("logging").unique().store().await;
+    let component_id = admin.component("logging").unique().store().await;
 
-    deps.create_plugin(PluginDefinitionCreation {
-        name: "component-transformer-1".to_string(),
-        version: "v1".to_string(),
-        description: "A test".to_string(),
-        icon: vec![],
-        homepage: "none".to_string(),
-        specs: PluginTypeSpecificDefinition::ComponentTransformer(ComponentTransformerDefinition {
-            provided_wit_package: None,
-            json_schema: None,
-            validate_url: "not-used".to_string(),
-            transform_url: format!("http://localhost:{port}/transform"),
-        }),
-        scope: PluginScope::Global(Empty {}),
-    })
-    .await;
+    admin
+        .create_plugin(PluginDefinitionCreation {
+            name: "component-transformer-1".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::ComponentTransformer(
+                ComponentTransformerDefinition {
+                    provided_wit_package: None,
+                    json_schema: None,
+                    validate_url: "not-used".to_string(),
+                    transform_url: format!("http://localhost:{port}/transform"),
+                },
+            ),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
 
-    let _installation_id = deps
+    let _installation_id = admin
         .install_plugin_to_component(
             &component_id,
             "component-transformer-1",
@@ -129,10 +136,10 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies, _tracing: &Trac
         )
         .await;
 
-    let worker = deps.start_worker(&component_id, "worker1").await;
-    let mut rx = deps.capture_output(&worker).await;
+    let worker = admin.start_worker(&component_id, "worker1").await;
+    let mut rx = admin.capture_output(&worker).await;
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(&worker, "golem:it/api.{some-random-entries}", vec![])
         .await;
 
@@ -210,6 +217,8 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Trac
             .expect("Failed to transform component")
     }
 
+    let admin = deps.admin();
+
     let app = Router::new().route("/transform", post(transform));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
@@ -218,40 +227,44 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Trac
 
     let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-    let component_id = deps
+    let component_id = admin
         .component("app_and_library_library")
         .unique()
         .store()
         .await;
 
-    deps.create_plugin(PluginDefinitionCreation {
-        name: "component-transformer-2".to_string(),
-        version: "v1".to_string(),
-        description: "A test".to_string(),
-        icon: vec![],
-        homepage: "none".to_string(),
-        specs: PluginTypeSpecificDefinition::ComponentTransformer(ComponentTransformerDefinition {
-            provided_wit_package: None,
-            json_schema: None,
-            validate_url: "not-used".to_string(),
-            transform_url: format!("http://localhost:{port}/transform"),
-        }),
-        scope: PluginScope::Global(Empty {}),
-    })
-    .await;
+    admin
+        .create_plugin(PluginDefinitionCreation {
+            name: "component-transformer-2".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::ComponentTransformer(
+                ComponentTransformerDefinition {
+                    provided_wit_package: None,
+                    json_schema: None,
+                    validate_url: "not-used".to_string(),
+                    transform_url: format!("http://localhost:{port}/transform"),
+                },
+            ),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
 
-    deps.install_plugin_to_component(
-        &component_id,
-        "component-transformer-2",
-        "v1",
-        0,
-        HashMap::new(),
-    )
-    .await;
+    admin
+        .install_plugin_to_component(
+            &component_id,
+            "component-transformer-2",
+            "v1",
+            0,
+            HashMap::new(),
+        )
+        .await;
 
     server_handle.abort();
 
-    let patched_component_metadata = deps.get_latest_component_metadata(&component_id).await;
+    let patched_component_metadata = admin.get_latest_component_metadata(&component_id).await;
 
     let exports = patched_component_metadata.exports;
 
@@ -264,9 +277,9 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Trac
         }) if name == "it:app-and-library-app/app-api"
     ));
 
-    let worker = deps.start_worker(&component_id, "worker1").await;
+    let worker = admin.start_worker(&component_id, "worker1").await;
 
-    let response = deps
+    let response = admin
         .invoke_and_await(
             &worker,
             "it:app-and-library-app/app-api.{app-function}",
@@ -282,6 +295,7 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies, _tracing:
     async fn transform() -> StatusCode {
         StatusCode::INTERNAL_SERVER_ERROR
     }
+    let admin = deps.admin();
 
     let app = Router::new().route("/transform", post(transform));
 
@@ -291,27 +305,30 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies, _tracing:
 
     let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-    let component_id = deps.component("logging").unique().store().await;
+    let component_id = admin.component("logging").unique().store().await;
 
-    deps.create_plugin(PluginDefinitionCreation {
-        name: "component-transformer-failed".to_string(),
-        version: "v1".to_string(),
-        description: "A test".to_string(),
-        icon: vec![],
-        homepage: "none".to_string(),
-        specs: PluginTypeSpecificDefinition::ComponentTransformer(ComponentTransformerDefinition {
-            provided_wit_package: None,
-            json_schema: None,
-            validate_url: "not-used".to_string(),
-            transform_url: format!("http://localhost:{port}/transform"),
-        }),
-        scope: PluginScope::Global(Empty {}),
-    })
-    .await;
+    admin
+        .create_plugin(PluginDefinitionCreation {
+            name: "component-transformer-failed".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::ComponentTransformer(
+                ComponentTransformerDefinition {
+                    provided_wit_package: None,
+                    json_schema: None,
+                    validate_url: "not-used".to_string(),
+                    transform_url: format!("http://localhost:{port}/transform"),
+                },
+            ),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
 
-    let result = <EnvBasedTestDependencies as golem_test_framework::dsl::TestDsl>::
+    let result = <TestDependenciesDsl<_, _> as golem_test_framework::dsl::TestDsl>::
         install_plugin_to_component(
-            deps,
+            &admin,
             &component_id,
             "component-transformer-failed",
             "v1",
@@ -330,30 +347,33 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies, _tracing:
 
 #[test]
 async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let plugin_component_id = deps.component("oplog-processor").unique().store().await;
-    let component_id = deps.component("shopping-cart").unique().store().await;
+    let admin = deps.admin();
 
-    deps.create_plugin(PluginDefinitionCreation {
-        name: "oplog-processor-1".to_string(),
-        version: "v1".to_string(),
-        description: "A test".to_string(),
-        icon: vec![],
-        homepage: "none".to_string(),
-        specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
-            component_id: plugin_component_id.clone(),
-            component_version: 0,
-        }),
-        scope: PluginScope::Global(Empty {}),
-    })
-    .await;
+    let plugin_component_id = admin.component("oplog-processor").unique().store().await;
+    let component_id = admin.component("shopping-cart").unique().store().await;
 
-    let _installation_id = deps
+    admin
+        .create_plugin(PluginDefinitionCreation {
+            name: "oplog-processor-1".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
+                component_id: plugin_component_id.clone(),
+                component_version: 0,
+            }),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
+
+    let _installation_id = admin
         .install_plugin_to_component(&component_id, "oplog-processor-1", "v1", 0, HashMap::new())
         .await;
 
-    let worker_id = deps.start_worker(&component_id, "worker1").await;
+    let worker_id = admin.start_worker(&component_id, "worker1").await;
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{initialize-cart}",
@@ -361,7 +381,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
@@ -375,7 +395,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
@@ -389,7 +409,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
@@ -403,7 +423,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{update-item-quantity}",
@@ -411,7 +431,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _ = deps
+    let _ = admin
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{force-commit}",
@@ -423,7 +443,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let mut cursor = ScanCursor::default();
 
     loop {
-        let (maybe_cursor, items) = deps
+        let (maybe_cursor, items) = admin
             .get_workers_metadata(&plugin_component_id, None, cursor, 1, true)
             .await;
 
@@ -449,7 +469,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let mut invocations = Vec::new();
 
     loop {
-        let response = deps
+        let response = admin
             .invoke_and_await(
                 &plugin_worker_id,
                 "golem:component/api.{get-invoked-functions}",
@@ -487,35 +507,36 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
 #[test]
 async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.component("app_and_library_app").unique().store().await;
-
-    let plugin_wasm_key = deps
-        .add_plugin_wasm(
-            &deps.cloud_service().admin_account_id(),
-            "app_and_library_library",
-        )
+    let admin = deps.admin();
+    let component_id = admin
+        .component("app_and_library_app")
+        .unique()
+        .store()
         .await;
 
-    deps.create_plugin(PluginDefinitionCreation {
-        name: "library-plugin-1".to_string(),
-        version: "v1".to_string(),
-        description: "A test".to_string(),
-        icon: vec![],
-        homepage: "none".to_string(),
-        specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-            blob_storage_key: plugin_wasm_key,
-        }),
-        scope: PluginScope::Global(Empty {}),
-    })
-    .await;
+    let plugin_wasm_key = admin.add_plugin_wasm("app_and_library_library").await;
 
-    let _installation_id = deps
+    admin
+        .create_plugin(PluginDefinitionCreation {
+            name: "library-plugin-1".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+                blob_storage_key: plugin_wasm_key,
+            }),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
+
+    let _installation_id = admin
         .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
         .await;
 
-    let worker = deps.start_worker(&component_id, "worker1").await;
+    let worker = admin.start_worker(&component_id, "worker1").await;
 
-    let response = deps
+    let response = admin
         .invoke_and_await(
             &worker,
             "it:app-and-library-app/app-api.{app-function}",
@@ -528,39 +549,37 @@ async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
 #[test]
 async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps
+    let admin = deps.admin();
+
+    let component_id = admin
         .component("app_and_library_library")
         .unique()
         .store()
         .await;
 
-    let plugin_wasm_key = deps
-        .add_plugin_wasm(
-            &deps.cloud_service().admin_account_id(),
-            "app_and_library_app",
-        )
+    let plugin_wasm_key = admin.add_plugin_wasm("app_and_library_app").await;
+
+    admin
+        .create_plugin(PluginDefinitionCreation {
+            name: "app-plugin-1".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::App(AppPluginDefinition {
+                blob_storage_key: plugin_wasm_key,
+            }),
+            scope: PluginScope::Global(Empty {}),
+        })
         .await;
 
-    deps.create_plugin(PluginDefinitionCreation {
-        name: "app-plugin-1".to_string(),
-        version: "v1".to_string(),
-        description: "A test".to_string(),
-        icon: vec![],
-        homepage: "none".to_string(),
-        specs: PluginTypeSpecificDefinition::App(AppPluginDefinition {
-            blob_storage_key: plugin_wasm_key,
-        }),
-        scope: PluginScope::Global(Empty {}),
-    })
-    .await;
-
-    let _installation_id = deps
+    let _installation_id = admin
         .install_plugin_to_component(&component_id, "app-plugin-1", "v1", 0, HashMap::new())
         .await;
 
-    let worker = deps.start_worker(&component_id, "worker1").await;
+    let worker = admin.start_worker(&component_id, "worker1").await;
 
-    let response = deps
+    let response = admin
         .invoke_and_await(
             &worker,
             "it:app-and-library-app/app-api.{app-function}",
@@ -574,14 +593,15 @@ async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 /// Test that a plugin can be recreated after deleting it
 #[test]
 async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.component("app_and_library_app").unique().store().await;
+    let admin = deps.admin();
 
-    let plugin_wasm_key = deps
-        .add_plugin_wasm(
-            &deps.cloud_service().admin_account_id(),
-            "app_and_library_library",
-        )
+    let component_id = admin
+        .component("app_and_library_app")
+        .unique()
+        .store()
         .await;
+
+    let plugin_wasm_key = admin.add_plugin_wasm("app_and_library_library").await;
 
     let plugin_definition = PluginDefinitionCreation {
         name: "library-plugin-2".to_string(),
@@ -595,19 +615,19 @@ async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         scope: PluginScope::Global(Empty {}),
     };
 
-    deps.create_plugin(plugin_definition.clone()).await;
+    admin.create_plugin(plugin_definition.clone()).await;
 
-    deps.delete_plugin("library-plugin-2", "v1").await;
+    admin.delete_plugin("library-plugin-2", "v1").await;
 
-    deps.create_plugin(plugin_definition.clone()).await;
+    admin.create_plugin(plugin_definition.clone()).await;
 
-    let _installation_id = deps
+    let _installation_id = admin
         .install_plugin_to_component(&component_id, "library-plugin-2", "v1", 0, HashMap::new())
         .await;
 
-    let worker = deps.start_worker(&component_id, "worker1").await;
+    let worker = admin.start_worker(&component_id, "worker1").await;
 
-    let response = deps
+    let response = admin
         .invoke_and_await(
             &worker,
             "it:app-and-library-app/app-api.{app-function}",
@@ -621,14 +641,15 @@ async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 /// Test that a component can be invoked after a plugin is unregistered that it depends on
 #[test]
 async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.component("app_and_library_app").unique().store().await;
+    let admin = deps.admin();
 
-    let plugin_wasm_key = deps
-        .add_plugin_wasm(
-            &deps.cloud_service().admin_account_id(),
-            "app_and_library_library",
-        )
+    let component_id = admin
+        .component("app_and_library_app")
+        .unique()
+        .store()
         .await;
+
+    let plugin_wasm_key = admin.add_plugin_wasm("app_and_library_library").await;
 
     let plugin_definition = PluginDefinitionCreation {
         name: "library-plugin-3".to_string(),
@@ -642,17 +663,17 @@ async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing:
         scope: PluginScope::Global(Empty {}),
     };
 
-    deps.create_plugin(plugin_definition.clone()).await;
+    admin.create_plugin(plugin_definition.clone()).await;
 
-    let _installation_id = deps
+    let _installation_id = admin
         .install_plugin_to_component(&component_id, "library-plugin-3", "v1", 0, HashMap::new())
         .await;
 
-    deps.delete_plugin("library-plugin-3", "v1").await;
+    admin.delete_plugin("library-plugin-3", "v1").await;
 
-    let worker = deps.start_worker(&component_id, "worker1").await;
+    let worker = admin.start_worker(&component_id, "worker1").await;
 
-    let response = deps
+    let response = admin
         .invoke_and_await(
             &worker,
             "it:app-and-library-app/app-api.{app-function}",

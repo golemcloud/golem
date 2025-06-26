@@ -28,7 +28,7 @@ use tokio::sync::Mutex;
 use tracing::{info, Instrument, Level};
 
 pub struct SpawnedWorkerExecutorCluster {
-    worker_executors: Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>>,
+    worker_executors: Vec<Arc<dyn WorkerExecutor>>,
     stopped_indices: Arc<Mutex<HashSet<usize>>>,
 }
 
@@ -38,16 +38,16 @@ impl SpawnedWorkerExecutorCluster {
         working_directory: PathBuf,
         http_port: u16,
         grpc_port: u16,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        worker_service: Arc<dyn WorkerService + 'static>,
+        redis: Arc<dyn Redis>,
+        component_service: Arc<dyn ComponentService>,
+        shard_manager: Arc<dyn ShardManager>,
+        worker_service: Arc<dyn WorkerService>,
         verbosity: Level,
         out_level: Level,
         err_level: Level,
         shared_client: bool,
         cloud_service: Arc<dyn CloudService>,
-    ) -> Arc<dyn WorkerExecutor + Send + Sync + 'static> {
+    ) -> Arc<dyn WorkerExecutor> {
         Arc::new(
             SpawnedWorkerExecutor::new(
                 &executable,
@@ -161,7 +161,7 @@ impl WorkerExecutorCluster for SpawnedWorkerExecutorCluster {
         }
     }
 
-    fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>> {
+    fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor>> {
         self.worker_executors.to_vec()
     }
 
