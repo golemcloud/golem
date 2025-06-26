@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::sqlite::SqliteDb;
 use crate::repo::Deps;
 use crate::Tracing;
 use golem_common::config::DbPostgresConfig;

@@ -13,19 +13,13 @@
 // limitations under the License.
 
 use crate::Tracing;
-use assert2::let_assert;
-use chrono::{NaiveDateTime, Utc};
-use golem_common::model::AccountId;
 use golem_registry_service::repo::account::{AccountRecord, AccountRepo};
-use golem_registry_service::repo::application::{
-    ApplicationRecord, ApplicationRepo, DbApplicationRepo,
-};
+use golem_registry_service::repo::application::{ApplicationRecord, ApplicationRepo};
 use golem_registry_service::repo::environment::{
     EnvironmentCurrentRevisionRecord, EnvironmentRepo,
 };
 use golem_registry_service::repo::plan::{PlanRecord, PlanRepository};
 use golem_registry_service::repo::SqlDateTime;
-use golem_service_base::db::Pool;
 use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};
@@ -67,7 +61,7 @@ impl Deps {
         let account_id = Uuid::new_v4();
         self.account_repo
             .create(AccountRecord {
-                account_id: account_id.clone(),
+                account_id: account_id,
                 name: format!("Test Account {}", account_id),
                 email: format!("test-{}@golem", account_id),
                 created_at: SqlDateTime::now(),

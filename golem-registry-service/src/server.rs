@@ -12,29 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::{DateTime, Utc};
 use golem_common::config::DbConfig;
-use golem_common::model::auth::TokenSecret;
-use golem_common::model::AccountId;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_registry_service::bootstrap::Services;
-use golem_registry_service::config::{make_config_loader, AccountsConfig, RegistryServiceConfig};
+use golem_registry_service::config::{make_config_loader, RegistryServiceConfig};
 use golem_registry_service::metrics;
 use golem_service_base::db;
 use golem_service_base::migration::{Migrations, MigrationsDir};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
-use poem::listener::TcpListener;
-use poem::middleware::{CookieJarManager, Cors};
-use poem::EndpointExt;
 use prometheus::Registry;
-use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
-use std::str::FromStr;
-use std::sync::Arc;
-use tokio::select;
 use tracing::error;
-use tracing::info;
 
 fn main() -> Result<(), std::io::Error> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {

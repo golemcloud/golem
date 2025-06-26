@@ -17,11 +17,8 @@ use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures_util::future::join_all;
 use golem_registry_service::repo::account::AccountRecord;
-use golem_registry_service::repo::environment::{
-    EnvironmentCurrentRevisionRecord, EnvironmentRevisionRecord,
-};
-use golem_registry_service::repo::{SqlBlake3Hash, SqlDateTime};
-use std::str::FromStr;
+use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
+use golem_registry_service::repo::SqlDateTime;
 use uuid::Uuid;
 
 // Common test cases -------------------------------------------------------------------------------
@@ -149,7 +146,7 @@ pub async fn test_environment_ensure(deps: &Deps) {
 
     let env = deps
         .environment_repo
-        .ensure(&user.account_id, &app.application_id, &env_name)
+        .ensure(&user.account_id, &app.application_id, env_name)
         .await
         .unwrap();
 
@@ -168,7 +165,7 @@ pub async fn test_environment_ensure(deps: &Deps) {
     let another_user = deps.create_account().await;
     let env_ensured_by_other_user = deps
         .environment_repo
-        .ensure(&another_user.account_id, &app.application_id, &env_name)
+        .ensure(&another_user.account_id, &app.application_id, env_name)
         .await
         .unwrap();
 
@@ -176,7 +173,7 @@ pub async fn test_environment_ensure(deps: &Deps) {
 
     let env_by_name = deps
         .environment_repo
-        .get_by_name(&app.application_id, &env_name)
+        .get_by_name(&app.application_id, env_name)
         .await
         .unwrap();
     let_assert!(Some(env_by_name) = env_by_name);
@@ -230,7 +227,7 @@ pub async fn test_create_environment_revision(deps: &Deps) {
         environment_id: env_no_revision.environment_id,
         revision_id: 0,
         created_at: SqlDateTime::now(),
-        created_by: user.account_id.clone(),
+        created_by: user.account_id,
         compatibility_check: true,
         version_check: true,
         security_overrides: false,
@@ -268,7 +265,7 @@ pub async fn test_create_environment_revision(deps: &Deps) {
         environment_id: env_no_revision.environment_id,
         revision_id: 0, // NOTE: this is expected to be overwritten by the repo
         created_at: SqlDateTime::now(),
-        created_by: user.account_id.clone(),
+        created_by: user.account_id,
         compatibility_check: false,
         version_check: false,
         security_overrides: true,
@@ -318,7 +315,7 @@ pub async fn test_create_environment_revisions_concurrently(deps: &Deps) {
                 environment_id: env_no_revision.environment_id,
                 revision_id: 0,
                 created_at: SqlDateTime::now(),
-                created_by: user.account_id.clone(),
+                created_by: user.account_id,
                 compatibility_check: true,
                 version_check: true,
                 security_overrides: false,

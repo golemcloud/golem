@@ -65,9 +65,7 @@ pub struct EnvironmentCurrentRevisionRecord {
 
 impl EnvironmentCurrentRevisionRecord {
     pub fn to_revision(&self) -> Option<EnvironmentRevisionRecord> {
-        if self.current_revision_id.is_none() {
-            return None;
-        }
+        self.current_revision_id?;
         Some(EnvironmentRevisionRecord {
             environment_id: self.environment_id,
             revision_id: self.current_revision_id.unwrap(),
