@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
-
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{worker_error_message, TestDslUnsafe};
 use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use std::collections::HashMap;
 use std::time::SystemTime;
+use test_r::{inherit_test_dep, test};
 use tracing::info;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -36,7 +36,7 @@ async fn auction_example_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let registry_component_id = executor
         .component("auction_registry_composed")
@@ -110,7 +110,7 @@ async fn auction_example_2(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let registry_component_id = executor
         .component("auction_registry_composed")
@@ -184,7 +184,7 @@ async fn counter_resource_test_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor.component("caller_composed").store().await;
@@ -228,7 +228,7 @@ async fn counter_resource_test_2(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor.component("caller_composed").store().await;
@@ -273,7 +273,7 @@ async fn counter_resource_test_2_with_restart(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor.component("caller_composed").store().await;
@@ -296,7 +296,7 @@ async fn counter_resource_test_2_with_restart(
         .await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let result2 = executor
         .invoke_and_await(
@@ -322,7 +322,7 @@ async fn counter_resource_test_3(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor.component("caller_composed").store().await;
@@ -367,7 +367,7 @@ async fn counter_resource_test_3_with_restart(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor.component("caller_composed").store().await;
@@ -390,7 +390,7 @@ async fn counter_resource_test_3_with_restart(
         .await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let result2 = executor
         .invoke_and_await(
@@ -416,7 +416,7 @@ async fn context_inheritance(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor.component("caller_composed").store().await;
@@ -508,7 +508,7 @@ async fn counter_resource_test_5(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor.component("caller_composed").store().await;
@@ -554,7 +554,7 @@ async fn counter_resource_test_5_with_restart(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     // using store_unique_component to avoid collision with counter_resource_test_5
     let counters_component_id = executor.component("counters").unique().store().await;
@@ -581,7 +581,7 @@ async fn counter_resource_test_5_with_restart(
 
     drop(executor);
 
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let result2 = executor
         .invoke_and_await(
@@ -622,7 +622,7 @@ async fn wasm_rpc_bug_32_test(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let counters_component_id = executor.component("counters").store().await;
     let caller_component_id = executor.component("caller_composed").store().await;
@@ -671,7 +671,7 @@ async fn error_message_non_existing_target_component(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let registry_component_id = executor
         .component("auction_registry_composed")
@@ -727,7 +727,7 @@ async fn ephemeral_worker_invocation_via_rpc1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let ephemeral_component_id = executor.component("ephemeral").ephemeral().store().await;
     let caller_component_id = executor.component("caller_composed").store().await;

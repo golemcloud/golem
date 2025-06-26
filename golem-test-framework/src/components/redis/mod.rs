@@ -23,7 +23,7 @@ pub mod provided;
 pub mod spawned;
 
 #[async_trait]
-pub trait Redis {
+pub trait Redis: Send + Sync {
     fn assert_valid(&self);
 
     fn private_host(&self) -> String;

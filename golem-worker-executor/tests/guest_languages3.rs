@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
-
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{check, let_assert};
@@ -22,12 +20,14 @@ use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
 use chrono::Datelike;
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{events_to_lines, log_event_to_string, TestDslUnsafe};
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use http::HeaderMap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use test_r::{inherit_test_dep, test};
 use tracing::{info, Instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -42,7 +42,7 @@ async fn javascript_example_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("js-1").store().await;
     let worker_id = executor.start_worker(&component_id, "js-1").await;
@@ -113,7 +113,7 @@ async fn javascript_example_2(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("js-2").store().await;
     let worker_id = executor.start_worker(&component_id, "js-2").await;
@@ -157,7 +157,7 @@ async fn csharp_example_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let component_id = executor.component("csharp-1").store().await;
     let mut env = HashMap::new();
@@ -206,7 +206,7 @@ async fn python_http_client(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap().into_admin();
 
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();

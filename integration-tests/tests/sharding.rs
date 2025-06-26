@@ -389,8 +389,9 @@ mod tests {
         }
 
         async fn create_component_and_start_workers(&self, n: usize) -> Vec<WorkerId> {
+            let admin = self.admin();
             info!("Storing component");
-            let component_id = self.component("option-service").store().await;
+            let component_id = admin.component("option-service").store().await;
             info!("ComponentId: {}", component_id);
 
             let mut worker_ids = Vec::new();
@@ -398,7 +399,7 @@ mod tests {
             for i in 1..=n {
                 info!("Worker {i} starting");
                 let worker_name = format!("sharding-test-{i}");
-                let worker_id = self.start_worker(&component_id, &worker_name).await;
+                let worker_id = admin.start_worker(&component_id, &worker_name).await;
                 info!("Worker {i} started");
                 worker_ids.push(worker_id);
             }
@@ -414,7 +415,7 @@ mod tests {
         ) -> Result<(), worker::v1::worker_error::Error> {
             let mut tasks = JoinSet::new();
             for worker_id in workers {
-                let self_clone = self.clone();
+                let self_clone = self.clone().into_admin();
                 tasks.spawn({
                     let worker_id = worker_id.clone();
                     async move {

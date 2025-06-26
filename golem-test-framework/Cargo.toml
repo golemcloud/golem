@@ -27,6 +27,7 @@ async-dropper-simple = { version = "0.2.6", features = ["no-default-bound", "tok
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 bytes = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true }
 cli-table = { workspace = true }
 colored = "3.0.0"

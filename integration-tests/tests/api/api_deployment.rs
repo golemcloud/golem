@@ -26,7 +26,7 @@ use golem_api_grpc::proto::golem::component::VersionedComponentId;
 use golem_client::model::{
     ApiDefinitionInfo, ApiDeployment, ApiDeploymentRequest, ApiSite, ComponentType,
 };
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, ProjectId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
@@ -40,7 +40,10 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
-    let component_id = deps.component("shopping-cart").unique().store().await;
+    let admin = deps.admin();
+    let project_id = admin.default_project().await;
+
+    let component_id = admin.component("shopping-cart").unique().store().await;
 
     fn new_api_definition_id(prefix: &str) -> String {
         format!("{}-{}", prefix, Uuid::new_v4())
@@ -48,6 +51,8 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
 
     let api_definition_1 = create_api_definition(
         deps,
+        &admin.token,
+        &project_id,
         &component_id,
         new_api_definition_id("a"),
         "1".to_string(),
@@ -57,14 +62,14 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
 
     let api_definition_2 = create_api_definition(
         deps,
+        &admin.token,
+        &project_id,
         &component_id,
         new_api_definition_id("b"),
         "2".to_string(),
         "/path-2".to_string(),
     )
     .await;
-
-    let project_id = deps.cloud_service().get_default_project().await.unwrap();
 
     let request = ApiDeploymentRequest {
         project_id: project_id.0,
@@ -86,7 +91,7 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
 
     let response = deps
         .worker_service()
-        .create_or_update_api_deployment(request.clone())
+        .create_or_update_api_deployment(&admin.token, request.clone())
         .await
         .unwrap();
     check!(request.api_definitions == response.api_definitions);
@@ -94,7 +99,7 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
 
     let response = deps
         .worker_service()
-        .get_api_deployment("subdomain.localhost")
+        .get_api_deployment(&admin.token, &project_id, "subdomain.localhost")
         .await
         .unwrap();
     check!(request.api_definitions == response.api_definitions);
@@ -102,14 +107,14 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
 
     let api_definition_3 = create_api_definition(
         deps,
+        &admin.token,
+        &project_id,
         &component_id,
         new_api_definition_id("c"),
         "1".to_string(),
         "/path-3".to_string(),
     )
     .await;
-
-    let project_id = deps.cloud_service().get_default_project().await.unwrap();
 
     let request = ApiDeploymentRequest {
         project_id: project_id.0,
@@ -128,8 +133,6 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
             subdomain: Some("subdomain".to_string()),
         },
     };
-
-    let project_id = deps.cloud_service().get_default_project().await.unwrap();
 
     // NOTE: create_or_update does not delete previous defs
     let expected_merged = ApiDeploymentRequest {
@@ -156,7 +159,7 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
 
     let response = deps
         .worker_service()
-        .create_or_update_api_deployment(request.clone())
+        .create_or_update_api_deployment(&admin.token, request.clone())
         .await
         .unwrap();
     check!(expected_merged
@@ -167,7 +170,7 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
 
     let response = deps
         .worker_service()
-        .get_api_deployment("subdomain.localhost")
+        .get_api_deployment(&admin.token, &project_id, "subdomain.localhost")
         .await
         .unwrap();
     check!(expected_merged
@@ -177,12 +180,12 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
     check!(request.site == response.site);
 
     deps.worker_service()
-        .delete_api_deployment("subdomain.localhost")
+        .delete_api_deployment(&admin.token, &project_id, "subdomain.localhost")
         .await
         .unwrap();
     let response = deps
         .worker_service()
-        .get_api_deployment("subdomain.localhost")
+        .get_api_deployment(&admin.token, &project_id, "subdomain.localhost")
         .await;
     assert!(response.is_err());
     check!(response.err().unwrap().to_string().contains("not found"));
@@ -194,7 +197,10 @@ async fn create_and_get_api_deployment(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependencies) {
-    let component_id = deps.component("shopping-cart").unique().store().await;
+    let admin = deps.admin();
+    let project_id = admin.default_project().await;
+
+    let component_id = admin.component("shopping-cart").unique().store().await;
 
     fn new_api_definition_id(prefix: &str) -> String {
         format!("{}-{}", prefix, Uuid::new_v4())
@@ -202,14 +208,14 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
 
     let api_definition_1 = create_api_definition(
         deps,
+        &admin.token,
+        &project_id,
         &component_id,
         new_api_definition_id("a"),
         "1".to_string(),
         "/path-4".to_string(),
     )
     .await;
-
-    let project_id = deps.cloud_service().get_default_project().await.unwrap();
 
     let request = ApiDeploymentRequest {
         project_id: project_id.0,
@@ -224,7 +230,7 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
     };
 
     deps.worker_service()
-        .create_or_update_api_deployment(request.clone())
+        .create_or_update_api_deployment(&admin.token, request.clone())
         .await
         .unwrap();
 
@@ -234,6 +240,7 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
     let update_component = deps
         .component_service()
         .update_component(
+            &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
@@ -252,13 +259,14 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
     // Delete the API deployment and see if component can be updated
     // as constraints should be removed after deleting the API deployment
     deps.worker_service()
-        .delete_api_deployment("subdomain-2.localhost")
+        .delete_api_deployment(&admin.token, &project_id, "subdomain-2.localhost")
         .await
         .unwrap();
 
     let update_component = deps
         .component_service()
         .update_component(
+            &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
@@ -278,7 +286,10 @@ async fn create_api_deployment_and_update_component(deps: &EnvBasedTestDependenc
 #[test]
 #[tracing::instrument]
 async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedTestDependencies) {
-    let component_id = deps.component("shopping-cart").unique().store().await;
+    let admin = deps.admin();
+    let project_id = admin.default_project().await;
+
+    let component_id = admin.component("shopping-cart").unique().store().await;
 
     fn new_api_definition_id(prefix: &str) -> String {
         format!("{}-{}", prefix, Uuid::new_v4())
@@ -286,14 +297,14 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
 
     let api_definition = create_api_definition(
         deps,
+        &admin.token,
+        &project_id,
         &component_id,
         new_api_definition_id("a"),
         "1".to_string(),
         "/path-5".to_string(),
     )
     .await;
-
-    let project_id = deps.cloud_service().get_default_project().await.unwrap();
 
     // Same API definition but different subdomain
     let request1 = ApiDeploymentRequest {
@@ -321,12 +332,12 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
     };
 
     deps.worker_service()
-        .create_or_update_api_deployment(request1.clone())
+        .create_or_update_api_deployment(&admin.token, request1.clone())
         .await
         .unwrap();
 
     deps.worker_service()
-        .create_or_update_api_deployment(request2.clone())
+        .create_or_update_api_deployment(&admin.token, request2.clone())
         .await
         .unwrap();
 
@@ -336,6 +347,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
     let update_component = deps
         .component_service()
         .update_component(
+            &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
@@ -354,13 +366,14 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
     // Delete one of the API deployments and see if component can be updated, and it
     // should fail as the component is still being used in subdomain2
     deps.worker_service()
-        .delete_api_deployment("subdomain1.domain1")
+        .delete_api_deployment(&admin.token, &project_id, "subdomain1.domain1")
         .await
         .unwrap();
 
     let update_component = deps
         .component_service()
         .update_component(
+            &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
@@ -378,13 +391,14 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
 
     // Delete the final API deployment and see if component can be updated, and it should succeed
     deps.worker_service()
-        .delete_api_deployment("subdomain2.domain2")
+        .delete_api_deployment(&admin.token, &project_id, "subdomain2.domain2")
         .await
         .unwrap();
 
     let update_component = deps
         .component_service()
         .update_component(
+            &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
@@ -404,7 +418,9 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &EnvBasedT
 #[test]
 #[tracing::instrument]
 async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedTestDependencies) {
-    let component_id = deps.component("shopping-cart").unique().store().await;
+    let admin = deps.admin();
+    let component_id = admin.component("shopping-cart").unique().store().await;
+    let project_id = admin.default_project().await;
 
     fn new_api_definition_id(prefix: &str) -> String {
         format!("{}-{}", prefix, Uuid::new_v4())
@@ -412,6 +428,8 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
 
     let api_definition1 = create_api_definition_without_worker_calls(
         deps,
+        &admin.token,
+        &project_id,
         &component_id,
         new_api_definition_id("a"),
         "1".to_string(),
@@ -421,14 +439,14 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
 
     let api_definition2 = create_api_definition(
         deps,
+        &admin.token,
+        &project_id,
         &component_id,
         new_api_definition_id("a"),
         "1".to_string(),
         "/path-7".to_string(),
     )
     .await;
-
-    let project_id = deps.cloud_service().get_default_project().await.unwrap();
 
     //
     let request1 = ApiDeploymentRequest {
@@ -456,12 +474,12 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
     };
 
     deps.worker_service()
-        .create_or_update_api_deployment(request1.clone())
+        .create_or_update_api_deployment(&admin.token, request1.clone())
         .await
         .unwrap();
 
     deps.worker_service()
-        .create_or_update_api_deployment(request2.clone())
+        .create_or_update_api_deployment(&admin.token, request2.clone())
         .await
         .unwrap();
 
@@ -471,6 +489,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
     let update_component = deps
         .component_service()
         .update_component(
+            &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
@@ -488,13 +507,14 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
 
     // Delete API deployment that was using the worker function
     deps.worker_service()
-        .delete_api_deployment("subdomain4.domain4")
+        .delete_api_deployment(&admin.token, &project_id, "subdomain4.domain4")
         .await
         .unwrap();
 
     let update_component = deps
         .component_service()
         .update_component(
+            &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
@@ -508,7 +528,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
 
     // Delete the final API deployment and cleanup
     deps.worker_service()
-        .delete_api_deployment("subdomain3.domain3")
+        .delete_api_deployment(&admin.token, &project_id, "subdomain3.domain3")
         .await
         .unwrap();
 }
@@ -516,10 +536,14 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &EnvBasedT
 #[test]
 #[tracing::instrument]
 async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
-    let component_id = deps.component("shopping-cart").unique().store().await;
+    let admin = deps.admin();
+    let project_id = admin.default_project().await;
+    let component_id = admin.component("shopping-cart").unique().store().await;
 
     let api_definition_1 = create_api_definition(
         deps,
+        &admin.token,
+        &project_id,
         &component_id,
         Uuid::new_v4().to_string(),
         "1".to_string(),
@@ -528,6 +552,8 @@ async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
     .await;
     let api_definition_2 = create_api_definition(
         deps,
+        &admin.token,
+        &project_id,
         &component_id,
         Uuid::new_v4().to_string(),
         "2".to_string(),
@@ -535,48 +561,57 @@ async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
     )
     .await;
 
-    let project_id = deps.cloud_service().get_default_project().await.unwrap();
+    deps.worker_service()
+        .create_or_update_api_deployment(
+            &admin.token,
+            ApiDeploymentRequest {
+                project_id: project_id.0,
+                api_definitions: vec![ApiDefinitionInfo {
+                    id: api_definition_1.id.as_ref().unwrap().value.clone(),
+                    version: api_definition_1.version.clone(),
+                }],
+                site: ApiSite {
+                    host: "domain".to_string(),
+                    subdomain: None,
+                },
+            },
+        )
+        .await
+        .unwrap();
 
     deps.worker_service()
-        .create_or_update_api_deployment(ApiDeploymentRequest {
-            project_id: project_id.0,
-            api_definitions: vec![ApiDefinitionInfo {
-                id: api_definition_1.id.as_ref().unwrap().value.clone(),
-                version: api_definition_1.version.clone(),
-            }],
-            site: ApiSite {
-                host: "domain".to_string(),
-                subdomain: None,
+        .create_or_update_api_deployment(
+            &admin.token,
+            ApiDeploymentRequest {
+                project_id: project_id.0,
+                api_definitions: vec![ApiDefinitionInfo {
+                    id: api_definition_1.id.as_ref().unwrap().value.clone(),
+                    version: api_definition_1.version.clone(),
+                }],
+                site: ApiSite {
+                    host: "domain".to_string(),
+                    subdomain: Some("subdomain".to_string()),
+                },
             },
-        })
+        )
         .await
         .unwrap();
+
     deps.worker_service()
-        .create_or_update_api_deployment(ApiDeploymentRequest {
-            project_id: project_id.0,
-            api_definitions: vec![ApiDefinitionInfo {
-                id: api_definition_1.id.as_ref().unwrap().value.clone(),
-                version: api_definition_1.version.clone(),
-            }],
-            site: ApiSite {
-                host: "domain".to_string(),
-                subdomain: Some("subdomain".to_string()),
+        .create_or_update_api_deployment(
+            &admin.token,
+            ApiDeploymentRequest {
+                project_id: project_id.0,
+                api_definitions: vec![ApiDefinitionInfo {
+                    id: api_definition_2.id.as_ref().unwrap().value.clone(),
+                    version: api_definition_2.version.clone(),
+                }],
+                site: ApiSite {
+                    host: "other-domain".to_string(),
+                    subdomain: None,
+                },
             },
-        })
-        .await
-        .unwrap();
-    deps.worker_service()
-        .create_or_update_api_deployment(ApiDeploymentRequest {
-            project_id: project_id.0,
-            api_definitions: vec![ApiDefinitionInfo {
-                id: api_definition_2.id.as_ref().unwrap().value.clone(),
-                version: api_definition_2.version.clone(),
-            }],
-            site: ApiSite {
-                host: "other-domain".to_string(),
-                subdomain: None,
-            },
-        })
+        )
         .await
         .unwrap();
 
@@ -598,7 +633,7 @@ async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
 
     let result = by_domains(
         deps.worker_service()
-            .list_api_deployments(None)
+            .list_api_deployments(&admin.token, &project_id, None)
             .await
             .unwrap(),
     );
@@ -608,7 +643,11 @@ async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
 
     let result = by_domains(
         deps.worker_service()
-            .list_api_deployments(Some(&api_definition_1.id.as_ref().unwrap().value))
+            .list_api_deployments(
+                &admin.token,
+                &project_id,
+                Some(&api_definition_1.id.as_ref().unwrap().value),
+            )
             .await
             .unwrap(),
     );
@@ -618,7 +657,11 @@ async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
 
     let result = by_domains(
         deps.worker_service()
-            .list_api_deployments(Some(&api_definition_2.id.as_ref().unwrap().value))
+            .list_api_deployments(
+                &admin.token,
+                &project_id,
+                Some(&api_definition_2.id.as_ref().unwrap().value),
+            )
             .await
             .unwrap(),
     );
@@ -629,108 +672,120 @@ async fn get_all_api_deployments(deps: &EnvBasedTestDependencies) {
 
 async fn create_api_definition_without_worker_calls(
     deps: &EnvBasedTestDependencies,
+    token: &Uuid,
+    project: &ProjectId,
     component_id: &ComponentId,
     api_definition_id: String,
     version: String,
     path: String,
 ) -> ApiDefinition {
     deps.worker_service()
-        .create_api_definition(CreateApiDefinitionRequest {
-            api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                ApiDefinitionRequest {
-                    id: Some(ApiDefinitionId {
-                        value: api_definition_id,
-                    }),
-                    version,
-                    draft: false,
-                    definition: Some(api_definition_request::Definition::Http(
-                        HttpApiDefinition {
-                            routes: vec![HttpRoute {
-                                method: HttpMethod::Post as i32,
-                                path,
-                                binding: Some(GatewayBinding {
-                                    component: Some(VersionedComponentId {
-                                        component_id: Some(component_id.clone().into()),
-                                        version: 0,
+        .create_api_definition(
+            token,
+            project,
+            CreateApiDefinitionRequest {
+                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                    ApiDefinitionRequest {
+                        id: Some(ApiDefinitionId {
+                            value: api_definition_id,
+                        }),
+                        version,
+                        draft: false,
+                        definition: Some(api_definition_request::Definition::Http(
+                            HttpApiDefinition {
+                                routes: vec![HttpRoute {
+                                    method: HttpMethod::Post as i32,
+                                    path,
+                                    binding: Some(GatewayBinding {
+                                        component: Some(VersionedComponentId {
+                                            component_id: Some(component_id.clone().into()),
+                                            version: 0,
+                                        }),
+                                        worker_name: None,
+                                        response: Some(to_grpc_rib_expr(
+                                            r#"
+                                                let status: u64 = 200;
+                                                {
+                                                headers: {ContentType: "json", userid: "foo"},
+                                                body: "foo",
+                                                status: status
+                                                }
+                                            "#,
+                                        )),
+                                        idempotency_key: None,
+                                        binding_type: Some(GatewayBindingType::Default as i32),
+                                        static_binding: None,
+                                        invocation_context: None,
                                     }),
-                                    worker_name: None,
-                                    response: Some(to_grpc_rib_expr(
-                                        r#"
-                                            let status: u64 = 200;
-                                            {
-                                              headers: {ContentType: "json", userid: "foo"},
-                                              body: "foo",
-                                              status: status
-                                            }
-                                        "#,
-                                    )),
-                                    idempotency_key: None,
-                                    binding_type: Some(GatewayBindingType::Default as i32),
-                                    static_binding: None,
-                                    invocation_context: None,
-                                }),
-                                middleware: None,
-                            }],
-                        },
-                    )),
-                },
-            )),
-        })
+                                    middleware: None,
+                                }],
+                            },
+                        )),
+                    },
+                )),
+            },
+        )
         .await
         .unwrap()
 }
 
 async fn create_api_definition(
     deps: &EnvBasedTestDependencies,
+    token: &Uuid,
+    project: &ProjectId,
     component_id: &ComponentId,
     api_definition_id: String,
     version: String,
     path: String,
 ) -> ApiDefinition {
     deps.worker_service()
-        .create_api_definition(CreateApiDefinitionRequest {
-            api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                ApiDefinitionRequest {
-                    id: Some(ApiDefinitionId {
-                        value: api_definition_id,
-                    }),
-                    version,
-                    draft: false,
-                    definition: Some(api_definition_request::Definition::Http(
-                        HttpApiDefinition {
-                            routes: vec![HttpRoute {
-                                method: HttpMethod::Post as i32,
-                                path,
-                                binding: Some(GatewayBinding {
-                                    component: Some(VersionedComponentId {
-                                        component_id: Some(component_id.clone().into()),
-                                        version: 0,
+        .create_api_definition(
+            token,
+            project,
+            CreateApiDefinitionRequest {
+                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
+                    ApiDefinitionRequest {
+                        id: Some(ApiDefinitionId {
+                            value: api_definition_id,
+                        }),
+                        version,
+                        draft: false,
+                        definition: Some(api_definition_request::Definition::Http(
+                            HttpApiDefinition {
+                                routes: vec![HttpRoute {
+                                    method: HttpMethod::Post as i32,
+                                    path,
+                                    binding: Some(GatewayBinding {
+                                        component: Some(VersionedComponentId {
+                                            component_id: Some(component_id.clone().into()),
+                                            version: 0,
+                                        }),
+                                        worker_name: None,
+                                        response: Some(to_grpc_rib_expr(
+                                            r#"
+                                                let worker = instance("shopping-cart");
+                                                let result = worker.get-cart-contents();
+                                                let status: u64 = 200;
+                                                {
+                                                headers: { ContentType: "json", userid: "foo" },
+                                                body: "foo",
+                                                status: status
+                                                }
+                                            "#,
+                                        )),
+                                        idempotency_key: None,
+                                        binding_type: Some(GatewayBindingType::Default as i32),
+                                        static_binding: None,
+                                        invocation_context: None,
                                     }),
-                                    worker_name: None,
-                                    response: Some(to_grpc_rib_expr(
-                                        r#"
-                                            let worker = instance("shopping-cart");
-                                            let result = worker.get-cart-contents();
-                                            let status: u64 = 200;
-                                            {
-                                              headers: { ContentType: "json", userid: "foo" },
-                                              body: "foo",
-                                              status: status
-                                            }
-                                        "#,
-                                    )),
-                                    idempotency_key: None,
-                                    binding_type: Some(GatewayBindingType::Default as i32),
-                                    static_binding: None,
-                                    invocation_context: None,
-                                }),
-                                middleware: None,
-                            }],
-                        },
-                    )),
-                },
-            )),
-        })
+                                    middleware: None,
+                                }],
+                            },
+                        )),
+                    },
+                )),
+            },
+        )
         .await
         .unwrap()
 }
@@ -738,10 +793,14 @@ async fn create_api_definition(
 #[test]
 #[tracing::instrument]
 async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
-    let component_id = deps.component("shopping-cart").unique().store().await;
+    let admin = deps.admin();
+    let component_id = admin.component("shopping-cart").unique().store().await;
+    let project = admin.default_project().await;
 
     let api_definition_1 = create_api_definition(
         deps,
+        &admin.token,
+        &project,
         &component_id,
         Uuid::new_v4().to_string(),
         "1".to_string(),
@@ -751,6 +810,8 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
 
     let api_definition_2 = create_api_definition(
         deps,
+        &admin.token,
+        &project,
         &component_id,
         Uuid::new_v4().to_string(),
         "2".to_string(),
@@ -758,34 +819,35 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
     )
     .await;
 
-    let project_id = deps.cloud_service().get_default_project().await.unwrap();
-
     // Deploy both APIs to the same site
     deps.worker_service()
-        .create_or_update_api_deployment(ApiDeploymentRequest {
-            project_id: project_id.0,
-            api_definitions: vec![
-                ApiDefinitionInfo {
-                    id: api_definition_1.id.as_ref().unwrap().value.clone(),
-                    version: api_definition_1.version.clone(),
+        .create_or_update_api_deployment(
+            &admin.token,
+            ApiDeploymentRequest {
+                project_id: project.0,
+                api_definitions: vec![
+                    ApiDefinitionInfo {
+                        id: api_definition_1.id.as_ref().unwrap().value.clone(),
+                        version: api_definition_1.version.clone(),
+                    },
+                    ApiDefinitionInfo {
+                        id: api_definition_2.id.as_ref().unwrap().value.clone(),
+                        version: api_definition_2.version.clone(),
+                    },
+                ],
+                site: ApiSite {
+                    host: "localhost".to_string(),
+                    subdomain: Some("undeploy-test".to_string()),
                 },
-                ApiDefinitionInfo {
-                    id: api_definition_2.id.as_ref().unwrap().value.clone(),
-                    version: api_definition_2.version.clone(),
-                },
-            ],
-            site: ApiSite {
-                host: "localhost".to_string(),
-                subdomain: Some("undeploy-test".to_string()),
             },
-        })
+        )
         .await
         .unwrap();
 
     // List deployments and check both are present
     let deployments = deps
         .worker_service()
-        .list_api_deployments(None)
+        .list_api_deployments(&admin.token, &project, None)
         .await
         .unwrap();
     check!(deployments
@@ -804,6 +866,8 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
     // Undeploy API 1
     deps.worker_service()
         .undeploy_api(
+            &admin.token,
+            &project,
             "undeploy-test.localhost",
             &api_definition_1.id.as_ref().unwrap().value,
             &api_definition_1.version,
@@ -814,7 +878,7 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
     // Verify that API 1 is no longer in the deployments
     let deployments = deps
         .worker_service()
-        .list_api_deployments(None)
+        .list_api_deployments(&admin.token, &project, None)
         .await
         .unwrap();
     check!(!deployments
@@ -835,7 +899,13 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
     // Test undeploying from a non-existent API
     let result = deps
         .worker_service()
-        .undeploy_api("subdomain.localhost", "non-existent-id", "1")
+        .undeploy_api(
+            &admin.token,
+            &project,
+            "subdomain.localhost",
+            "non-existent-id",
+            "1",
+        )
         .await;
     assert!(result.is_err());
 
@@ -843,6 +913,8 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
     let result = deps
         .worker_service()
         .undeploy_api(
+            &admin.token,
+            &project,
             "non-existent.localhost",
             &api_definition_2.id.as_ref().unwrap().value,
             &api_definition_2.version,
@@ -854,7 +926,10 @@ async fn undeploy_api_test(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
-    let component_id = deps.component("shopping-cart").unique().store().await;
+    let admin = deps.admin();
+    let project = admin.default_project().await;
+
+    let component_id = admin.component("shopping-cart").unique().store().await;
 
     fn new_api_definition_id(prefix: &str) -> String {
         format!("{}-{}", prefix, Uuid::new_v4())
@@ -862,6 +937,8 @@ async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
 
     let api_definition_1 = create_api_definition(
         deps,
+        &admin.token,
+        &project,
         &component_id,
         new_api_definition_id("a"),
         "1".to_string(),
@@ -869,10 +946,8 @@ async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
     )
     .await;
 
-    let project_id = deps.cloud_service().get_default_project().await.unwrap();
-
     let request = ApiDeploymentRequest {
-        project_id: project_id.0,
+        project_id: project.0,
         api_definitions: vec![ApiDefinitionInfo {
             id: api_definition_1.id.as_ref().unwrap().value.clone(),
             version: api_definition_1.version.clone(),
@@ -884,7 +959,7 @@ async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
     };
 
     deps.worker_service()
-        .create_or_update_api_deployment(request.clone())
+        .create_or_update_api_deployment(&admin.token, request.clone())
         .await
         .unwrap();
 
@@ -894,6 +969,7 @@ async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
     let update_component = deps
         .component_service()
         .update_component(
+            &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,
@@ -913,6 +989,8 @@ async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
     // as constraints should be removed after undeploying the API
     deps.worker_service()
         .undeploy_api(
+            &admin.token,
+            &project,
             "undeploy-test.localhost",
             &api_definition_1.id.as_ref().unwrap().value,
             &api_definition_1.version,
@@ -923,6 +1001,7 @@ async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
     let update_component = deps
         .component_service()
         .update_component(
+            &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
             ComponentType::Durable,

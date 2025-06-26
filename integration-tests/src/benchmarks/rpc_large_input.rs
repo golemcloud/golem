@@ -88,12 +88,14 @@ impl Benchmark for RpcLargeInput {
     ) -> Self::IterationContext {
         let child_component_id = benchmark_context
             .deps
+            .admin()
             .component("child_component")
             .unique()
             .store()
             .await;
         let component_id = benchmark_context
             .deps
+            .admin()
             .component("parent_component_composed")
             .unique()
             .store()
@@ -127,6 +129,7 @@ impl Benchmark for RpcLargeInput {
 
             benchmark_context
                 .deps
+                .admin()
                 .start_worker_with(
                     &parent_worker_id.component_id,
                     &parent_worker_id.worker_name,
@@ -206,11 +209,13 @@ impl Benchmark for RpcLargeInput {
         for worker_id in &context.worker_ids {
             benchmark_context
                 .deps
+                .admin()
                 .delete_worker(&worker_id.parent)
                 .await
                 .expect("Failed to delete parent worker");
             benchmark_context
                 .deps
+                .admin()
                 .delete_worker(&worker_id.child)
                 .await
                 .expect("Failed to delete child worker");
@@ -245,7 +250,7 @@ impl RpcLargeInput {
             let _ = fibers.spawn(async move {
                 for _ in 0..length {
                     let result = invoke_and_await(
-                        &context_clone.deps,
+                        &context_clone.deps.admin(),
                         &worker_id_clone,
                         &function_clone,
                         params_clone.clone(),

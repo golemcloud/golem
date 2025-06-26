@@ -22,18 +22,16 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::plugin::{PluginInstallation, PluginInstallationAction};
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
-use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
     ComponentType, ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter,
-    WorkerId, WorkerStatus,
+    WorkerId,
 };
 use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc_derive::IntoValue;
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
@@ -258,101 +256,6 @@ pub struct WorkersMetadataRequest {
     pub cursor: Option<ScanCursor>,
     pub count: Option<u64>,
     pub precise: Option<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct WorkersMetadataResponse {
-    pub workers: Vec<WorkerMetadata>,
-    pub cursor: Option<ScanCursor>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct WorkerMetadata {
-    pub worker_id: WorkerId,
-    pub args: Vec<String>,
-    pub env: HashMap<String, String>,
-    pub status: WorkerStatus,
-    pub component_version: ComponentVersion,
-    pub retry_count: u64,
-    pub pending_invocation_count: u64,
-    pub updates: Vec<UpdateRecord>,
-    pub created_at: Timestamp,
-    pub last_error: Option<String>,
-    pub component_size: u64,
-    pub total_linear_memory_size: u64,
-    pub owned_resources: HashMap<u64, ResourceMetadata>,
-    pub active_plugins: HashSet<PluginInstallationId>,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::WorkerMetadata,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
-            args: value.args,
-            env: value.env,
-            status: value.status.try_into()?,
-            component_version: value.component_version,
-            retry_count: value.retry_count,
-            pending_invocation_count: value.pending_invocation_count,
-            updates: value
-                .updates
-                .into_iter()
-                .map(|update| update.try_into())
-                .collect::<Result<Vec<UpdateRecord>, String>>()?,
-            created_at: value.created_at.ok_or("Missing created_at")?.into(),
-            last_error: value.last_error,
-            component_size: value.component_size,
-            total_linear_memory_size: value.total_linear_memory_size,
-            owned_resources: value
-                .owned_resources
-                .into_iter()
-                .map(|(k, v)| v.try_into().map(|v| (k, v)))
-                .collect::<Result<HashMap<_, _>, _>>()?,
-            active_plugins: value
-                .active_plugins
-                .into_iter()
-                .map(|id| id.try_into())
-                .collect::<Result<HashSet<_>, _>>()?,
-        })
-    }
-}
-
-impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetadata {
-    fn from(value: WorkerMetadata) -> Self {
-        Self {
-            worker_id: Some(value.worker_id.into()),
-            account_id: Some(AccountId::placeholder().into()),
-            args: value.args,
-            env: value.env,
-            status: value.status.into(),
-            component_version: value.component_version,
-            retry_count: value.retry_count,
-            pending_invocation_count: value.pending_invocation_count,
-            updates: value.updates.iter().cloned().map(|u| u.into()).collect(),
-            created_at: Some(value.created_at.into()),
-            last_error: value.last_error,
-            component_size: value.component_size,
-            total_linear_memory_size: value.total_linear_memory_size,
-            owned_resources: value
-                .owned_resources
-                .into_iter()
-                .map(|(k, v)| (k, v.into()))
-                .collect(),
-            active_plugins: value
-                .active_plugins
-                .into_iter()
-                .map(|id| id.into())
-                .collect(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union)]
