@@ -20,6 +20,7 @@ use futures::{future, TryFutureExt};
 use sqlx::query::{Query, QueryAs};
 use sqlx::{Database, Error, FromRow, IntoArguments, Row};
 use std::fmt::Debug;
+use tracing::{error, warn};
 
 pub mod postgres;
 pub mod sqlite;
@@ -81,8 +82,11 @@ pub trait Pool: Debug + Sync {
                 Ok(result)
             }
             Err(err) => {
-                // If rollback fails we still return the original error
-                let _ = tx.rollback().await;
+                warn!(svc_name, api_name, error = %err, "Rolling back, transaction failed");
+                // If rollback fails we still return the original error, but log the rollback error
+                if let Err(err) = tx.rollback().await {
+                    error!(svc_name, api_name, error = %err, "Rollback failed");
+                }
                 Err(err)
             }
         }

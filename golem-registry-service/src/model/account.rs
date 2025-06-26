@@ -26,4 +26,5 @@ pub struct Account {
     pub name: String,
     pub email: String,
     pub plan_id: PlanId,
+    // TODO: add created_at
 }

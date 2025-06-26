@@ -17,6 +17,7 @@ use crate::Tracing;
 use golem_common::config::DbSqliteConfig;
 use golem_registry_service::repo::account::{DbAccountRepo, LoggedAccountRepo};
 use golem_registry_service::repo::application::{DbApplicationRepo, LoggedApplicationRepo};
+use golem_registry_service::repo::environment::{DbEnvironmentRepo, LoggedEnvironmentRepo};
 use golem_registry_service::repo::plan::{DbPlanRepository, LoggedPlanRepository};
 use golem_service_base::db;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -80,6 +81,9 @@ async fn deps(db: &SqliteDb) -> Deps {
         application_repo: Arc::new(LoggedApplicationRepo::new(DbApplicationRepo::new(
             db.pool.clone(),
         ))),
+        environment_repo: Arc::new(LoggedEnvironmentRepo::new(DbEnvironmentRepo::new(
+            db.pool.clone(),
+        ))),
         plan_repo: Arc::new(LoggedPlanRepository::new(DbPlanRepository::new(
             db.pool.clone(),
         ))),
@@ -91,6 +95,11 @@ async fn deps(db: &SqliteDb) -> Deps {
 // Test cases --------------------------------------------------------------------------------------
 
 #[test]
+async fn test_create_and_get_account(deps: &Deps) {
+    crate::repo::common::test_create_and_get_account(deps).await;
+}
+
+#[test]
 async fn test_application_ensure(deps: &Deps) {
     crate::repo::common::test_application_ensure(deps).await;
 }
@@ -98,4 +107,24 @@ async fn test_application_ensure(deps: &Deps) {
 #[test]
 async fn test_application_ensure_concurrent(deps: &Deps) {
     crate::repo::common::test_application_ensure_concurrent(deps).await;
+}
+
+#[test]
+async fn test_environment_ensure(deps: &Deps) {
+    crate::repo::common::test_environment_ensure(deps).await;
+}
+
+#[test]
+async fn test_environment_ensure_concurrent(deps: &Deps) {
+    crate::repo::common::test_environment_ensure_concurrent(deps).await;
+}
+
+#[test]
+async fn test_create_environment_revision(deps: &Deps) {
+    crate::repo::common::test_create_environment_revision(deps).await;
+}
+
+#[test]
+async fn test_create_environment_revisions_concurrently(deps: &Deps) {
+    crate::repo::common::test_create_environment_revisions_concurrently(deps).await;
 }

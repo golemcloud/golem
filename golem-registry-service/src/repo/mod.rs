@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, TimeDelta, Utc};
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::Database;
+use std::fmt::Display;
+use std::ops::{Deref, Sub};
 
 pub mod account;
 pub mod application;
@@ -27,7 +29,13 @@ pub mod token;
 /// (e.g. TIMESTAMP WITHOUT TIME ZONE for Postgres). Doing so allows us to use the same queries
 /// for Sqlite and Postgres without any custom casting for the specific database, while still
 /// using UTC times in our Repo Record types.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+///
+/// Another feature provided by SqlDateTime is that it defines PartialEq with some small difference
+/// allowed. This is useful for writing repo tests in cases where the resolution
+/// of timestamps are different between the OS (used by Rust) and the DB timestamp type.
+///
+/// Note that above means that SqlDateTime MUST NOT implement Eq.
+#[derive(Debug, Clone, PartialOrd)]
 pub struct SqlDateTime {
     utc: DateTime<Utc>,
 }
@@ -47,6 +55,26 @@ impl SqlDateTime {
 
     pub fn into_utc(self) -> DateTime<Utc> {
         self.utc
+    }
+}
+
+impl PartialEq<SqlDateTime> for SqlDateTime {
+    fn eq(&self, other: &SqlDateTime) -> bool {
+        self.utc.sub(other.utc).abs() < TimeDelta::milliseconds(1)
+    }
+}
+
+impl Display for SqlDateTime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.utc.fmt(f)
+    }
+}
+
+impl Deref for SqlDateTime {
+    type Target = DateTime<Utc>;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_utc()
     }
 }
 
@@ -79,15 +107,22 @@ impl<'q, DB: Database> sqlx::Encode<'q, DB> for SqlDateTime
 where
     NaiveDateTime: sqlx::Encode<'q, DB>,
 {
+    fn encode(self, buf: &mut <DB as Database>::ArgumentBuffer<'q>) -> Result<IsNull, BoxDynError>
+    where
+        Self: Sized,
+    {
+        self.utc.naive_utc().encode(buf)
+    }
+
     fn encode_by_ref(
         &self,
         buf: &mut <DB as Database>::ArgumentBuffer<'q>,
     ) -> Result<IsNull, BoxDynError> {
-        <NaiveDateTime as sqlx::Encode<'q, DB>>::encode_by_ref(&self.utc.naive_utc(), buf)
+        self.utc.naive_utc().encode_by_ref(buf)
     }
 
     fn size_hint(&self) -> usize {
-        <NaiveDateTime as sqlx::Encode<'q, DB>>::size_hint(&self.utc.naive_utc())
+        self.utc.naive_utc().size_hint()
     }
 }
 
@@ -97,7 +132,95 @@ where
 {
     fn decode(value: <DB as Database>::ValueRef<'r>) -> Result<Self, BoxDynError> {
         Ok(Self {
-            utc: <NaiveDateTime as sqlx::Decode<'r, DB>>::decode(value)?.and_utc(),
+            utc: NaiveDateTime::decode(value)?.and_utc(),
+        })
+    }
+}
+
+// TODO: we might want to change this to "SqlModelHash" with internal versioning
+/// SqlBlake3Hash is a wrapper around blake3::Hash which allows storing it as BLOB, while
+/// making it easy to still use directly methods of blake3::Hash (e.g. as_hex())
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SqlBlake3Hash {
+    hash: blake3::Hash,
+}
+
+impl SqlBlake3Hash {
+    pub fn new(hash: blake3::Hash) -> Self {
+        Self { hash }
+    }
+
+    pub fn as_blake3_hash(&self) -> &blake3::Hash {
+        &self.hash
+    }
+
+    pub fn into_blake3_hash(self) -> blake3::Hash {
+        self.hash
+    }
+}
+
+impl Display for SqlBlake3Hash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.hash.fmt(f)
+    }
+}
+
+impl Deref for SqlBlake3Hash {
+    type Target = blake3::Hash;
+
+    fn deref(&self) -> &Self::Target {
+        &self.hash
+    }
+}
+
+impl From<SqlBlake3Hash> for blake3::Hash {
+    fn from(hash: SqlBlake3Hash) -> Self {
+        hash.hash
+    }
+}
+
+impl From<blake3::Hash> for SqlBlake3Hash {
+    fn from(hash: blake3::Hash) -> Self {
+        Self { hash }
+    }
+}
+
+impl<DB: Database> sqlx::Type<DB> for SqlBlake3Hash
+where
+    Vec<u8>: sqlx::Type<DB>,
+{
+    fn type_info() -> DB::TypeInfo {
+        <Vec<u8> as sqlx::Type<DB>>::type_info()
+    }
+
+    fn compatible(ty: &DB::TypeInfo) -> bool {
+        <Vec<u8> as sqlx::Type<DB>>::compatible(ty)
+    }
+}
+
+impl<'q, DB: Database> sqlx::Encode<'q, DB> for SqlBlake3Hash
+where
+    Vec<u8>: sqlx::Encode<'q, DB>,
+{
+    fn encode_by_ref(
+        &self,
+        buf: &mut <DB as Database>::ArgumentBuffer<'q>,
+    ) -> Result<IsNull, BoxDynError> {
+        self.hash.as_bytes().to_vec().encode_by_ref(buf)
+    }
+
+    fn size_hint(&self) -> usize {
+        blake3::OUT_LEN
+    }
+}
+
+impl<'r, DB: Database> sqlx::Decode<'r, DB> for SqlBlake3Hash
+where
+    Vec<u8>: sqlx::Decode<'r, DB>,
+{
+    fn decode(value: <DB as Database>::ValueRef<'r>) -> Result<Self, BoxDynError> {
+        Ok(Self {
+            hash: blake3::Hash::from_slice(<Vec<u8>>::decode(value)?.as_slice())?,
         })
     }
 }

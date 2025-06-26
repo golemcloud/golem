@@ -14,10 +14,8 @@
 
 use crate::repo::SqlDateTime;
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDateTime, Utc};
 use conditional_trait_gen::trait_gen;
-use futures_util::future::BoxFuture;
-use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
+use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo;
 use golem_service_base::repo::RepoError;
 use indoc::indoc;
@@ -26,7 +24,7 @@ use std::fmt::Debug;
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+#[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ApplicationRecord {
     pub application_id: Uuid,
     pub name: String,
@@ -145,7 +143,7 @@ impl ApplicationRepo for DbApplicationRepo<golem_service_base::db::postgres::Pos
             return Ok(app);
         }
 
-        let app: repo::Result<ApplicationRecord> = {
+        let result: repo::Result<ApplicationRecord> = {
             self.with_rw("ensure - insert")
                 .fetch_one_as(
                     sqlx::query_as(indoc! {r#"
@@ -162,12 +160,10 @@ impl ApplicationRepo for DbApplicationRepo<golem_service_base::db::postgres::Pos
             .await
         };
 
-        let result = match app {
-            Ok(app) => Some(Ok(app)),
+        let result = match result {
             Err(err) if err.is_unique_violation() => None,
-            Err(err) => Some(Err(err)),
+            result => Some(result),
         };
-
         if let Some(result) = result {
             return result;
         }

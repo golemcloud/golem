@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::account::Account;
+use crate::repo::SqlDateTime;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::{AccountId, PlanId};
@@ -23,11 +24,12 @@ use sqlx::FromRow;
 use tracing::{info_span, Instrument, Span};
 use uuid::Uuid;
 
-#[derive(FromRow, Debug, Clone)]
+#[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct AccountRecord {
     pub account_id: Uuid,
     pub name: String,
     pub email: String,
+    pub created_at: SqlDateTime,
     pub plan_id: Uuid,
 }
 
@@ -54,6 +56,7 @@ impl From<Account> for AccountRecord {
                 .unwrap_or_else(|err| panic!("Expected UUID for account ID, error: {:?}", err)),
             name: value.name,
             email: value.email,
+            created_at: SqlDateTime::now(), // TODO: from account
             plan_id: value.plan_id.0,
         }
     }
@@ -138,13 +141,14 @@ impl AccountRepo for DbAccountRepo<golem_service_base::db::postgres::PostgresPoo
             .with_rw("create")
             .fetch_one_as(
                 sqlx::query_as(indoc! {r#"
-                    INSERT INTO accounts (account_id, name, email, plan_id, deleted)
-                    VALUES ($1, $2, $3, $4, FALSE)
-                    RETURNING account_id, name, email, plan_id
+                    INSERT INTO accounts (account_id, name, email, created_at, plan_id, deleted)
+                    VALUES ($1, $2, $3, $4, $5, FALSE)
+                    RETURNING account_id, name, email, created_at, plan_id
                 "#})
                 .bind(account.account_id)
                 .bind(account.name)
                 .bind(account.email)
+                .bind(account.created_at)
                 .bind(account.plan_id),
             )
             .await;
@@ -160,7 +164,7 @@ impl AccountRepo for DbAccountRepo<golem_service_base::db::postgres::PostgresPoo
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT account_id, name, email, plan_id FROM accounts
+                    SELECT account_id, name, email, plan_id, created_at FROM accounts
                     WHERE account_id = $1 AND deleted = FALSE
                 "#})
                 .bind(account_id),
@@ -169,10 +173,10 @@ impl AccountRepo for DbAccountRepo<golem_service_base::db::postgres::PostgresPoo
     }
 
     async fn get_by_email(&self, email: &str) -> repo::Result<Option<AccountRecord>> {
-        self.with_rw("get_by_email")
+        self.with_ro("get_by_email")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT account_id, name, email, plan_id FROM accounts
+                    SELECT account_id, name, email, plan_id, created_at FROM accounts
                     WHERE email = $1 AND deleted = FALSE
                 "#})
                 .bind(email),

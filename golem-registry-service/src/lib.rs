@@ -15,8 +15,8 @@
 pub mod bootstrap;
 pub mod config;
 pub mod metrics;
-pub mod repo;
 pub mod model;
+pub mod repo;
 
 #[cfg(test)]
 test_r::enable!();

@@ -13,11 +13,18 @@
 // limitations under the License.
 
 use crate::Tracing;
+use assert2::let_assert;
 use chrono::{NaiveDateTime, Utc};
 use golem_common::model::AccountId;
 use golem_registry_service::repo::account::{AccountRecord, AccountRepo};
-use golem_registry_service::repo::application::{ApplicationRepo, DbApplicationRepo};
+use golem_registry_service::repo::application::{
+    ApplicationRecord, ApplicationRepo, DbApplicationRepo,
+};
+use golem_registry_service::repo::environment::{
+    EnvironmentCurrentRevisionRecord, EnvironmentRepo,
+};
 use golem_registry_service::repo::plan::{PlanRecord, PlanRepository};
+use golem_registry_service::repo::SqlDateTime;
 use golem_service_base::db::Pool;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -37,6 +44,7 @@ sequential_suite!(sqlite);
 pub struct Deps {
     pub account_repo: Arc<dyn AccountRepo>,
     pub application_repo: Arc<dyn ApplicationRepo>,
+    pub environment_repo: Arc<dyn EnvironmentRepo>,
     pub plan_repo: Arc<dyn PlanRepository>,
 }
 
@@ -62,10 +70,31 @@ impl Deps {
                 account_id: account_id.clone(),
                 name: format!("Test Account {}", account_id),
                 email: format!("test-{}@golem", account_id),
+                created_at: SqlDateTime::now(),
                 plan_id: self.test_plan_id(),
             })
             .await
             .unwrap()
+            .unwrap()
+    }
+
+    pub async fn create_application(&self) -> ApplicationRecord {
+        let owner = self.create_account().await;
+        let user = self.create_account().await;
+        let app_name = format!("app-name-{}", Uuid::new_v4());
+
+        self.application_repo
+            .ensure(&user.account_id, &owner.account_id, &app_name)
+            .await
+            .unwrap()
+    }
+
+    pub async fn create_env(&self) -> EnvironmentCurrentRevisionRecord {
+        let app = self.create_application().await;
+        let env_name = format!("env-{}", Uuid::new_v4());
+        self.environment_repo
+            .ensure(&app.created_by, &app.application_id, &env_name)
+            .await
             .unwrap()
     }
 }
