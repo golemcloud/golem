@@ -124,7 +124,7 @@ impl AccountService for AccountServiceDefault {
             .await
         {
             Ok(Some(account_record)) => Ok(account_record.into()),
-            Ok(None) => Err(format!("Duplicated account on fresh id: {}", id).into()),
+            Ok(None) => Err(format!("Duplicated account on fresh id: {id}").into()),
             Err(err) => {
                 error!("DB call failed. {}", err);
                 Err(err.into())

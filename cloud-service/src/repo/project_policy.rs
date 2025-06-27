@@ -389,13 +389,11 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
             Ok(vec![])
         } else {
             let params = (1..=project_policy_ids.len())
-                .map(|i| format!("${}", i))
+                .map(|i| format!("${i}"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let query_str = format!(
-                "SELECT * FROM project_policies WHERE project_policy_id IN ( { } )",
-                params
-            );
+            let query_str =
+                format!("SELECT * FROM project_policies WHERE project_policy_id IN ( {params} )");
 
             let mut query = sqlx::query_as::<_, ProjectPolicyRecord>(&query_str);
             for id in project_policy_ids {

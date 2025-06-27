@@ -78,28 +78,28 @@ impl Display for TypeName {
             TypeName::F64 => write!(f, "f64"),
             TypeName::Chr => write!(f, "char"),
             TypeName::Str => write!(f, "string"),
-            TypeName::List(inner_type) => write!(f, "list<{}>", inner_type),
+            TypeName::List(inner_type) => write!(f, "list<{inner_type}>"),
             TypeName::Tuple(inner_types) => {
                 write!(f, "tuple<")?;
                 for (i, inner_type) in inner_types.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", inner_type)?;
+                    write!(f, "{inner_type}")?;
                 }
                 write!(f, ">")
             }
-            TypeName::Option(inner_type) => write!(f, "option<{}>", inner_type),
+            TypeName::Option(inner_type) => write!(f, "option<{inner_type}>"),
             // https://component-model.bytecodealliance.org/design/wit.html#results
             TypeName::Result { ok, error } => match (ok, error) {
                 (Some(ok), Some(error)) => {
-                    write!(f, "result<{}, {}>", ok, error)
+                    write!(f, "result<{ok}, {error}>")
                 }
                 (Some(ok), None) => {
-                    write!(f, "result<{}>", ok)
+                    write!(f, "result<{ok}>")
                 }
                 (None, Some(error)) => {
-                    write!(f, "result<_, {}>", error)
+                    write!(f, "result<_, {error}>")
                 }
                 (None, None) => {
                     write!(f, "result")
@@ -111,7 +111,7 @@ impl Display for TypeName {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}: {}", field, typ)?;
+                    write!(f, "{field}: {typ}")?;
                 }
                 write!(f, " }}")
             }
@@ -121,7 +121,7 @@ impl Display for TypeName {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", flag)?;
+                    write!(f, "{flag}")?;
                 }
                 write!(f, ">")
             }
@@ -131,7 +131,7 @@ impl Display for TypeName {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", case)?;
+                    write!(f, "{case}")?;
                 }
                 write!(f, " }}")
             }
@@ -141,9 +141,9 @@ impl Display for TypeName {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", case)?;
+                    write!(f, "{case}")?;
                     if let Some(typ) = typ {
-                        write!(f, "({})", typ)?;
+                        write!(f, "({typ})")?;
                     }
                 }
                 write!(f, " }}")
@@ -250,7 +250,7 @@ impl TryFrom<AnalysedType> for TypeName {
                 })
             }
             AnalysedType::Handle(type_handle) => {
-                Err(format!("Handle type not supported: {:?}", type_handle))
+                Err(format!("Handle type not supported: {type_handle:?}"))
             }
         }
     }
@@ -637,7 +637,7 @@ mod protobuf {
                         Ok(BasicTypeName::F64) => Ok(TypeName::F64),
                         Ok(BasicTypeName::Chr) => Ok(TypeName::Chr),
                         Ok(BasicTypeName::Str) => Ok(TypeName::Str),
-                        _ => Err(format!("Unknown basic type: {:?}", value)),
+                        _ => Err(format!("Unknown basic type: {value:?}")),
                     },
                     InnerTypeName::ListType(inner_type) => {
                         let proto_list_type = inner_type
@@ -720,7 +720,7 @@ mod type_name_tests {
     use super::*;
 
     fn parse_and_compare(input: &str, expected: TypeName) {
-        let written = format!("{}", expected);
+        let written = format!("{expected}");
         let result1 = type_name()
             .easy_parse(position::Stream::new(input))
             .map(|x| x.0);

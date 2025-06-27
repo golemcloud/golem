@@ -267,7 +267,7 @@ pub enum AttributeValue {
 impl Display for AttributeValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::String(value) => write!(f, "{}", value),
+            Self::String(value) => write!(f, "{value}"),
         }
     }
 }

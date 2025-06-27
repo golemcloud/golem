@@ -155,7 +155,7 @@ impl Interpreter {
                         |left, right| {
                             if right.is_zero() {
                                 Err(arithmetic_error(
-                                    format!("division by zero. left: {}, right: {}", left, right)
+                                    format!("division by zero. left: {left}, right: {right}")
                                         .as_str(),
                                 ))
                             } else {
@@ -4851,7 +4851,7 @@ mod tests {
                 .into_iter()
                 .enumerate()
                 .map(|(index, typ)| AnalysedFunctionParameter {
-                    name: format!("param{}", index),
+                    name: format!("param{index}"),
                     typ,
                 })
                 .collect();
@@ -5239,8 +5239,7 @@ mod tests {
                         let worker_name = worker_name.map(|x| x.0).unwrap_or_default();
 
                         let uri = format!(
-                            "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
-                            worker_name
+                            "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{worker_name}"
                         );
                         Ok(ValueAndType::new(
                             Value::Handle {
@@ -5301,7 +5300,7 @@ mod tests {
                         let mut arg_types = vec![];
 
                         for (index, value_and_type) in function_args.iter().enumerate() {
-                            let name = format!("args{}", index);
+                            let name = format!("args{index}");
                             let value = value_and_type.typ.clone();
                             arg_types.push(field(name.as_str(), value));
                         }
@@ -5630,14 +5629,13 @@ mod tests {
                                         ValueAndType::new(Value::Enum(x), r#enum(&["x", "y", "z"]));
                                     Ok(Some(result))
                                 } else {
-                                    Err(format!("Enums are not equal: {} and {}", x, y).into())
+                                    Err(format!("Enums are not equal: {x} and {y}").into())
                                 }
                             }
-                            (v1, v2) => Err(format!(
-                                "Invalid arguments for add-enum: {:?} and {:?}",
-                                v1, v2
-                            )
-                            .into()),
+                            (v1, v2) => {
+                                Err(format!("Invalid arguments for add-enum: {v1:?} and {v2:?}")
+                                    .into())
+                            }
                         }
                     }
                     "add-variant" => {
@@ -5666,20 +5664,18 @@ mod tests {
                                     Ok(Some(result))
                                 } else {
                                     Err(format!(
-                                        "Variants are not equal: {} and {}",
-                                        case_idx1, case_idx2
+                                        "Variants are not equal: {case_idx1} and {case_idx2}"
                                     )
                                     .into())
                                 }
                             }
                             (v1, v2) => Err(format!(
-                                "Invalid arguments for add-variant: {:?} and {:?}",
-                                v1, v2
+                                "Invalid arguments for add-variant: {v1:?} and {v2:?}"
                             )
                             .into()),
                         }
                     }
-                    fun => Err(format!("unknown function {}", fun).into()),
+                    fun => Err(format!("unknown function {fun}").into()),
                 }
             }
         }

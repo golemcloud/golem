@@ -61,7 +61,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .push(ContainerEntry::new(name, created_at))?;
                 Ok(Ok(container))
             }
-            Err(e) => Ok(Err(format!("{:?}", e))),
+            Err(e) => Ok(Err(format!("{e:?}"))),
         }
     }
 
@@ -97,7 +97,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 Ok(Ok(container))
             }
             Ok(None) => Ok(Err("Container not found".to_string())),
-            Err(e) => Ok(Err(format!("{:?}", e))),
+            Err(e) => Ok(Err(format!("{e:?}"))),
         }
     }
 
@@ -123,7 +123,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         match result {
             Ok(_) => Ok(Ok(())),
-            Err(e) => Ok(Err(format!("{:?}", e))),
+            Err(e) => Ok(Err(format!("{e:?}"))),
         }
     }
 
@@ -152,7 +152,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         match result {
             Ok(exists) => Ok(Ok(exists)),
-            Err(e) => Ok(Err(format!("{:?}", e))),
+            Err(e) => Ok(Err(format!("{e:?}"))),
         }
     }
 
@@ -194,7 +194,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         match result {
             Ok(_) => Ok(Ok(())),
-            Err(e) => Ok(Err(format!("{:?}", e))),
+            Err(e) => Ok(Err(format!("{e:?}"))),
         }
     }
 
@@ -236,7 +236,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         match result {
             Ok(_) => Ok(Ok(())),
-            Err(e) => Ok(Err(format!("{:?}", e))),
+            Err(e) => Ok(Err(format!("{e:?}"))),
         }
     }
 }

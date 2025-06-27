@@ -28,16 +28,16 @@ impl Display for ReplBootstrapError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ReplBootstrapError::MultipleComponentsFound(msg) => {
-                write!(f, "Multiple components found: {}", msg)
+                write!(f, "Multiple components found: {msg}")
             }
             ReplBootstrapError::NoComponentsFound => {
                 write!(f, "No components found in the given context")
             }
             ReplBootstrapError::ComponentLoadError(msg) => {
-                write!(f, "Failed to load component: {}", msg)
+                write!(f, "Failed to load component: {msg}")
             }
             ReplBootstrapError::ReplHistoryFileError(msg) => {
-                write!(f, "Failed to read/write REPL history file: {}", msg)
+                write!(f, "Failed to read/write REPL history file: {msg}")
             }
         }
     }

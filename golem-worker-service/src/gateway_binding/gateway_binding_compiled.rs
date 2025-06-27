@@ -155,7 +155,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
             .unwrap_or(ProtoGatewayBindingType::Default.into());
 
         let binding_type = ProtoGatewayBindingType::try_from(binding_type)
-            .map_err(|e| format!("Failed to convert binding type: {}", e))?;
+            .map_err(|e| format!("Failed to convert binding type: {e}"))?;
 
         match binding_type {
             ProtoGatewayBindingType::FileServer | ProtoGatewayBindingType::Default => {

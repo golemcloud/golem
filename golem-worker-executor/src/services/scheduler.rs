@@ -359,7 +359,7 @@ impl SchedulerServiceDefault {
     }
 
     fn schedule_key_from_timestamp(timestamp: i64) -> String {
-        format!("worker:schedule:{}", timestamp)
+        format!("worker:schedule:{timestamp}")
     }
 }
 

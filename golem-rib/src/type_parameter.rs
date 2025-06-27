@@ -52,16 +52,16 @@ impl TypeParameter {
         type_parameter()
             .easy_parse(position::Stream::new(input))
             .map(|t| t.0)
-            .map_err(|err| format!("Invalid type parameter type {}", err))
+            .map_err(|err| format!("Invalid type parameter type {err}"))
     }
 }
 
 impl Display for TypeParameter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TypeParameter::Interface(interface) => write!(f, "{}", interface),
-            TypeParameter::PackageName(package) => write!(f, "{}", package),
-            TypeParameter::FullyQualifiedInterface(qualified) => write!(f, "{}", qualified),
+            TypeParameter::Interface(interface) => write!(f, "{interface}"),
+            TypeParameter::PackageName(package) => write!(f, "{package}"),
+            TypeParameter::FullyQualifiedInterface(qualified) => write!(f, "{qualified}"),
         }
     }
 }
@@ -77,7 +77,7 @@ impl Display for InterfaceName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name)?;
         if let Some(version) = &self.version {
-            write!(f, "@{}", version)?;
+            write!(f, "@{version}")?;
         }
         Ok(())
     }
@@ -95,7 +95,7 @@ impl Display for PackageName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.namespace, self.package_name)?;
         if let Some(version) = &self.version {
-            write!(f, "@{}", version)?;
+            write!(f, "@{version}")?;
         }
         Ok(())
     }

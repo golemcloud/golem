@@ -353,7 +353,7 @@ impl Expr {
             .with(block().skip(eof()))
             .easy_parse(position::Stream::new(input))
             .map(|t| t.0)
-            .map_err(|err| format!("{}", err))
+            .map_err(|err| format!("{err}"))
     }
 
     pub fn lookup(&self, source_span: &SourceSpan) -> Option<Expr> {
@@ -2488,8 +2488,7 @@ impl<'de> Deserialize<'de> for Expr {
             },
 
             e => Err(serde::de::Error::custom(format!(
-                "Failed to deserialize expression {}",
-                e
+                "Failed to deserialize expression {e}"
             ))),
         }
     }

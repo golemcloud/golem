@@ -68,7 +68,7 @@ impl FromStr for Provider {
             "facebook" => Ok(Provider::Facebook),
             "microsoft" => Ok(Provider::Microsoft),
             "gitlab" => Ok(Provider::Gitlab),
-            _ => Err(format!("Invalid provider: {}", s)),
+            _ => Err(format!("Invalid provider: {s}")),
         }
     }
 }
@@ -135,13 +135,13 @@ impl Provider {
     pub fn issue_url(&self) -> Result<IssuerUrl, String> {
         match self {
             Provider::Google => IssuerUrl::new("https://accounts.google.com".to_string())
-                .map_err(|err| format!("Invalid Issuer URL for Google, {}", err)),
+                .map_err(|err| format!("Invalid Issuer URL for Google, {err}")),
             Provider::Facebook => IssuerUrl::new("https://www.facebook.com".to_string())
-                .map_err(|err| format!("Invalid Issuer URL for Facebook, {}", err)),
+                .map_err(|err| format!("Invalid Issuer URL for Facebook, {err}")),
             Provider::Microsoft => IssuerUrl::new("https://login.microsoftonline.com".to_string())
-                .map_err(|err| format!("Invalid Issuer URL for Microsoft, {}", err)),
+                .map_err(|err| format!("Invalid Issuer URL for Microsoft, {err}")),
             Provider::Gitlab => IssuerUrl::new("https://gitlab.com".to_string())
-                .map_err(|err| format!("Invalid Issuer URL for Gitlab, {}", err)),
+                .map_err(|err| format!("Invalid Issuer URL for Gitlab, {err}")),
         }
     }
 }
@@ -240,7 +240,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecurityScheme> for Se
 
         let scheme_identifier = SecuritySchemeIdentifier::new(value.scheme_identifier);
         let redirect_url = RedirectUrl::new(value.redirect_url)
-            .map_err(|err| format!("Invalid RedirectURL. {}", err))?;
+            .map_err(|err| format!("Invalid RedirectURL. {err}"))?;
 
         let scopes: Vec<Scope> = value.scopes.iter().map(|x| Scope::new(x.clone())).collect();
 

@@ -182,15 +182,11 @@ pub enum RegistryKey {
 impl Display for RegistryKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            RegistryKey::FunctionName(name) => write!(f, "Function Name: {}", name),
+            RegistryKey::FunctionName(name) => write!(f, "Function Name: {name}"),
             RegistryKey::FunctionNameWithInterface {
                 interface_name,
                 function_name,
-            } => write!(
-                f,
-                "Interface: {}, Function: {}",
-                interface_name, function_name
-            ),
+            } => write!(f, "Interface: {interface_name}, Function: {function_name}"),
         }
     }
 }
@@ -256,7 +252,7 @@ impl RegistryKey {
 
         resource_name_without_prefixes.map(|resource_name_without_prefix| {
             let resource_constructor_with_prefix =
-                format!["[constructor]{}", resource_name_without_prefix];
+                format!["[constructor]{resource_name_without_prefix}"];
 
             match function.site.interface_name() {
                 None => RegistryKey::FunctionName(resource_constructor_with_prefix),

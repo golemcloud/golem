@@ -46,15 +46,15 @@ impl std::error::Error for RibByteCodeGenerationError {}
 impl Display for RibByteCodeGenerationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            RibByteCodeGenerationError::CastError(msg) => write!(f, "cast error: {}", msg),
+            RibByteCodeGenerationError::CastError(msg) => write!(f, "cast error: {msg}"),
             RibByteCodeGenerationError::AnalysedTypeConversionError(msg) => {
-                write!(f, "{}", msg)
+                write!(f, "{msg}")
             }
             RibByteCodeGenerationError::PatternMatchDesugarError => {
                 write!(f, "Pattern match desugar error")
             }
             RibByteCodeGenerationError::RangeSelectionDesugarError(msg) => {
-                write!(f, "Range selection desugar error: {}", msg)
+                write!(f, "Range selection desugar error: {msg}")
             }
             RibByteCodeGenerationError::UnexpectedTypeError { expected, actual } => {
                 write!(
@@ -65,7 +65,7 @@ impl Display for RibByteCodeGenerationError {
                 )
             }
             RibByteCodeGenerationError::UnresolvedWasmComponent { function } => {
-                write!(f, "Unresolved wasm component for function: {}", function)
+                write!(f, "Unresolved wasm component for function: {function}")
             }
             RibByteCodeGenerationError::UnresolvedWorkerName => {
                 write!(f, "inline invocation of functions on a worker instance is currently not supported")
@@ -383,8 +383,7 @@ mod internal {
                     let list_comprehension =
                         desugar_range_selection(expr, index).map_err(|err| {
                             RibByteCodeGenerationError::RangeSelectionDesugarError(format!(
-                                "Failed to desugar range selection: {}",
-                                err
+                                "Failed to desugar range selection: {err}"
                             ))
                         })?;
                     stack.push(ExprState::from_expr(&list_comprehension));
@@ -2190,7 +2189,7 @@ mod compiler_tests {
                 .into_iter()
                 .enumerate()
                 .map(|(index, typ)| AnalysedFunctionParameter {
-                    name: format!("param{}", index),
+                    name: format!("param{index}"),
                     typ,
                 })
                 .collect();

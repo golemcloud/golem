@@ -1020,8 +1020,7 @@ async fn http_client_using_reqwest(
                         *capture = Some(body.clone());
                     }
                     format!(
-                        "{{ \"percentage\" : 0.25, \"message\": \"response message {}\" }}",
-                        header
+                        "{{ \"percentage\" : 0.25, \"message\": \"response message {header}\" }}"
                     )
                 }),
             );

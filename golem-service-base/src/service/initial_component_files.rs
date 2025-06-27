@@ -52,7 +52,7 @@ impl InitialComponentFilesService {
                 &path,
             )
             .await
-            .map_err(|err| format!("Failed to get metadata: {}", err))?;
+            .map_err(|err| format!("Failed to get metadata: {err}"))?;
 
         Ok(metadata.is_some())
     }
@@ -94,7 +94,7 @@ impl InitialComponentFilesService {
                 &key,
             )
             .await
-            .map_err(|err| format!("Failed to get metadata: {}", err))?;
+            .map_err(|err| format!("Failed to get metadata: {err}"))?;
 
         if metadata.is_none() {
             debug!("Storing initial component file with hash: {}", hash);

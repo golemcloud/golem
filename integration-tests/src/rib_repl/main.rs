@@ -22,7 +22,7 @@ async fn main() {
             component_name: component_name.to_string(),
             source_path: deps
                 .component_directory()
-                .join(format!("{}.wasm", component_name)),
+                .join(format!("{component_name}.wasm")),
         }),
         prompt: None,
         command_registry: None,

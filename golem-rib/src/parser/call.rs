@@ -124,8 +124,7 @@ where
                         return ParseResult::CommitErr(ParseError::from_error(
                             input.position(),
                             StreamError::message_format(format!(
-                                "Failed to parse resource parameter {}",
-                                err
+                                "Failed to parse resource parameter {err}"
                             )),
                         ))
                         .into_result();

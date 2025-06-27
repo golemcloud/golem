@@ -455,7 +455,7 @@ fn display_for_resource_handle(type_handle: &TypeHandle) -> String {
         AnalysedResourceMode::Borrowed => "borrowed",
     };
 
-    format!("handle<resource-id:{}, mode:{}>", resource_id, mode)
+    format!("handle<resource-id:{resource_id}, mode:{mode}>")
 }
 
 pub struct Indent {

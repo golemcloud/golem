@@ -485,7 +485,7 @@ mod tests {
         );
 
         for b in 1..=1000 {
-            let s = format!("{}", b);
+            let s = format!("{b}");
             svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()), true);
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
@@ -524,7 +524,7 @@ mod tests {
         ready_rx.await.unwrap();
 
         for b in 1001..=1004 {
-            let s = format!("{}", b);
+            let s = format!("{b}");
             svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()), true);
             tokio::time::sleep(Duration::from_millis(1)).await;
         }

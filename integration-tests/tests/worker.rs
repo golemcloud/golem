@@ -74,7 +74,7 @@ async fn dynamic_worker_creation(deps: &EnvBasedTestDependencies, _tracing: &Tra
             ]),
             Value::Tuple(vec![
                 Value::String("GOLEM_COMPONENT_ID".to_string()),
-                Value::String(format!("{}", component_id))
+                Value::String(format!("{component_id}"))
             ]),
             Value::Tuple(vec![
                 Value::String("GOLEM_COMPONENT_VERSION".to_string()),
@@ -988,8 +988,8 @@ async fn auction_example_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
         )
         .await;
 
-    info!("result: {:?}", create_results);
-    info!("result: {:?}", get_auctions_result);
+    info!("result: {create_results:?}");
+    info!("result: {get_auctions_result:?}");
 
     check!(create_results.iter().all(|r| r.is_ok()));
 }
@@ -1013,7 +1013,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     for i in 0..workers_count {
         let worker_id = admin
-            .start_worker(&component_id, &format!("get-workers-test-{}", i))
+            .start_worker(&component_id, &format!("get-workers-test-{i}"))
             .await;
 
         worker_ids.insert(worker_id);
@@ -1135,7 +1135,7 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
         );
 
         let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{}", host_http_port)
+            format!("0.0.0.0:{host_http_port}")
                 .parse::<SocketAddr>()
                 .unwrap(),
         )
@@ -1154,7 +1154,7 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
         let worker_id = admin
             .start_worker_with(
                 &component_id,
-                &format!("worker-http-client-{}", i),
+                &format!("worker-http-client-{i}"),
                 vec![],
                 env.clone(),
             )
@@ -1257,7 +1257,7 @@ async fn auto_update_on_idle(deps: &EnvBasedTestDependencies, _tracing: &Tracing
         .await
         .unwrap();
 
-    info!("result: {:?}", result);
+    info!("result: {result:?}");
     let (metadata, _) = admin.get_worker_metadata(&worker_id).await.unwrap();
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns

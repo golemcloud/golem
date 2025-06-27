@@ -111,7 +111,7 @@ impl Display for ConflictReport {
             writeln!(f, "  None")?;
         } else {
             for missing_function in &self.missing_functions {
-                writeln!(f, "  - {}", missing_function)?;
+                writeln!(f, "  - {missing_function}")?;
             }
         }
 
@@ -121,7 +121,7 @@ impl Display for ConflictReport {
             writeln!(f, "  None")?;
         } else {
             for conflict in &self.conflicting_functions {
-                writeln!(f, "{}", conflict)?;
+                writeln!(f, "{conflict}")?;
             }
         }
 

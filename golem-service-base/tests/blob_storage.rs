@@ -85,7 +85,7 @@ impl GetBlobStorage for FsTest {
         let counter = self
             .counter
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let path = self.dir.path().join(format!("test-{}", counter));
+        let path = self.dir.path().join(format!("test-{counter}"));
         Arc::new(fs::FileSystemBlobStorage::new(&path).await.unwrap())
     }
 }

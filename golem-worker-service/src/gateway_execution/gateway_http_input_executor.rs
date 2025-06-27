@@ -678,8 +678,7 @@ async fn resolve_rib_input(
                     "body" => {
                         let body = rich_request.request_body().await.map_err(|err| {
                             GatewayHttpError::BadRequest(format!(
-                                "invalid http request body. {}",
-                                err
+                                "invalid http request body. {err}"
                             ))
                         })?;
 
@@ -718,8 +717,7 @@ async fn resolve_rib_input(
                         )
                         .map_err(|err| {
                             GatewayHttpError::BadRequest(format!(
-                                "invalid http request header. {}",
-                                err
+                                "invalid http request header. {err}"
                             ))
                         })?;
 
@@ -734,13 +732,12 @@ async fn resolve_rib_input(
                                     .query_params()
                                     .get(key)
                                     .map(|x| x.to_string())
-                                    .ok_or(format!("Missing query parameter: {}", key))
+                                    .ok_or(format!("Missing query parameter: {key}"))
                             },
                         )
                         .map_err(|err| {
                             GatewayHttpError::BadRequest(format!(
-                                "invalid http request query. {}",
-                                err
+                                "invalid http request query. {err}"
                             ))
                         })?;
 
@@ -755,13 +752,12 @@ async fn resolve_rib_input(
                                     .path_params()
                                     .get(key)
                                     .map(|x| x.to_string())
-                                    .ok_or(format!("Missing path parameter: {}", key))
+                                    .ok_or(format!("Missing path parameter: {key}"))
                             },
                         )
                         .map_err(|err| {
                             GatewayHttpError::BadRequest(format!(
-                                "invalid http request path. {}",
-                                err
+                                "invalid http request path. {err}"
                             ))
                         })?;
 
@@ -804,8 +800,7 @@ async fn resolve_rib_input(
                         // however we still fail if we happen to have other inputs
                         // at this stage instead of silently ignoring them.
                         return Err(GatewayHttpError::InternalError(format!(
-                            "invalid rib script with unknown input: request.{}",
-                            field_name
+                            "invalid rib script with unknown input: request.{field_name}"
                         )));
                     }
                 }
@@ -966,10 +961,7 @@ fn parse_to_value<T: FromStr + IntoValue + Sized>(
     type_name: &str,
 ) -> Result<golem_wasm_rpc::Value, String> {
     let value = field_value.parse::<T>().map_err(|_| {
-        format!(
-            "Invalid value for key {}. Expected {}, Found {}",
-            field_name, type_name, field_value
-        )
+        format!("Invalid value for key {field_name}. Expected {type_name}, Found {field_value}")
     })?;
     Ok(value.into_value_and_type().value)
 }

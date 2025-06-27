@@ -64,10 +64,10 @@ impl SafeDisplay for SecuritySchemeServiceError {
                 format!("IdentityProviderError: {}", err.to_safe_string())
             }
             SecuritySchemeServiceError::InternalError(err) => {
-                format!("InternalError: {}", err)
+                format!("InternalError: {err}")
             }
             SecuritySchemeServiceError::NotFound(identifier) => {
-                format!("security scheme not found: {}", identifier)
+                format!("security scheme not found: {identifier}")
             }
         }
     }

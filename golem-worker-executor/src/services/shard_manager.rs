@@ -75,7 +75,7 @@ impl ShardManagerService for ShardManagerServiceGrpc {
         with_retries(
             "shard_manager",
             "register",
-            Some(format!("{:?}", pod_name)),
+            Some(format!("{pod_name:?}")),
             &self.config.retries,
             &(host, port),
             |(host, port)| {
@@ -93,8 +93,7 @@ impl ShardManagerService for ShardManagerServiceGrpc {
                         .await
                         .map_err(|err| {
                             GolemError::unknown(format!(
-                                "Registering with shard manager failed with {}",
-                                err
+                                "Registering with shard manager failed with {err}"
                             ))
                         })?;
                     match response.into_inner() {
@@ -111,8 +110,7 @@ impl ShardManagerService for ShardManagerServiceGrpc {
                             result:
                                 Some(shardmanager::v1::register_response::Result::Failure(failure)),
                         } => Err(GolemError::unknown(format!(
-                            "Registering with shard manager failed with shard manager error {:?}",
-                            failure
+                            "Registering with shard manager failed with shard manager error {failure:?}"
                         ))),
                         shardmanager::v1::RegisterResponse { .. } => Err(GolemError::unknown(
                             "Registering with shard manager failed with unknown error",

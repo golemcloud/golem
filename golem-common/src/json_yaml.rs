@@ -93,15 +93,12 @@ impl<T: ParseFromYAML + ParseFromJSON> ParsePayload for JsonOrYaml<T> {
             .unwrap_or_default();
 
         let body = body.take().map_err(|e| {
-            poem::Error::from_string(
-                format!("Missing request body {}", e),
-                StatusCode::BAD_REQUEST,
-            )
+            poem::Error::from_string(format!("Missing request body {e}"), StatusCode::BAD_REQUEST)
         })?;
 
         let bytes = body.into_bytes().await.map_err(|e| {
             poem::Error::from_string(
-                format!("Failed to read request body {}", e),
+                format!("Failed to read request body {e}"),
                 StatusCode::BAD_REQUEST,
             )
         })?;
@@ -109,7 +106,7 @@ impl<T: ParseFromYAML + ParseFromJSON> ParsePayload for JsonOrYaml<T> {
         if content_type.contains("json") {
             let json_data = serde_json::from_slice(&bytes).map_err(|e| {
                 poem::Error::from_string(
-                    format!("Failed to read JSON data {}", e),
+                    format!("Failed to read JSON data {e}"),
                     StatusCode::BAD_REQUEST,
                 )
             })?;
@@ -121,7 +118,7 @@ impl<T: ParseFromYAML + ParseFromJSON> ParsePayload for JsonOrYaml<T> {
         } else if content_type.contains("yaml") {
             let yaml_data = serde_yaml::from_slice(&bytes).map_err(|e| {
                 poem::Error::from_string(
-                    format!("Failed to read YAML data {}", e),
+                    format!("Failed to read YAML data {e}"),
                     StatusCode::BAD_REQUEST,
                 )
             })?;

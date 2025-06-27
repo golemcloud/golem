@@ -1322,16 +1322,15 @@ mod tests {
           createdAt: 2024-08-21T07:42:15.696Z
           routes:
           - method: Get
-            path: {}
+            path: {path_pattern}
             binding:
               component:
                 version: 0
                 name: 'foobar'
-              workerName: '{}'
-              response: '{}'
+              workerName: '{worker_id}'
+              response: '{response_mapping}'
 
-        "#,
-            path_pattern, worker_id, response_mapping
+        "#
         );
 
         let de = serde_yaml::Deserializer::from_str(yaml_string.as_str());

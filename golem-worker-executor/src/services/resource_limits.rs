@@ -317,7 +317,7 @@ fn authorised_request<T>(request: T, access_token: &Uuid) -> Request<T> {
     let mut req = Request::new(request);
     req.metadata_mut().insert(
         "authorization",
-        format!("Bearer {}", access_token).parse().unwrap(),
+        format!("Bearer {access_token}").parse().unwrap(),
     );
     req
 }

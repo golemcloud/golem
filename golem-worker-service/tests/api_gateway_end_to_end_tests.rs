@@ -2122,16 +2122,15 @@ async fn get_api_def_with_worker_binding(
           createdAt: 2024-08-21T07:42:15.696Z
           routes:
           - method: Get
-            path: {}
+            path: {path_pattern}
             binding:
               type: wit-worker
               component:
                 name: test-component
                 version: 0
-              response: '${{{}}}'
+              response: '${{{rib_expression}}}'
 
-        "#,
-        path_pattern, rib_expression
+        "#
     );
 
     // Serde is available only for user facing HttpApiDefinition
@@ -2193,19 +2192,18 @@ async fn get_api_def_with_security(
           version: 0.0.1
           createdAt: 2024-08-21T07:42:15.696Z
           security:
-          - {}
+          - {security_scheme_identifier}
           routes:
           - method: Get
-            path: {}
-            security: {}
+            path: {path_pattern}
+            security: {security_scheme_identifier}
             binding:
               type: wit-worker
               component:
                 name: test-component
                 version: 0
-              response: '${{{}}}'
-        "#,
-        security_scheme_identifier, path_pattern, security_scheme_identifier, rib_expression
+              response: '${{{rib_expression}}}'
+        "#
     );
 
     let user_facing_definition_request: api::dto::HttpApiDefinitionRequest =
@@ -2237,11 +2235,10 @@ async fn get_api_def_with_default_cors_preflight(path_pattern: &str) -> HttpApiD
           createdAt: 2024-08-21T07:42:15.696Z
           routes:
           - method: Options
-            path: {}
+            path: {path_pattern}
             binding:
               bindingType: cors-preflight
         "#,
-        path_pattern,
     );
 
     // Serde is available only for user facing HttpApiDefinition
@@ -2397,20 +2394,19 @@ async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
           createdAt: 2024-08-21T07:42:15.696Z
           routes:
           - method: Options
-            path: {}
+            path: {path_pattern}
             binding:
               bindingType: cors-preflight
           - method: Get
-            path: {}
+            path: {path_pattern}
             binding:
               type: wit-worker
               component:
                 name: test-component
                 version: 0
-              response: '${{{}}}'
+              response: '${{{rib_expression}}}'
 
-        "#,
-        path_pattern, path_pattern, rib_expression
+        "#
     );
 
     // Serde is available only for user facing HttpApiDefinition
@@ -3025,7 +3021,7 @@ mod internal {
         while let Some(c) = chars.next() {
             if c == '%' {
                 if let (Some(hex1), Some(hex2)) = (chars.next(), chars.next()) {
-                    if let Ok(byte) = u8::from_str_radix(&format!("{}{}", hex1, hex2), 16) {
+                    if let Ok(byte) = u8::from_str_radix(&format!("{hex1}{hex2}"), 16) {
                         decoded.push(byte as char);
                     } else {
                         decoded.push('%');
@@ -3488,11 +3484,8 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
         redirect_host: &str,
     ) -> Request {
         let uri = Uri::from_str(
-            format!(
-                "{}?state={}&code={}&scope={}&prompt=consent",
-                redirect_path, state, code, scope
-            )
-            .as_str(),
+            format!("{redirect_path}?state={state}&code={code}&scope={scope}&prompt=consent")
+                .as_str(),
         )
         .unwrap();
 
@@ -3723,7 +3716,7 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
 
         let cookie_header = cookies
             .into_iter()
-            .map(|(key, value)| format!("{}={}", key, value))
+            .map(|(key, value)| format!("{key}={value}"))
             .collect::<Vec<String>>()
             .join("; ");
 
@@ -3738,7 +3731,7 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
 
         Request::builder()
             .method(Method::GET)
-            .uri(Uri::from_str(format!("http://localhost/{}", location).as_str()).unwrap()) // Use the "Location" header as the URL
+            .uri(Uri::from_str(format!("http://localhost/{location}").as_str()).unwrap()) // Use the "Location" header as the URL
             .header(HOST, "localhost")
             .header(COOKIE, cookie_header)
             .finish()

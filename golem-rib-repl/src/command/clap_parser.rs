@@ -21,11 +21,11 @@ pub fn parse_with_clap<Input: Parser>(command_name: &str, input: &str) -> Result
     let args = shell_words::split(input).map_err(|e| {
         Error::raw(
             ErrorKind::InvalidValue,
-            format!("Failed to parse input to command: {}", e),
+            format!("Failed to parse input to command: {e}"),
         )
     })?;
 
-    let command = format!(":{}", command_name);
+    let command = format!(":{command_name}");
 
     Input::try_parse_from(std::iter::once(command).chain(args))
 }

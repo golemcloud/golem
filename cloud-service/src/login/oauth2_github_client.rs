@@ -291,7 +291,7 @@ impl Display for ErrorResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Error: {}", self.error)?;
         if let Some(descr) = &self.error_description {
-            write!(f, ": {}", descr)?;
+            write!(f, ": {descr}")?;
         }
         Ok(())
     }
@@ -466,7 +466,7 @@ mod tests {
             .await
             .expect("Failed to initiate workflow");
 
-        println!("Device: {:?}", device);
+        println!("Device: {device:?}");
 
         let access_token = client
             .get_access_token(
@@ -477,6 +477,6 @@ mod tests {
             .await
             .expect("Failed to get access token");
 
-        println!("Access Token: {}", access_token)
+        println!("Access Token: {access_token}")
     }
 }

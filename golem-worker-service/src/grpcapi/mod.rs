@@ -157,7 +157,7 @@ pub fn bad_request_errors(errors: Vec<String>) -> WorkerError {
 pub fn error_to_status(error: WorkerError) -> Status {
     match error.error {
         Some(worker_error::Error::BadRequest(ErrorsBody { errors })) => {
-            Status::invalid_argument(format!("Bad Request: {:?}", errors))
+            Status::invalid_argument(format!("Bad Request: {errors:?}"))
         }
         Some(worker_error::Error::Unauthorized(ErrorBody { error })) => {
             Status::unauthenticated(error)

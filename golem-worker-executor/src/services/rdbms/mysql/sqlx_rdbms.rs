@@ -399,7 +399,7 @@ impl TryFrom<&sqlx::mysql::MySqlTypeInfo> for DbColumnType {
             mysql_type_name::SET => Ok(DbColumnType::Set),
             mysql_type_name::BIT => Ok(DbColumnType::Bit),
             mysql_type_name::ENUM => Ok(DbColumnType::Enumeration),
-            _ => Err(format!("Column type '{}' is not supported", type_name))?,
+            _ => Err(format!("Column type '{type_name}' is not supported"))?,
         }
     }
 }

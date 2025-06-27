@@ -44,7 +44,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 let _ = writeln!(result, "{pad}  - {}: {}", k, &v);
             }
             if let Some(parent) = params.parent.as_ref() {
-                let _ = writeln!(result, "{pad}parent:            {}", parent);
+                let _ = writeln!(result, "{pad}parent:            {parent}");
             }
             let _ = writeln!(result, "{pad}initial active plugins:");
             for plugin in &params.initial_active_plugins {
@@ -239,7 +239,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}target version:    {}", &params.target_version,);
             if let Some(details) = &params.details {
-                let _ = writeln!(result, "{pad}error:             {}", details);
+                let _ = writeln!(result, "{pad}error:             {details}");
             }
         }
         PublicOplogEntry::GrowMemory(params) => {

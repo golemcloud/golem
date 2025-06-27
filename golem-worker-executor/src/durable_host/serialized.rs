@@ -111,15 +111,15 @@ pub enum SerializableError {
 impl Display for SerializableError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            SerializableError::Generic { message } => write!(f, "{}", message),
+            SerializableError::Generic { message } => write!(f, "{message}"),
             SerializableError::FsError { code } => {
                 let decoded = decode_fs_error(*code);
                 match decoded {
                     Some(error_code) => {
-                        write!(f, "File system error: {}", error_code)
+                        write!(f, "File system error: {error_code}")
                     }
                     None => {
-                        write!(f, "File system error: unknown error code {}", code)
+                        write!(f, "File system error: unknown error code {code}")
                     }
                 }
             }
@@ -128,10 +128,10 @@ impl Display for SerializableError {
                 let decoded = decode_socket_error(*code);
                 match decoded {
                     Some(error_code) => {
-                        write!(f, "Socket error: {}", error_code)
+                        write!(f, "Socket error: {error_code}")
                     }
                     None => {
-                        write!(f, "Socket error: unknown error code {}", code)
+                        write!(f, "Socket error: unknown error code {code}")
                     }
                 }
             }
@@ -329,7 +329,7 @@ impl From<SerializableError> for anyhow::Error {
                 let error_code = decode_fs_error(code);
                 match error_code {
                     Some(code) => anyhow!(FsError::from(code)),
-                    None => anyhow::Error::msg(format!("Unknown file-system error code: {}", code)),
+                    None => anyhow::Error::msg(format!("Unknown file-system error code: {code}")),
                 }
             }
             SerializableError::Golem { error } => anyhow!(error),
@@ -337,7 +337,7 @@ impl From<SerializableError> for anyhow::Error {
                 let error_code = decode_socket_error(code);
                 match error_code {
                     Some(code) => anyhow!(SocketError::from(code)),
-                    None => anyhow::Error::msg(format!("Unknown socket error code: {}", code)),
+                    None => anyhow::Error::msg(format!("Unknown socket error code: {code}")),
                 }
             }
             SerializableError::Rpc { error } => anyhow!(error),
@@ -356,8 +356,7 @@ impl From<SerializableError> for FsError {
                 match error_code {
                     Some(code) => FsError::from(code),
                     None => FsError::trap(anyhow::Error::msg(format!(
-                        "Unknown file-system error code: {}",
-                        code
+                        "Unknown file-system error code: {code}"
                     ))),
                 }
             }
@@ -437,8 +436,7 @@ impl From<SerializableError> for SocketError {
                 match error_code {
                     Some(code) => SocketError::from(code),
                     None => SocketError::trap(anyhow::Error::msg(format!(
-                        "Unknown file-system error code: {}",
-                        code
+                        "Unknown file-system error code: {code}"
                     ))),
                 }
             }

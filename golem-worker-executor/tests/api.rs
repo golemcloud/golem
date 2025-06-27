@@ -296,7 +296,7 @@ async fn dynamic_worker_creation(
             ]),
             Value::Tuple(vec![
                 Value::String("GOLEM_COMPONENT_ID".to_string()),
-                Value::String(format!("{}", component_id))
+                Value::String(format!("{component_id}"))
             ]),
             Value::Tuple(vec![
                 Value::String("GOLEM_COMPONENT_VERSION".to_string()),
@@ -930,7 +930,7 @@ async fn component_env_variables(
             ]),
             Value::Tuple(vec![
                 Value::String("GOLEM_COMPONENT_ID".to_string()),
-                Value::String(format!("{}", component_id))
+                Value::String(format!("{component_id}"))
             ]),
             Value::Tuple(vec![
                 Value::String("GOLEM_COMPONENT_VERSION".to_string()),
@@ -1271,7 +1271,7 @@ async fn get_workers(
 
     for i in 0..workers_count {
         let worker_id = executor
-            .start_worker(&component_id, &format!("test-worker-{}", i))
+            .start_worker(&component_id, &format!("test-worker-{i}"))
             .await;
 
         worker_ids.push(worker_id);
