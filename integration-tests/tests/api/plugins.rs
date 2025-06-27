@@ -18,11 +18,11 @@ use axum::extract::Multipart;
 use axum::routing::post;
 use axum::Router;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
-use golem_common::model::plugin::PluginScope;
 use golem_common::model::plugin::{
     AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
     OplogProcessorDefinition, PluginTypeSpecificDefinition,
 };
+use golem_common::model::plugin::{PluginScope, ProjectPluginScope};
 use golem_common::model::{Empty, ScanCursor};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, TestDependencies, TestDependenciesDsl,
@@ -326,7 +326,7 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies, _tracing:
         })
         .await;
 
-    let result = <TestDependenciesDsl<_, _> as golem_test_framework::dsl::TestDsl>::
+    let result = <TestDependenciesDsl<_> as golem_test_framework::dsl::TestDsl>::
         install_plugin_to_component(
             &admin,
             &component_id,
@@ -346,34 +346,33 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies, _tracing:
 }
 
 #[test]
-async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin();
+async fn oplog_processor_global_scope(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let user = deps.user().await;
 
-    let plugin_component_id = admin.component("oplog-processor").unique().store().await;
-    let component_id = admin.component("shopping-cart").unique().store().await;
+    let plugin_component_id = user.component("oplog-processor").unique().store().await;
+    let component_id = user.component("shopping-cart").unique().store().await;
 
-    admin
-        .create_plugin(PluginDefinitionCreation {
-            name: "oplog-processor-1".to_string(),
-            version: "v1".to_string(),
-            description: "A test".to_string(),
-            icon: vec![],
-            homepage: "none".to_string(),
-            specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
-                component_id: plugin_component_id.clone(),
-                component_version: 0,
-            }),
-            scope: PluginScope::Global(Empty {}),
-        })
-        .await;
+    user.create_plugin(PluginDefinitionCreation {
+        name: "oplog-processor-1".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
+            component_id: plugin_component_id.clone(),
+            component_version: 0,
+        }),
+        scope: PluginScope::Global(Empty {}),
+    })
+    .await;
 
-    let _installation_id = admin
+    let _installation_id = user
         .install_plugin_to_component(&component_id, "oplog-processor-1", "v1", 0, HashMap::new())
         .await;
 
-    let worker_id = admin.start_worker(&component_id, "worker1").await;
+    let worker_id = user.start_worker(&component_id, "worker1").await;
 
-    let _ = admin
+    let _ = user
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{initialize-cart}",
@@ -381,7 +380,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _ = admin
+    let _ = user
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
@@ -395,7 +394,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _ = admin
+    let _ = user
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
@@ -409,7 +408,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _ = admin
+    let _ = user
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
@@ -423,7 +422,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _ = admin
+    let _ = user
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{update-item-quantity}",
@@ -431,7 +430,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
-    let _ = admin
+    let _ = user
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{force-commit}",
@@ -443,7 +442,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let mut cursor = ScanCursor::default();
 
     loop {
-        let (maybe_cursor, items) = admin
+        let (maybe_cursor, items) = user
             .get_workers_metadata(&plugin_component_id, None, cursor, 1, true)
             .await;
 
@@ -469,7 +468,7 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let mut invocations = Vec::new();
 
     loop {
-        let response = admin
+        let response = user
             .invoke_and_await(
                 &plugin_worker_id,
                 "golem:component/api.{get-invoked-functions}",
@@ -493,7 +492,174 @@ async fn oplog_processor1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         }
     }
 
-    let account_id = deps.cloud_service().admin_account_id();
+    let account_id = user.account_id;
+
+    let expected = vec![
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{initialize-cart}}"),
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{update-item-quantity}}"),
+    ];
+    assert_eq!(invocations, expected);
+}
+
+#[test]
+async fn oplog_processor_project_scope(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let user = deps.user().await;
+    let project = user.create_project().await;
+
+    let plugin_component_id = user.component("oplog-processor").unique().store().await;
+    let component_id = user
+        .component("shopping-cart")
+        .unique()
+        .with_project(project.clone())
+        .store()
+        .await;
+
+    user.create_plugin(PluginDefinitionCreation {
+        name: "oplog-processor-2".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
+            component_id: plugin_component_id.clone(),
+            component_version: 0,
+        }),
+        scope: PluginScope::Project(ProjectPluginScope {
+            project_id: project.clone(),
+        }),
+    })
+    .await;
+
+    let _installation_id = user
+        .install_plugin_to_component(&component_id, "oplog-processor-2", "v1", 0, HashMap::new())
+        .await;
+
+    let worker_id = user.start_worker(&component_id, "worker1").await;
+
+    let _ = user
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{initialize-cart}",
+            vec!["test-user-1".into_value_and_type()],
+        )
+        .await;
+
+    let _ = user
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add-item}",
+            vec![vec![
+                ("product-id", "G1000".into_value_and_type()),
+                ("name", "Golem T-Shirt M".into_value_and_type()),
+                ("price", 100.0f32.into_value_and_type()),
+                ("quantity", 5u32.into_value_and_type()),
+            ]
+            .into_value_and_type()],
+        )
+        .await;
+
+    let _ = user
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add-item}",
+            vec![vec![
+                ("product-id", "G1001".into_value_and_type()),
+                ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
+                ("price", 999999.0f32.into_value_and_type()),
+                ("quantity", 1u32.into_value_and_type()),
+            ]
+            .into_value_and_type()],
+        )
+        .await;
+
+    let _ = user
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add-item}",
+            vec![vec![
+                ("product-id", "G1002".into_value_and_type()),
+                ("name", "Mud Golem".into_value_and_type()),
+                ("price", 11.0f32.into_value_and_type()),
+                ("quantity", 10u32.into_value_and_type()),
+            ]
+            .into_value_and_type()],
+        )
+        .await;
+
+    let _ = user
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{update-item-quantity}",
+            vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
+        )
+        .await;
+
+    let _ = user
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{force-commit}",
+            vec![10u8.into_value_and_type()],
+        )
+        .await;
+
+    let mut plugin_worker_id = None;
+    let mut cursor = ScanCursor::default();
+
+    loop {
+        let (maybe_cursor, items) = user
+            .get_workers_metadata(&plugin_component_id, None, cursor, 1, true)
+            .await;
+
+        for (item, _) in items {
+            if plugin_worker_id.is_none() {
+                plugin_worker_id = Some(item.worker_id.clone());
+            }
+        }
+
+        if plugin_worker_id.is_some() {
+            break;
+        }
+
+        if let Some(new_cursor) = maybe_cursor {
+            cursor = new_cursor;
+        } else {
+            break;
+        }
+    }
+
+    let plugin_worker_id = plugin_worker_id.expect("Plugin worker id found");
+
+    let mut invocations = Vec::new();
+
+    loop {
+        let response = user
+            .invoke_and_await(
+                &plugin_worker_id,
+                "golem:component/api.{get-invoked-functions}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        if let Value::List(items) = &response[0] {
+            invocations.extend(items.iter().filter_map(|item| {
+                if let Value::String(name) = item {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }));
+        }
+
+        if !invocations.is_empty() {
+            break;
+        }
+    }
+
+    let account_id = user.account_id;
 
     let expected = vec![
         format!("{account_id}/{component_id}/worker1/golem:it/api.{{initialize-cart}}"),

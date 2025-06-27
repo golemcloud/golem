@@ -18,7 +18,6 @@ use crate::model as domain;
 use crate::service::plugin::PluginService;
 use futures::{stream, StreamExt, TryStreamExt};
 use golem_common::model::plugin::PluginInstallation;
-use golem_common::model::plugin::PluginOwner;
 use std::sync::Arc;
 
 pub struct ApiMapper {
@@ -34,12 +33,11 @@ impl ApiMapper {
 impl ApiMapper {
     pub async fn convert_plugin_installation(
         &self,
-        owner: &PluginOwner,
         plugin_installation: PluginInstallation,
     ) -> Result<dto::PluginInstallation, ComponentError> {
         let definition = self
             .plugin_service
-            .get_by_id(owner, &plugin_installation.plugin_id)
+            .get_by_id(&plugin_installation.plugin_id)
             .await?
             .expect("Plugin referenced by id not found");
         Ok(dto::PluginInstallation::from_model(
@@ -53,10 +51,7 @@ impl ApiMapper {
         component: domain::Component,
     ) -> Result<dto::Component, ComponentError> {
         let installed_plugins = stream::iter(component.installed_plugins)
-            .then(async |p| {
-                self.convert_plugin_installation(&component.owner.clone().into(), p)
-                    .await
-            })
+            .then(async |p| self.convert_plugin_installation(p).await)
             .try_collect::<Vec<_>>()
             .await?;
 

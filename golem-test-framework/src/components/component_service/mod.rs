@@ -54,7 +54,7 @@ use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::PluginTypeSpecificDefinition;
 use golem_common::model::{
     AccountId, ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion,
-    InitialComponentFile, PluginId, PluginInstallationId,
+    InitialComponentFile, PluginId, PluginInstallationId, ProjectId,
 };
 use golem_service_base::clients::authorised_request;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -112,6 +112,7 @@ pub trait ComponentService: Send + Sync {
     async fn get_plugin_id(
         &self,
         token: &Uuid,
+        owner: AccountId,
         name: &str,
         version: &str,
     ) -> crate::Result<Option<PluginId>> {
@@ -121,6 +122,7 @@ pub trait ComponentService: Send + Sync {
 
                 let request = authorised_request(
                     GetPluginRequest {
+                        account_id: Some(owner.into()),
                         name: name.to_string(),
                         version: version.to_string(),
                     },
@@ -161,6 +163,9 @@ pub trait ComponentService: Send + Sync {
         token: &Uuid,
         component: golem_client::model::Component,
     ) -> crate::Result<Component> {
+        let account_id = AccountId {
+            value: component.account_id,
+        };
         let component = Component {
             versioned_component_id: Some(VersionedComponentId {
                 component_id: Some(
@@ -171,8 +176,8 @@ pub trait ComponentService: Send + Sync {
             component_name: component.component_name,
             component_size: component.component_size,
             metadata: Some(component.metadata.into()),
-            project_id: None,
-            account_id: None,
+            project_id: Some(ProjectId(component.project_id).into()),
+            account_id: Some(account_id.clone().into()),
             created_at: Some(SystemTime::from(component.created_at).into()),
             component_type: Some(component.component_type as i32),
             files: component
@@ -183,7 +188,12 @@ pub trait ComponentService: Send + Sync {
             installed_plugins: stream::iter(component.installed_plugins)
                 .then(async |install| {
                     let plugin_id = self
-                        .get_plugin_id(token, &install.plugin_name, &install.plugin_version)
+                        .get_plugin_id(
+                            token,
+                            account_id.clone(),
+                            &install.plugin_name,
+                            &install.plugin_version,
+                        )
                         .await?
                         .ok_or(anyhow!("Failed to get plugin id during conversion"))?;
 
@@ -347,6 +357,7 @@ pub trait ComponentService: Send + Sync {
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> Component {
         let mut retries = 10;
         loop {
@@ -356,7 +367,7 @@ pub trait ComponentService: Send + Sync {
 
                     let request = authorised_request(
                         GetComponentsRequest {
-                            project_id: None,
+                            project_id: project_id.clone().map(|pid| pid.into()),
                             component_name: Some(name.to_string()),
                         },
                         token,
@@ -426,6 +437,7 @@ pub trait ComponentService: Send + Sync {
                     dynamic_linking,
                     unverified,
                     env,
+                    project_id.clone(),
                 )
                 .await
             {
@@ -455,6 +467,7 @@ pub trait ComponentService: Send + Sync {
         _component_id: &ComponentId,
         _component_name: &str,
         _component_type: ComponentType,
+        _project_id: Option<ProjectId>,
     ) -> Result<(), AddComponentError> {
         panic!(
             "Adding a component with a specific Component ID is only supported in filesystem mode"
@@ -471,6 +484,7 @@ pub trait ComponentService: Send + Sync {
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         _unverified: bool,
         env: &HashMap<String, String>,
+        project_id: Option<ProjectId>,
     ) -> Result<Component, AddComponentError> {
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
@@ -488,7 +502,7 @@ pub trait ComponentService: Send + Sync {
                 let mut chunks: Vec<CreateComponentRequest> = vec![CreateComponentRequest {
                     data: Some(create_component_request::Data::Header(
                         CreateComponentRequestHeader {
-                            project_id: None,
+                            project_id: project_id.map(|pid| pid.into()),
                             component_name: name.to_string(),
                             component_type: Some(component_type as i32),
                             files,
