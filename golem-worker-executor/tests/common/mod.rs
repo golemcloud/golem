@@ -1121,7 +1121,7 @@ impl TestOplog {
         oplog: Arc<dyn Oplog>,
         additional_test_deps: AdditionalTestDeps,
     ) -> Self {
-        println!("TestOplog for worker {}", owned_worker_id);
+        println!("TestOplog for worker {owned_worker_id}");
         Self {
             owned_worker_id,
             oplog,
@@ -1149,7 +1149,7 @@ impl TestOplog {
             let times = &captures[1].parse::<usize>().unwrap_or_default();
             let entry = &captures[2];
             if entry == entry_name {
-                println!("worker {} entry {}", worker_name, entry_name);
+                println!("worker {worker_name} entry {entry_name}");
 
                 let failed_before = self.additional_test_deps.get_oplog_failures_count(
                     self.owned_worker_id.worker_id.clone(),
@@ -1158,8 +1158,7 @@ impl TestOplog {
 
                 if failed_before >= *times {
                     println!(
-                        "worker {} failed on {} before {} times",
-                        worker_name, entry_name, failed_before
+                        "worker {worker_name} failed on {entry_name} before {failed_before} times",
                     );
                     Ok(())
                 } else {
@@ -1168,15 +1167,11 @@ impl TestOplog {
                         entry_name.to_string(),
                     );
                     println!(
-                        "worker {} failed on {} {} times",
-                        worker_name,
-                        entry_name,
+                        "worker {worker_name} failed on {entry_name} {} times",
                         failed_before + 1
                     );
                     Err(format!(
-                        "worker {} failed on {} {} times",
-                        worker_name,
-                        entry_name,
+                        "worker {worker_name} failed on {entry_name} {} times",
                         failed_before + 1
                     ))
                 }
@@ -1293,7 +1288,7 @@ impl<T: rdbms::RdbmsType> TestRdms<T> {
             let times = &captures[1].parse::<usize>().unwrap_or_default();
             let entry = &captures[2];
             if entry == entry_name {
-                println!("worker {} entry {}", worker_name, entry_name);
+                println!("worker {worker_name} entry {entry_name}");
 
                 let failed_before = self
                     .additional_test_deps
@@ -1301,8 +1296,7 @@ impl<T: rdbms::RdbmsType> TestRdms<T> {
 
                 if failed_before >= *times {
                     println!(
-                        "worker {} failed on {} before {} times",
-                        worker_name, entry_name, failed_before
+                        "worker {worker_name} failed on {entry_name} before {failed_before} times",
                     );
                     Ok(())
                 } else {

@@ -728,7 +728,7 @@ impl FromStr for RdbmsTransactionStatus {
             "Committed" => Ok(RdbmsTransactionStatus::Committed),
             "RolledBack" => Ok(RdbmsTransactionStatus::RolledBack),
             "NotFound" => Ok(RdbmsTransactionStatus::NotFound),
-            _ => Err(format!("Unknown transaction status: {}", s)),
+            _ => Err(format!("Unknown transaction status: {s}")),
         }
     }
 }

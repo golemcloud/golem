@@ -82,8 +82,7 @@ impl GolemTransactionRepo<sqlx::MySql> for MysqlType {
             match e {
                 sqlx::Error::Database(e) if e.downcast_ref::<MySqlDatabaseError>().number() == 1142 => {
                     Error::other_response_failure(format!(
-                        "There was a problem to create 'golem_transactions' table, see: https://learn.golem.cloud/common-language-guide/rdbms for more details (error: {})",
-                        e
+                        "There was a problem to create 'golem_transactions' table, see: https://learn.golem.cloud/common-language-guide/rdbms for more details (error: {e})"
                     ))
                 }
                 _ => Error::other_response_failure(e)

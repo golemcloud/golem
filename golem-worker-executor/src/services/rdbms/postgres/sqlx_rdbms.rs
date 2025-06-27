@@ -132,8 +132,7 @@ impl TransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
                 "committed" => Ok(RdbmsTransactionStatus::Committed),
                 "aborted" => Ok(RdbmsTransactionStatus::RolledBack),
                 _ => Err(Error::query_response_failure(format!(
-                    "Unknown transaction status: {}",
-                    status
+                    "Unknown transaction status: {status}"
                 ))),
             }
         } else {

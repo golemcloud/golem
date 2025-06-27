@@ -205,9 +205,9 @@ impl TransactionFailOn {
 
     fn name(&self) -> String {
         match self {
-            TransactionFailOn::OplogAdd(e, c) => format!("FailOplogAdd{}On{}", c, e),
+            TransactionFailOn::OplogAdd(e, c) => format!("FailOplogAdd{c}On{e}"),
             TransactionFailOn::OplogAddAndTx(oe, oc, te, tc) => {
-                format!("FailOplogAdd{}On{}-FailRdbmsTx{}On{}", oc, oe, tc, te)
+                format!("FailOplogAdd{oc}On{oe}-FailRdbmsTx{tc}On{te}")
             }
         }
     }
