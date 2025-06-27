@@ -14,7 +14,7 @@
 
 use crate::api::{ApiError, ApiResult, ApiTags};
 use crate::model::*;
-use crate::service::account_grant::AccountGrantService;
+use crate::service::account_grant::{AccountGrantService, AccountGrantServiceError};
 use crate::service::auth::AuthService;
 use golem_common::model::auth::Role;
 use golem_common::model::error::ErrorBody;
@@ -60,7 +60,12 @@ impl GrantApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Vec<Role>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let response = self.account_grant_service.get(&account_id, &auth).await?;
+
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::ViewAccountGrants)
+            .await?;
+
+        let response = self.account_grant_service.get(&account_id).await?;
         Ok(Json(response))
     }
 
@@ -92,7 +97,13 @@ impl GrantApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Role>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let roles = self.account_grant_service.get(&account_id, &auth).await?;
+
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::ViewAccountGrants)
+            .await?;
+
+        let roles = self.account_grant_service.get(&account_id).await?;
+
         if roles.contains(&role) {
             Ok(Json(role))
         } else {
@@ -132,9 +143,13 @@ impl GrantApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Role>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        self.account_grant_service
-            .add(&account_id, &role, &auth)
+
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::CreateAccountGrant)
             .await?;
+
+        self.account_grant_service.add(&account_id, &role).await?;
+
         Ok(Json(role))
     }
 
@@ -168,9 +183,21 @@ impl GrantApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<DeleteGrantResponse>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        self.account_grant_service
-            .remove(&account_id, &role, &auth)
+
+        self.auth_service
+            .authorize_account_action(&auth, &account_id, &AccountAction::DeleteAccountGrant)
             .await?;
+
+        if auth.token.account_id == account_id && role == Role::Admin {
+            Err(AccountGrantServiceError::ArgValidation(vec![
+                "Cannot remove Admin role from current account.".to_string(),
+            ]))?
+        };
+
+        self.account_grant_service
+            .remove(&account_id, &role)
+            .await?;
+
         Ok(Json(DeleteGrantResponse {}))
     }
 }

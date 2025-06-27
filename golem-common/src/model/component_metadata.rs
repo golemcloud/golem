@@ -342,10 +342,10 @@ impl SafeDisplay for ComponentProcessingError {
 impl Display for ComponentProcessingError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            ComponentProcessingError::Parsing(e) => write!(f, "Parsing error: {}", e),
+            ComponentProcessingError::Parsing(e) => write!(f, "Parsing error: {e}"),
             ComponentProcessingError::Analysis(source) => {
                 let AnalysisFailure { reason } = source;
-                write!(f, "Analysis error: {}", reason)
+                write!(f, "Analysis error: {reason}")
             }
         }
     }

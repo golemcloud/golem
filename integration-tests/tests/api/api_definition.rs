@@ -645,8 +645,7 @@ paths:
           }}
 x-golem-api-definition-id: shopping-cart
 x-golem-api-definition-version: 0.0.1
-"#,
-        unique_component_name = unique_component_name
+"#
     );
 
     let project = admin.default_project().await;
@@ -787,8 +786,7 @@ async fn create_openapi_json_definition(deps: &EnvBasedTestDependencies) {
   "x-golem-api-definition-id": "shopping-cart-openapi-json",
   "x-golem-api-definition-version": "0.0.1"
 }}
-"#,
-        unique_component_name = unique_component_name
+"#
     );
 
     let project = admin.default_project().await;

@@ -82,8 +82,7 @@ impl ComponentDependencies {
                     Err("unknown function".to_string())
                 } else if function_types_in_component.len() > 1 {
                     Err(format!(
-                        "function `{}` is ambiguous across components",
-                        function_name
+                        "function `{function_name}` is ambiguous across components"
                     ))
                 } else {
                     let function_types = function_types_in_component.pop().unwrap();
@@ -167,7 +166,7 @@ impl ComponentDependencies {
         }
 
         if tree.is_empty() {
-            return Err(format!("interface `{}` not found", interface_name));
+            return Err(format!("interface `{interface_name}` not found"));
         }
 
         Ok(ComponentDependencies { dependencies: tree })
@@ -206,7 +205,7 @@ impl ComponentDependencies {
         }
 
         if tree.is_empty() {
-            return Err(format!("package `{}` not found", package_name));
+            return Err(format!("package `{package_name}` not found"));
         }
 
         Ok(crate::ComponentDependencies { dependencies: tree })
@@ -247,7 +246,7 @@ impl ComponentDependencies {
         }
 
         if tree.is_empty() {
-            return Err(format!("`{}` not found", fqi));
+            return Err(format!("`{fqi}` not found"));
         }
 
         Ok(ComponentDependencies { dependencies: tree })
@@ -276,7 +275,7 @@ impl ComponentDependencies {
                         Some(name) => {
                             let pkg = match &x.root_package_version {
                                 None => name.to_string(),
-                                Some(version) => format!("{}@{}", name, version),
+                                Some(version) => format!("{name}@{version}"),
                             };
 
                             pkg == package_name.to_string()

@@ -138,7 +138,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 if inferred_type.is_unknown() {
                     return Err(
                         UnResolvedTypesError::from(expr.source_span()).with_help_message(
-                            format!("make sure `{}` is a valid identifier", expr).as_str(),
+                            format!("make sure `{expr}` is a valid identifier").as_str(),
                         ),
                     );
                 }
@@ -361,30 +361,22 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 let additional_message = match call_type {
                     CallType::Function { function_name, .. } => {
                         format!(
-                            "cannot determine the return type of the function `{}`",
-                            function_name
+                            "cannot determine the return type of the function `{function_name}`"
                         )
                     }
                     CallType::VariantConstructor(name) => {
-                        format!(
-                            "cannot determine the type of the variant constructor `{}`",
-                            name
-                        )
+                        format!("cannot determine the type of the variant constructor `{name}`")
                     }
                     CallType::EnumConstructor(name) => {
-                        format!(
-                            "cannot determine the type of the enum constructor `{}`",
-                            name
-                        )
+                        format!("cannot determine the type of the enum constructor `{name}`")
                     }
                     CallType::InstanceCreation(instance) => match instance {
                         InstanceCreationType::WitWorker { worker_name, .. } => {
                             let worker_name = worker_name
                                 .as_ref()
-                                .map_or("".to_string(), |x| format!(", with worker `{}`", x));
+                                .map_or("".to_string(), |x| format!(", with worker `{x}`"));
                             format!(
-                                "cannot determine the type of instance creation `{}`",
-                                worker_name
+                                "cannot determine the type of instance creation `{worker_name}`"
                             )
                         }
                         InstanceCreationType::WitResource {
@@ -395,7 +387,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                             let worker_name = module
                                 .as_ref()
                                 .and_then(|x| x.worker_name())
-                                .map_or("".to_string(), |x| format!(", with worker `{}`", x));
+                                .map_or("".to_string(), |x| format!(", with worker `{x}`"));
 
                             format!(
                                 "cannot determine the type of the resource creation `{}`{}",

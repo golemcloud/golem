@@ -71,7 +71,7 @@ impl ShardId {
         );
         let high = Self::hash_string(&high_bits.to_string());
         let worker_name = &worker_id.worker_name;
-        let component_worker_name = format!("{}{}", low_bits, worker_name);
+        let component_worker_name = format!("{low_bits}{worker_name}");
         let low = Self::hash_string(&component_worker_name);
         ((high as i64) << 32) | ((low as i64) & 0xFFFFFFFF)
     }
@@ -401,20 +401,20 @@ mod tests {
         }
 
         check(
-            format!("urn:worker:{}", component_id),
+            format!("urn:worker:{component_id}"),
             Some(TargetWorkerId {
                 component_id: component_id.clone(),
                 worker_name: None,
             }),
         );
         check(
-            format!("urn:worker:{}/worker1", component_id),
+            format!("urn:worker:{component_id}/worker1"),
             Some(TargetWorkerId {
                 component_id: component_id.clone(),
                 worker_name: Some("worker1".to_string()),
             }),
         );
-        check(format!("urn:worker:{}/worker1/worker2", component_id), None);
-        check(format!("urn:component:{}", component_id), None);
+        check(format!("urn:worker:{component_id}/worker1/worker2"), None);
+        check(format!("urn:component:{component_id}"), None);
     }
 }

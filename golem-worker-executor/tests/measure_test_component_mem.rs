@@ -88,7 +88,7 @@ async fn measure(
             ISizeFormatter::new(delta_memory, BINARY),
             // ISizeFormatter::new(vresult, BINARY)
         );
-        writeln!(csv, "{},{},{}", name, component_size, delta_memory).unwrap();
+        writeln!(csv, "{name},{component_size},{delta_memory}").unwrap();
     }
     info!("{}", csv);
 }

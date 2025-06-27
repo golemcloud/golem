@@ -203,7 +203,7 @@ impl Services {
             BlobStorageConfig::Sqlite(sqlite) => {
                 let pool = SqlitePool::configured(sqlite)
                     .await
-                    .map_err(|e| format!("Failed to create sqlite pool: {}", e))?;
+                    .map_err(|e| format!("Failed to create sqlite pool: {e}"))?;
                 Arc::new(
                     golem_service_base::storage::blob::sqlite::SqliteBlobStorage::new(pool.clone())
                         .await?,

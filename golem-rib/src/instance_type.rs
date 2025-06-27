@@ -222,13 +222,11 @@ impl InstanceType {
             })
         } else if tree.is_empty() {
             Err(format!(
-                "No components found have the resource constructor '{}'",
-                resource_constructor_name
+                "No components found have the resource constructor '{resource_constructor_name}'"
             ))
         } else {
             Err(format!(
-                "Multiple components found with the resource constructor '{}'. Please specify the type parameter",
-                resource_constructor_name
+                "Multiple components found with the resource constructor '{resource_constructor_name}'. Please specify the type parameter"
             ))
         }
     }
@@ -285,8 +283,7 @@ impl InstanceType {
 
                         if functions.is_empty() {
                             return Err(format!(
-                                "Function '{}' not found in interface '{}'",
-                                method_name, iface
+                                "Function '{method_name}' not found in interface '{iface}'"
                             ));
                         }
 
@@ -303,10 +300,7 @@ impl InstanceType {
                             search_function_in_instance(self, method_name, Some(info))
                         }
                     } else {
-                        Err(format!(
-                            "Interface '{}' found in multiple components",
-                            iface
-                        ))
+                        Err(format!("Interface '{iface}' found in multiple components"))
                     }
                 }
 
@@ -325,7 +319,7 @@ impl InstanceType {
                             .collect::<Vec<_>>();
 
                         if packages.is_empty() {
-                            return Err(format!("package '{}' not found", pkg));
+                            return Err(format!("package '{pkg}' not found"));
                         }
 
                         let functions = packages
@@ -335,8 +329,7 @@ impl InstanceType {
 
                         if functions.is_empty() {
                             return Err(format!(
-                                "function '{}' not found in package '{}'",
-                                method_name, pkg
+                                "function '{method_name}' not found in package '{pkg}'"
                             ));
                         }
 
@@ -354,8 +347,7 @@ impl InstanceType {
                         }
                     } else {
                         Err(format!(
-                            "package '{}' found in multiple components. Please specify the root package name instead",
-                            pkg
+                            "package '{pkg}' found in multiple components. Please specify the root package name instead"
                         ))
                     }
                 }
@@ -381,8 +373,7 @@ impl InstanceType {
 
                         if functions.is_empty() {
                             return Err(format!(
-                                "function '{}' not found in interface '{}'",
-                                method_name, fq_iface
+                                "function '{method_name}' not found in interface '{fq_iface}'"
                             ));
                         }
 
@@ -400,8 +391,7 @@ impl InstanceType {
                         }
                     } else {
                         Err(format!(
-                            "interface '{}' found in multiple components. Please specify the root package name instead",
-                            fq_iface
+                            "interface '{fq_iface}' found in multiple components. Please specify the root package name instead"
                         ))
                     }
                 }
@@ -548,8 +538,7 @@ fn search_function_in_instance(
                     .dependencies
                     .get(component_info)
                     .ok_or(format!(
-                        "component '{}' not found in dependencies",
-                        component_info
+                        "component '{component_info}' not found in dependencies"
                     ))?;
 
             let functions = function_dictionary
@@ -560,8 +549,7 @@ fn search_function_in_instance(
 
             if functions.is_empty() {
                 return Err(format!(
-                    "function '{}' not found in component '{}'",
-                    function_name, component_info
+                    "function '{function_name}' not found in component '{component_info}'"
                 ));
             }
 
@@ -638,11 +626,10 @@ fn search_function_in_instance(
                 let (info, function) = &component_info_functions[0];
                 Ok((info.clone(), function.clone()))
             } else if component_info_functions.is_empty() {
-                Err(format!("function '{}' not found", function_name))
+                Err(format!("function '{function_name}' not found"))
             } else {
                 Err(format!(
-                    "function '{}' found in multiple components. Please specify the type parameter",
-                    function_name
+                    "function '{function_name}' found in multiple components. Please specify the type parameter"
                 ))
             }
         }
@@ -683,8 +670,7 @@ fn search_function_in_multiple_packages(
     package_map: HashMap<Option<PackageName>, HashSet<Option<InterfaceName>>>,
 ) -> Result<Function, String> {
     let mut error_msg = format!(
-        "function '{}' exists in multiple packages. specify a package name as type parameter from: ",
-        function_name
+        "function '{function_name}' exists in multiple packages. specify a package name as type parameter from: "
     );
 
     let mut package_interface_list = package_map
@@ -699,7 +685,7 @@ fn search_function_in_multiple_packages(
                 interface_list.sort();
 
                 if interface_list.is_empty() {
-                    format!("{}", p)
+                    format!("{p}")
                 } else {
                     format!("{} (interfaces: {})", p, interface_list.join(", "))
                 }

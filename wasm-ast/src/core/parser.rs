@@ -262,7 +262,7 @@ impl<T: TryFromExprSource> TryFrom<wasmparser::Element<'_>> for Elem<T> {
                 let mut init = Vec::new();
                 for func_idx in indices {
                     let func_idx = func_idx
-                        .map_err(|e| format!("Error parsing core module element: {:?}", e))?;
+                        .map_err(|e| format!("Error parsing core module element: {e:?}"))?;
                     let expr_source = RefFuncExprSource::new(func_idx);
                     init.push(T::try_from(expr_source)?);
                 }
@@ -272,7 +272,7 @@ impl<T: TryFromExprSource> TryFrom<wasmparser::Element<'_>> for Elem<T> {
                 let mut init = Vec::new();
                 for expr in exprs {
                     let expr =
-                        expr.map_err(|e| format!("Error parsing core module element: {:?}", e))?;
+                        expr.map_err(|e| format!("Error parsing core module element: {e:?}"))?;
                     let expr_source = OperatorsReaderExprSource::new(expr.get_operators_reader());
                     let expr: T = T::try_from(expr_source)?;
                     init.push(expr);
@@ -332,10 +332,10 @@ impl<T: TryFromExprSource> TryFrom<wasmparser::FunctionBody<'_>> for FuncCode<T>
 
         for local_groups in value
             .get_locals_reader()
-            .map_err(|e| format!("Error parsing core module function body: {:?}", e))?
+            .map_err(|e| format!("Error parsing core module function body: {e:?}"))?
         {
             let (count, val_type) = local_groups
-                .map_err(|e| format!("Error parsing core module function body: {:?}", e))?;
+                .map_err(|e| format!("Error parsing core module function body: {e:?}"))?;
             let val_type: ValType = val_type.try_into()?;
             for _ in 0..count {
                 locals.push(val_type.clone());
@@ -345,7 +345,7 @@ impl<T: TryFromExprSource> TryFrom<wasmparser::FunctionBody<'_>> for FuncCode<T>
         let expr_source = OperatorsReaderExprSource::new(
             value
                 .get_operators_reader()
-                .map_err(|e| format!("Error parsing core module function body: {:?}", e))?,
+                .map_err(|e| format!("Error parsing core module function body: {e:?}"))?,
         );
         let body: T = T::try_from(expr_source)?;
 
@@ -380,7 +380,7 @@ impl TryFrom<OperatorsReader<'_>> for Expr {
         let mut stack = vec![OperatorTarget::TopLevel(Vec::new())];
 
         for op in value {
-            let op = op.map_err(|e| format!("Error parsing core module instruction: {:?}", e))?;
+            let op = op.map_err(|e| format!("Error parsing core module instruction: {e:?}"))?;
 
             let instr = match op {
                 Operator::Unreachable => Some(Instr::Unreachable),
@@ -454,9 +454,7 @@ impl TryFrom<OperatorsReader<'_>> for Expr {
                 Operator::BrTable { targets } => {
                     let labels: Vec<LabelIdx> = targets
                         .targets()
-                        .map(|r| {
-                            r.map_err(|err| format!("Failed to read brtable labels: {:?}", err))
-                        })
+                        .map(|r| r.map_err(|err| format!("Failed to read brtable labels: {err:?}")))
                         .collect::<Result<Vec<LabelIdx>, String>>()?;
                     Some(Instr::BrTable(labels, targets.default()))
                 }
@@ -1836,36 +1834,36 @@ where
         let (parser, data) = value;
         let mut sections = Vec::new();
         for payload in parser.parse_all(data) {
-            let payload = payload.map_err(|e| format!("Error parsing core module: {:?}", e))?;
+            let payload = payload.map_err(|e| format!("Error parsing core module: {e:?}"))?;
             match payload {
                 Payload::Version { .. } => {}
                 Payload::TypeSection(reader) => {
                     for tpe in reader.into_iter_err_on_gc_types() {
-                        let tpe = tpe.map_err(|e| format!("Error parsing core module type section: {:?}", e))?;
+                        let tpe = tpe.map_err(|e| format!("Error parsing core module type section: {e:?}"))?;
                         sections.push(CoreSection::Type(tpe.try_into()?));
                     }
                 }
                 Payload::ImportSection(reader) => {
                     for import in reader {
-                        let import = import.map_err(|e| format!("Error parsing core module import section: {:?}", e))?;
+                        let import = import.map_err(|e| format!("Error parsing core module import section: {e:?}"))?;
                         sections.push(CoreSection::Import(import.try_into()?))
                     }
                 }
                 Payload::FunctionSection(reader) => {
                     for function in reader {
-                        let type_idx = function.map_err(|e| format!("Error parsing core module function section: {:?}", e))?;
+                        let type_idx = function.map_err(|e| format!("Error parsing core module function section: {e:?}"))?;
                         sections.push(CoreSection::Func(FuncTypeRef { type_idx }));
                     }
                 }
                 Payload::TableSection(reader) => {
                     for table in reader {
-                        let table = table.map_err(|e| format!("Error parsing core module table section: {:?}", e))?;
+                        let table = table.map_err(|e| format!("Error parsing core module table section: {e:?}"))?;
                         sections.push(CoreSection::Table(table.try_into()?))
                     }
                 }
                 Payload::MemorySection(reader) => {
                     for mem_type in reader {
-                        let memory = mem_type.map_err(|e| format!("Error parsing core module memory section: {:?}", e))?;
+                        let memory = mem_type.map_err(|e| format!("Error parsing core module memory section: {e:?}"))?;
                         sections.push(CoreSection::Mem(memory.try_into()?))
                     }
                 }
@@ -1873,13 +1871,13 @@ where
                     return Err("Unexpected tag section in core module; exception handling proposal is not supported".to_string()),
                 Payload::GlobalSection(reader) => {
                     for global in reader {
-                        let global = global.map_err(|e| format!("Error parsing core module global section: {:?}", e))?;
+                        let global = global.map_err(|e| format!("Error parsing core module global section: {e:?}"))?;
                         sections.push(CoreSection::Global(global.try_into()?))
                     }
                 }
                 Payload::ExportSection(reader) => {
                     for export in reader {
-                        let export = export.map_err(|e| format!("Error parsing core module export section: {:?}", e))?;
+                        let export = export.map_err(|e| format!("Error parsing core module export section: {e:?}"))?;
                         sections.push(CoreSection::Export(export.try_into()?))
                     }
                 }
@@ -1888,7 +1886,7 @@ where
                 }
                 Payload::ElementSection(reader) => {
                     for element in reader {
-                        let element = element.map_err(|e| format!("Error parsing core module element section: {:?}", e))?;
+                        let element = element.map_err(|e| format!("Error parsing core module element section: {e:?}"))?;
                         sections.push(CoreSection::Elem(element.try_into()?))
                     }
                 }
@@ -1897,7 +1895,7 @@ where
                 }
                 Payload::DataSection(reader) => {
                     for data in reader {
-                        let data = data.map_err(|e| format!("Error parsing core module data section: {:?}", e))?;
+                        let data = data.map_err(|e| format!("Error parsing core module data section: {e:?}"))?;
                         let data: Data<Ast::Expr> = data.try_into()?;
                         sections.push(CoreSection::Data(data.into()));
                     }
@@ -1978,7 +1976,7 @@ impl ExprSource for OperatorsReaderExprSource<'_> {
         let range = binary_reader.range();
         let bytes = self.reader.get_binary_reader().read_bytes(range.count());
         bytes
-            .map_err(|e| format!("Error reading bytes from binary reader: {:?}", e))
+            .map_err(|e| format!("Error reading bytes from binary reader: {e:?}"))
             .map(|bytes| bytes.to_vec())
     }
 }

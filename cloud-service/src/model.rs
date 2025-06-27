@@ -191,7 +191,7 @@ impl TryFrom<i32> for ProjectType {
         match value {
             0 => Ok(ProjectType::Default),
             1 => Ok(ProjectType::NonDefault),
-            _ => Err(format!("Invalid project type: {}", value)),
+            _ => Err(format!("Invalid project type: {value}")),
         }
     }
 }
@@ -687,7 +687,7 @@ impl TryFrom<i32> for LogLevel {
             3 => Ok(LogLevel::Warn),
             4 => Ok(LogLevel::Error),
             5 => Ok(LogLevel::Critical),
-            _ => Err(format!("Invalid value for LogLevel: {}", value)),
+            _ => Err(format!("Invalid value for LogLevel: {value}")),
         }
     }
 }
@@ -787,15 +787,24 @@ pub enum GlobalAction {
 pub enum AccountAction {
     ViewAccount,
     UpdateAccount,
-    ViewPlan,
-    CreateProject,
     DeleteAccount,
+
+    ViewPlan,
+
+    CreateProject,
+
     ViewAccountGrants,
     CreateAccountGrant,
     DeleteAccountGrant,
+
     ViewDefaultProject,
+
     ListProjectGrants,
+
     ViewLimits,
     UpdateLimits,
+
+    CreateToken,
+    ViewTokens,
     DeleteToken,
 }

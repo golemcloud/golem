@@ -457,8 +457,7 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
             try_match!(v, DbValue::Domain(r)).map_err(|_| get_unexpected_value_error(column_type))
         }),
         _ => Err(format!(
-            "{} do not support '{}' value",
-            value_category, column_type
+            "{value_category} do not support '{column_type}' value"
         )),
     }
 }
@@ -469,7 +468,7 @@ fn get_array_plain_values<T>(
 ) -> Result<Vec<T>, String> {
     match value {
         DbValue::Array(vs) => get_plain_values(vs, f),
-        v => Err(format!("'{}' is not array", v)),
+        v => Err(format!("'{v}' is not array")),
     }
 }
 
@@ -482,7 +481,7 @@ fn get_plain_values<T>(
         match f(value.clone()) {
             Ok(v) => result.push(v),
             Err(e) => {
-                let suffix = if e.is_empty() { e } else { format!(" ({})", e) };
+                let suffix = if e.is_empty() { e } else { format!(" ({e})") };
                 Err(format!(
                     "Array element '{}' with index {} has different type than expected{}",
                     value.clone(),
@@ -520,7 +519,7 @@ fn get_range<T>(value: PgCustomRange<T>, f: impl Fn(T) -> DbValue + Clone) -> Db
 }
 
 fn get_unexpected_value_error(column_type: &DbColumnType) -> String {
-    format!("value do not have '{}' type", column_type)
+    format!("value do not have '{column_type}' type")
 }
 
 impl TryFrom<&sqlx::postgres::PgRow> for DbRow<DbValue> {
@@ -675,8 +674,7 @@ fn get_db_value_helper<G: PgValueGetter>(
             getter.try_get_db_value::<Domain>(value_category, DbValue::Domain)?
         }
         _ => Err(format!(
-            "{} of '{}' is not supported",
-            value_category, column_type
+            "{value_category} of '{column_type}' is not supported"
         ))?,
     };
     Ok(value)
@@ -812,7 +810,7 @@ fn get_db_column_type(type_info: &sqlx::postgres::PgTypeInfo) -> Result<DbColumn
                 let column_type = get_db_column_type(element_type)?;
                 Ok(column_type.into_array())
             }
-            _ => Err(format!("Column type '{}' is not supported", type_name))?,
+            _ => Err(format!("Column type '{type_name}' is not supported"))?,
         },
     }
 }
@@ -952,10 +950,9 @@ trait PgValueSetter<'a> {
     {
         match value_category {
             DbValueCategory::Primitive => match value {
-                DbValue::Array(_) | DbValue::Range(_) => Err(format!(
-                    "{} do not support '{}' value",
-                    value_category, value
-                )),
+                DbValue::Array(_) | DbValue::Range(_) => {
+                    Err(format!("{value_category} do not support '{value}' value"))
+                }
                 _ => {
                     let v = f(value)?;
                     self.try_set_value(v)
@@ -974,10 +971,7 @@ trait PgValueSetter<'a> {
                     let v: PgCustomRange<T> = get_pg_range(v, f)?;
                     self.try_set_value(v)
                 }
-                _ => Err(format!(
-                    "{} do not support '{}' value",
-                    value_category, value
-                )),
+                _ => Err(format!("{value_category} do not support '{value}' value")),
             },
             DbValueCategory::RangeArray => {
                 let vs: Vec<PgCustomRange<T>> = get_array_plain_values(value, |v| {
@@ -1087,7 +1081,7 @@ impl<'r> sqlx::Decode<'r, sqlx::Postgres> for Enumeration {
             let v = <String as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
             Ok(Enumeration::new(name, v))
         } else {
-            Err(format!("Type '{}' is not supported", name).into())
+            Err(format!("Type '{name}' is not supported").into())
         }
     }
 }
@@ -1305,7 +1299,7 @@ impl<'r> sqlx::Decode<'r, sqlx::Postgres> for Composite {
             }
             Ok(Composite::new(name, values))
         } else {
-            Err(format!("Type '{}' is not supported", name).into())
+            Err(format!("Type '{name}' is not supported").into())
         }
     }
 }
@@ -1385,7 +1379,7 @@ impl<'r> sqlx::Decode<'r, sqlx::Postgres> for Domain {
             let db_value = get_db_value(&db_column_type, &mut getter)?;
             Ok(Domain::new(name, db_value))
         } else {
-            Err(format!("Type '{}' is not supported", name).into())
+            Err(format!("Type '{name}' is not supported").into())
         }
     }
 }
@@ -1473,7 +1467,7 @@ where
             let v = <PgRange<T> as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
             Ok(PgCustomRange::new(name, v))
         } else {
-            Err(format!("Type '{}' is not supported", name).into())
+            Err(format!("Type '{name}' is not supported").into())
         }
     }
 }

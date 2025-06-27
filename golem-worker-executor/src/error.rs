@@ -262,7 +262,7 @@ impl Display for GolemError {
                 shard_id,
                 shard_ids,
             } => {
-                write!(f, "{} is not in shards {:?}", shard_id, shard_ids)
+                write!(f, "{shard_id} is not in shards {shard_ids:?}")
             }
             GolemError::InvalidAccount => {
                 write!(f, "Invalid account")
@@ -409,7 +409,7 @@ impl From<anyhow::Error> for GolemError {
 impl From<std::io::Error> for GolemError {
     fn from(value: std::io::Error) -> Self {
         GolemError::Unknown {
-            details: format!("{}", value),
+            details: format!("{value}"),
         }
     }
 }
@@ -418,14 +418,12 @@ impl From<GolemError> for Status {
     fn from(value: GolemError) -> Self {
         match value {
             GolemError::InvalidRequest { details } => Status::invalid_argument(details),
-            GolemError::PromiseNotFound { promise_id } => Status::not_found(format!(
-                "Promise not found: {promise_id}",
-                promise_id = promise_id
-            )),
-            GolemError::WorkerNotFound { worker_id } => Status::not_found(format!(
-                "Worker not found: {worker_id}",
-                worker_id = worker_id
-            )),
+            GolemError::PromiseNotFound { promise_id } => {
+                Status::not_found(format!("Promise not found: {promise_id}"))
+            }
+            GolemError::WorkerNotFound { worker_id } => {
+                Status::not_found(format!("Worker not found: {worker_id}"))
+            }
             GolemError::ParamTypeMismatch { details } => {
                 Status::invalid_argument(format!("Parameter type mismatch: {details}"))
             }

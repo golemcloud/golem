@@ -77,8 +77,7 @@ impl HttpHandlerBindingHandler for DefaultHttpHandlerBindingHandler {
         let type_annotated_param =
             TypeAnnotatedValue::create(&incoming_http_request.to_value(), typ).map_err(|e| {
                 HttpHandlerBindingError::InternalError(format!(
-                    "Failed converting request into wasm rpc: {:?}",
-                    e
+                    "Failed converting request into wasm rpc: {e:?}"
                 ))
             })?;
 
@@ -108,17 +107,13 @@ impl HttpHandlerBindingHandler for DefaultHttpHandlerBindingHandler {
 
             let parsed_response = hic::HttpResponse::from_function_output(response.result)
                 .map_err(|e| {
-                    HttpHandlerBindingError::InternalError(format!(
-                        "Failed parsing response: {}",
-                        e
-                    ))
+                    HttpHandlerBindingError::InternalError(format!("Failed parsing response: {e}"))
                 })?;
 
             let converted_status_code =
                 StatusCode::from_u16(parsed_response.status).map_err(|e| {
                     HttpHandlerBindingError::InternalError(format!(
-                        "Failed to parse response status: {}",
-                        e
+                        "Failed to parse response status: {e}"
                     ))
                 })?;
 
@@ -128,8 +123,7 @@ impl HttpHandlerBindingHandler for DefaultHttpHandlerBindingHandler {
                 let converted_header_value =
                     http::HeaderValue::from_bytes(&header_value).map_err(|e| {
                         HttpHandlerBindingError::InternalError(format!(
-                            "Failed to parse response header: {}",
-                            e
+                            "Failed to parse response header: {e}"
                         ))
                     })?;
                 builder = builder.header(header_name, converted_header_value);
@@ -144,15 +138,13 @@ impl HttpHandlerBindingHandler for DefaultHttpHandlerBindingHandler {
                         let converted_header_name = http::HeaderName::from_str(&header_name)
                             .map_err(|e| {
                                 HttpHandlerBindingError::InternalError(format!(
-                                    "Failed to parse response trailer name: {}",
-                                    e
+                                    "Failed to parse response trailer name: {e}"
                                 ))
                             })?;
                         let converted_header_value = http::HeaderValue::from_bytes(&header_value)
                             .map_err(|e| {
                             HttpHandlerBindingError::InternalError(format!(
-                                "Failed to parse response trailer value: {}",
-                                e
+                                "Failed to parse response trailer value: {e}"
                             ))
                         })?;
 

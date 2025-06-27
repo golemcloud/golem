@@ -60,7 +60,7 @@ where
 {
     pub(crate) fn new(config: RdbmsConfig) -> Self {
         let rdbms_type = T::default();
-        let cache_name: &'static str = format!("rdbms-{}-pools", rdbms_type).leak();
+        let cache_name: &'static str = format!("rdbms-{rdbms_type}-pools").leak();
         let pool_cache = Cache::new(
             None,
             FullCacheEvictionMode::None,

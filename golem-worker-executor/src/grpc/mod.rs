@@ -1313,7 +1313,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: ListDirectoryRequest,
     ) -> Result<ListDirectoryResponse, GolemError> {
         let path = ComponentFilePath::from_abs_str(&request.path)
-            .map_err(|e| GolemError::invalid_request(format!("Invalid path: {}", e)))?;
+            .map_err(|e| GolemError::invalid_request(format!("Invalid path: {e}")))?;
 
         let worker = self.get_or_create(&request).await?;
 
@@ -1353,7 +1353,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: GetFileContentsRequest,
     ) -> Result<<Self as WorkerExecutor>::GetFileContentsStream, GolemError> {
         let path = ComponentFilePath::from_abs_str(&request.file_path)
-            .map_err(|e| GolemError::invalid_request(format!("Invalid path: {}", e)))?;
+            .map_err(|e| GolemError::invalid_request(format!("Invalid path: {e}")))?;
 
         let worker = self.get_or_create(&request).await?;
 
@@ -2646,7 +2646,7 @@ pub fn authorised_grpc_request<T>(request: T, access_token: &Uuid) -> Request<T>
     let mut req = Request::new(request);
     req.metadata_mut().insert(
         "authorization",
-        format!("Bearer {}", access_token).parse().unwrap(),
+        format!("Bearer {access_token}").parse().unwrap(),
     );
     req
 }
@@ -2688,7 +2688,7 @@ impl Stream for WorkerEventStream {
                 }
             },
             Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(n)))) => Poll::Ready(Some(Err(
-                Status::data_loss(format!("Lagged by {} events", n)),
+                Status::data_loss(format!("Lagged by {n} events")),
             ))),
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,

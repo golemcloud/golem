@@ -1222,7 +1222,7 @@ impl<Deps: TestDependencies, Inner: Borrow<Deps> + Sync> TestDsl
                                         break;
                                     }
                                     Err(e) => {
-                                        panic!("Failed to get message: {:?}", e);
+                                        panic!("Failed to get message: {e:?}");
                                     }
                                 }
                             }

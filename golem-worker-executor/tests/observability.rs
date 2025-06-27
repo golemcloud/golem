@@ -372,7 +372,7 @@ async fn invocation_context_test(
     }
 
     let dump: Vec<_> = contexts.lock().unwrap().drain(..).collect();
-    info!("{:#?}", dump);
+    info!("{dump:#?}");
 
     executor.check_oplog_is_queryable(&worker_id).await;
 

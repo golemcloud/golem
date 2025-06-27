@@ -241,7 +241,7 @@ pub async fn run_benchmark<A: BenchmarkApi>() {
     let result = get_benchmark_results::<A>(params.clone()).await;
     if params.json {
         let str = serde_json::to_string(&result).expect("Failed to serialize BenchmarkResult");
-        println!("{}", str);
+        println!("{str}");
     } else {
         println!("{}", result.view());
     }
@@ -290,14 +290,14 @@ pub async fn invoke_and_await(
             }
             Ok(Ok(Err(e))) => {
                 // worker error
-                println!("Invocation failed, retrying: {:?}", e);
+                println!("Invocation failed, retrying: {e:?}");
                 retries += 1;
                 accumulated_time += duration;
                 tokio::time::sleep(RETRY_DELAY).await;
             }
             Ok(Err(e)) => {
                 // client error
-                println!("Invocation failed, retrying: {:?}", e);
+                println!("Invocation failed, retrying: {e:?}");
                 retries += 1;
                 accumulated_time += duration;
                 tokio::time::sleep(RETRY_DELAY).await;
@@ -306,7 +306,7 @@ pub async fn invoke_and_await(
                 // timeout
                 // not counting timeouts into the accumulated time
                 timeouts += 1;
-                println!("Invocation timed out, retrying: {:?}", e);
+                println!("Invocation timed out, retrying: {e:?}");
             }
         }
     }

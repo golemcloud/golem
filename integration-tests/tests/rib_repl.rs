@@ -76,7 +76,7 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
     .expect("Failed to bootstrap REPL");
 
     let rib1 = match worker_name {
-        Some(name) => format!(r#"let worker = instance("{}")"#, name),
+        Some(name) => format!(r#"let worker = instance("{name}")"#),
         None => r#"let worker = instance()"#.to_string(),
     };
 
@@ -186,7 +186,7 @@ async fn test_repl_invoking_resource_methods(
     .expect("Failed to bootstrap REPL");
 
     let rib1 = match worker_name {
-        Some(name) => format!(r#"let worker = instance("{}")"#, name),
+        Some(name) => format!(r#"let worker = instance("{name}")"#),
         None => r#"let worker = instance()"#.to_string(),
     };
 

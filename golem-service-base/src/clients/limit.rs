@@ -257,7 +257,7 @@ impl LimitService for LimitServiceDefault {
         &self,
         account_id: &AccountId,
     ) -> Result<ResourceLimits, LimitError> {
-        let desc = format!("Getting resource limits - account: {}", account_id);
+        let desc = format!("Getting resource limits - account: {account_id}");
         info!("{}", &desc);
         let result: Result<ResourceLimits, LimitClientError> = with_retries(
             "limit",

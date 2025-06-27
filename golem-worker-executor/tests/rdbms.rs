@@ -790,7 +790,7 @@ fn postgres_get_values(count: usize) -> Vec<(Uuid, String, String)> {
     for i in 0..count {
         let user_id = Uuid::new_v4();
         let name = format!("name-{}", Uuid::new_v4());
-        let vs: Vec<String> = (0..5).map(|v| format!("tag-{}-{}", v, i)).collect();
+        let vs: Vec<String> = (0..5).map(|v| format!("tag-{v}-{i}")).collect();
         let tags = format!("[{}]", vs.join(", "));
 
         values.push((user_id, name, tags));
@@ -1498,7 +1498,7 @@ fn mysql_get_values(count: usize) -> Vec<(String, String)> {
     let mut values: Vec<(String, String)> = Vec::with_capacity(count);
 
     for i in 0..count {
-        let user_id = format!("{:03}", i);
+        let user_id = format!("{i:03}");
         let name = format!("name-{}", Uuid::new_v4());
 
         values.push((user_id, name));

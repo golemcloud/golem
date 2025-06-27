@@ -478,7 +478,7 @@ impl ReplayState {
                     _ => {
                         break Err(GolemError::unexpected_oplog_entry(
                             "ExportedFunctionInvoked",
-                            format!("{:?}", oplog_entry),
+                            format!("{oplog_entry:?}"),
                         ));
                     }
                 }
@@ -510,7 +510,7 @@ impl ReplayState {
                     _ => {
                         break Err(GolemError::unexpected_oplog_entry(
                             "ExportedFunctionCompleted",
-                            format!("{:?}", oplog_entry),
+                            format!("{oplog_entry:?}"),
                         ));
                     }
                 }

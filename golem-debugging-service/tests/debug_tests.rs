@@ -38,7 +38,7 @@ async fn test_connect_non_invoked_worker(
     let worker_id = regular_worker_executor
         .start_worker(&component, "shopping-cart")
         .await
-        .unwrap_or_else(|e| panic!("Failed to start a regular worker: {}", e));
+        .unwrap_or_else(|e| panic!("Failed to start a regular worker: {e}"));
 
     let connect_result = debug_executor
         .connect(&worker_id)
@@ -538,7 +538,7 @@ fn nth_invocation_boundary(oplogs: &[PublicOplogEntry], n: usize) -> OplogIndex 
         .filter(|(_, entry)| matches!(entry, PublicOplogEntry::ExportedFunctionCompleted(_)))
         .nth(n - 1)
         .map(|(i, _)| i)
-        .unwrap_or_else(|| panic!("No {}th invocation boundary found", n));
+        .unwrap_or_else(|| panic!("No {n}th invocation boundary found"));
 
     OplogIndex::from_u64((index + 1) as u64)
 }

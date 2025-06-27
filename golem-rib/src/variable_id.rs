@@ -43,7 +43,7 @@ impl VariableId {
             VariableId::ListReduce(r) => r.name.clone(),
         };
 
-        VariableId::global(format!("__instance_{}", variable_string))
+        VariableId::global(format!("__instance_{variable_string}"))
     }
     pub fn list_comprehension_identifier(name: impl AsRef<str>) -> VariableId {
         VariableId::ListComprehension(ListComprehensionIdentifier {
@@ -170,8 +170,8 @@ impl MatchIdentifier {
 impl Display for VariableId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VariableId::Global(name) => write!(f, "{}", name),
-            VariableId::Local(name, _) => write!(f, "{}", name),
+            VariableId::Global(name) => write!(f, "{name}"),
+            VariableId::Local(name, _) => write!(f, "{name}"),
             VariableId::MatchIdentifier(m) => write!(f, "{}", m.name),
             VariableId::ListComprehension(l) => write!(f, "{}", l.name),
             VariableId::ListReduce(r) => write!(f, "{}", r.name),

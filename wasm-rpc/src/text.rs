@@ -215,91 +215,91 @@ impl WasmValue for ValueAndType {
     fn unwrap_bool(&self) -> bool {
         match self.value {
             Value::Bool(val) => val,
-            _ => panic!("Expected bool, found {:?}", self),
+            _ => panic!("Expected bool, found {self:?}"),
         }
     }
 
     fn unwrap_s8(&self) -> i8 {
         match self.value {
             Value::S8(val) => val,
-            _ => panic!("Expected s8, found {:?}", self),
+            _ => panic!("Expected s8, found {self:?}"),
         }
     }
 
     fn unwrap_s16(&self) -> i16 {
         match self.value {
             Value::S16(val) => val,
-            _ => panic!("Expected s16, found {:?}", self),
+            _ => panic!("Expected s16, found {self:?}"),
         }
     }
 
     fn unwrap_s32(&self) -> i32 {
         match self.value {
             Value::S32(val) => val,
-            _ => panic!("Expected s32, found {:?}", self),
+            _ => panic!("Expected s32, found {self:?}"),
         }
     }
 
     fn unwrap_s64(&self) -> i64 {
         match self.value {
             Value::S64(val) => val,
-            _ => panic!("Expected s64, found {:?}", self),
+            _ => panic!("Expected s64, found {self:?}"),
         }
     }
 
     fn unwrap_u8(&self) -> u8 {
         match self.value {
             Value::U8(val) => val,
-            _ => panic!("Expected u8, found {:?}", self),
+            _ => panic!("Expected u8, found {self:?}"),
         }
     }
 
     fn unwrap_u16(&self) -> u16 {
         match self.value {
             Value::U16(val) => val,
-            _ => panic!("Expected u16, found {:?}", self),
+            _ => panic!("Expected u16, found {self:?}"),
         }
     }
 
     fn unwrap_u32(&self) -> u32 {
         match self.value {
             Value::U32(val) => val,
-            _ => panic!("Expected u32, found {:?}", self),
+            _ => panic!("Expected u32, found {self:?}"),
         }
     }
 
     fn unwrap_u64(&self) -> u64 {
         match self.value {
             Value::U64(val) => val,
-            _ => panic!("Expected u64, found {:?}", self),
+            _ => panic!("Expected u64, found {self:?}"),
         }
     }
 
     fn unwrap_f32(&self) -> f32 {
         match self.value {
             Value::F32(val) => val,
-            _ => panic!("Expected f32, found {:?}", self),
+            _ => panic!("Expected f32, found {self:?}"),
         }
     }
 
     fn unwrap_f64(&self) -> f64 {
         match self.value {
             Value::F64(val) => val,
-            _ => panic!("Expected f64, found {:?}", self),
+            _ => panic!("Expected f64, found {self:?}"),
         }
     }
 
     fn unwrap_char(&self) -> char {
         match self.value {
             Value::Char(val) => val,
-            _ => panic!("Expected char, found {:?}", self),
+            _ => panic!("Expected char, found {self:?}"),
         }
     }
 
     fn unwrap_string(&self) -> Cow<str> {
         match &self.value {
             Value::String(val) => Cow::Borrowed(val),
-            _ => panic!("Expected string, found {:?}", self),
+            _ => panic!("Expected string, found {self:?}"),
         }
     }
 
@@ -311,7 +311,7 @@ impl WasmValue for ValueAndType {
                     typ: (*typ.inner).clone(),
                 })
             })),
-            _ => panic!("Expected list, found {:?}", self),
+            _ => panic!("Expected list, found {self:?}"),
         }
     }
 
@@ -328,7 +328,7 @@ impl WasmValue for ValueAndType {
                     )
                 }))
             }
-            _ => panic!("Expected record, found {:?}", self),
+            _ => panic!("Expected record, found {self:?}"),
         }
     }
 
@@ -342,7 +342,7 @@ impl WasmValue for ValueAndType {
                     })
                 }))
             }
-            _ => panic!("Expected tuple, found {:?}", self),
+            _ => panic!("Expected tuple, found {self:?}"),
         }
     }
 
@@ -370,7 +370,7 @@ impl WasmValue for ValueAndType {
                 });
                 (Cow::Borrowed(case_name), case_value)
             }
-            _ => panic!("Expected variant, found {:?}", self),
+            _ => panic!("Expected variant, found {self:?}"),
         }
     }
 
@@ -379,7 +379,7 @@ impl WasmValue for ValueAndType {
             (Value::Enum(case_idx), AnalysedType::Enum(typ)) => {
                 Cow::Borrowed(&typ.cases[*case_idx as usize])
             }
-            _ => panic!("Expected enum, found {:?}", self),
+            _ => panic!("Expected enum, found {self:?}"),
         }
     }
 
@@ -392,7 +392,7 @@ impl WasmValue for ValueAndType {
                 }))
             }
             (Value::Option(None), AnalysedType::Option(_)) => None,
-            _ => panic!("Expected option, found {:?}", self),
+            _ => panic!("Expected option, found {self:?}"),
         }
     }
 
@@ -420,7 +420,7 @@ impl WasmValue for ValueAndType {
                 })))
             }
             (Value::Result(Err(None)), AnalysedType::Result(_)) => Err(None),
-            _ => panic!("Expected result, found {:?}", self),
+            _ => panic!("Expected result, found {self:?}"),
         }
     }
 
@@ -438,7 +438,7 @@ impl WasmValue for ValueAndType {
                         }
                     }),
             ),
-            _ => panic!("Expected flags, found {:?}", self),
+            _ => panic!("Expected flags, found {self:?}"),
         }
     }
 }
@@ -961,84 +961,84 @@ mod type_annotated_value {
         fn unwrap_bool(&self) -> bool {
             match self.0 {
                 TypeAnnotatedValue::Bool(value) => value,
-                _ => panic!("Expected bool, found {:?}", self),
+                _ => panic!("Expected bool, found {self:?}"),
             }
         }
 
         fn unwrap_s8(&self) -> i8 {
             match self.0 {
                 TypeAnnotatedValue::S8(value) => value as i8,
-                _ => panic!("Expected s8, found {:?}", self),
+                _ => panic!("Expected s8, found {self:?}"),
             }
         }
 
         fn unwrap_s16(&self) -> i16 {
             match self.0 {
                 TypeAnnotatedValue::S16(value) => value as i16,
-                _ => panic!("Expected s16, found {:?}", self),
+                _ => panic!("Expected s16, found {self:?}"),
             }
         }
 
         fn unwrap_s32(&self) -> i32 {
             match self.0 {
                 TypeAnnotatedValue::S32(value) => value,
-                _ => panic!("Expected s32, found {:?}", self),
+                _ => panic!("Expected s32, found {self:?}"),
             }
         }
 
         fn unwrap_s64(&self) -> i64 {
             match self.0 {
                 TypeAnnotatedValue::S64(value) => value,
-                _ => panic!("Expected s64, found {:?}", self),
+                _ => panic!("Expected s64, found {self:?}"),
             }
         }
 
         fn unwrap_u8(&self) -> u8 {
             match self.0 {
                 TypeAnnotatedValue::U8(value) => value as u8,
-                _ => panic!("Expected u8, found {:?}", self),
+                _ => panic!("Expected u8, found {self:?}"),
             }
         }
 
         fn unwrap_u16(&self) -> u16 {
             match self.0 {
                 TypeAnnotatedValue::U16(value) => value as u16,
-                _ => panic!("Expected u16, found {:?}", self),
+                _ => panic!("Expected u16, found {self:?}"),
             }
         }
 
         fn unwrap_u32(&self) -> u32 {
             match self.0 {
                 TypeAnnotatedValue::U32(value) => value,
-                _ => panic!("Expected u32, found {:?}", self),
+                _ => panic!("Expected u32, found {self:?}"),
             }
         }
 
         fn unwrap_u64(&self) -> u64 {
             match self.0 {
                 TypeAnnotatedValue::U64(value) => value,
-                _ => panic!("Expected u64, found {:?}", self),
+                _ => panic!("Expected u64, found {self:?}"),
             }
         }
 
         fn unwrap_f32(&self) -> f32 {
             match self.0 {
                 TypeAnnotatedValue::F32(value) => value,
-                _ => panic!("Expected f32, found {:?}", self),
+                _ => panic!("Expected f32, found {self:?}"),
             }
         }
 
         fn unwrap_f64(&self) -> f64 {
             match self.0 {
                 TypeAnnotatedValue::F64(value) => value,
-                _ => panic!("Expected f64, found {:?}", self),
+                _ => panic!("Expected f64, found {self:?}"),
             }
         }
 
         fn unwrap_char(&self) -> char {
             match self.0 {
                 TypeAnnotatedValue::Char(value) => char::from_u32(value as u32).unwrap(),
-                _ => panic!("Expected chr, found {:?}", self),
+                _ => panic!("Expected chr, found {self:?}"),
             }
         }
 
@@ -1048,7 +1048,7 @@ mod type_annotated_value {
                 TypeAnnotatedValue::Handle(handle) => {
                     Cow::Owned(format!("{}/{}", handle.uri, handle.resource_id))
                 }
-                _ => panic!("Expected string, found {:?}", self),
+                _ => panic!("Expected string, found {self:?}"),
             }
         }
 
@@ -1061,7 +1061,7 @@ mod type_annotated_value {
                         ))
                     }))
                 }
-                _ => panic!("Expected list, found {:?}", self),
+                _ => panic!("Expected list, found {self:?}"),
             }
         }
 
@@ -1078,7 +1078,7 @@ mod type_annotated_value {
                         )
                     }))
                 }
-                _ => panic!("Expected record, found {:?}", self),
+                _ => panic!("Expected record, found {self:?}"),
             }
         }
 
@@ -1093,7 +1093,7 @@ mod type_annotated_value {
                         }
                     }))
                 }
-                _ => panic!("Expected tuple, found {:?}", self),
+                _ => panic!("Expected tuple, found {self:?}"),
             }
         }
 
@@ -1106,14 +1106,14 @@ mod type_annotated_value {
                     });
                     (case_name, case_value)
                 }
-                _ => panic!("Expected variant, found {:?}", self),
+                _ => panic!("Expected variant, found {self:?}"),
             }
         }
 
         fn unwrap_enum(&self) -> Cow<str> {
             match self.0.clone() {
                 TypeAnnotatedValue::Enum(TypedEnum { typ: _, value }) => Cow::Owned(value),
-                _ => panic!("Expected enum, found {:?}", self),
+                _ => panic!("Expected enum, found {self:?}"),
             }
         }
 
@@ -1124,7 +1124,7 @@ mod type_annotated_value {
                         .as_ref()
                         .map(|inner| Cow::Owned(TypeAnnotatedValuePrintable(inner.clone())))
                 }),
-                _ => panic!("Expected option, found {:?}", self),
+                _ => panic!("Expected option, found {self:?}"),
             }
         }
 
@@ -1147,7 +1147,7 @@ mod type_annotated_value {
                     },
                     None => panic!("Expected ok, found None"),
                 },
-                _ => panic!("Expected result, found {:?}", self),
+                _ => panic!("Expected result, found {self:?}"),
             }
         }
 
@@ -1156,7 +1156,7 @@ mod type_annotated_value {
                 TypeAnnotatedValue::Flags(TypedFlags { typ: _, values }) => {
                     Box::new(values.into_iter().map(Cow::Owned))
                 }
-                _ => panic!("Expected flags, found {:?}", self),
+                _ => panic!("Expected flags, found {self:?}"),
             }
         }
     }

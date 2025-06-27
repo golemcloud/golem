@@ -430,7 +430,7 @@ impl Display for BenchmarkResultView {
                     }
                     if show_duration {
                         fn duration_cell(d: Option<&Duration>) -> CellStruct {
-                            d.map(|d| format!("{:?}", d))
+                            d.map(|d| format!("{d:?}"))
                                 .unwrap_or("".to_string())
                                 .cell()
                                 .justify(Justify::Right)
@@ -442,7 +442,7 @@ impl Display for BenchmarkResultView {
                     }
                     if show_count {
                         fn count_cell(c: Option<u64>) -> CellStruct {
-                            c.map(|c| format!("{}", c))
+                            c.map(|c| format!("{c}"))
                                 .unwrap_or("".to_string())
                                 .cell()
                                 .justify(Justify::Right)
@@ -464,7 +464,7 @@ impl Display for BenchmarkResultView {
                     .display()
                     .unwrap();
 
-                writeln!(f, "{}", res)?;
+                writeln!(f, "{res}")?;
             }
         }
 

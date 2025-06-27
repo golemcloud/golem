@@ -126,8 +126,7 @@ impl InferredType {
                                 Some(previous) => {
                                     if previous != current {
                                         return Err(format!(
-                                            "expected the same type of number. But found {}, {}",
-                                            current, previous
+                                            "expected the same type of number. But found {current}, {previous}"
                                         ));
                                     }
 
@@ -651,7 +650,7 @@ pub struct RangeType {
 impl Display for InferredNumber {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let type_name = TypeName::from(self);
-        write!(f, "{}", type_name)
+        write!(f, "{type_name}")
     }
 }
 

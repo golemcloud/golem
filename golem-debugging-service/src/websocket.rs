@@ -119,7 +119,7 @@ async fn close_on_error(
     let result = socket.send(Message::Close(Some(close_frame))).await;
 
     if let Err(e) = result {
-        debug!("Error sending response: {}", e);
+        debug!("Error sending response: {e}");
     }
 }
 
@@ -157,7 +157,7 @@ async fn send_error_response(socket: &mut WebSocket, rpc_error: JsonRpcResponse)
     let result = socket.send(Message::Close(Some(close_frame))).await;
 
     if let Err(e) = result {
-        debug!("Error sending response: {}", e);
+        debug!("Error sending response: {e}");
     }
 }
 

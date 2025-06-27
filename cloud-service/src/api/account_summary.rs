@@ -119,7 +119,12 @@ impl AccountSummaryApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<AccountSummary>>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let response = self.account_summary_service.get(skip, limit, &auth).await?;
+
+        self.auth_service
+            .authorize_global_action(&auth, &GlobalAction::ViewAccountSummaries)
+            .await?;
+
+        let response = self.account_summary_service.get(skip, limit).await?;
         Ok(Json(response))
     }
 
@@ -136,7 +141,11 @@ impl AccountSummaryApi {
 
     async fn get_account_count_internal(&self, token: GolemSecurityScheme) -> Result<Json<i64>> {
         let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let response = self.account_summary_service.count(&auth).await?;
+        self.auth_service
+            .authorize_global_action(&auth, &GlobalAction::ViewAccountCount)
+            .await?;
+
+        let response = self.account_summary_service.count().await?;
         Ok(Json(response as i64))
     }
 }

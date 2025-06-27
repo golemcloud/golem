@@ -185,8 +185,7 @@ impl CompileWorker {
                 move || {
                     Component::from_binary(&engine, &bytes).map_err(|e| {
                         CompilationError::CompileFailure(format!(
-                            "Failed to compile component {:?}: {}",
-                            component_with_version, e
+                            "Failed to compile component {component_with_version:?}: {e}"
                         ))
                     })
                 }

@@ -246,11 +246,11 @@ async fn context_inheritance(
     let result = result.unwrap();
     let result_tuple = match &result[0] {
         Value::Tuple(result) => result,
-        _ => panic!("Unexpected result: {:?}", result),
+        _ => panic!("Unexpected result: {result:?}"),
     };
     let args = match &result_tuple[0] {
         Value::List(args) => args.clone(),
-        _ => panic!("Unexpected result: {:?}", result),
+        _ => panic!("Unexpected result: {result:?}"),
     };
     let mut env = match &result_tuple[1] {
         Value::List(env) => env
@@ -259,12 +259,12 @@ async fn context_inheritance(
             .map(|value| match value {
                 Value::Tuple(tuple) => match (&tuple[0], &tuple[1]) {
                     (Value::String(key), Value::String(value)) => (key.clone(), value.clone()),
-                    _ => panic!("Unexpected result: {:?}", result),
+                    _ => panic!("Unexpected result: {result:?}"),
                 },
-                _ => panic!("Unexpected result: {:?}", result),
+                _ => panic!("Unexpected result: {result:?}"),
             })
             .collect::<Vec<_>>(),
-        _ => panic!("Unexpected result: {:?}", result),
+        _ => panic!("Unexpected result: {result:?}"),
     };
     env.sort_by_key(|(k, _v)| k.clone());
 

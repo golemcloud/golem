@@ -682,10 +682,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 .get_payload_of_entry::<SerializableResponse>(&oplog_entry)
                 .await
                 .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to deserialize function response: {:?}: {err}",
-                        oplog_entry
-                    )
+                    panic!("failed to deserialize function response: {oplog_entry:?}: {err}")
                 })
                 .unwrap();
 

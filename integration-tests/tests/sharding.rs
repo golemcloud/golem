@@ -293,7 +293,7 @@ mod tests {
         );
 
         for step in steps {
-            let formatted_step = format!("{:?}", step);
+            let formatted_step = format!("{step:?}");
             info!("Step: {} - Started", formatted_step);
             match step {
                 Step::StartWorkerExecutors(n) => {
@@ -681,7 +681,7 @@ mod tests {
 
         loop {
             let command = command_rx.recv().await.unwrap();
-            let formatted_command = format!("{:?}", command);
+            let formatted_command = format!("{command:?}");
             let response_event = command.response_event();
 
             info!("Command: {} - Started", formatted_command);
@@ -750,7 +750,7 @@ mod tests {
                 commands.shuffle(&mut rng);
             }
             let command = &commands[0];
-            let formatted_command = format!("{:?}", command);
+            let formatted_command = format!("{command:?}");
             info!("Command: {} - Started", formatted_command);
             match command {
                 Command::StartShard => {

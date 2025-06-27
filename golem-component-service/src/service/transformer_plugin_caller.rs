@@ -158,8 +158,7 @@ impl TransformerPluginCaller for TransformerPluginCallerDefault {
 
         let body = response.bytes().await.map_err(|err| {
             TransformationFailedReason::Failure(format!(
-                "Failed to read response from transformation plugin: {}",
-                err
+                "Failed to read response from transformation plugin: {err}"
             ))
         })?;
 

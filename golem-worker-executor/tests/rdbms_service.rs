@@ -255,11 +255,11 @@ async fn postgres_transaction_tests(
 
     for i in 0..count {
         let params: Vec<postgres_types::DbValue> = vec![
-            postgres_types::DbValue::Text(format!("{:03}", i)),
-            postgres_types::DbValue::Text(format!("name-{:03}", i)),
+            postgres_types::DbValue::Text(format!("{i:03}")),
+            postgres_types::DbValue::Text(format!("name-{i:03}")),
             postgres_types::DbValue::Array(vec![
-                postgres_types::DbValue::Text(format!("tag-1-{}", i)),
-                postgres_types::DbValue::Text(format!("tag-2-{}", i)),
+                postgres_types::DbValue::Text(format!("tag-1-{i}")),
+                postgres_types::DbValue::Text(format!("tag-2-{i}")),
             ]),
         ];
 
@@ -480,7 +480,7 @@ async fn postgres_create_insert_select_test(
     let mut statements: Vec<StatementTest<PostgresType>> = Vec::with_capacity(count);
     for i in 0..count {
         let mut params: Vec<postgres_types::DbValue> =
-            vec![postgres_types::DbValue::Varchar(format!("{:03}", i))];
+            vec![postgres_types::DbValue::Varchar(format!("{i:03}"))];
 
         if i % 2 == 0 {
             let tstzbounds = postgres_types::ValuesRange::new(
@@ -569,7 +569,7 @@ async fn postgres_create_insert_select_test(
                 postgres_types::DbValue::Macaddr(MacAddress::new([0, 1, 2, 3, 4, i as u8])),
                 postgres_types::DbValue::Bit(BitVec::from_iter(vec![true, false, true])),
                 postgres_types::DbValue::Varbit(BitVec::from_iter(vec![true, false, false])),
-                postgres_types::DbValue::Xml(format!("<foo>{}</foo>", i)),
+                postgres_types::DbValue::Xml(format!("<foo>{i}</foo>")),
                 postgres_types::DbValue::Int4range(postgres_types::ValuesRange::new(
                     Bound::Included(1),
                     Bound::Excluded(4),
@@ -1209,7 +1209,7 @@ async fn postgres_create_insert_select_array_test(
     let mut statements: Vec<StatementTest<PostgresType>> = Vec::with_capacity(count);
     for i in 0..count {
         let mut params: Vec<postgres_types::DbValue> =
-            vec![postgres_types::DbValue::Varchar(format!("{:03}", i))];
+            vec![postgres_types::DbValue::Varchar(format!("{i:03}"))];
 
         if i % 2 == 0 {
             let tstzbounds = postgres_types::ValuesRange::new(
@@ -1335,8 +1335,7 @@ async fn postgres_create_insert_select_array_test(
                     BitVec::from_iter(vec![true, false, false]),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Xml(format!(
-                    "<foo>{}</foo>",
-                    i
+                    "<foo>{i}</foo>"
                 ))]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int4range(
                     postgres_types::ValuesRange::new(Bound::Included(1), Bound::Excluded(4)),
@@ -1934,8 +1933,8 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsSe
 
     for i in 0..count {
         let params: Vec<mysql_types::DbValue> = vec![
-            mysql_types::DbValue::Varchar(format!("{:03}", i)),
-            mysql_types::DbValue::Varchar(format!("name-{:03}", i)),
+            mysql_types::DbValue::Varchar(format!("{i:03}")),
+            mysql_types::DbValue::Varchar(format!("name-{i:03}")),
         ];
 
         statements.push(StatementTest::execute_test(
@@ -2096,7 +2095,7 @@ async fn mysql_create_insert_select_test(
     let mut statements: Vec<StatementTest<MysqlType>> = Vec::with_capacity(count);
     for i in 0..count {
         let mut params: Vec<mysql_types::DbValue> =
-            vec![mysql_types::DbValue::Varchar(format!("{:03}", i))];
+            vec![mysql_types::DbValue::Varchar(format!("{i:03}"))];
 
         if i % 2 == 0 {
             params.append(&mut vec![
@@ -3000,13 +2999,13 @@ async fn create_test_databases<T: RdbmsType + 'static>(
     let mut values: Vec<String> = Vec::with_capacity(count as usize);
 
     for i in 0..count {
-        let db_name = format!("test_db_{}", i);
+        let db_name = format!("test_db_{i}");
 
         let r = rdbms
             .execute(
                 &pool_key,
                 &worker_id,
-                &format!("CREATE DATABASE {}", db_name),
+                &format!("CREATE DATABASE {db_name}"),
                 vec![],
             )
             .await;

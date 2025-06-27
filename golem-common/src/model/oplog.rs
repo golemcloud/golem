@@ -1070,7 +1070,7 @@ pub enum WorkerError {
 impl WorkerError {
     pub fn to_string(&self, error_logs: &str) -> String {
         let error_logs = if !error_logs.is_empty() {
-            format!("\n\n{}", error_logs)
+            format!("\n\n{error_logs}")
         } else {
             "".to_string()
         };

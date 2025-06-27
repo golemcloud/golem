@@ -1738,7 +1738,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
     for i in 0..100 {
         let worker_id = WorkerId {
             component_id: component_id.clone(),
-            worker_name: format!("worker-{}", i),
+            worker_name: format!("worker-{i}"),
         };
         let create_entry = OplogEntry::create(
             worker_id.clone(),

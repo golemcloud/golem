@@ -48,11 +48,11 @@ impl AwsLoadBalancer {
     ) -> Result<AwsLoadBalancer, Box<dyn std::error::Error>> {
         let cluster_tag = rusoto_elbv2::Tag {
             key: "elbv2.k8s.aws/cluster".to_string(),
-            value: Some(format!("golem-eks-cluster-{}", environment)),
+            value: Some(format!("golem-eks-cluster-{environment}")),
         };
         let stack_tag = rusoto_elbv2::Tag {
             key: "ingress.k8s.aws/stack".to_string(),
-            value: Some(format!("{}-{}/ingress-api-gateway", environment, workspace)),
+            value: Some(format!("{environment}-{workspace}/ingress-api-gateway")),
         };
         let client: ElbClient = config.clone().try_into()?;
 
@@ -159,7 +159,7 @@ mod tests {
         let config = aws_config();
         let result = AwsLoadBalancer::new("dev", "release", &config).await;
 
-        println!("result: {:?}", result);
+        println!("result: {result:?}");
         assert!(result.is_ok());
     }
 }

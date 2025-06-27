@@ -41,8 +41,8 @@ impl From<sqlx::Error> for RepoError {
 impl Display for RepoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RepoError::UniqueViolation(error) => write!(f, "{}", error),
-            RepoError::Internal(error) => write!(f, "{}", error),
+            RepoError::UniqueViolation(error) => write!(f, "{error}"),
+            RepoError::Internal(error) => write!(f, "{error}"),
         }
     }
 }

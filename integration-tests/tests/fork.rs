@@ -550,7 +550,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         ]),
         Value::Tuple(vec![
             Value::String("GOLEM_COMPONENT_ID".to_string()),
-            Value::String(format!("{}", component_id)),
+            Value::String(format!("{component_id}")),
         ]),
         Value::Tuple(vec![
             Value::String("GOLEM_COMPONENT_VERSION".to_string()),
@@ -608,7 +608,7 @@ fn run_http_server(
             );
 
             let listener = tokio::net::TcpListener::bind(
-                format!("0.0.0.0:{}", host_http_port)
+                format!("0.0.0.0:{host_http_port}")
                     .parse::<SocketAddr>()
                     .unwrap(),
             )

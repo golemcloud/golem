@@ -164,7 +164,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                 |component| component.get_component_type(*func_type_idx),
             ),
             ComponentSection::Import(ComponentImport { desc, .. }) => Err(AnalysisFailure::failed(
-                format!("Expected function import, but got {:?} instead", desc),
+                format!("Expected function import, but got {desc:?} instead"),
             )),
             _ => Err(AnalysisFailure::failed(format!(
                 "Expected canonical lift function or function import, but got {} instead",

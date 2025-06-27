@@ -61,7 +61,7 @@ fn random_component_owner() -> ComponentOwner {
 }
 
 pub(crate) fn get_component_data(name: &str) -> Vec<u8> {
-    let path = format!("../test-components/{}.wasm", name);
+    let path = format!("../test-components/{name}.wasm");
     std::fs::read(path).unwrap()
 }
 

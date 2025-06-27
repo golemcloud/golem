@@ -252,31 +252,20 @@ impl ToHttpResponse for AuthorisationSuccess {
             .header("Location", self.target_path)
             .header(
                 "Set-Cookie",
-                format!(
-                    "access_token={}; HttpOnly; Secure; Path=/; SameSite=None",
-                    access_token
-                )
-                .as_str(),
+                format!("access_token={access_token}; HttpOnly; Secure; Path=/; SameSite=None")
+                    .as_str(),
             );
 
         if let Some(id_token) = id_token {
             response = response.header(
                 "Set-Cookie",
-                format!(
-                    "id_token={}; HttpOnly; Secure; Path=/; SameSite=None",
-                    id_token
-                )
-                .as_str(),
+                format!("id_token={id_token}; HttpOnly; Secure; Path=/; SameSite=None").as_str(),
             )
         }
 
         response = response.header(
             "Set-Cookie",
-            format!(
-                "session_id={}; HttpOnly; Secure; Path=/; SameSite=None",
-                session_id
-            )
-            .as_str(),
+            format!("session_id={session_id}; HttpOnly; Secure; Path=/; SameSite=None").as_str(),
         );
 
         response.body(())

@@ -228,7 +228,7 @@ impl DomainRecordsConfig {
         let s = api_site.to_lowercase();
 
         !self.subdomain_black_list.iter().any(|p| {
-            let d = format!("{}.{}", p, hz).to_lowercase();
+            let d = format!("{p}.{hz}").to_lowercase();
             d == s
         })
     }
