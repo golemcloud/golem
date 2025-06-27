@@ -101,7 +101,7 @@ pub mod wit {
             package_name
                 .version
                 .as_ref()
-                .map(|version| format!("@{}", version))
+                .map(|version| format!("@{version}"))
                 .unwrap_or_default()
         ))
     }

@@ -197,7 +197,7 @@ impl ComponentCommandHandler {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
 
-            log_error(format!("Component {} already exists", component_name));
+            log_error(format!("Component {component_name} already exists"));
             logln("");
             app_ctx.log_dynamic_help(&DynamicHelpSections::show_components())?;
             bail!(NonSuccessfulExit)
@@ -887,10 +887,7 @@ impl ComponentCommandHandler {
             return Ok(());
         }
 
-        log_action(
-            "Updating",
-            format!("existing workers using {} mode", update),
-        );
+        log_action("Updating", format!("existing workers using {update} mode"));
         let _indent = LogIndent::new();
 
         let mut update_results = TryUpdateAllWorkersResult::default();
@@ -962,7 +959,7 @@ impl ComponentCommandHandler {
     ) -> anyhow::Result<SelectedComponents> {
         fn empty_checked<'a>(name: &'a str, value: &'a str) -> anyhow::Result<&'a str> {
             if value.is_empty() {
-                log_error(format!("Missing {} part in component name!", name));
+                log_error(format!("Missing {name} part in component name!"));
                 logln("");
                 log_text_view(&ComponentNameHelp);
                 bail!(NonSuccessfulExit);

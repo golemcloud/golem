@@ -450,7 +450,7 @@ impl ResolvedWitApplication {
                 Ok(resolved_component) => {
                     self.add_resolved_component(component_name.clone(), resolved_component);
                 }
-                Err(err) => validation.add_error(format!("{:?}", err)),
+                Err(err) => validation.add_error(format!("{err:?}")),
             }
 
             validation.pop_context();
@@ -863,7 +863,7 @@ impl WitDepsResolver {
 
                 let packages = packages
                     .iter()
-                    .map(|package_name| format!("- {}", package_name))
+                    .map(|package_name| format!("- {package_name}"))
                     .join("\n");
 
                 if !packages.is_empty() {

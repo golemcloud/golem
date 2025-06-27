@@ -42,8 +42,8 @@ pub enum ComponentSelection<'a> {
 impl Display for ComponentSelection<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ComponentSelection::Name(name) => write!(f, "{}", name),
-            ComponentSelection::Id(id) => write!(f, "{}", id),
+            ComponentSelection::Name(name) => write!(f, "{name}"),
+            ComponentSelection::Id(id) => write!(f, "{id}"),
         }
     }
 }

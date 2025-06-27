@@ -120,7 +120,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         let interface_ident = to_rust_ident(entity.name()).to_upper_camel_case();
         let interface_name = Ident::new(&interface_ident, Span::call_site());
         let guest_interface_name =
-            Ident::new(&format!("Guest{}", interface_ident), Span::call_site());
+            Ident::new(&format!("Guest{interface_ident}"), Span::call_site());
 
         let mut fn_impls = Vec::new();
         for function in entity.functions() {

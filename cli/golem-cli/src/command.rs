@@ -210,9 +210,7 @@ impl GolemCliGlobalFlags {
             self.http_batch_size = Some(
                 batch_size
                     .parse()
-                    .with_context(|| {
-                        format!("Failed to parse GOLEM_HTTP_BATCH_SIZE: {}", batch_size)
-                    })
+                    .with_context(|| format!("Failed to parse GOLEM_HTTP_BATCH_SIZE: {batch_size}"))
                     .unwrap(),
             )
         }
@@ -416,7 +414,7 @@ impl GolemCliCommand {
 
             let missing_arg_error_name =
                 format!("<{}>", matcher.missing_positional_arg.to_uppercase());
-            let missing_args_error_name = format!("{}...", missing_arg_error_name);
+            let missing_args_error_name = format!("{missing_arg_error_name}...");
             if !error_context_args.contains(&missing_arg_error_name)
                 && !error_context_args.contains(&missing_args_error_name)
             {
@@ -2005,7 +2003,7 @@ mod test {
             "\n{}",
             bad_matchers
                 .into_iter()
-                .map(|(error, matcher)| format!("error: {}\nmatcher: {:?}\n", error, matcher))
+                .map(|(error, matcher)| format!("error: {error}\nmatcher: {matcher:?}\n"))
                 .join("\n")
         )
     }
@@ -2089,7 +2087,7 @@ mod test {
             "\n{}",
             commands_with_conflicting_flags
                 .iter()
-                .map(|e| format!("{:?}", e))
+                .map(|e| format!("{e:?}"))
                 .join("\n")
         );
     }
@@ -2109,10 +2107,7 @@ mod test {
                 match command.find_subcommand(subcommand) {
                     Some(subcommand) => command = subcommand,
                     None => {
-                        panic!(
-                            "Invalid help target: {}, {:?}, {}",
-                            target, subcommands, subcommand
-                        );
+                        panic!("Invalid help target: {target}, {subcommands:?}, {subcommand}");
                     }
                 }
             }

@@ -159,7 +159,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
             .await?;
 
         let Some(component) = component else {
-            log_error(format!("Component {} not found", component_name));
+            log_error(format!("Component {component_name} not found"));
             bail!(NonSuccessfulExit);
         };
 

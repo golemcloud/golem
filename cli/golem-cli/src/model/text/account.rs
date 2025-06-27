@@ -83,7 +83,7 @@ impl TextView for GrantGetView {
         } else {
             logln("Granted roles:");
             for role in &self.0 {
-                logln(format!("  - {}", role));
+                logln(format!("  - {role}"));
             }
         }
     }

@@ -141,7 +141,7 @@ impl PluginCommandHandler {
                 let component = {
                     log_action(
                         "Uploading",
-                        format!("oplog processor component: {}", component_name),
+                        format!("oplog processor component: {component_name}"),
                     );
                     let _indent = LogIndent::new();
 

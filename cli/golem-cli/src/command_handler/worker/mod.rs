@@ -1019,10 +1019,7 @@ impl WorkerCommandHandler {
         if workers.is_empty() {
             log_warn_action(
                 "Skipping",
-                format!(
-                    "updating workers for component {}, no workers found",
-                    component_name
-                ),
+                format!("updating workers for component {component_name}, no workers found"),
             );
             return Ok(TryUpdateAllWorkersResult::default());
         }
@@ -1121,7 +1118,7 @@ impl WorkerCommandHandler {
             Err(error) => {
                 log_error_action("Failed", "to trigger update for worker, error:");
                 let _indent = LogIndent::new();
-                logln(format!("{}", error));
+                logln(format!("{error}"));
                 Err(anyhow!(error))
             }
         }
@@ -1139,10 +1136,7 @@ impl WorkerCommandHandler {
         if workers.is_empty() {
             log_warn_action(
                 "Skipping",
-                format!(
-                    "redeploying workers for component {}, no workers found",
-                    component_name
-                ),
+                format!("redeploying workers for component {component_name}, no workers found"),
             );
             return Ok(());
         }
@@ -1431,7 +1425,7 @@ impl WorkerCommandHandler {
             2..=4 => {
                 fn empty_checked<'a>(name: &'a str, value: &'a str) -> anyhow::Result<&'a str> {
                     if value.is_empty() {
-                        log_error(format!("Missing {} part in worker name!", name));
+                        log_error(format!("Missing {name} part in worker name!"));
                         logln("");
                         log_text_view(&ComponentNameHelp);
                         bail!(NonSuccessfulExit);
@@ -1479,7 +1473,7 @@ impl WorkerCommandHandler {
                         empty_checked_component(segments[2])?.into(),
                         empty_checked_worker(segments[3])?.into(),
                     ),
-                    other => panic!("Unexpected segment count: {}", other),
+                    other => panic!("Unexpected segment count: {other}"),
                 };
 
                 if worker_name.is_empty() {
@@ -1693,8 +1687,8 @@ pub fn lenient_parse_type_annotated_value(
     input: &str,
 ) -> Result<TypeAnnotatedValue, String> {
     let patched_input = match analysed_type {
-        AnalysedType::Chr(_) => (!input.starts_with('\'')).then(|| format!("'{}'", input)),
-        AnalysedType::Str(_) => (!input.starts_with('"')).then(|| format!("\"{}\"", input)),
+        AnalysedType::Chr(_) => (!input.starts_with('\'')).then(|| format!("'{input}'")),
+        AnalysedType::Str(_) => (!input.starts_with('"')).then(|| format!("\"{input}\"")),
         _ => None,
     };
 

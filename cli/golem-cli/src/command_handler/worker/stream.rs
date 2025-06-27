@@ -171,7 +171,7 @@ impl WorkerConnection {
 
         {
             let headers = request.headers_mut();
-            headers.insert("Authorization", format!("Bearer {}", auth_token).parse()?);
+            headers.insert("Authorization", format!("Bearer {auth_token}").parse()?);
         }
 
         let connector = if allow_insecure {

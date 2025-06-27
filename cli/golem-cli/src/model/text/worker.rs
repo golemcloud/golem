@@ -248,7 +248,7 @@ impl TextView for InvokeResultView {
             } else {
                 log_results_format("WAVE");
                 for wave in wave_values {
-                    logln(format!("  - {}", wave));
+                    logln(format!("  - {wave}"));
                 }
             }
         } else if let Some(json) = &self.result_json {

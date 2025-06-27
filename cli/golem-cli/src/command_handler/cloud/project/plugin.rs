@@ -86,7 +86,7 @@ impl CloudProjectPluginCommandHandler {
 
         log_action(
             "Installing",
-            format!("plugin {} for project {}", plugin_name, project_reference),
+            format!("plugin {plugin_name} for project {project_reference}"),
         );
         logln("");
 
@@ -148,10 +148,7 @@ impl CloudProjectPluginCommandHandler {
 
         log_action(
             "Updating",
-            format!(
-                "plugin {} for project {}",
-                plugin_installation_id, project_reference
-            ),
+            format!("plugin {plugin_installation_id} for project {project_reference}"),
         );
 
         self.ctx
@@ -187,10 +184,7 @@ impl CloudProjectPluginCommandHandler {
 
         log_warn_action(
             "Uninstalling",
-            format!(
-                "plugin {} from project {}",
-                plugin_installation_id, project_reference
-            ),
+            format!("plugin {plugin_installation_id} from project {project_reference}"),
         );
 
         self.ctx

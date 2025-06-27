@@ -759,11 +759,10 @@ impl DetectedTool {
                             _ => Err(format!("Unexpected compare result: {}", comp_op.sign())),
                         }
                     }
-                    None => Err(format!("Failed to parse detected version: {}", version)),
+                    None => Err(format!("Failed to parse detected version: {version}")),
                 },
                 None => Err(format!(
-                    "Failed to parse required version: {}",
-                    required_version
+                    "Failed to parse required version: {required_version}"
                 )),
             }
         }
@@ -780,7 +779,7 @@ impl DetectedTool {
                 }
                 MinimumVersion(required_version) => compare(required_version, version, true),
             },
-            Err(error) => Err(format!("Failed to get tool version: {}", error)),
+            Err(error) => Err(format!("Failed to get tool version: {error}")),
         };
 
         match result {
@@ -845,8 +844,7 @@ pub fn diagnose(dir: &Path, language: Option<GuestLanguage>) {
         None => match &language {
             Some(language) => {
                 logln(format!(
-                    "The selected language ({}) has no language specific diagnostics currently.\n",
-                    language,
+                    "The selected language ({language}) has no language specific diagnostics currently.\n",
                 ));
                 logln("Running diagnostics for common Worker to Worker RPC tooling.\n");
                 report_tools(
@@ -941,7 +939,7 @@ fn cmd_version(dir: &Path, cmd: &str, args: Vec<&str>, regex: &Regex) -> Result<
             let output = String::from_utf8_lossy(&result.stdout);
             match regex.captures(&output).and_then(|c| c.get(1)) {
                 Some(version) => Ok(version.as_str().to_string()),
-                None => Err(format!("Failed to extract version from output: {}", output)),
+                None => Err(format!("Failed to extract version from output: {output}")),
             }
         }
         Err(err) => Err(err.to_string()),

@@ -354,10 +354,13 @@ async fn build_client(
     let client_sources: Vec<PathBuf> = stub_def
         .packages_with_wit_sources()
         .flat_map(|(package_id, _, sources)| {
-            (client_dep_package_ids.contains(&package_id)
-                || package_id == stub_def.source_package_id)
-                .then(|| sources.files.iter().cloned())
-                .unwrap_or_default()
+            if client_dep_package_ids.contains(&package_id)
+                || package_id == stub_def.source_package_id
+            {
+                sources.files.iter().cloned()
+            } else {
+                Default::default()
+            }
         })
         .collect();
 

@@ -83,7 +83,7 @@ impl<T: MessageWithFields> TextView for T {
             } else {
                 logln(format!("{}:", Self::format_field_name(name)));
                 for line in lines {
-                    logln(format!("  {}", line))
+                    logln(format!("  {line}"))
                 }
             }
         }
@@ -307,7 +307,7 @@ pub fn format_env(show_sensitive: bool, env: &BTreeMap<String, String>) -> Strin
     env.iter()
         .map(|(k, v)| {
             if is_sensitive_env_var_name(show_sensitive, k) {
-                format!("{}={}", k, hidden)
+                format!("{k}={hidden}")
             } else {
                 format!("{}={}", k, v.log_color_highlight())
             }
@@ -455,7 +455,7 @@ pub fn format_rib_source_for_error(source: &str, error: &str) -> String {
                                 underline
                             )
                         } else {
-                            format!(" {: >LINE_COUNT_PADDING$} | {}", line_no, line)
+                            format!(" {line_no: >LINE_COUNT_PADDING$} | {line}")
                         })
                     } else {
                         None

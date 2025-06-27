@@ -254,12 +254,12 @@ impl StubDefinition {
                 let mut imported_type_names = HashMap::<String, HashSet<TypeId>>::new();
                 for type_id in imported_type_ids {
                     let type_def = self.resolve.types.get(type_id).unwrap_or_else(|| {
-                        panic!("Imported type not found, type id: {:?}", type_id)
+                        panic!("Imported type not found, type id: {type_id:?}")
                     });
                     let type_name = type_def
                         .name
                         .clone()
-                        .unwrap_or_else(|| panic!("Missing type name, type id: {:?}", type_id));
+                        .unwrap_or_else(|| panic!("Missing type name, type id: {type_id:?}"));
 
                     imported_type_names
                         .entry(type_name)
@@ -279,7 +279,7 @@ impl StubDefinition {
                             .types
                             .get(type_id)
                             .unwrap_or_else(|| {
-                                panic!("Imported type not found, type id: {:?}", type_id)
+                                panic!("Imported type not found, type id: {type_id:?}")
                             })
                             .clone();
 
@@ -295,18 +295,17 @@ impl StubDefinition {
                                 .interfaces
                                 .get(interface_id)
                                 .unwrap_or_else(|| {
-                                    panic!("Interface not found, interface id: {:?}", interface_id)
+                                    panic!("Interface not found, interface id: {interface_id:?}")
                                 });
 
                         let interface_name = interface.name.clone().unwrap_or_else(|| {
-                            panic!("Missing interface name, interface id: {:?}", interface_id)
+                            panic!("Missing interface name, interface id: {interface_id:?}")
                         });
 
                         let package = interface.package.map(|package_id| {
                             self.resolve.packages.get(package_id).unwrap_or_else(|| {
                                 panic!(
-                                    "Missing package for interface, package id: {:?}, interface id: {:?}",
-                                    package_id, interface_id,
+                                    "Missing package for interface, package id: {package_id:?}, interface id: {interface_id:?}",
                                 )
                             })
                         });
@@ -323,7 +322,7 @@ impl StubDefinition {
                                 interface_name,
                                 &type_name
                             ),
-                            None => format!("{}-{}", interface_name, type_name),
+                            None => format!("{interface_name}-{type_name}"),
                         });
 
                         InterfaceStubTypeDef {
@@ -375,9 +374,10 @@ impl StubDefinition {
 
         if let TypeDefKind::Type(Type::Id(type_id)) = type_def.kind {
             self.type_def_owner_package_ids(
-                self.resolve.types.get(type_id).unwrap_or_else(|| {
-                    panic!("Type alias target not found, type id: {:?}", type_id)
-                }),
+                self.resolve
+                    .types
+                    .get(type_id)
+                    .unwrap_or_else(|| panic!("Type alias target not found, type id: {type_id:?}")),
                 package_ids,
             );
         }
@@ -394,10 +394,11 @@ impl StubDefinition {
         for (world_key, world_item) in world_items {
             match world_item {
                 WorldItem::Interface { id, stability: _ } => {
-                    let interface =
-                        self.resolve.interfaces.get(*id).unwrap_or_else(|| {
-                            panic!("failed to resolve interface by id, {:?}", id)
-                        });
+                    let interface = self
+                        .resolve
+                        .interfaces
+                        .get(*id)
+                        .unwrap_or_else(|| panic!("failed to resolve interface by id, {id:?}"));
                     interfaces.push((
                         interface
                             .name

@@ -37,8 +37,7 @@ pub fn start_router(
     info!("Starting single-executable http api");
 
     let ipv4_addr: Ipv4Addr = listener_addr.parse().context(format!(
-        "Failed at parsing the listener host address {}",
-        listener_addr
+        "Failed at parsing the listener host address {listener_addr}"
     ))?;
 
     let listener_socket_addr = SocketAddrV4::new(ipv4_addr, listener_port);

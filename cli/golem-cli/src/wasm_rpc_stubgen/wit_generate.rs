@@ -859,7 +859,7 @@ fn extract_exports_package(
     let exports_suffix = package
         .name()
         .version()
-        .map(|version| format!("@{}", version))
+        .map(|version| format!("@{version}"))
         .unwrap_or_default();
 
     let mut exported_interface_identifiers = HashSet::<Ident>::new();

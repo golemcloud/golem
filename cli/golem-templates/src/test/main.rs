@@ -238,7 +238,7 @@ fn test_template(
 
     let run = |command: &str, args: Vec<&str>| -> Result<(), String> {
         let command_formatted = format!("{} {}", command, args.join(" "));
-        let run_failed = |e| format!("{} failed: {}", command_formatted, e);
+        let run_failed = |e| format!("{command_formatted} failed: {e}");
 
         println!(
             "Running {} in {}",
@@ -253,7 +253,7 @@ fn test_template(
 
         match status.code() {
             Some(0) => Ok(()),
-            Some(code) => Err(run_failed(format!("non-zero exit code: {}", code))),
+            Some(code) => Err(run_failed(format!("non-zero exit code: {code}"))),
             None => Err(run_failed("terminated".to_string())),
         }
     };
@@ -266,7 +266,7 @@ fn test_template(
         if component_path.exists() {
             println!("Deleting {}", component_path.display().to_string().blue());
             std::fs::remove_dir_all(&component_path)
-                .map_err(|e| format!("remove dir all failed: {}", e))?;
+                .map_err(|e| format!("remove dir all failed: {e}"))?;
         }
 
         let _ = instantiate_template(
@@ -274,7 +274,7 @@ fn test_template(
             &template_parameters,
             TargetExistsResolveMode::Fail,
         )
-        .map_err(|e| format!("instantiate failed: {}", e))?;
+        .map_err(|e| format!("instantiate failed: {e}"))?;
 
         add_cargo_workspace(&component_path)?;
 

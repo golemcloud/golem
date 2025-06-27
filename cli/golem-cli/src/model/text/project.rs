@@ -148,13 +148,7 @@ fn project_policy_fields(policy: &ProjectPolicy) -> Vec<(String, String)> {
             "Actions",
             &policy.project_actions,
             !policy.project_actions.actions.is_empty(),
-            |actions| {
-                actions
-                    .actions
-                    .iter()
-                    .map(|a| format!("- {}", a))
-                    .join("\n")
-            },
+            |actions| actions.actions.iter().map(|a| format!("- {a}")).join("\n"),
         );
 
     fields.build()

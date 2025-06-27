@@ -279,7 +279,7 @@ impl WorkerStreamOutput {
 
     fn json(&self, level_or_source: &str, context: &str, message: &str) {
         let json = self.json_value(level_or_source, context, message);
-        println!("{}", json);
+        println!("{json}");
     }
 
     fn yaml(&self, level_or_source: &str, context: &str, message: &str) {
@@ -306,9 +306,9 @@ impl WorkerStreamOutput {
                 LogLevel::Error => s.red(),
                 LogLevel::Critical => s.red().bold(),
             };
-            println!("{}", colored);
+            println!("{colored}");
         } else {
-            println!("{}", s);
+            println!("{s}");
         }
     }
 

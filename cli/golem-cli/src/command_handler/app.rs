@@ -639,7 +639,7 @@ impl AppCommandHandler {
             .unwrap_or_else(|| TemplateName::from("default"));
 
         let Some(lang_templates) = self.ctx.templates().get(&language) else {
-            log_error(format!("No templates found for language: {}", language).as_str());
+            log_error(format!("No templates found for language: {language}").as_str());
             self.log_templates_help(None, None);
             bail!(NonSuccessfulExit);
         };

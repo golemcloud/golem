@@ -301,10 +301,10 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 // App validation errors are already formatted and usually contain multiple
                 // errors (and warns)
                 logln("");
-                logln(format!("{:#}", error));
+                logln(format!("{error:#}"));
             } else {
                 logln("");
-                log_error(format!("{:#}", error));
+                log_error(format!("{error:#}"));
             }
             ExitCode::FAILURE
         })

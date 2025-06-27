@@ -299,6 +299,6 @@ fn show_available_profiles_help(config_dir: &Path, manifest_profile_names: &[Pro
     logln("");
     logln("Available profiles:".log_color_help_group().to_string());
     for profile_name in profile_names {
-        logln(format!("- {}", profile_name));
+        logln(format!("- {profile_name}"));
     }
 }

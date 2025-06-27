@@ -166,7 +166,7 @@ impl InteractiveHandler {
             true,
             format!("The following changes will be applied to the installed plugins of component {}:\n{}\nDo you want to continue?",
                     component.to_string().log_color_highlight(),
-                    rendered_steps.iter().map(|s| format!(" - {}", s)).collect::<Vec<_>>().join("\n")
+                    rendered_steps.iter().map(|s| format!(" - {s}")).collect::<Vec<_>>().join("\n")
             ),
             None,
         )
@@ -184,7 +184,7 @@ impl InteractiveHandler {
                 site.to_string().log_color_highlight(),
                 rendered_steps
                     .iter()
-                    .map(|s| format!(" - {}", s))
+                    .map(|s| format!(" - {s}"))
                     .collect::<Vec<_>>()
                     .join("\n")
             ),
@@ -673,7 +673,7 @@ impl Display for OptionalUrl {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
             None => Ok(()),
-            Some(url) => write!(f, "{}", url),
+            Some(url) => write!(f, "{url}"),
         }
     }
 }
@@ -697,7 +697,7 @@ impl Display for OptionalAuthSecret {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
             None => Ok(()),
-            Some(value) => write!(f, "{}", value),
+            Some(value) => write!(f, "{value}"),
         }
     }
 }
@@ -769,13 +769,13 @@ fn confirm<M: AsRef<str>>(
     if yes {
         log_warn_action("Auto confirming", "");
         for line in message.as_ref().cyan().lines() {
-            logln(format!("> {}", line));
+            logln(format!("> {line}"));
         }
         return Ok(true);
     }
 
     let hint = match extra_hint {
-        Some(extra_hint) => format!("{} {}", YES_FLAG_HINT, extra_hint),
+        Some(extra_hint) => format!("{YES_FLAG_HINT} {extra_hint}"),
         None => YES_FLAG_HINT.to_string(),
     };
 

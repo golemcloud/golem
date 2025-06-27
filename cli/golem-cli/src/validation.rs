@@ -284,7 +284,7 @@ impl ValidationBuilder {
                 "context:".log_color_highlight(),
                 context,
                 "message:".log_color_highlight(),
-                message.lines().map(|l| format!("  {}", l)).join("\n")
+                message.lines().map(|l| format!("  {l}")).join("\n")
             )
         }
     }

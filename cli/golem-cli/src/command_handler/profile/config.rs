@@ -61,7 +61,7 @@ impl ProfileConfigCommandHandler {
                 Ok(())
             }
             None => {
-                log_error(format!("Profile {} not found", profile_name));
+                log_error(format!("Profile {profile_name} not found"));
                 // TODO: show available profiles
                 bail!(NonSuccessfulExit);
             }

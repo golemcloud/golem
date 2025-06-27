@@ -408,7 +408,7 @@ impl HttpClientConfig {
         ];
 
         for (env_var_name, field) in duration_fields {
-            if let Some(duration) = env_duration(&format!("{}_{}", prefix, env_var_name)) {
+            if let Some(duration) = env_duration(&format!("{prefix}_{env_var_name}")) {
                 *field = Some(duration);
             }
         }

@@ -319,9 +319,9 @@ impl ApiDeploymentCommandHandler {
                                     format!("{} {}@{}", "Undeploy".log_color_warn(), name, version)
                                 })
                                 .chain(
-                                    plan.add.iter().map(|(name, version)| {
-                                        format!("Deploy {}@{}", name, version)
-                                    }),
+                                    plan.add
+                                        .iter()
+                                        .map(|(name, version)| format!("Deploy {name}@{version}")),
                                 )
                                 .collect::<Vec<_>>()
                         };

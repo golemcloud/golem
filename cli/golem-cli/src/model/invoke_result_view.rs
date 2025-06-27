@@ -40,7 +40,7 @@ impl InvokeResultView {
         let wave = match Self::try_parse_wave(&result.result, component, function) {
             Ok(wave) => Some(wave),
             Err(err) => {
-                log_error(format!("{}", err));
+                log_error(format!("{err}"));
                 None
             }
         };

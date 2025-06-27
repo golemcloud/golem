@@ -481,9 +481,9 @@ mod tests {
                 map.insert_str("third-key", "third-value");
 
                 let doc_str = doc.to_string();
-                println!("---\n{}", doc);
+                println!("---\n{doc}");
                 let_assert!(Err(error) = serde_yaml::from_str::<serde_yaml::Value>(&doc_str));
-                println!("error: {:#}", error);
+                println!("error: {error:#}");
             }
 
             // Workaround
@@ -508,7 +508,7 @@ mod tests {
                 }
 
                 let doc_str = doc.to_string();
-                println!("---\n{}", doc);
+                println!("---\n{doc}");
                 let serde_value = serde_yaml::from_str::<serde_yaml::Value>(&doc_str).unwrap();
                 let seq = serde_value
                     .as_mapping()
@@ -699,7 +699,7 @@ mod tests {
 
     fn to_serde_yaml_value(doc: &Document) -> serde_yaml::Value {
         let doc_str = doc.to_string();
-        println!("---\n{}\n", doc);
+        println!("---\n{doc}\n");
         serde_yaml::from_str::<serde_yaml::Value>(&doc_str).unwrap()
     }
 }

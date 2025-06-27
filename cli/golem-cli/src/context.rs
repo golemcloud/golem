@@ -393,10 +393,10 @@ impl Context {
     ) {
         let mut state = self.app_context_state.write().await;
         if *was_set_mut(&mut state) {
-            panic!("{} can be set only once, was already set", name);
+            panic!("{name} can be set only once, was already set");
         }
         if state.app_context.is_some() {
-            panic!("cannot change {} after application context init", name);
+            panic!("cannot change {name} after application context init");
         }
         *value_mut(&mut state) = value;
         *was_set_mut(&mut state) = true;

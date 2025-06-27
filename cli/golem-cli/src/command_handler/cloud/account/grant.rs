@@ -84,7 +84,7 @@ impl CloudAccountGrantCommandHandler {
             .await
             .map_service_error()?;
 
-        log_action("Granted", format!("role {}", role));
+        log_action("Granted", format!("role {role}"));
 
         Ok(())
     }
@@ -106,7 +106,7 @@ impl CloudAccountGrantCommandHandler {
             .await
             .map_service_error()?;
 
-        log_action("Deleted", format!("role {}", role));
+        log_action("Deleted", format!("role {role}"));
 
         Ok(())
     }

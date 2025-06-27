@@ -152,7 +152,7 @@ impl From<&PluginInstallation> for PluginInstallationTableView {
             parameters: value
                 .parameters
                 .iter()
-                .map(|(k, v)| format!("{}: {}", k, v))
+                .map(|(k, v)| format!("{k}: {v}"))
                 .join(", "),
         }
     }

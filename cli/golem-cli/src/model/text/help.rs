@@ -187,7 +187,7 @@ impl TextView for AvailableComponentNamesHelp {
                 .to_string(),
         );
         for component_name in &self.0 {
-            logln(format!("  - {}", component_name));
+            logln(format!("  - {component_name}"));
         }
         logln("");
     }

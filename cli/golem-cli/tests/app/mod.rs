@@ -186,7 +186,7 @@ fn app_new_language_hints(_tracing: &Tracing) {
     check!(outputs.stdout_contains("Available languages:"));
 
     let languages_without_templates = GuestLanguage::iter()
-        .filter(|language| !outputs.stdout_contains(format!("- {}", language)))
+        .filter(|language| !outputs.stdout_contains(format!("- {language}")))
         .collect::<Vec<_>>();
 
     assert!(
@@ -927,11 +927,11 @@ impl TestContext {
         println!("{} {}", status_prefix, output.status);
         let stdout_prefix = "> stdout:".green().bold();
         for line in &output.stdout {
-            println!("{} {}", stdout_prefix, line);
+            println!("{stdout_prefix} {line}");
         }
         let stderr_prefix = "> stderr:".red().bold();
         for line in &output.stderr {
-            println!("{} {}", stderr_prefix, line);
+            println!("{stderr_prefix} {line}");
         }
 
         output
@@ -1030,7 +1030,7 @@ fn contains_ordered<S: AsRef<str>, I: IntoIterator<Item = S>>(
     if !remaining_patterns.is_empty() {
         println!("{}", "Missing patterns:".red().underline());
         for pattern in &remaining_patterns {
-            println!("{}", pattern);
+            println!("{pattern}");
         }
     }
     remaining_patterns.is_empty()

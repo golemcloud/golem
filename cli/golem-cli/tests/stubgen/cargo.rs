@@ -30,7 +30,7 @@ fn regenerate_cargo_toml() {
 
     // Check that we have the original comments
     let cargo_toml = fs::read_to_string(&cargo_toml_path).unwrap();
-    println!(">\n{}", cargo_toml);
+    println!(">\n{cargo_toml}");
     check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.40.0\""));
     check!(cargo_toml.contains("\n# This is the comment for lib\n[lib]"));
     check!(cargo_toml.contains("\n# Another comment\ncrate-type = [\"cdylib\"] # Hello again"));
@@ -42,7 +42,7 @@ fn regenerate_cargo_toml() {
     // Regenerate and check for comments and deps
     regenerate_cargo_package_component(&cargo_toml_path, &wit_path, None).unwrap();
     let cargo_toml = fs::read_to_string(&cargo_toml_path).unwrap();
-    println!(">\n{}", cargo_toml);
+    println!(">\n{cargo_toml}");
     cargo_component_build(project_dir.path());
     check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.40.0\""));
     check!(cargo_toml.contains("\n# This is the comment for lib\n[lib]"));
@@ -55,7 +55,7 @@ fn regenerate_cargo_toml() {
     // Regenerate again and check for comments and deps
     regenerate_cargo_package_component(&cargo_toml_path, &wit_path, None).unwrap();
     let cargo_toml = fs::read_to_string(&cargo_toml_path).unwrap();
-    println!(">\n{}", cargo_toml);
+    println!(">\n{cargo_toml}");
     cargo_component_build(project_dir.path());
     check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.40.0\""));
     check!(cargo_toml.contains("\n# This is the comment for lib\n[lib]"));
@@ -75,7 +75,7 @@ fn regenerate_cargo_toml() {
     .unwrap();
     regenerate_cargo_package_component(&cargo_toml_path, &wit_path, None).unwrap();
     let cargo_toml = fs::read_to_string(&cargo_toml_path).unwrap();
-    println!(">\n{}", cargo_toml);
+    println!(">\n{cargo_toml}");
     cargo_component_build(project_dir.path());
     check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.40.0\""));
     check!(cargo_toml.contains("\n# This is the comment for lib\n[lib]"));
@@ -95,7 +95,7 @@ fn regenerate_cargo_toml() {
     .unwrap();
     regenerate_cargo_package_component(&cargo_toml_path, &wit_path, None).unwrap();
     let cargo_toml = fs::read_to_string(&cargo_toml_path).unwrap();
-    println!(">\n{}", cargo_toml);
+    println!(">\n{cargo_toml}");
     cargo_component_build(project_dir.path());
     check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.40.0\""));
     check!(cargo_toml.contains("\n# This is the comment for lib\n[lib]"));
@@ -118,7 +118,7 @@ generate_unused_types = true
     .unwrap();
     regenerate_cargo_package_component(&cargo_toml_path, &wit_path, None).unwrap();
     let cargo_toml = fs::read_to_string(&cargo_toml_path).unwrap();
-    println!(">\n{}", cargo_toml);
+    println!(">\n{cargo_toml}");
     cargo_component_build(project_dir.path());
     check!(cargo_toml.contains("\n# Hello\nwit-bindgen-rt = \"0.40.0\""));
     check!(cargo_toml.contains("\n# This is the comment for lib\n[lib]"));

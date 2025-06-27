@@ -105,7 +105,7 @@ impl ComponentPluginCommandHandler {
         for component_name in &selected_components.component_names {
             log_action(
                 "Installing",
-                format!("plugin {} from component {}", plugin_name, component_name),
+                format!("plugin {plugin_name} from component {component_name}"),
             );
             let _indent = LogIndent::new();
 
@@ -140,7 +140,7 @@ impl ComponentPluginCommandHandler {
                     Some(result)
                 }
                 None => {
-                    log_warn(format!("Component {} not found", component_name));
+                    log_warn(format!("Component {component_name} not found"));
                     any_error = true;
                     None
                 }
@@ -198,7 +198,7 @@ impl ComponentPluginCommandHandler {
                     .await
                     .map_service_error()?,
                 None => {
-                    log_warn(format!("Component {} not found", component_name));
+                    log_warn(format!("Component {component_name} not found"));
                     vec![]
                 }
             };
@@ -227,10 +227,7 @@ impl ComponentPluginCommandHandler {
         for component_name in &selected_components.component_names {
             log_action(
                 "Updating",
-                format!(
-                    "plugin {} for component {}",
-                    plugin_installation_id, component_name
-                ),
+                format!("plugin {plugin_installation_id} for component {component_name}"),
             );
             let _indent = LogIndent::new();
 
@@ -265,7 +262,7 @@ impl ComponentPluginCommandHandler {
                     log_action("Updated", "plugin");
                 }
                 None => {
-                    log_warn(format!("Component {} not found", component_name));
+                    log_warn(format!("Component {component_name} not found"));
                     any_error = true;
                 }
             };
@@ -293,10 +290,7 @@ impl ComponentPluginCommandHandler {
         for component_name in &selected_components.component_names {
             log_warn_action(
                 "Uninstalling",
-                format!(
-                    "plugin {} from component {}",
-                    plugin_installation_id, component_name
-                ),
+                format!("plugin {plugin_installation_id} from component {component_name}"),
             );
             let _ident = LogIndent::new();
 
@@ -324,7 +318,7 @@ impl ComponentPluginCommandHandler {
                     .map(|_| ())
                     .map_service_error(),
                 None => {
-                    log_warn(format!("Component {} not found", component_name));
+                    log_warn(format!("Component {component_name} not found"));
                     any_error = true;
                     Ok(())
                 }
@@ -335,7 +329,7 @@ impl ComponentPluginCommandHandler {
                     log_action("Uninstalled", "plugin");
                 }
                 Err(error) => {
-                    log_error_action("Uninstall", format!("failed: {}", error));
+                    log_error_action("Uninstall", format!("failed: {error}"));
                     any_error = true;
                 }
             }
