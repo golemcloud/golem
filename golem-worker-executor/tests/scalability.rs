@@ -40,7 +40,7 @@ async fn spawning_many_workers_that_sleep(
 ) {
     let context = TestContext::new(last_unique_id);
     fn worker_name(n: i32) -> String {
-        format!("sleeping-worker-{}", n)
+        format!("sleeping-worker-{n}")
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -110,7 +110,7 @@ async fn spawning_many_workers_that_sleep(
         .into_iter()
         .map(|r| match r {
             Ok((_, duration)) => duration.as_millis(),
-            Err(err) => panic!("Error: {:?}", err),
+            Err(err) => panic!("Error: {err:?}"),
         })
         .collect::<Vec<_>>();
     sorted.sort();
@@ -132,7 +132,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 ) {
     let context = TestContext::new(last_unique_id);
     fn worker_name(n: i32) -> String {
-        format!("sleeping-suspending-worker-{}", n)
+        format!("sleeping-suspending-worker-{n}")
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -215,7 +215,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
                 };
                 (seconds * 1000.0) as u64
             }
-            Err(err) => panic!("Error: {:?}", err),
+            Err(err) => panic!("Error: {err:?}"),
         })
         .collect::<Vec<_>>();
     sorted1.sort();
@@ -226,7 +226,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
         .into_iter()
         .map(|r| match r {
             Ok((_, duration)) => duration.as_millis(),
-            Err(err) => panic!("Error: {:?}", err),
+            Err(err) => panic!("Error: {err:?}"),
         })
         .collect::<Vec<_>>();
     sorted2.sort();

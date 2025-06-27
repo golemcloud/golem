@@ -80,18 +80,18 @@ impl Display for Path {
             match elem {
                 PathElem::Field(name) => {
                     if is_first {
-                        write!(f, "{}", name)?;
+                        write!(f, "{name}")?;
                         is_first = false;
                     } else {
-                        write!(f, ".{}", name)?;
+                        write!(f, ".{name}")?;
                     }
                 }
                 PathElem::Index(index) => {
                     if is_first {
-                        write!(f, "index: {}", index)?;
+                        write!(f, "index: {index}")?;
                         is_first = false;
                     } else {
-                        write!(f, "[{}]", index)?;
+                        write!(f, "[{index}]")?;
                     }
                 }
             }

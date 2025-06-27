@@ -138,7 +138,7 @@ impl RibEdit {
                         .map(ToString::to_string)
                         .collect::<Vec<_>>()
                         .join(", ");
-                    completions.push(format!("{})", args_str));
+                    completions.push(format!("{args_str})"));
 
                     return Ok(Some((end_pos, completions)));
                 }
@@ -171,7 +171,7 @@ impl RibEdit {
                         .map(ToString::to_string)
                         .collect::<Vec<_>>()
                         .join(", ");
-                    completions.push(format!("{})", args_str));
+                    completions.push(format!("{args_str})"));
 
                     return Ok(Some((end_pos, completions)));
                 }
@@ -205,7 +205,7 @@ impl RibEdit {
             for case in variant.cases.iter() {
                 let variant_name = &case.name;
 
-                let name_with_paren = format!("{}(", variant_name);
+                let name_with_paren = format!("{variant_name}(");
 
                 if word == name_with_paren {
                     if let Some(variant_arg_type) = &case.typ {
@@ -213,7 +213,7 @@ impl RibEdit {
                         let value_and_type =
                             ValueAndType::new(generated_value, variant_arg_type.clone());
                         let arg_str = value_and_type.to_string();
-                        completions.push(format!("{})", arg_str));
+                        completions.push(format!("{arg_str})"));
                         return Ok(Some((end_pos, completions)));
                     }
                 }
@@ -395,7 +395,7 @@ impl Validator for RibEdit {
 
         match expr {
             Ok(_) => Ok(ValidationResult::Valid(None)),
-            Err(err) => Ok(ValidationResult::Invalid(Some(format!("\n{}\n", err)))),
+            Err(err) => Ok(ValidationResult::Invalid(Some(format!("\n{err}\n")))),
         }
     }
 }

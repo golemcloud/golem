@@ -85,7 +85,7 @@ impl fmt::Display for TypeHint {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}: {}", name, kind)?;
+                    write!(f, "{name}: {kind}")?;
                 }
                 write!(f, "}}")
             }
@@ -97,7 +97,7 @@ impl fmt::Display for TypeHint {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", kind)?;
+                    write!(f, "{kind}")?;
                 }
                 write!(f, ">")
             }
@@ -109,7 +109,7 @@ impl fmt::Display for TypeHint {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", flag)?;
+                    write!(f, "{flag}")?;
                 }
                 write!(f, "}}")
             }
@@ -120,7 +120,7 @@ impl fmt::Display for TypeHint {
             TypeHint::List(None) => write!(f, "list"),
             TypeHint::List(Some(typ)) => {
                 write!(f, "list<")?;
-                write!(f, "{}", typ)?;
+                write!(f, "{typ}")?;
                 write!(f, ">")
             }
             TypeHint::Boolean => write!(f, "boolean"),
@@ -137,7 +137,7 @@ impl fmt::Display for TypeHint {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", enum_name)?;
+                    write!(f, "{enum_name}")?;
                 }
                 write!(f, "}}")
             }
@@ -145,13 +145,13 @@ impl fmt::Display for TypeHint {
             TypeHint::Result { ok, err } => {
                 write!(f, "result<")?;
                 if let Some(ok) = ok {
-                    write!(f, "{}", ok)?;
+                    write!(f, "{ok}")?;
                 } else {
                     write!(f, "_")?;
                 }
                 write!(f, ", ")?;
                 if let Some(err) = err {
-                    write!(f, "{}", err)?;
+                    write!(f, "{err}")?;
                 } else {
                     write!(f, "_")?;
                 }
@@ -183,7 +183,7 @@ impl fmt::Display for TypeHint {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", kind)?;
+                    write!(f, "{kind}")?;
                 }
                 Ok(())
             }

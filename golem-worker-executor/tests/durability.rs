@@ -154,7 +154,7 @@ async fn lazy_pollable(
                         async move {
                             tracing::info!("fetch awaiting signal");
                             signal_rx.lock().await.recv().await;
-                            let fragment_str = format!("chunk-{}-{}\n", idx, i);
+                            let fragment_str = format!("chunk-{idx}-{i}\n");
                             tracing::info!("emitting response fragment: {fragment_str}");
                             let fragment = Bytes::from(fragment_str);
                             Ok::<Bytes, BoxError>(fragment)

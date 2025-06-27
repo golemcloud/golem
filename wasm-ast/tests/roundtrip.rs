@@ -35,7 +35,7 @@ fn assert_component_eq(a: Component<DefaultAst>, b: Component<DefaultAst>) {
             expected: &wat_a,
             actual: &wat_b,
         };
-        println!("{}", diff);
+        println!("{diff}");
 
         panic!("Components are not equal");
     }

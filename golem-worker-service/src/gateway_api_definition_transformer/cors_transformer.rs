@@ -58,8 +58,7 @@ mod internal {
                 method.clone(),
                 path.to_string(),
                 format!(
-                    "Invalid binding for resource '{}' with method '{}'. CORS binding is only supported for the OPTIONS method.",
-                    path, method
+                    "Invalid binding for resource '{path}' with method '{method}'. CORS binding is only supported for the OPTIONS method."
                 )
             );
             Err(error)

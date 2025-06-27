@@ -110,8 +110,7 @@ async fn create_account(
 
     assert!(
         create_result.is_ok(),
-        "Failed to create account: {:?}",
-        account_data
+        "Failed to create account: {account_data:?}"
     );
 
     create_result.unwrap()
@@ -136,8 +135,7 @@ async fn create_project(
 
     assert!(
         create_result.is_ok(),
-        "Failed to create project: {:?}",
-        project
+        "Failed to create project: {project:?}"
     );
     project
 }
@@ -163,14 +161,12 @@ async fn delete_project(
 
     assert!(
         create_result.is_ok(),
-        "Failed to create project: {:?}",
-        project
+        "Failed to create project: {project:?}"
     );
 
     assert!(
         delete_result.is_ok(),
-        "Failed to delete project: {:?}",
-        project
+        "Failed to delete project: {project:?}"
     );
     project
 }
@@ -190,8 +186,7 @@ async fn create_project_policy(
 
     assert!(
         create_result.is_ok(),
-        "Failed to create project policy: {:?}",
-        policy
+        "Failed to create project policy: {policy:?}"
     );
     policy
 }

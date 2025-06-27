@@ -128,7 +128,7 @@ mod protobuf {
             )?;
 
             let function_name = FunctionName::try_from(function_key_type)
-                .map_err(|e| format!("Failed to convert function key: {}", e))?;
+                .map_err(|e| format!("Failed to convert function key: {e}"))?;
 
             Ok(Self {
                 function_name,

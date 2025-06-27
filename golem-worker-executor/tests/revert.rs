@@ -225,7 +225,7 @@ async fn revert_auto_update(
         .await
         .unwrap();
 
-    info!("result: {:?}", result1);
+    info!("result: {result1:?}");
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.check_oplog_is_queryable(&worker_id).await;

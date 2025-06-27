@@ -45,20 +45,20 @@ impl Display for RibTypeError {
         )?;
 
         if let Some(expr) = &self.expr {
-            writeln!(f, "`{}`", expr)?;
+            writeln!(f, "`{expr}`")?;
         }
 
         writeln!(f, "cause: {}", self.cause)?;
 
         if !self.additional_error_details.is_empty() {
             for message in &self.additional_error_details {
-                writeln!(f, "{}", message)?;
+                writeln!(f, "{message}")?;
             }
         }
 
         if !self.help_messages.is_empty() {
             for message in &self.help_messages {
-                writeln!(f, "help: {}", message)?;
+                writeln!(f, "help: {message}")?;
             }
         }
 
@@ -112,20 +112,20 @@ impl RibTypeErrorInternal {
         );
 
         if let Some(wrong_expr) = wrong_expr {
-            error_message.push_str(&format!("`{}`\n", wrong_expr));
+            error_message.push_str(&format!("`{wrong_expr}`\n"));
         }
 
         error_message.push_str(&format!("cause: {}\n", self.cause));
 
         if !self.additional_error_details.is_empty() {
             for message in &self.additional_error_details {
-                error_message.push_str(&format!("{}\n", message));
+                error_message.push_str(&format!("{message}\n"));
             }
         }
 
         if !self.help_messages.is_empty() {
             for message in &self.help_messages {
-                error_message.push_str(&format!("help: {}\n", message));
+                error_message.push_str(&format!("help: {message}\n"));
             }
         }
 
@@ -165,23 +165,23 @@ impl From<TypeMismatchError> for RibTypeErrorInternal {
     fn from(value: TypeMismatchError) -> Self {
         let expected = match value.expected_type {
             ExpectedType::AnalysedType(analysed_type) => TypeName::try_from(analysed_type)
-                .map(|x| format!("expected {}", x))
+                .map(|x| format!("expected {x}"))
                 .ok(),
-            ExpectedType::Hint(kind) => Some(format!("expected {}", kind)),
+            ExpectedType::Hint(kind) => Some(format!("expected {kind}")),
             ExpectedType::InferredType(type_name) => {
                 Some(format!("expected {}", type_name.printable()))
             }
         };
 
         let actual = match value.actual_type {
-            ActualType::Hint(type_kind) => Some(format!("found {}", type_kind)),
+            ActualType::Hint(type_kind) => Some(format!("found {type_kind}")),
             ActualType::Inferred(inferred_type) => TypeName::try_from(inferred_type)
-                .map(|x| format!("found {}", x))
+                .map(|x| format!("found {x}"))
                 .ok(),
         };
 
         let cause_suffix = match (expected, actual) {
-            (Some(expected), Some(actual)) => format!("{}, {}", expected, actual),
+            (Some(expected), Some(actual)) => format!("{expected}, {actual}"),
             (Some(expected), None) => expected.to_string(),
             _ => "".to_string(),
         };
@@ -192,7 +192,7 @@ impl From<TypeMismatchError> for RibTypeErrorInternal {
                 value.field_path, cause_suffix
             )
         } else {
-            format!("type mismatch. {}", cause_suffix)
+            format!("type mismatch. {cause_suffix}")
         };
 
         RibTypeErrorInternal {
@@ -212,7 +212,7 @@ impl From<FunctionCallError> for RibTypeErrorInternal {
                 source_span,
                 message,
             } => RibTypeErrorInternal {
-                cause: format!("invalid function call `{}`", function_name),
+                cause: format!("invalid function call `{function_name}`"),
                 source_span,
                 additional_error_details: vec![message],
                 help_messages: vec![],
@@ -224,7 +224,7 @@ impl From<FunctionCallError> for RibTypeErrorInternal {
             } => {
                 let mut original_compilation: RibTypeErrorInternal = error.into();
 
-                let error_detail = format!("invalid argument to the function `{}`", function_name);
+                let error_detail = format!("invalid argument to the function `{function_name}`");
 
                 original_compilation
                     .additional_error_details
@@ -245,8 +245,7 @@ impl From<FunctionCallError> for RibTypeErrorInternal {
 
                 RibTypeErrorInternal {
                     cause: format!(
-                        "invalid argument to the function `{}`.  missing field(s) in record: `{}`",
-                        call_type, missing_fields
+                        "invalid argument to the function `{call_type}`.  missing field(s) in record: `{missing_fields}`"
                     ),
                     source_span: argument_source_span,
                     additional_error_details: vec![],
@@ -261,14 +260,14 @@ impl From<FunctionCallError> for RibTypeErrorInternal {
                 ..
             } => {
                 let expected = TypeName::try_from(expected_type.clone())
-                    .map(|t| format!("expected {}", t))
+                    .map(|t| format!("expected {t}"))
                     .unwrap_or_default();
 
                 let mut rib_compilation_error = RibTypeErrorInternal::from(unresolved_error);
 
                 rib_compilation_error
                     .additional_error_details
-                    .push(format!("invalid argument to `{}`. {}", call_type, expected));
+                    .push(format!("invalid argument to `{call_type}`. {expected}"));
 
                 rib_compilation_error
             }
@@ -276,7 +275,7 @@ impl From<FunctionCallError> for RibTypeErrorInternal {
                 invalid_lhs_source_span,
                 resource_method_name: function_call_name,
             } => RibTypeErrorInternal {
-                cause: format!("invalid resource method call: `{}`", function_call_name),
+                cause: format!("invalid resource method call: `{function_call_name}`"),
                 source_span: invalid_lhs_source_span,
                 additional_error_details: vec![],
                 help_messages: vec![],
@@ -287,8 +286,7 @@ impl From<FunctionCallError> for RibTypeErrorInternal {
                 source_span,
             } => RibTypeErrorInternal {
                 cause: format!(
-                    "invalid generic type parameter: `{}`",
-                    generic_type_parameter
+                    "invalid generic type parameter: `{generic_type_parameter}`"
                 ),
                 source_span,
                 additional_error_details: vec![message],
@@ -302,8 +300,7 @@ impl From<FunctionCallError> for RibTypeErrorInternal {
                 provided,
             } => RibTypeErrorInternal {
                 cause: format!(
-                    "invalid argument size for function `{}`. expected {} arguments, found {}",
-                    function_name, expected, provided
+                    "invalid argument size for function `{function_name}`. expected {expected} arguments, found {provided}"
                 ),
                 source_span: argument_source_span,
                 additional_error_details: vec![],
@@ -352,7 +349,7 @@ impl From<ExhaustivePatternMatchError> for RibTypeErrorInternal {
                 cause,
                 ..
             } => {
-                format!("dead code detected, pattern `{}` is unreachable due to the existence of the pattern `{}` prior to it", dead_pattern, cause)
+                format!("dead code detected, pattern `{dead_pattern}` is unreachable due to the existence of the pattern `{cause}` prior to it")
             }
         };
 
@@ -375,7 +372,7 @@ impl From<AmbiguousTypeError> for RibTypeErrorInternal {
             value
                 .ambiguous_types
                 .iter()
-                .map(|t| format!("`{}`", t))
+                .map(|t| format!("`{t}`"))
                 .collect::<Vec<String>>()
                 .join(", ")
         );
@@ -399,8 +396,7 @@ impl From<InvalidPatternMatchError> for RibTypeErrorInternal {
             } => {
                 (
                     format!(
-                        "invalid pattern match: cannot match to constructor `{}`",
-                        constructor_name
+                        "invalid pattern match: cannot match to constructor `{constructor_name}`"
                     ),
                     match_expr_source_span,
                 )
@@ -414,8 +410,7 @@ impl From<InvalidPatternMatchError> for RibTypeErrorInternal {
             } => {
                 (
                     format!(
-                        "invalid pattern match: missing arguments in constructor `{}`. expected {} arguments, found {}",
-                        constructor_name, expected_arg_size, actual_arg_size
+                        "invalid pattern match: missing arguments in constructor `{constructor_name}`. expected {expected_arg_size} arguments, found {actual_arg_size}"
                     ),
                     match_expr_source_span,
                 )

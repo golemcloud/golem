@@ -747,7 +747,7 @@ where
     loop {
         let payload = match parser
             .parse(remaining, true)
-            .map_err(|e| format!("Error parsing core module: {:?}", e))?
+            .map_err(|e| format!("Error parsing core module: {e:?}"))?
         {
             Chunk::Parsed { payload, consumed } => {
                 remaining = &remaining[consumed..];
@@ -827,16 +827,15 @@ where
             Payload::InstanceSection(reader) => {
                 for instance in reader {
                     let instance = instance.map_err(|e| {
-                        format!("Error parsing component core instance section: {:?}", e)
+                        format!("Error parsing component core instance section: {e:?}")
                     })?;
                     sections.push(ComponentSection::CoreInstance(instance.try_into()?))
                 }
             }
             Payload::CoreTypeSection(reader) => {
                 for core_type in reader {
-                    let core_type = core_type.map_err(|e| {
-                        format!("Error parsing component core type section: {:?}", e)
-                    })?;
+                    let core_type = core_type
+                        .map_err(|e| format!("Error parsing component core type section: {e:?}"))?;
                     sections.push(ComponentSection::CoreType(core_type.try_into()?))
                 }
             }
@@ -856,31 +855,29 @@ where
             }
             Payload::ComponentInstanceSection(reader) => {
                 for component_instance in reader {
-                    let component_instance = component_instance.map_err(|e| {
-                        format!("Error parsing component instance section: {:?}", e)
-                    })?;
+                    let component_instance = component_instance
+                        .map_err(|e| format!("Error parsing component instance section: {e:?}"))?;
                     sections.push(ComponentSection::Instance(component_instance.try_into()?))
                 }
             }
             Payload::ComponentAliasSection(reader) => {
                 for alias in reader {
                     let alias = alias
-                        .map_err(|e| format!("Error parsing component alias section: {:?}", e))?;
+                        .map_err(|e| format!("Error parsing component alias section: {e:?}"))?;
                     sections.push(ComponentSection::Alias(alias.try_into()?))
                 }
             }
             Payload::ComponentTypeSection(reader) => {
                 for component_type in reader {
                     let component_type = component_type
-                        .map_err(|e| format!("Error parsing component type section: {:?}", e))?;
+                        .map_err(|e| format!("Error parsing component type section: {e:?}"))?;
                     sections.push(ComponentSection::Type(component_type.try_into()?))
                 }
             }
             Payload::ComponentCanonicalSection(reader) => {
                 for canon in reader {
-                    let canon = canon.map_err(|e| {
-                        format!("Error parsing component canonical section: {:?}", e)
-                    })?;
+                    let canon = canon
+                        .map_err(|e| format!("Error parsing component canonical section: {e:?}"))?;
                     sections.push(ComponentSection::Canon(canon.try_into()?))
                 }
             }
@@ -890,14 +887,14 @@ where
             Payload::ComponentImportSection(reader) => {
                 for import in reader {
                     let import = import
-                        .map_err(|e| format!("Error parsing component import section: {:?}", e))?;
+                        .map_err(|e| format!("Error parsing component import section: {e:?}"))?;
                     sections.push(ComponentSection::Import(import.try_into()?))
                 }
             }
             Payload::ComponentExportSection(reader) => {
                 for export in reader {
                     let export = export
-                        .map_err(|e| format!("Error parsing component export section: {:?}", e))?;
+                        .map_err(|e| format!("Error parsing component export section: {e:?}"))?;
                     sections.push(ComponentSection::Export(export.try_into()?))
                 }
             }

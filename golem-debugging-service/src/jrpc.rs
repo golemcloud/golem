@@ -218,7 +218,7 @@ impl JrpcHandlerError {
                 self.jrpc_id.clone(),
                 JsonRpcError::new(
                     JsonRpcErrorReason::MethodNotFound,
-                    format!("Method not found: {}", method),
+                    format!("Method not found: {method}"),
                     Value::Null,
                 ),
             ),
@@ -230,14 +230,14 @@ impl Display for JrpcHandlerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.error_type {
             JrpcHandlerErrorType::DebugServiceError(error) => {
-                write!(f, "DebugServiceError: {}", error)
+                write!(f, "DebugServiceError: {error}")
             }
             JrpcHandlerErrorType::InactiveSession { error } => {
-                write!(f, "InactiveSessionError: {}", error)
+                write!(f, "InactiveSessionError: {error}")
             }
-            JrpcHandlerErrorType::InvalidParams { error } => write!(f, "JsonRpcError: {}", error),
+            JrpcHandlerErrorType::InvalidParams { error } => write!(f, "JsonRpcError: {error}"),
             JrpcHandlerErrorType::MethodNotFound { method } => {
-                write!(f, "MethodNotFound: {}", method)
+                write!(f, "MethodNotFound: {method}")
             }
         }
     }

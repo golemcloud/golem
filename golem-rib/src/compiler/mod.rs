@@ -185,7 +185,7 @@ pub struct DefaultWorkerNameGenerator;
 impl GenerateWorkerName for DefaultWorkerNameGenerator {
     fn generate_worker_name(&self) -> String {
         let uuid = uuid::Uuid::new_v4();
-        format!("worker-{}", uuid)
+        format!("worker-{uuid}")
     }
 }
 
@@ -238,10 +238,10 @@ impl Display for RibCompilationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RibCompilationError::RibStaticAnalysisError(msg) => {
-                write!(f, "rib static analysis error: {}", msg)
+                write!(f, "rib static analysis error: {msg}")
             }
-            RibCompilationError::RibTypeError(err) => write!(f, "{}", err),
-            RibCompilationError::InvalidSyntax(msg) => write!(f, "invalid rib syntax: {}", msg),
+            RibCompilationError::RibTypeError(err) => write!(f, "{err}"),
+            RibCompilationError::InvalidSyntax(msg) => write!(f, "invalid rib syntax: {msg}"),
             RibCompilationError::UnsupportedGlobalInput {
                 invalid_global_inputs,
                 valid_global_inputs,
@@ -254,7 +254,7 @@ impl Display for RibCompilationError {
                 )
             }
             RibCompilationError::ByteCodeGenerationFail(e) => {
-                write!(f, "{}", e)
+                write!(f, "{e}")
             }
         }
     }

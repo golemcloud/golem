@@ -96,7 +96,7 @@ mod internal {
                         let mut new_missing_constructors = vec![];
                         missing_constructors.iter().for_each(|missing_constructor| {
                             new_missing_constructors
-                                .push(format!("{}({})", field, missing_constructor));
+                                .push(format!("{field}({missing_constructor})"));
                         });
                         ExhaustivePatternMatchError::MissingConstructors {
                             predicate_source_span: predicate.source_span(),

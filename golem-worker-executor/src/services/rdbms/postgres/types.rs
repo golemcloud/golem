@@ -512,7 +512,7 @@ impl Display for Composite {
             f,
             "{}({})",
             self.name,
-            self.values.iter().map(|v| format!("{}", v)).format(", ")
+            self.values.iter().map(|v| format!("{v}")).format(", ")
         )
     }
 }
@@ -941,18 +941,18 @@ impl Display for DbColumnType {
             DbColumnType::Daterange => write!(f, "daterange"),
             DbColumnType::Money => write!(f, "money"),
             DbColumnType::Oid => write!(f, "oid"),
-            DbColumnType::Enumeration(v) => write!(f, "enumeration: {}", v),
+            DbColumnType::Enumeration(v) => write!(f, "enumeration: {v}"),
             DbColumnType::Composite(v) => {
-                write!(f, "composite: {}", v)
+                write!(f, "composite: {v}")
             }
             DbColumnType::Domain(v) => {
-                write!(f, "domain: {}", v)
+                write!(f, "domain: {v}")
             }
             DbColumnType::Array(v) => {
-                write!(f, "{}[]", v)
+                write!(f, "{v}[]")
             }
             DbColumnType::Range(v) => {
-                write!(f, "range: {}", v)
+                write!(f, "range: {v}")
             }
             DbColumnType::Null => write!(f, "null"),
         }
@@ -1153,47 +1153,47 @@ pub enum DbValue {
 impl Display for DbValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DbValue::Character(v) => write!(f, "{}", v),
-            DbValue::Int2(v) => write!(f, "{}", v),
-            DbValue::Int4(v) => write!(f, "{}", v),
-            DbValue::Int8(v) => write!(f, "{}", v),
-            DbValue::Float4(v) => write!(f, "{}", v),
-            DbValue::Float8(v) => write!(f, "{}", v),
-            DbValue::Numeric(v) => write!(f, "{}", v),
-            DbValue::Boolean(v) => write!(f, "{}", v),
-            DbValue::Timestamp(v) => write!(f, "{}", v),
-            DbValue::Timestamptz(v) => write!(f, "{}", v),
-            DbValue::Date(v) => write!(f, "{}", v),
-            DbValue::Time(v) => write!(f, "{}", v),
-            DbValue::Timetz(v) => write!(f, "{}", v),
-            DbValue::Interval(v) => write!(f, "{}", v),
-            DbValue::Text(v) => write!(f, "{}", v),
-            DbValue::Varchar(v) => write!(f, "{}", v),
-            DbValue::Bpchar(v) => write!(f, "{}", v),
-            DbValue::Bytea(v) => write!(f, "{:?}", v),
-            DbValue::Json(v) => write!(f, "{}", v),
-            DbValue::Jsonb(v) => write!(f, "{}", v),
-            DbValue::Jsonpath(v) => write!(f, "{}", v),
-            DbValue::Xml(v) => write!(f, "{}", v),
-            DbValue::Uuid(v) => write!(f, "{}", v),
-            DbValue::Inet(v) => write!(f, "{}", v),
-            DbValue::Cidr(v) => write!(f, "{}", v),
-            DbValue::Macaddr(v) => write!(f, "{}", v),
-            DbValue::Bit(v) => write!(f, "{:?}", v),
-            DbValue::Varbit(v) => write!(f, "{:?}", v),
-            DbValue::Int4range(v) => write!(f, "{}", v),
-            DbValue::Int8range(v) => write!(f, "{}", v),
-            DbValue::Numrange(v) => write!(f, "{}", v),
-            DbValue::Tsrange(v) => write!(f, "{}", v),
-            DbValue::Tstzrange(v) => write!(f, "{}", v),
-            DbValue::Daterange(v) => write!(f, "{}", v),
-            DbValue::Oid(v) => write!(f, "{}", v),
-            DbValue::Money(v) => write!(f, "{}", v),
-            DbValue::Enumeration(v) => write!(f, "{}", v),
-            DbValue::Composite(v) => write!(f, "{}", v),
-            DbValue::Domain(v) => write!(f, "{}", v),
+            DbValue::Character(v) => write!(f, "{v}"),
+            DbValue::Int2(v) => write!(f, "{v}"),
+            DbValue::Int4(v) => write!(f, "{v}"),
+            DbValue::Int8(v) => write!(f, "{v}"),
+            DbValue::Float4(v) => write!(f, "{v}"),
+            DbValue::Float8(v) => write!(f, "{v}"),
+            DbValue::Numeric(v) => write!(f, "{v}"),
+            DbValue::Boolean(v) => write!(f, "{v}"),
+            DbValue::Timestamp(v) => write!(f, "{v}"),
+            DbValue::Timestamptz(v) => write!(f, "{v}"),
+            DbValue::Date(v) => write!(f, "{v}"),
+            DbValue::Time(v) => write!(f, "{v}"),
+            DbValue::Timetz(v) => write!(f, "{v}"),
+            DbValue::Interval(v) => write!(f, "{v}"),
+            DbValue::Text(v) => write!(f, "{v}"),
+            DbValue::Varchar(v) => write!(f, "{v}"),
+            DbValue::Bpchar(v) => write!(f, "{v}"),
+            DbValue::Bytea(v) => write!(f, "{v:?}"),
+            DbValue::Json(v) => write!(f, "{v}"),
+            DbValue::Jsonb(v) => write!(f, "{v}"),
+            DbValue::Jsonpath(v) => write!(f, "{v}"),
+            DbValue::Xml(v) => write!(f, "{v}"),
+            DbValue::Uuid(v) => write!(f, "{v}"),
+            DbValue::Inet(v) => write!(f, "{v}"),
+            DbValue::Cidr(v) => write!(f, "{v}"),
+            DbValue::Macaddr(v) => write!(f, "{v}"),
+            DbValue::Bit(v) => write!(f, "{v:?}"),
+            DbValue::Varbit(v) => write!(f, "{v:?}"),
+            DbValue::Int4range(v) => write!(f, "{v}"),
+            DbValue::Int8range(v) => write!(f, "{v}"),
+            DbValue::Numrange(v) => write!(f, "{v}"),
+            DbValue::Tsrange(v) => write!(f, "{v}"),
+            DbValue::Tstzrange(v) => write!(f, "{v}"),
+            DbValue::Daterange(v) => write!(f, "{v}"),
+            DbValue::Oid(v) => write!(f, "{v}"),
+            DbValue::Money(v) => write!(f, "{v}"),
+            DbValue::Enumeration(v) => write!(f, "{v}"),
+            DbValue::Composite(v) => write!(f, "{v}"),
+            DbValue::Domain(v) => write!(f, "{v}"),
             DbValue::Array(v) => write!(f, "[{}]", v.iter().format(", ")),
-            DbValue::Range(v) => write!(f, "{}", v),
+            DbValue::Range(v) => write!(f, "{v}"),
             DbValue::Null => write!(f, "NULL"),
         }
     }
@@ -1859,7 +1859,7 @@ pub mod tests {
         for (i, ct) in types.iter().enumerate() {
             let c = postgres_types::DbColumn {
                 ordinal: i as u64,
-                name: format!("column-{}", i),
+                name: format!("column-{i}"),
                 db_type: ct.clone(),
                 db_type_name: ct.to_string(),
             };

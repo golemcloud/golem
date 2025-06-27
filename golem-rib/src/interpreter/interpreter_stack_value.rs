@@ -208,7 +208,7 @@ impl Display for RibInterpreterStackValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             RibInterpreterStackValue::Unit => write!(f, "unit"),
-            RibInterpreterStackValue::Val(value) => write!(f, "{}", value),
+            RibInterpreterStackValue::Val(value) => write!(f, "{value}"),
             RibInterpreterStackValue::Iterator(_) => write!(f, "iterator:(...)"),
             RibInterpreterStackValue::Sink(value, _) => write!(f, "sink:{}", value.len()),
         }
@@ -226,7 +226,7 @@ impl fmt::Debug for RibInterpreterStackValue {
                     match &value.value {
                         Value::Handle { uri, resource_id } => {
                             // wasm-wave don't support resource handles yet
-                            format!("handle:{{uri:{}, resource-id:{}}}", uri, resource_id)
+                            format!("handle:{{uri:{uri}, resource-id:{resource_id}}}")
                         }
 
                         _ => value.to_string(),

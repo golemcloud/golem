@@ -79,7 +79,7 @@ impl From<TokenServiceError> for AuthServiceError {
     fn from(error: TokenServiceError) -> Self {
         match error {
             TokenServiceError::UnknownToken(id) => {
-                AuthServiceError::invalid_token(format!("Invalid token id: {}", id))
+                AuthServiceError::invalid_token(format!("Invalid token id: {id}"))
             }
             _ => AuthServiceError::InternalTokenServiceError(error),
         }

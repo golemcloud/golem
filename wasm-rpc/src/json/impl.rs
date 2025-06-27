@@ -168,7 +168,7 @@ impl TypeAnnotatedValueJsonExtensions for TypeAnnotatedValue {
                 typ: _,
                 uri,
                 resource_id,
-            }) => JsonValue::String(format!("{}/{}", uri, resource_id)),
+            }) => JsonValue::String(format!("{uri}/{resource_id}")),
         }
     }
 }
@@ -495,7 +495,7 @@ fn get_record(
                 Err(value_errors) => errors.extend(
                     value_errors
                         .iter()
-                        .map(|err| format!("invalid value for key {}: {}", name, err))
+                        .map(|err| format!("invalid value for key {name}: {err}"))
                         .collect::<Vec<_>>(),
                 ),
             }
@@ -509,7 +509,7 @@ fn get_record(
 
                     vals.push((name.clone(), TypeAnnotatedValue::Option(Box::new(option))))
                 }
-                _ => errors.push(format!("key '{}' not found", name)),
+                _ => errors.push(format!("key '{name}' not found")),
             }
         }
     }

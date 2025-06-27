@@ -486,7 +486,7 @@ async fn test_rib_regression() {
 
     let duration = start.elapsed();
 
-    println!("Compile time of the complex rib: {:?}", duration);
+    println!("Compile time of the complex rib: {duration:?}");
 
     let mut rib_executor = mock_interpreter::interpreter();
 
@@ -496,7 +496,7 @@ async fn test_rib_regression() {
 
     let duration = start.elapsed();
 
-    println!("Execution time of the complex rib: {:?}", duration);
+    println!("Execution time of the complex rib: {duration:?}");
 
     let actual_as_text = test_utils::convert_value_and_type_to_str(&result.get_val().unwrap());
 
@@ -505,9 +505,7 @@ async fn test_rib_regression() {
     assert_eq!(
         result.get_val().unwrap(),
         expected_value_and_type(),
-        "Assertion failed! \n\n Actual value as string  : {} \n\n Expected value as string: {}\n",
-        actual_as_text,
-        expected_as_text
+        "Assertion failed! \n\n Actual value as string  : {actual_as_text} \n\n Expected value as string: {expected_as_text}\n"
     );
 }
 
@@ -1801,13 +1799,13 @@ mod mock_data {
 
     pub(crate) fn ok_of_tuple() -> ValueAndType {
         let tuple_str = test_utils::convert_value_and_type_to_str(&tuple());
-        let wave_str = format!("ok({})", tuple_str);
+        let wave_str = format!("ok({tuple_str})");
         test_utils::get_value_and_type(&data_types::result_of_tuple_type(), wave_str.as_str())
     }
 
     pub(crate) fn err_of_tuple() -> ValueAndType {
         let tuple_str = test_utils::convert_value_and_type_to_str(&tuple());
-        let wave_str = format!("err({})", tuple_str);
+        let wave_str = format!("err({tuple_str})");
         test_utils::get_value_and_type(&data_types::result_of_tuple_type(), wave_str.as_str())
     }
 
@@ -1920,7 +1918,7 @@ mod mock_data {
 
     pub(crate) fn some_of_tuple() -> ValueAndType {
         let tuple_str = test_utils::convert_value_and_type_to_str(&tuple());
-        let wave_str = format!("some({})", tuple_str);
+        let wave_str = format!("some({tuple_str})");
         test_utils::get_value_and_type(&data_types::option_of_tuple(), wave_str.as_str())
     }
 
@@ -2306,10 +2304,7 @@ mod test_utils {
 
         match result {
             Ok(value) => value,
-            Err(err) => panic!(
-                "Wasm wave syntax error {:?} {} {}",
-                analysed_type, wasm_wave_str, err
-            ),
+            Err(err) => panic!("Wasm wave syntax error {analysed_type:?} {wasm_wave_str} {err}"),
         }
     }
 
@@ -2326,7 +2321,7 @@ mod test_utils {
             .into_iter()
             .enumerate()
             .map(|(index, typ)| AnalysedFunctionParameter {
-                name: format!("param{}", index),
+                name: format!("param{index}"),
                 typ,
             })
             .collect();

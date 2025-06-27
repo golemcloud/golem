@@ -160,7 +160,7 @@ impl FileServerBindingDetails {
                     .first()
                     .ok_or("Could not determine mime type")?;
                 ContentType::from_str(mime_type.as_ref())
-                    .map_err(|e| format!("Invalid mime type: {}", e))?
+                    .map_err(|e| format!("Invalid mime type: {e}"))?
             }
         };
 
@@ -296,7 +296,7 @@ impl FileServerBindingHandler for DefaultFileServerBindingHandler {
                 .map(|&w| WorkerId::validate_worker_name(w).map(|_| w.to_string()))
                 .transpose()
                 .map_err(|e| {
-                    FileServerBindingError::InternalError(format!("Invalid worker name: {}", e))
+                    FileServerBindingError::InternalError(format!("Invalid worker name: {e}"))
                 })?;
 
             let component_id = component_id.clone();

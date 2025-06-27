@@ -132,15 +132,14 @@ impl Display for WorkerProxyError {
 impl From<tonic::transport::Error> for WorkerProxyError {
     fn from(value: tonic::transport::Error) -> Self {
         Self::InternalError(GolemError::unknown(format!(
-            "gRPC Transport error: {}",
-            value
+            "gRPC Transport error: {value}"
         )))
     }
 }
 
 impl From<tonic::Status> for WorkerProxyError {
     fn from(value: tonic::Status) -> Self {
-        Self::InternalError(GolemError::unknown(format!("gRPC error: {}", value)))
+        Self::InternalError(GolemError::unknown(format!("gRPC error: {value}")))
     }
 }
 

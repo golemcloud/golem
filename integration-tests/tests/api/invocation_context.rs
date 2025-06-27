@@ -83,7 +83,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
             );
 
             let listener = tokio::net::TcpListener::bind(
-                format!("0.0.0.0:{}", host_http_port)
+                format!("0.0.0.0:{host_http_port}")
                     .parse::<SocketAddr>()
                     .unwrap(),
             )

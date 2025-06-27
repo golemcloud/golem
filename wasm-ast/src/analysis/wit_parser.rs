@@ -376,7 +376,7 @@ impl ToAnalysedType for Type {
             Type::Id(id) => resolve
                 .types
                 .get(*id)
-                .ok_or_else(|| format!("Type not found by id: {:?}", id))?
+                .ok_or_else(|| format!("Type not found by id: {id:?}"))?
                 .to_analysed_type(resolve, resource_map),
             Type::ErrorContext => Err("ErrorContext not supported".to_string()),
         }

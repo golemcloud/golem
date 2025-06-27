@@ -275,7 +275,7 @@ mod tests {
     }
 
     fn pod(idx: usize) -> Pod {
-        Pod::new(format!("pod{}", idx), (9000 + idx) as u16)
+        Pod::new(format!("pod{idx}"), (9000 + idx) as u16)
     }
 
     fn shard_ids(ids: Vec<i64>) -> Vec<ShardId> {
@@ -297,9 +297,7 @@ mod tests {
         assert_eq!(
             get_assigned_ids(rebalance, pod),
             shard_ids(shards),
-            "assert_assignments_for_pod: {}\n{:#?}\n",
-            pod,
-            rebalance,
+            "assert_assignments_for_pod: {pod}\n{rebalance:#?}\n",
         );
     }
 
@@ -313,9 +311,7 @@ mod tests {
         assert_eq!(
             get_unassigned_ids(rebalance, pod),
             shard_ids(shards),
-            "assert_unassignments_for_pod: {}\n{:#?}\n",
-            pod,
-            rebalance,
+            "assert_unassignments_for_pod: {pod}\n{rebalance:#?}\n",
         );
     }
 

@@ -104,7 +104,7 @@ impl SecuritySchemeApi {
     ) -> Result<Json<SecuritySchemeData>, ApiEndpointError> {
         let token = token.secret();
         let security_scheme = SecurityScheme::try_from(payload).map_err(|err| {
-            ApiEndpointError::bad_request(safe(format!("Invalid security scheme {}", err)))
+            ApiEndpointError::bad_request(safe(format!("Invalid security scheme {err}")))
         })?;
 
         let security_scheme_with_metadata = self

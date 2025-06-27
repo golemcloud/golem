@@ -190,7 +190,7 @@ async fn auto_update_on_running(
     control2.resume();
 
     let result = fiber.await.unwrap();
-    info!("result: {:?}", result);
+    info!("result: {result:?}");
 
     let _ = executor
         .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
@@ -242,7 +242,7 @@ async fn auto_update_on_idle(
         .await
         .unwrap();
 
-    info!("result: {:?}", result);
+    info!("result: {result:?}");
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.check_oplog_is_queryable(&worker_id).await;
@@ -301,7 +301,7 @@ async fn failing_auto_update_on_idle(
         .await
         .unwrap();
 
-    info!("result: {:?}", result);
+    info!("result: {result:?}");
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.check_oplog_is_queryable(&worker_id).await;
@@ -362,7 +362,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
         .await
         .unwrap();
 
-    info!("result: {:?}", result);
+    info!("result: {result:?}");
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.check_oplog_is_queryable(&worker_id).await;
@@ -438,7 +438,7 @@ async fn failing_auto_update_on_running(
     control2.resume();
 
     let result = fiber.await.unwrap();
-    info!("result: {:?}", result);
+    info!("result: {result:?}");
 
     let _ = executor
         .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
@@ -662,13 +662,13 @@ async fn auto_update_on_running_followed_by_manual(
     control2.resume();
 
     let result1 = fiber.await.unwrap();
-    info!("result1: {:?}", result1);
+    info!("result1: {result1:?}");
 
     let result2 = executor
         .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
         .await
         .unwrap();
-    info!("result2: {:?}", result2);
+    info!("result2: {result2:?}");
 
     let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 

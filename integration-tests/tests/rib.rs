@@ -93,7 +93,7 @@ async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&s
         Some(worker_name) => {
             format!(
                 r#"
-                let worker = instance("{}");
+                let worker = instance("{worker_name}");
                 let result = worker.get-cart-contents();
                 worker.add-item({{
                     product-id: "123",
@@ -102,8 +102,7 @@ async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&s
                     quantity: 2
                 }});
                 worker.get-cart-contents()
-                "#,
-                worker_name
+                "#
             )
         }
 
@@ -177,7 +176,7 @@ async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<
         Some(worker_name) => {
             format!(
                 r#"
-                let worker = instance("{}");
+                let worker = instance("{worker_name}");
                 let result = worker.get-cart-contents();
 
                 for i in 1:u32..=2:u32 {{
@@ -190,8 +189,7 @@ async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<
                 }};
 
                 worker.get-cart-contents()
-                "#,
-                worker_name
+                "#
             )
         }
 
@@ -280,7 +278,7 @@ async fn test_rib_with_resource_methods(
         Some(worker_name) => {
             format!(
                 r#"
-                let resource = instance("{}");
+                let resource = instance("{worker_name}");
                 let cart = resource.cart("foo");
 
                 for i in 1:u32..=2:u32 {{
@@ -293,8 +291,7 @@ async fn test_rib_with_resource_methods(
                 }};
 
                 cart.get-cart-contents()
-                "#,
-                worker_name
+                "#
             )
         }
 

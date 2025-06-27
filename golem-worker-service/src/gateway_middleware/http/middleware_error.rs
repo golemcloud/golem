@@ -40,7 +40,7 @@ impl SafeDisplay for MiddlewareError {
                 CorsError::HeadersNotAllowed => "CORS Error: Headers not allowed".to_string(),
             },
             MiddlewareError::InternalError(msg) => {
-                format!("Internal Server Error: {}", msg)
+                format!("Internal Server Error: {msg}")
             }
         }
     }

@@ -71,7 +71,7 @@ impl PluginWasmFilesService {
                 &key,
             )
             .await
-            .map_err(|err| format!("Failed to get metadata: {}", err))?;
+            .map_err(|err| format!("Failed to get metadata: {err}"))?;
 
         if metadata.is_none() {
             debug!("Storing library plugin file with hash: {}", hash);

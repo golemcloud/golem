@@ -198,14 +198,12 @@ fn get_status_code_inner(status_code: ValueAndType) -> Result<StatusCode, String
         match status_code.get_literal() {
             Some(LiteralValue::String(status_str)) => status_str.parse().map_err(|e| {
                 format!(
-                    "Invalid Status Code Expression. It is resolved to a string but not a number {}. Error: {}",
-                    status_str, e
+                    "Invalid Status Code Expression. It is resolved to a string but not a number {status_str}. Error: {e}"
                 )
             }),
             Some(LiteralValue::Num(number)) => number.to_string().parse().map_err(|e| {
                 format!(
-                    "Invalid Status Code Expression. It is resolved to a number but not a u16 {}. Error: {}",
-                    number, e
+                    "Invalid Status Code Expression. It is resolved to a number but not a u16 {number}. Error: {e}"
                 )
             }),
             _ => Err(format!(
@@ -218,7 +216,6 @@ fn get_status_code_inner(status_code: ValueAndType) -> Result<StatusCode, String
 
     StatusCode::from_u16(status_u16).map_err(|e|
         format!(
-            "Invalid Status Code. A valid status code cannot be formed from the evaluated status code expression {}. Error: {}",
-            status_u16, e
+            "Invalid Status Code. A valid status code cannot be formed from the evaluated status code expression {status_u16}. Error: {e}"
         ))
 }

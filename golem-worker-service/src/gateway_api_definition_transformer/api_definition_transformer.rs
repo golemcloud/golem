@@ -34,11 +34,10 @@ impl Display for ApiDefTransformationError {
                 detail,
             } => write!(
                 f,
-                "ApiDefinitionTransformationError: method: {}, path: {}, detail: {}",
-                method, path, detail
+                "ApiDefinitionTransformationError: method: {method}, path: {path}, detail: {detail}"
             )?,
             ApiDefTransformationError::Custom(msg) => {
-                write!(f, "ApiDefinitionTransformationError: {}", msg)?
+                write!(f, "ApiDefinitionTransformationError: {msg}")?
             }
         }
 

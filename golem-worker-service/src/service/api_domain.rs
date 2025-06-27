@@ -535,7 +535,7 @@ async fn unregister_hosted_zone(
         .list_hosted_zones(ListHostedZonesRequest::default())
         .await?;
 
-    let target_zone_name = format!("{}.", domain_name); // appends a dot
+    let target_zone_name = format!("{domain_name}."); // appends a dot
 
     let zone = zones
         .hosted_zones
@@ -562,7 +562,7 @@ async fn get_name_servers(
         .list_hosted_zones(ListHostedZonesRequest::default())
         .await?;
 
-    let target_zone_name = format!("{}.", domain_name); // appends a dot
+    let target_zone_name = format!("{domain_name}."); // appends a dot
 
     let zone = zones
         .hosted_zones
@@ -736,7 +736,7 @@ impl AwsRoute53HostedZone {
             .list_hosted_zones(ListHostedZonesRequest::default())
             .await?;
 
-        let target_zone_name = format!("{}.", domain); // appends a dot
+        let target_zone_name = format!("{domain}."); // appends a dot
 
         let zone = zones
             .hosted_zones
@@ -790,7 +790,7 @@ impl RegisterDomainRoute for AwsDomainRoute {
         sub_domain_opt: Option<&str>,
     ) -> Result<(), RegisterDomainRouteError> {
         let api_site = match sub_domain_opt {
-            Some(subdomain) => format!("{}.{}", subdomain, domain),
+            Some(subdomain) => format!("{subdomain}.{domain}"),
             None => domain.to_string(),
         };
 
@@ -869,7 +869,7 @@ impl RegisterDomainRoute for AwsDomainRoute {
         subdomain: Option<&str>,
     ) -> Result<(), RegisterDomainRouteError> {
         let api_site = match subdomain {
-            Some(subdomain) => format!("{}.{}", subdomain, domain),
+            Some(subdomain) => format!("{subdomain}.{domain}"),
             None => domain.to_string(),
         };
 
@@ -951,7 +951,7 @@ impl RegisterDomainRoute for InMemoryRegisterDomainRoute {
         sub_domain: Option<&str>,
     ) -> Result<(), RegisterDomainRouteError> {
         let api_site = match sub_domain {
-            Some(subdomain) => format!("{}.{}", subdomain, domain),
+            Some(subdomain) => format!("{subdomain}.{domain}"),
             None => domain.to_string(),
         };
 

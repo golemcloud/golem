@@ -90,7 +90,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 FunctionCallError::invalid_function_call(
                                     &dynamic_parsed_function_name,
                                     source_span.clone(),
-                                    format!("invalid function name: {}", err),
+                                    format!("invalid function name: {err}"),
                                 )
                             })?;
 
@@ -133,7 +133,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 .map_err(|err| {
                                     RibTypeErrorInternal::from(CustomError::new(
                                         lhs.source_span(),
-                                        format!("Failed to get resource instance type: {}", err),
+                                        format!("Failed to get resource instance type: {err}"),
                                     ))
                                 })?;
 
@@ -179,7 +179,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                     FunctionCallError::invalid_function_call(
                                         resource_method.method_name(),
                                         source_span.clone(),
-                                        format!("Invalid function name: {}", err),
+                                        format!("Invalid function name: {err}"),
                                     )
                                 })?;
 
