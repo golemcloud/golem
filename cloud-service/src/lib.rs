@@ -23,7 +23,6 @@ pub mod model;
 pub mod repo;
 pub mod service;
 
-use self::auth::AccountAuthorisation;
 use self::config::{AccountConfig, AccountsConfig};
 use self::service::account::AccountService;
 use self::service::account_grant::AccountGrantService;
@@ -252,17 +251,12 @@ async fn create_initial_account(
                 name: account_config.name.clone(),
                 email: account_config.email.clone(),
             },
-            &AccountAuthorisation::admin(),
         )
         .await
         .ok();
 
     grant_service
-        .add(
-            &account_id,
-            &account_config.role,
-            &AccountAuthorisation::admin(),
-        )
+        .add(&account_id, &account_config.role)
         .await
         .ok();
 
@@ -271,7 +265,6 @@ async fn create_initial_account(
             &account_id,
             &DateTime::<Utc>::MAX_UTC,
             &TokenSecret::new(account_config.token),
-            &AccountAuthorisation::admin(),
         )
         .await
         .ok();
