@@ -14,7 +14,7 @@
 
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
-use crate::model::{self, AccountAction, GlobalAction};
+use crate::model::{AccountData, GlobalAction};
 use crate::service::account;
 use crate::service::auth::{AuthService, AuthServiceError};
 use golem_api_grpc::proto::golem::account::v1::cloud_account_service_server::CloudAccountService;
@@ -30,6 +30,7 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::plan::Plan;
 use golem_common::grpc::proto_account_id_string;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::auth::AccountAction;
 use golem_common::model::AccountId;
 use golem_common::recorded_grpc_api_request;
 use golem_common::SafeDisplay;
@@ -172,7 +173,7 @@ impl AccountGrpcApi {
         metadata: MetadataMap,
     ) -> Result<Account, AccountError> {
         let auth = self.auth(metadata).await?;
-        let data: model::AccountData = request
+        let data: AccountData = request
             .account_data
             .map(|id| id.into())
             .ok_or_else(|| bad_request_error("Missing account data"))?;
@@ -199,7 +200,7 @@ impl AccountGrpcApi {
             .map(|id| id.into())
             .ok_or_else(|| bad_request_error("Missing account id"))?;
 
-        let data: model::AccountData = request
+        let data: AccountData = request
             .account_data
             .map(|id| id.into())
             .ok_or_else(|| bad_request_error("Missing account data"))?;

@@ -16,7 +16,7 @@ use crate::api::{ApiError, ApiResult, ApiTags};
 use crate::model::*;
 use crate::service::account_grant::{AccountGrantService, AccountGrantServiceError};
 use crate::service::auth::AuthService;
-use golem_common::model::auth::Role;
+use golem_common::model::auth::{AccountAction, Role};
 use golem_common::model::error::ErrorBody;
 use golem_common::model::AccountId;
 use golem_common::recorded_http_api_request;

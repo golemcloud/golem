@@ -16,23 +16,23 @@ use crate::error::ComponentError;
 use crate::model::plugin::PluginDefinitionCreation;
 use crate::service::component::ComponentService;
 use crate::service::plugin::PluginService;
-use golem_common::model::auth::{AuthCtx, ProjectAction};
+use golem_common::model::auth::{AccountAction, AuthCtx, ProjectAction};
 use golem_common::model::plugin::PluginDefinition;
 use golem_common::model::plugin::{PluginOwner, PluginScope};
-use golem_common::model::PluginId;
-use golem_service_base::clients::auth::BaseAuthService;
+use golem_common::model::{AccountId, PluginId};
+use golem_service_base::clients::auth::AuthService;
 use std::sync::Arc;
 
 pub struct AuthedPluginService {
     plugin_service: Arc<PluginService>,
-    auth_service: Arc<dyn BaseAuthService>,
+    auth_service: Arc<AuthService>,
     component_service: Arc<dyn ComponentService>,
 }
 
 impl AuthedPluginService {
     pub fn new(
         base_plugin_service: Arc<PluginService>,
-        auth_service: Arc<dyn BaseAuthService>,
+        auth_service: Arc<AuthService>,
         component_service: Arc<dyn ComponentService>,
     ) -> Self {
         Self {
@@ -88,11 +88,43 @@ impl AuthedPluginService {
     pub async fn get(
         &self,
         auth: &AuthCtx,
+        account_id: AccountId,
         name: &str,
         version: &str,
     ) -> Result<Option<PluginDefinition>, ComponentError> {
-        let owner = self.get_owner(auth).await?;
-        self.plugin_service.get(&owner, name, version).await
+        let owner = PluginOwner { account_id };
+        let plugin = self.plugin_service.get(&owner, name, version).await?;
+        if let Some(plugin) = &plugin {
+            self.check_plugin_access(
+                plugin,
+                ProjectAction::ViewPluginDefinition,
+                AccountAction::ViewGlobalPlugins,
+                auth,
+            )
+            .await?;
+        };
+        Ok(plugin)
+    }
+
+    pub async fn get_own(
+        &self,
+        auth: &AuthCtx,
+        name: &str,
+        version: &str,
+    ) -> Result<Option<PluginDefinition>, ComponentError> {
+        let account_id = self.auth_service.get_account(auth).await?;
+        let owner = PluginOwner { account_id };
+        let plugin = self.plugin_service.get(&owner, name, version).await?;
+        if let Some(plugin) = &plugin {
+            self.check_plugin_access(
+                plugin,
+                ProjectAction::ViewPluginDefinition,
+                AccountAction::ViewGlobalPlugins,
+                auth,
+            )
+            .await?;
+        };
+        Ok(plugin)
     }
 
     pub async fn get_by_id(
@@ -100,8 +132,17 @@ impl AuthedPluginService {
         auth: &AuthCtx,
         id: &PluginId,
     ) -> Result<Option<PluginDefinition>, ComponentError> {
-        let owner = self.get_owner(auth).await?;
-        self.plugin_service.get_by_id(&owner, id).await
+        let plugin = self.plugin_service.get_by_id(id).await?;
+        if let Some(plugin) = &plugin {
+            self.check_plugin_access(
+                plugin,
+                ProjectAction::ViewPluginDefinition,
+                AccountAction::ViewGlobalPlugins,
+                auth,
+            )
+            .await?;
+        };
+        Ok(plugin)
     }
 
     pub async fn delete(
@@ -173,5 +214,41 @@ impl AuthedPluginService {
                 ])
             }
         }
+    }
+
+    async fn check_plugin_access(
+        &self,
+        plugin: &PluginDefinition,
+        project_action: ProjectAction,
+        account_action: AccountAction,
+        auth: &AuthCtx,
+    ) -> Result<(), ComponentError> {
+        match &plugin.scope {
+            PluginScope::Component(inner) => {
+                let component = self
+                    .component_service
+                    .get_owner(&inner.component_id)
+                    .await?
+                    .ok_or(ComponentError::UnknownComponentId(
+                        inner.component_id.clone(),
+                    ))?;
+
+                self.auth_service
+                    .authorize_project_action(&component.project_id, project_action, auth)
+                    .await?;
+            }
+            PluginScope::Project(inner) => {
+                self.auth_service
+                    .authorize_project_action(&inner.project_id, project_action, auth)
+                    .await?;
+            }
+            PluginScope::Global(_) => {
+                self.auth_service
+                    .authorize_account_action(&plugin.owner.account_id, account_action, auth)
+                    .await?;
+            }
+        };
+
+        Ok(())
     }
 }

@@ -54,7 +54,7 @@ use crate::service::api_domain::{
 };
 use crate::service::api_domain::{AwsRegisterDomain, RegisterDomain};
 use crate::service::api_security::{SecuritySchemeService, SecuritySchemeServiceDefault};
-use crate::service::auth::{AuthService, CloudAuthService};
+use crate::service::auth::{AuthService, GrpcAuthService};
 use crate::service::component::{ComponentService, RemoteComponentService};
 use crate::service::gateway::api_definition::{
     ApiDefinitionService, ApiDefinitionServiceConfig, ApiDefinitionServiceDefault,
@@ -108,8 +108,8 @@ impl Services {
         let project_service: Arc<dyn ProjectService> =
             Arc::new(ProjectServiceDefault::new(&config.cloud_service));
 
-        let auth_service: Arc<dyn AuthService> = Arc::new(CloudAuthService::new(
-            golem_service_base::clients::auth::CloudAuthService::new(&config.cloud_service),
+        let auth_service: Arc<dyn AuthService> = Arc::new(GrpcAuthService::new(
+            golem_service_base::clients::auth::AuthService::new(&config.cloud_service),
             config.component_service.clone(),
         ));
 

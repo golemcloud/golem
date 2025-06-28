@@ -3164,6 +3164,10 @@ components:
       - UpsertApiDomain
       - ViewApiDomain
       - DeleteApiDomain
+      - ViewPluginDefinition
+      - CreatePluginDefinition
+      - UpdatePluginDefinition
+      - DeletePluginDefinition
     ProjectPolicy:
       type: object
       title: ProjectPolicy

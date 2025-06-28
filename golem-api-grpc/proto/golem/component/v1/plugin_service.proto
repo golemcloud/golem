@@ -3,6 +3,7 @@ syntax = "proto3";
 package golem.component.v1;
 
 import "golem/common/empty.proto";
+import "golem/common/account_id.proto";
 import "golem/component/v1/component_error.proto";
 import "golem/component/plugin_definition.proto";
 
@@ -46,8 +47,9 @@ message CreatePluginResponse {
 }
 
 message GetPluginRequest {
-  string name = 1;
-  string version = 2;
+  golem.common.AccountId account_id = 1;
+  string name = 2;
+  string version = 3;
 }
 
 message GetPluginResponse {

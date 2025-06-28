@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ComponentError;
 use crate::api::dto;
-use crate::api::{ApiTags, ComponentError, Result};
+use crate::api::{ApiTags, Result};
 use crate::authed::plugin::AuthedPluginService;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::error::ErrorBody;
@@ -186,9 +187,12 @@ impl PluginApi {
         );
         let auth = AuthCtx::new(token.secret());
 
+        // FIXME: This endpoint cannot retrieve plugins registered in shared projects by other users.
+        // Pass account_id of the plugin as a parameter instead of getting it from auth.
+
         let response = self
             .plugin_service
-            .get(&auth, &name, &version)
+            .get_own(&auth, &name, &version)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())

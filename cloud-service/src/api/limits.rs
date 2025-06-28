@@ -17,6 +17,7 @@ use crate::model::*;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::auth::AccountAction;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::AccountId;
 use golem_common::recorded_http_api_request;

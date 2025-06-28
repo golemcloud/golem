@@ -26,7 +26,7 @@ use golem_common::model::auth::ProjectAction;
 use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_common::retries::with_retries;
-use golem_service_base::clients::auth::{AuthServiceError, BaseAuthService};
+use golem_service_base::clients::auth::AuthServiceError;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -35,7 +35,16 @@ use tracing::error;
 // A wrapper over base auth service to be used by worker-service as well as debug-service (both being directly user facing).
 // Debug service requires similar authentication when trying to create a worker in debug mode.
 #[async_trait]
-pub trait AuthService: BaseAuthService {
+pub trait AuthService: Send + Sync {
+    async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError>;
+
+    async fn authorize_project_action(
+        &self,
+        project_id: &ProjectId,
+        permission: ProjectAction,
+        ctx: &AuthCtx,
+    ) -> Result<Namespace, AuthServiceError>;
+
     async fn is_authorized_by_component(
         &self,
         component_id: &ComponentId,
@@ -44,16 +53,16 @@ pub trait AuthService: BaseAuthService {
     ) -> Result<Namespace, AuthServiceError>;
 }
 
-pub struct CloudAuthService {
-    common_auth: golem_service_base::clients::auth::CloudAuthService,
+pub struct GrpcAuthService {
+    common_auth: golem_service_base::clients::auth::AuthService,
     component_service_config: ComponentServiceConfig,
     component_service_client: GrpcClient<ComponentServiceClient<Channel>>,
     component_project_cache: Cache<ComponentId, (), ProjectId, String>,
 }
 
-impl CloudAuthService {
+impl GrpcAuthService {
     pub fn new(
-        common_auth: golem_service_base::clients::auth::CloudAuthService,
+        common_auth: golem_service_base::clients::auth::AuthService,
         component_service_config: ComponentServiceConfig,
     ) -> Self {
         let component_service_client = GrpcClient::new(
@@ -160,7 +169,7 @@ impl CloudAuthService {
 }
 
 #[async_trait]
-impl BaseAuthService for CloudAuthService {
+impl AuthService for GrpcAuthService {
     async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError> {
         self.common_auth.get_account(ctx).await
     }
@@ -175,10 +184,7 @@ impl BaseAuthService for CloudAuthService {
             .authorize_project_action(project_id, permission, ctx)
             .await
     }
-}
 
-#[async_trait]
-impl AuthService for CloudAuthService {
     async fn is_authorized_by_component(
         &self,
         component_id: &ComponentId,

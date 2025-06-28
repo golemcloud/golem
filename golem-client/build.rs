@@ -64,6 +64,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "OplogCursor",
                 "golem_common::model::public_oplog::OplogCursor",
             ),
+            (
+                "ProjectActions",
+                "golem_common::model::auth::ProjectActions",
+            ),
             ("PromiseId", "golem_common::model::PromiseId"),
             (
                 "PublicOplogEntry",

@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package golem.auth.v1;
 
+import public "golem/auth/account_action.proto";
 import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
 import public "golem/project/project.proto";
@@ -13,6 +14,7 @@ import public "golem/auth/v1/auth_error.proto";
 service CloudAuthService {
   rpc GetAccount (GetAccountRequest) returns (GetAccountResponse);
   rpc AuthorizeProjectAction (AuthorizeProjectActionRequest) returns (AuthorizeProjectActionResponse);
+  rpc AuthorizeAccountAction (AuthorizeAccountActionRequest) returns (AuthorizeAccountActionResponse);
 }
 
 message GetAccountRequest {
@@ -45,4 +47,19 @@ message AuthorizeProjectActionResponse {
 message AuthorizeProjectActionSuccessResponse {
     golem.common.AccountId own_accountId = 1;
     golem.common.AccountId project_owner_accountId = 2;
+}
+
+message AuthorizeAccountActionRequest {
+    golem.common.AccountId accountId = 1;
+    golem.auth.AccountAction action = 2;
+}
+
+message AuthorizeAccountActionResponse {
+  oneof result {
+      AuthorizeAccountActionSuccessResponse success = 1;
+      golem.auth.v1.AuthError error = 2;
+  }
+}
+
+message AuthorizeAccountActionSuccessResponse {
 }

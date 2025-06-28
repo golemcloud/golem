@@ -14,7 +14,7 @@
 
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
-use crate::model::{self, AccountAction};
+use crate::model;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::project;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
@@ -29,7 +29,7 @@ use golem_api_grpc::proto::golem::project::v1::{
 };
 use golem_api_grpc::proto::golem::project::Project;
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::auth::ProjectAction;
+use golem_common::model::auth::{AccountAction, ProjectAction};
 use golem_common::model::{AccountId, ProjectId};
 use golem_common::recorded_grpc_api_request;
 use golem_common::SafeDisplay;
@@ -77,6 +77,11 @@ impl From<project::ProjectError> for ProjectError {
             }
             project::ProjectError::LimitExceeded(_) => {
                 wrap_error(project_error::Error::LimitExceeded(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+            project::ProjectError::ProjectNotFound { .. } => {
+                wrap_error(project_error::Error::NotFound(ErrorBody {
                     error: value.to_safe_string(),
                 }))
             }

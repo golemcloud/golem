@@ -21,7 +21,7 @@ use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::model::{AccountId, ComponentId, ComponentType, ProjectId, RetryConfig};
 use golem_common::redis::RedisPool;
-use golem_service_base::clients::auth::{AuthServiceError, BaseAuthService};
+use golem_service_base::clients::auth::AuthServiceError;
 use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -104,7 +104,7 @@ impl TestAuthService {
 }
 
 #[async_trait]
-impl BaseAuthService for TestAuthService {
+impl AuthService for TestAuthService {
     async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError> {
         Ok(AccountId::from(ctx.token_secret.value.to_string().as_str()))
     }
@@ -120,10 +120,7 @@ impl BaseAuthService for TestAuthService {
             AccountId::from(ctx.token_secret.value.to_string().as_str()),
         ))
     }
-}
 
-#[async_trait]
-impl AuthService for TestAuthService {
     async fn is_authorized_by_component(
         &self,
         component_id: &ComponentId,

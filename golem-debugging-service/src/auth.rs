@@ -23,7 +23,7 @@ use golem_common::model::auth::ProjectAction;
 use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_common::retries::with_retries;
-use golem_service_base::clients::auth::{AuthServiceError, BaseAuthService, CloudAuthService};
+use golem_service_base::clients::auth::{AuthService as BaseAuthService, AuthServiceError};
 use golem_worker_executor::services::golem_config::ComponentServiceGrpcConfig;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
@@ -32,7 +32,16 @@ use tonic::Status;
 use tracing::error;
 
 #[async_trait]
-pub trait AuthService: BaseAuthService {
+pub trait AuthService: Send + Sync {
+    async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError>;
+
+    async fn authorize_project_action(
+        &self,
+        project_id: &ProjectId,
+        permission: ProjectAction,
+        ctx: &AuthCtx,
+    ) -> Result<Namespace, AuthServiceError>;
+
     async fn is_authorized_by_component(
         &self,
         component_id: &ComponentId,
@@ -90,16 +99,16 @@ impl From<golem_api_grpc::proto::golem::component::v1::ComponentError>
     }
 }
 
-pub struct AuthServiceDefault {
-    common_auth: CloudAuthService,
+pub struct GrpcAuthService {
+    common_auth: BaseAuthService,
     component_service_grpc_config: ComponentServiceGrpcConfig,
     component_service_client: GrpcClient<ComponentServiceClient<Channel>>,
     component_project_cache: Cache<ComponentId, (), ProjectId, String>,
 }
 
-impl AuthServiceDefault {
+impl GrpcAuthService {
     pub fn new(
-        common_auth: CloudAuthService,
+        common_auth: BaseAuthService,
         component_service_grpc_config: ComponentServiceGrpcConfig,
     ) -> Self {
         let component_service_client = GrpcClient::new(
@@ -206,7 +215,7 @@ impl AuthServiceDefault {
 }
 
 #[async_trait]
-impl BaseAuthService for AuthServiceDefault {
+impl AuthService for GrpcAuthService {
     async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError> {
         self.common_auth.get_account(ctx).await
     }
@@ -221,10 +230,7 @@ impl BaseAuthService for AuthServiceDefault {
             .authorize_project_action(project_id, permission, ctx)
             .await
     }
-}
 
-#[async_trait]
-impl AuthService for AuthServiceDefault {
     async fn is_authorized_by_component(
         &self,
         component_id: &ComponentId,

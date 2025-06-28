@@ -53,6 +53,10 @@ pub struct ProjectPolicyRecord {
     pub upsert_api_domain: bool,
     pub view_api_domain: bool,
     pub delete_api_domain: bool,
+    pub view_plugin_definition: bool,
+    pub create_plugin_definition: bool,
+    pub update_plugin_definition: bool,
+    pub delete_plugin_definition: bool,
 }
 
 impl From<ProjectPolicyRecord> for ProjectPolicy {
@@ -136,6 +140,18 @@ impl From<ProjectPolicyRecord> for ProjectPolicy {
         }
         if value.delete_api_domain {
             project_actions.insert(ProjectPermisison::DeleteApiDomain);
+        }
+        if value.view_plugin_definition {
+            project_actions.insert(ProjectPermisison::ViewPluginDefinition);
+        }
+        if value.create_plugin_definition {
+            project_actions.insert(ProjectPermisison::CreatePluginDefinition);
+        }
+        if value.update_plugin_definition {
+            project_actions.insert(ProjectPermisison::UpdatePluginDefinition);
+        }
+        if value.delete_plugin_definition {
+            project_actions.insert(ProjectPermisison::DeletePluginDefinition);
         }
 
         ProjectPolicy {
@@ -257,6 +273,22 @@ impl From<ProjectPolicy> for ProjectPolicyRecord {
                 .project_actions
                 .actions
                 .contains(&ProjectPermisison::DeleteApiDomain),
+            view_plugin_definition: value
+                .project_actions
+                .actions
+                .contains(&ProjectPermisison::ViewPluginDefinition),
+            create_plugin_definition: value
+                .project_actions
+                .actions
+                .contains(&ProjectPermisison::CreatePluginDefinition),
+            update_plugin_definition: value
+                .project_actions
+                .actions
+                .contains(&ProjectPermisison::UpdatePluginDefinition),
+            delete_plugin_definition: value
+                .project_actions
+                .actions
+                .contains(&ProjectPermisison::DeletePluginDefinition),
         }
     }
 }
@@ -303,7 +335,8 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
                 delete_project_grants, view_api_definition, create_api_definition, update_api_definition,
                 delete_api_definition, delete_project, view_plugin_installations, create_plugin_installation,
                 update_plugin_installation, delete_plugin_installation, upsert_api_deployment, view_api_deployment,
-                delete_api_deployment, upsert_api_domain, view_api_domain, delete_api_domain
+                delete_api_deployment, upsert_api_domain, view_api_domain, delete_api_domain,
+                view_plugin_definition, create_plugin_definition, update_plugin_definition, delete_plugin_definition
                 )
               VALUES
                 (
@@ -313,7 +346,8 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
                  $13, $14, $15, $16,
                  $17, $18, $19, $20,
                  $21, $22, $23, $24,
-                 $25, $26, $27, $28
+                 $25, $26, $27, $28,
+                 $29, $30, $31, $32
                 )
             "#,
              )
@@ -344,7 +378,11 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<golem_service_base::db::postgres:
             .bind(project_policy.delete_api_deployment)
             .bind(project_policy.upsert_api_domain)
             .bind(project_policy.view_api_domain)
-            .bind(project_policy.delete_api_domain);
+            .bind(project_policy.delete_api_domain)
+            .bind(project_policy.view_plugin_definition)
+            .bind(project_policy.create_plugin_definition)
+            .bind(project_policy.update_plugin_definition)
+            .bind(project_policy.delete_plugin_definition);
 
         self.db_pool
             .with_rw("project_policy", "create")
