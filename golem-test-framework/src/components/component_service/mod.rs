@@ -589,7 +589,7 @@ pub trait ComponentService: Send + Sync {
                 match client
                     .create_component(
                         &ComponentQuery {
-                            project_id: None,
+                            project_id: project_id.map(|pid| pid.0),
                             component_name: name.to_string(),
                         },
                         file,
