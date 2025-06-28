@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{as_std_path, as_unix_path};
 use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
@@ -38,6 +39,8 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use tracing::info;
+use unix_path::Path as UnixPath;
+use unix_path::PathBuf as UnixPathBuf;
 
 #[derive(Debug)]
 pub struct S3BlobStorage {
@@ -71,6 +74,19 @@ impl S3BlobStorage {
         }
     }
 
+    fn s3_key(
+        &self,
+        namespace: &BlobStorageNamespace,
+        path: &Path
+    ) -> UnixPathBuf {
+        // push of components is done to prevent mixed-separator paths
+        let mut pre = self.prefix_of(&namespace);
+        path.components().for_each(|comp| {
+           pre.push(comp.as_os_str().to_string_lossy().to_string());
+        });
+        pre
+    }
+
     fn bucket_of(&self, namespace: &BlobStorageNamespace) -> &String {
         match namespace {
             BlobStorageNamespace::CompilationCache => &self.config.compilation_cache_bucket,
@@ -87,20 +103,21 @@ impl S3BlobStorage {
         }
     }
 
-    fn prefix_of(&self, namespace: &BlobStorageNamespace) -> PathBuf {
+    fn prefix_of(&self, namespace: &BlobStorageNamespace) -> UnixPathBuf {
+        let mut base = UnixPathBuf::new();
+        if ! self.config.object_prefix.is_empty() {
+            base.push(&self.config.object_prefix);
+        }
         match namespace {
             BlobStorageNamespace::CompilationCache => {
-                Path::new(&self.config.object_prefix).to_path_buf()
+                // none
             }
+            BlobStorageNamespace::Components => {
+                // none
+            },
             BlobStorageNamespace::CustomStorage(account_id) => {
                 let account_id_string = account_id.to_string();
-                if self.config.object_prefix.is_empty() {
-                    Path::new(&account_id_string).to_path_buf()
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(account_id_string)
-                        .to_path_buf()
-                }
+                base.push(&account_id_string);
             }
             BlobStorageNamespace::OplogPayload {
                 account_id,
@@ -108,16 +125,8 @@ impl S3BlobStorage {
             } => {
                 let account_id_string = account_id.to_string();
                 let worker_id_string = worker_id.to_string();
-                if self.config.object_prefix.is_empty() {
-                    Path::new(&account_id_string)
-                        .join(worker_id_string)
-                        .to_path_buf()
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(account_id_string)
-                        .join(worker_id_string)
-                        .to_path_buf()
-                }
+                base.push(account_id_string);
+                base.push(worker_id_string);
             }
             BlobStorageNamespace::CompressedOplog {
                 account_id,
@@ -126,39 +135,21 @@ impl S3BlobStorage {
             } => {
                 let account_id_string = account_id.to_string();
                 let component_id_string = component_id.to_string();
-                if self.config.object_prefix.is_empty() {
-                    Path::new(&account_id_string)
-                        .join(component_id_string)
-                        .to_path_buf()
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(account_id_string)
-                        .join(component_id_string)
-                        .to_path_buf()
-                }
+                base.push(account_id_string);
+                base.push(component_id_string);
             }
             BlobStorageNamespace::InitialComponentFiles { account_id } => {
                 let account_id_string = account_id.to_string();
-                if self.config.object_prefix.is_empty() {
-                    PathBuf::from(&account_id_string)
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(account_id_string)
-                        .to_path_buf()
-                }
+                base.push(account_id_string);
             }
             BlobStorageNamespace::Components => Path::new(&self.config.object_prefix).to_path_buf(),
             BlobStorageNamespace::PluginWasmFiles { account_id } => {
                 let account_id_string = account_id.to_string();
-                if self.config.object_prefix.is_empty() {
-                    PathBuf::from(&account_id_string)
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(account_id_string)
-                        .to_path_buf()
-                }
+                base.push(account_id_string);
             }
         }
+
+        base.to_path_buf()
     }
 
     async fn list_objects(
@@ -168,6 +159,7 @@ impl S3BlobStorage {
         bucket: &str,
         prefix: &Path,
     ) -> Result<Vec<Object>, String> {
+        let u_path = as_unix_path( prefix );
         let mut result = Vec::new();
         let mut cont: Option<String> = None;
 
@@ -175,15 +167,15 @@ impl S3BlobStorage {
             let response = with_retries_customized(
                 target_label,
                 op_label,
-                Some(format!("{bucket} - {}", prefix.to_string_lossy())),
+                Some(format!("{bucket} - {}", u_path.to_string_lossy())),
                 &self.config.retries,
-                &(self.client.clone(), bucket, prefix, cont),
-                |(client, bucket, prefix, cont)| {
+                &(self.client.clone(), bucket, u_path.clone(), cont),
+                |(client, bucket, u_path, cont)| {
                     Box::pin(async move {
-                        let prefix = if prefix.to_string_lossy().ends_with('/') {
-                            prefix.to_string_lossy().to_string()
+                        let prefix = if u_path.to_string_lossy().ends_with('/') {
+                            u_path.to_string_lossy().strip_suffix("/").unwrap().to_string()
                         } else {
-                            format!("{}/", prefix.to_string_lossy())
+                            u_path.to_string_lossy().to_string()
                         };
                         client
                             .list_objects_v2()
@@ -324,7 +316,7 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<Option<Bytes>, String> {
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let key = self.s3_key(&namespace, path);
 
         let result = with_retries_customized(
             target_label,
@@ -372,7 +364,7 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let key = self.s3_key(&namespace, path);
 
         let result = with_retries_customized(
             target_label,
@@ -423,7 +415,7 @@ impl BlobStorage for S3BlobStorage {
         end: u64,
     ) -> Result<Option<Bytes>, String> {
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let key = self.s3_key(&namespace, path);
 
         let result = with_retries_customized(
             target_label,
@@ -472,7 +464,7 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<Option<BlobMetadata>, String> {
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let key = self.s3_key(&namespace, path);
         let op_id = format!("{bucket} - {key:?}");
 
         let file_head_result = with_retries_customized(
@@ -566,7 +558,7 @@ impl BlobStorage for S3BlobStorage {
         data: &[u8],
     ) -> Result<(), String> {
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let key = self.s3_key(&namespace, path);
 
         with_retries_customized(
             target_label,
@@ -603,13 +595,13 @@ impl BlobStorage for S3BlobStorage {
         stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
     ) -> Result<(), String> {
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let key = self.s3_key(&namespace, path);
 
         fn go<'a>(
             args: &'a (
                 Client,
                 &String,
-                PathBuf,
+                UnixPathBuf,
                 &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
             ),
         ) -> Pin<
@@ -668,7 +660,7 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<(), String> {
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let key = self.s3_key(&namespace, path);
 
         with_retries_customized(
             target_label,
@@ -709,7 +701,7 @@ impl BlobStorage for S3BlobStorage {
         let to_delete = paths
             .iter()
             .map(|path| {
-                let key = prefix.join(path);
+                let key = self.s3_key(&namespace, path);
                 ObjectIdentifier::builder()
                     .key(key.to_string_lossy())
                     .build()
@@ -756,7 +748,7 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<(), String> {
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let key = self.s3_key(&namespace, path);
         let marker = key.join("__dir_marker");
 
         with_retries_customized(
@@ -794,34 +786,54 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<Vec<PathBuf>, String> {
         let bucket = self.bucket_of(&namespace);
-        let namespace_root = self.prefix_of(&namespace);
-        let key = namespace_root.join(path);
+        let is_empty_path = path.to_str().unwrap() == "";
+
+        let unix_namespace_root = self.prefix_of(&namespace);
+        let namespace_root = format!("{}/", unix_namespace_root.display());
+
+        let unix_key = self.s3_key(&namespace, path);
+        let key = Path::new(unix_key.to_str().unwrap()); // keep content
 
         Ok(self
-            .list_objects(target_label, op_label, bucket, &key)
+            .list_objects(target_label, op_label, bucket, key)
             .await?
             .iter()
             .flat_map(|obj| obj.key.as_ref().map(|k| Path::new(k).to_path_buf()))
             .filter_map(|path| {
-                let is_dir_marker =
-                    path.file_name().and_then(|s| s.to_str()) == Some("__dir_marker");
-                let is_nested = path.parent() != Some(&key);
-                if is_nested {
-                    if is_dir_marker {
-                        path.parent().map(|p| p.to_path_buf())
-                    } else {
-                        None
-                    }
-                } else if is_dir_marker {
-                    None
+                if namespace_root != "/" {
+                    path.strip_prefix(&namespace_root)
+                        .ok()
+                        .map(|p| p.to_path_buf())
                 } else {
-                    Some(path)
+                    Some(path.to_path_buf())
                 }
             })
-            .filter_map(|path| {
-                path.strip_prefix(&namespace_root)
-                    .ok()
-                    .map(|p| p.to_path_buf())
+            .filter_map(|path_elem| {
+                let mut components = path_elem.components().collect::<Vec<_>>();
+                let has_prefix_key : bool = is_empty_path || components[0].as_os_str() == OsStr::new(path);
+                let has_marker_dir : bool = components.last().unwrap().as_os_str() == OsStr::new("__dir_marker");
+                let is_nested : bool = if is_empty_path {
+                    components.len() > 1
+                } else {
+                    components.len() > 2
+                };
+
+                if has_prefix_key {
+                    if is_nested && has_marker_dir {
+                        components.pop(); // remove __dir_marker
+
+                        // create actual path
+                        let mut newpath = PathBuf::new();
+                        components.iter().for_each( |comp| {
+                            newpath.push( comp );
+                        } );
+                        return Some( newpath );
+                    }
+                    if ! is_nested && ! has_marker_dir {
+                        return Some(path_elem);
+                    }
+                }
+                None
             })
             .collect::<Vec<_>>())
     }
@@ -834,7 +846,8 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<bool, String> {
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let unix_key = self.s3_key(&namespace, path);
+        let key = Path::new(unix_key.to_str().unwrap()); // keep content
 
         let to_delete = self
             .list_objects(target_label, op_label, bucket, &key)
@@ -892,7 +905,7 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<ExistsResult, String> {
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let key = self.s3_key(&namespace, path);
         let op_id = format!("{} - {:?}", bucket, key);
 
         let file_head_result = with_retries_customized(
@@ -966,8 +979,8 @@ impl BlobStorage for S3BlobStorage {
         to: &Path,
     ) -> Result<(), String> {
         let bucket = self.bucket_of(&namespace);
-        let from_key = self.prefix_of(&namespace).join(from);
-        let to_key = self.prefix_of(&namespace).join(to);
+        let from_key = self.s3_key(&namespace, from);
+        let to_key = self.s3_key(&namespace, to);
 
         with_retries_customized(
             target_label,

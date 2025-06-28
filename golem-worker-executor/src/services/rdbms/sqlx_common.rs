@@ -18,7 +18,7 @@ use crate::services::rdbms::{
     DbResult, DbResultStream, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey, RdbmsStatus,
     RdbmsType,
 };
-use async_dropper_simple::AsyncDrop;
+use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::future::BoxFuture;
@@ -167,9 +167,17 @@ where
     }
 
     fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
-        match self.pool_workers_cache.get_mut(key) {
-            Some(mut workers) => (*workers).remove(worker_id),
-            None => false,
+        if let dashmap::mapref::entry::Entry::Occupied(mut occupied) =
+            self.pool_workers_cache.entry(key.clone())
+        {
+            let removed = occupied.get_mut().remove(worker_id);
+            // cleanup empty entries
+            if removed && occupied.get().is_empty() {
+                occupied.remove();
+            }
+            removed
+        } else {
+            false
         }
     }
 
@@ -321,9 +329,9 @@ where
                 .await
                 .map_err(Error::query_execution_failure)?;
 
-            let db_transaction: Arc<dyn DbTransaction<T> + Send + Sync> = Arc::new(
-                SqlxDbTransaction::new(key.clone(), connection, self.config.query),
-            );
+            let tx = SqlxDbTransaction::new(key.clone(), connection, self.config.query);
+            let db_transaction: Arc<dyn DbTransaction<T> + Send + Sync> =
+                Arc::new(AsyncDropper::new(tx));
 
             Ok(db_transaction)
         };
@@ -728,6 +736,58 @@ where
 {
     async fn async_drop(&mut self) {
         let _ = SqlxDbTransaction::rollback_if_open(self).await;
+    }
+}
+
+#[async_trait]
+impl<T, DB> DbTransaction<T> for AsyncDropper<SqlxDbTransaction<T, DB>>
+where
+    T: RdbmsType + Sync + QueryExecutor<T, DB>,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
+{
+    async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait,
+    {
+        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::execute(self.inner().deref(), statement, params)
+            .await
+    }
+
+    async fn query(&self, statement: &str, params: Vec<T::DbValue>) -> Result<DbResult<T>, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait,
+    {
+        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::query(self.inner().deref(), statement, params)
+            .await
+    }
+
+    async fn query_stream(
+        &self,
+        statement: &str,
+        params: Vec<T::DbValue>,
+    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, Error>
+    where
+        <T as RdbmsType>::DbValue: 'async_trait,
+    {
+        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::query_stream(
+            self.inner().deref(),
+            statement,
+            params,
+        )
+            .await
+    }
+
+    async fn commit(&self) -> Result<(), Error> {
+        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::commit(self.inner().deref()).await
+    }
+
+    async fn rollback(&self) -> Result<(), Error> {
+        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::rollback(self.inner().deref()).await
+    }
+
+    async fn rollback_if_open(&self) -> Result<(), Error> {
+        <SqlxDbTransaction<T, DB> as DbTransaction<T>>::rollback_if_open(self.inner().deref()).await
     }
 }
 

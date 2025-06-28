@@ -16,8 +16,11 @@ use crate::{IntoValueAndType, Value, ValueAndType};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::io;
 use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
 use wasm_wave::{from_str, to_string};
+use wasm_wave::writer as wave_writer;
+use wasm_wave::writer::{WriterError};
 
 #[cfg(all(feature = "typeinfo", feature = "protobuf"))]
 pub use type_annotated_value::*;
@@ -31,7 +34,84 @@ pub fn parse_value_and_type(
 }
 
 pub fn print_value_and_type(value: &ValueAndType) -> Result<String, String> {
-    to_string(value).map_err(|err| err.to_string())
+    let mut buf = vec![];
+    let inner_writer = wave_writer::Writer::new(&mut buf);
+    let mut text_writer = TextWriter::new(inner_writer);
+
+    text_writer.write_value(value).map_err(|err| err.to_string())?;
+    Ok(String::from_utf8(buf).unwrap_or_else(|err| panic!("invalid UTF-8: {err:?}")))
+}
+
+/// A writer that serializes `WasmValue` implementors to the WAVE text format,
+/// by wrapping an existing `wasm_wave::writer::Writer`.
+pub struct TextWriter<W: io::Write> {
+    inner_wave_writer: wave_writer::Writer<W>,
+}
+
+impl<W: io::Write> TextWriter<W> {
+    /// Creates a new `TextWriter` from an existing `wave_writer::Writer<W>` instance.
+    /// The `wave_writer::Writer` itself wraps an `io::Write` sink.
+    pub fn new(inner_wave_writer: wave_writer::Writer<W>) -> Self {
+        Self { inner_wave_writer }
+    }
+
+    fn has_unsupported<V>(&mut self, val: &V) -> bool
+    where
+        V: WasmValue,
+    {
+        match val.kind() {
+            WasmTypeKind::List => val.unwrap_list().any(|item_cow| self.has_unsupported(item_cow.as_ref())),
+            WasmTypeKind::Record => val.unwrap_record().any(|(_, item_cow)| self.has_unsupported(item_cow.as_ref())),
+            WasmTypeKind::Tuple => val.unwrap_tuple().any(|item_cow| self.has_unsupported(item_cow.as_ref())),
+            WasmTypeKind::Variant => {
+                val.unwrap_variant().1.map_or(false, |inner_val_cow| self.has_unsupported(inner_val_cow.as_ref()))
+            }
+            WasmTypeKind::Option => val.unwrap_option().map_or(false, |inner_val_cow| self.has_unsupported(inner_val_cow.as_ref())),
+            WasmTypeKind::Result => {
+                match val.unwrap_result() {
+                    Ok(Some(ok_val_cow)) => self.has_unsupported(ok_val_cow.as_ref()),
+                    Err(Some(err_val_cow)) => self.has_unsupported(err_val_cow.as_ref()),
+                    _ => false, // Ok(None) or Err(None)
+                }
+            }
+            WasmTypeKind::Unsupported => true,
+            _ => false, // Primitives and other types
+        }
+    }
+
+    /// Writes a `WasmValue` to the underlying stream in WAVE text format.
+    ///
+    /// This method directly delegates to the `write_value` method of the wrapped
+    /// `wasm_wave::writer::Writer`.
+    ///
+    /// # Arguments
+    /// * `val`: A reference to a value that implements `WasmValue`.
+    ///
+    /// # Errors
+    /// Returns a `TextWriterError` if writing fails, typically by propagating
+    /// an error from the underlying `wasm-wave` writer or an IO error.
+    pub fn write_value<V>(&mut self, val: &V) -> Result<(), WriterError>
+    where
+        V: WasmValue,
+    {
+        if self.has_unsupported(val) {
+            let placeholder_value_and_type = ValueAndType::make_string(Cow::Borrowed("<unsupported>"));
+            return self.inner_wave_writer.write_value(&placeholder_value_and_type);
+        }
+        self.inner_wave_writer.write_value(val)?;
+        Ok(())
+    }
+
+    /// Gets a mutable reference to the underlying `io::Write` sink
+    /// originally wrapped by the `wave_writer::Writer`.
+    pub fn get_mut(&mut self) -> &mut W {
+        self.inner_wave_writer.as_mut()
+    }
+
+    /// Unwraps this `TextWriter`, returning the underlying `wasm_wave::writer::Writer<W>`.
+    pub fn into_wave_writer(self) -> wave_writer::Writer<W> {
+        self.inner_wave_writer
+    }
 }
 
 impl WasmValue for ValueAndType {
@@ -447,21 +527,34 @@ impl WasmValue for ValueAndType {
 mod tests {
     use test_r::test;
 
-    use crate::text::{parse_value_and_type, print_value_and_type};
+    use crate::text::{parse_value_and_type, print_value_and_type, TextWriter};
     use crate::{Value, ValueAndType};
     use golem_wasm_ast::analysis::analysed_type::{
         bool, case, chr, f32, f64, field, flags, list, option, r#enum, record, result_err,
         result_ok, s16, s32, s64, s8, str, tuple, u16, u32, u64, u8, unit_case, variant,
     };
     use golem_wasm_ast::analysis::AnalysedType;
+    use wasm_wave::writer as wave_writer; // For creating the wave_writer::Writer
 
     fn round_trip(value: Value, typ: AnalysedType) {
         let typed_value = ValueAndType::new(value.clone(), typ.clone());
 
-        let s = print_value_and_type(&typed_value).unwrap();
-        let round_trip_value: ValueAndType = parse_value_and_type(&typ, &s).unwrap();
-        let result: Value = Value::from(round_trip_value);
-        assert_eq!(value, result);
+        let s_via_to_string = print_value_and_type(&typed_value).unwrap();
+        let round_trip_value_from_string: ValueAndType =
+            parse_value_and_type(&typ, &s_via_to_string).unwrap();
+        assert_eq!(value, Value::from(round_trip_value_from_string));
+
+        let mut buffer = Vec::new();
+        let inner_writer = wave_writer::Writer::new(&mut buffer);
+        let mut text_writer = TextWriter::new(inner_writer);
+        text_writer.write_value(&typed_value).unwrap();
+        let s_via_writer = String::from_utf8(buffer).unwrap();
+
+        assert_eq!(s_via_to_string, s_via_writer, "Output from to_string and TextWriter should match");
+
+        let round_trip_value_from_writer: ValueAndType =
+            parse_value_and_type(&typ, &s_via_writer).unwrap();
+        assert_eq!(value, Value::from(round_trip_value_from_writer));
     }
 
     #[test]
@@ -637,6 +730,8 @@ mod type_annotated_value {
     use std::ops::Deref;
     use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
     use wasm_wave::{from_str, to_string};
+    use wasm_wave::writer::Writer;
+    use crate::text::TextWriter;
 
     pub fn parse_type_annotated_value(
         analysed_type: &AnalysedType,
@@ -649,12 +744,14 @@ mod type_annotated_value {
     }
 
     pub fn print_type_annotated_value(value: &TypeAnnotatedValue) -> Result<String, String> {
-        let printable_typed_value: TypeAnnotatedValuePrintable =
-            TypeAnnotatedValuePrintable(value.clone());
+        let mut buf = vec![];
+        let inner_writer = Writer::new(&mut buf);
+        let mut text_writer = TextWriter::new(inner_writer);
 
-        let typed_value_str = to_string(&printable_typed_value).map_err(|err| err.to_string())?;
+        let printable_typed_value = TypeAnnotatedValuePrintable(value.clone());
+        text_writer.write_value(&printable_typed_value).map_err(|err| err.to_string())?;
 
-        Ok(typed_value_str)
+        Ok(String::from_utf8(buf).unwrap_or_else(|err| panic!("invalid UTF-8: {err:?}")))
     }
 
     #[derive(Debug, Clone)]
@@ -666,13 +763,7 @@ mod type_annotated_value {
         fn kind(&self) -> WasmTypeKind {
             let analysed_type = AnalysedType::try_from(&self.0)
                 .expect("Failed to retrieve AnalysedType from TypeAnnotatedValue");
-            let kind = analysed_type.kind();
-            if kind == WasmTypeKind::Unsupported {
-                // Fake kind to avoid the printer to panic
-                WasmTypeKind::String
-            } else {
-                kind
-            }
+            analysed_type.kind()
         }
 
         fn make_bool(val: bool) -> Self {
@@ -878,7 +969,10 @@ mod type_annotated_value {
 
         fn make_option(ty: &Self::Type, val: Option<Self>) -> Result<Self, WasmValueError> {
             let option = TypedOption {
-                typ: Some(ty.into()),
+                typ: Some(match ty {
+                    AnalysedType::Option(opt_inner) => opt_inner.inner.as_ref().into(),
+                    _ => ty.into(),
+                }),
                 value: val.map(|v| {
                     Box::new(RootTypeAnnotatedValue {
                         type_annotated_value: Some(v.0),
@@ -1037,27 +1131,24 @@ mod type_annotated_value {
 
         fn unwrap_char(&self) -> char {
             match self.0 {
-                TypeAnnotatedValue::Char(value) => char::from_u32(value as u32).unwrap(),
+                TypeAnnotatedValue::Char(value) => char::from_u32(value as u32).unwrap_or_else(|| panic!("Invalid char value: {value}")),
                 _ => panic!("Expected chr, found {:?}", self),
             }
         }
 
         fn unwrap_string(&self) -> Cow<str> {
-            match self.0.clone() {
-                TypeAnnotatedValue::Str(value) => Cow::Owned(value.clone()),
-                TypeAnnotatedValue::Handle(handle) => {
-                    Cow::Owned(format!("{}/{}", handle.uri, handle.resource_id))
-                }
+            match &self.0 {
+                TypeAnnotatedValue::Str(value) => Cow::Borrowed(value),
                 _ => panic!("Expected string, found {:?}", self),
             }
         }
 
-        fn unwrap_list(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
-            match self.0.clone() {
+        fn unwrap_list(&self) -> Box<dyn Iterator<Item=Cow<Self>> + '_> {
+            match &self.0 {
                 TypeAnnotatedValue::List(TypedList { typ: _, values }) => {
-                    Box::new(values.into_iter().map(|v| {
+                    Box::new(values.iter().map(|v| {
                         Cow::Owned(TypeAnnotatedValuePrintable(
-                            v.type_annotated_value.as_ref().unwrap().clone(),
+                            v.type_annotated_value.as_ref().expect("List item value missing").clone(),
                         ))
                     }))
                 }
@@ -1065,15 +1156,15 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_record(&self) -> Box<dyn Iterator<Item = (Cow<str>, Cow<Self>)> + '_> {
-            match self.0.clone() {
+        fn unwrap_record(&self) -> Box<dyn Iterator<Item=(Cow<str>, Cow<Self>)> + '_> {
+            match &self.0 {
                 TypeAnnotatedValue::Record(TypedRecord { typ: _, value }) => {
-                    Box::new(value.into_iter().map(|name_value| {
-                        let name = name_value.name.clone();
+                    Box::new(value.iter().map(|name_value| {
+                        let name = Cow::Borrowed(name_value.name.as_str());
                         let type_annotated_value =
-                            name_value.value.unwrap().type_annotated_value.unwrap();
+                            name_value.value.as_ref().expect("Record field value missing").type_annotated_value.as_ref().expect("Record field inner value missing").clone();
                         (
-                            Cow::Owned(name),
+                            name,
                             Cow::Owned(TypeAnnotatedValuePrintable(type_annotated_value)),
                         )
                     }))
@@ -1082,14 +1173,14 @@ mod type_annotated_value {
             }
         }
 
-        fn unwrap_tuple(&self) -> Box<dyn Iterator<Item = Cow<Self>> + '_> {
-            match self.0.clone() {
+        fn unwrap_tuple(&self) -> Box<dyn Iterator<Item=Cow<Self>> + '_> {
+            match &self.0 {
                 TypeAnnotatedValue::Tuple(TypedTuple { typ: _, value }) => {
-                    Box::new(value.into_iter().map(|x| {
+                    Box::new(value.iter().map(|x| {
                         if let Some(ref v) = x.type_annotated_value {
                             Cow::Owned(TypeAnnotatedValuePrintable(v.clone()))
                         } else {
-                            panic!("Expected value, found None")
+                            panic!("Expected value in tuple element, found None")
                         }
                     }))
                 }
@@ -1098,11 +1189,11 @@ mod type_annotated_value {
         }
 
         fn unwrap_variant(&self) -> (Cow<str>, Option<Cow<Self>>) {
-            match self.0.clone() {
+            match &self.0 {
                 TypeAnnotatedValue::Variant(variant) => {
-                    let case_name = Cow::Owned(variant.case_name);
-                    let case_value = variant.case_value.clone().map(|v| {
-                        Cow::Owned(TypeAnnotatedValuePrintable(v.type_annotated_value.unwrap()))
+                    let case_name = Cow::Borrowed(variant.case_name.as_str());
+                    let case_value = variant.case_value.as_ref().map(|v| {
+                        Cow::Owned(TypeAnnotatedValuePrintable(v.type_annotated_value.as_ref().expect("Variant inner value missing").clone()))
                     });
                     (case_name, case_value)
                 }
@@ -1111,14 +1202,14 @@ mod type_annotated_value {
         }
 
         fn unwrap_enum(&self) -> Cow<str> {
-            match self.0.clone() {
-                TypeAnnotatedValue::Enum(TypedEnum { typ: _, value }) => Cow::Owned(value),
+            match &self.0 {
+                TypeAnnotatedValue::Enum(TypedEnum { typ: _, value }) => Cow::Borrowed(value),
                 _ => panic!("Expected enum, found {:?}", self),
             }
         }
 
         fn unwrap_option(&self) -> Option<Cow<Self>> {
-            match self.0.clone() {
+            match &self.0 {
                 TypeAnnotatedValue::Option(option) => option.value.as_ref().and_then(|v| {
                     v.type_annotated_value
                         .as_ref()
@@ -1129,32 +1220,32 @@ mod type_annotated_value {
         }
 
         fn unwrap_result(&self) -> Result<Option<Cow<Self>>, Option<Cow<Self>>> {
-            match self.0.clone() {
-                TypeAnnotatedValue::Result(result0) => match result0.result_value {
+            match &self.0 {
+                TypeAnnotatedValue::Result(result0) => match result0.result_value.as_ref() {
                     Some(result) => match result {
-                        ResultValue::OkValue(ok) => match ok.type_annotated_value {
+                        ResultValue::OkValue(ok) => match ok.type_annotated_value.as_ref() {
                             Some(ok_value) => {
-                                Ok(Some(Cow::Owned(TypeAnnotatedValuePrintable(ok_value))))
+                                Ok(Some(Cow::Owned(TypeAnnotatedValuePrintable(ok_value.clone()))))
                             }
                             None => Ok(None),
                         },
-                        ResultValue::ErrorValue(error) => match error.type_annotated_value {
+                        ResultValue::ErrorValue(error) => match error.type_annotated_value.as_ref() {
                             Some(error_value) => {
-                                Err(Some(Cow::Owned(TypeAnnotatedValuePrintable(error_value))))
+                                Err(Some(Cow::Owned(TypeAnnotatedValuePrintable(error_value.clone()))))
                             }
-                            None => Ok(None),
+                            None => Err(None),
                         },
                     },
-                    None => panic!("Expected ok, found None"),
+                    None => Ok(None),
                 },
                 _ => panic!("Expected result, found {:?}", self),
             }
         }
 
-        fn unwrap_flags(&self) -> Box<dyn Iterator<Item = Cow<str>> + '_> {
-            match self.0.clone() {
+        fn unwrap_flags(&self) -> Box<dyn Iterator<Item=Cow<str>> + '_> {
+            match &self.0 {
                 TypeAnnotatedValue::Flags(TypedFlags { typ: _, values }) => {
-                    Box::new(values.into_iter().map(Cow::Owned))
+                    Box::new(values.iter().map(|s| Cow::Borrowed(s.as_str())))
                 }
                 _ => panic!("Expected flags, found {:?}", self),
             }

@@ -13,13 +13,19 @@ impl Guest for Component {
         let ro_read_result: Option<String> = read_to_string("foo.txt").ok();
         println!("initial ro file write starting");
         let ro_write_result = write("foo.txt", "hello world").ok().map(|_| "success".to_string());
+
         println!("initial ro file permission change starting");
-        let ro_permission_change_result = {
-            let metadata = metadata("foo.txt").unwrap();
-            let mut permissions = metadata.permissions();
-            permissions.set_readonly(true);
-            set_permissions("foo.txt", permissions).ok().map(|_| "success".to_string())
-        };
+        let ro_permission_change_result = metadata("foo.txt")
+            .ok() // Converts Result<Metadata, Error> to Option<Metadata>. If Err, becomes None.
+            .and_then(|meta| { // If Some(meta), this closure is executed.
+                let mut permissions = meta.permissions();
+                permissions.set_readonly(true);
+                // set_permissions also returns a Result, so convert it to Option.
+                set_permissions("foo.txt", permissions)
+                    .ok() // Converts Result<(), Error> to Option<()>.
+                    .map(|_| "success".to_string()) // If successful (Some(())), map to Some("success").
+            });
+
         println!("initial rw file read starting");
         let rw_read_result: Option<String> = read_to_string("bar/baz.txt").ok();
         println!("initial rw file write starting");

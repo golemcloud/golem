@@ -42,7 +42,7 @@ use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_test_framework::components::worker_executor_cluster::WorkerExecutorCluster;
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
-use golem_test_framework::config::TestDependencies;
+use golem_test_framework::config::{EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies};
 use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 
 mod common;
@@ -195,15 +195,11 @@ impl Debug for WorkerExecutorTestDependencies {
 
 impl WorkerExecutorTestDependencies {
     pub async fn new() -> Self {
-        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
-            6379,
-            "".to_string(),
-            Level::INFO,
-            Level::ERROR,
-        ));
-        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
-            SpawnedRedisMonitor::new(redis.clone(), Level::TRACE, Level::ERROR),
-        );
+        let env_config = EnvBasedTestDependenciesConfig::new();
+        let env = EnvBasedTestDependencies::new( env_config ).await;
+
+        let redis: Arc<dyn Redis + Send + Sync + 'static> = env.redis();
+        let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = env.redis_monitor();
 
         let blob_storage = Arc::new(
             FileSystemBlobStorage::new(Path::new("data/blobs"))

@@ -506,19 +506,41 @@ impl ComponentService for TestComponentService {
 
 struct SqliteDb {
     db_path: String,
+    db_pool: SqlitePool,
 }
 
-impl Default for SqliteDb {
-    fn default() -> Self {
+impl SqliteDb {
+    async fn new() -> Self {
+        let db_path = format!("{}/golem-worker-{}.db", env::temp_dir().display(), Uuid::new_v4());
+        let db_config = DbSqliteConfig {
+            database: db_path.clone(),
+            max_connections: 10,
+        };
+
+        db::sqlite::migrate(
+            &db_config,
+            MigrationsDir::new("../golem-worker-service/db/migration".into()).sqlite_migrations(),
+        )
+        .await
+        .expect("Failed migration");
+
+        let db_pool = SqlitePool::configured(&db_config)
+            .await
+            .expect("Failed db configuration");
+
         Self {
-            db_path: format!("/tmp/golem-worker-{}.db", Uuid::new_v4()),
+            db_path,
+            db_pool,
         }
     }
 }
 
 impl Drop for SqliteDb {
     fn drop(&mut self) {
-        std::fs::remove_file(&self.db_path).unwrap();
+        futures::executor::block_on(self.db_pool.close());
+        if let Err(e) = std::fs::remove_file(&self.db_path) {
+            eprintln!("Warning: Failed to remove test database file '{}': {}", self.db_path, e);
+        }
     }
 }
 
@@ -634,13 +656,7 @@ pub async fn test_with_postgres_db() {
 
 #[test]
 pub async fn test_gateway_session_with_sqlite() {
-    let db = SqliteDb::default();
-    let db_config = DbSqliteConfig {
-        database: db.db_path.clone(),
-        max_connections: 10,
-    };
-
-    let db_pool = SqlitePool::configured(&db_config).await.unwrap();
+    let db = SqliteDb::new().await;
 
     let data_value = DataValue(serde_json::Value::String(
         Nonce::new_random().secret().to_string(),
@@ -650,7 +666,7 @@ pub async fn test_gateway_session_with_sqlite() {
         SessionId("test1".to_string()),
         DataKey::nonce(),
         data_value.clone(),
-        db_pool.clone(),
+        db.db_pool.clone(),
     )
     .await
     .expect("Expecting a value for longer expiry");
@@ -660,13 +676,7 @@ pub async fn test_gateway_session_with_sqlite() {
 
 #[test]
 pub async fn test_gateway_session_with_sqlite_expired() {
-    let db = SqliteDb::default();
-    let db_config = DbSqliteConfig {
-        database: db.db_path.clone(),
-        max_connections: 10,
-    };
-
-    let pool = SqlitePool::configured(&db_config).await.unwrap();
+    let db = SqliteDb::new().await;
 
     let data_value = DataValue(serde_json::Value::String(
         Nonce::new_random().secret().to_string(),
@@ -675,7 +685,7 @@ pub async fn test_gateway_session_with_sqlite_expired() {
     let expiration =
         SqliteGatewaySessionExpiration::new(Duration::from_secs(1), Duration::from_secs(1));
 
-    let sqlite_session = SqliteGatewaySession::new(pool.clone(), expiration.clone())
+    let sqlite_session = SqliteGatewaySession::new(db.db_pool.clone(), expiration.clone())
         .await
         .expect("Failed to create sqlite session");
 
@@ -689,7 +699,7 @@ pub async fn test_gateway_session_with_sqlite_expired() {
         .await
         .expect("Insert to session failed");
 
-    SqliteGatewaySession::cleanup_expired(pool, SqliteGatewaySession::current_time() + 10)
+    SqliteGatewaySession::cleanup_expired(db.db_pool.clone(), SqliteGatewaySession::current_time() + 10)
         .await
         .expect("Failed to cleanup expired sessions");
 
@@ -781,34 +791,20 @@ async fn insert_and_get_session_with_sqlite(
 
 #[test]
 pub async fn test_with_sqlite_db() {
-    let db = SqliteDb::default();
-    let db_config = DbSqliteConfig {
-        database: db.db_path.clone(),
-        max_connections: 10,
-    };
+    let db = SqliteDb::new().await;
 
-    db::sqlite::migrate(
-        &db_config,
-        MigrationsDir::new("../golem-worker-service/db/migration".into()).sqlite_migrations(),
-    )
-    .await
-    .unwrap();
+    let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
+        Arc::new(api_definition::DbApiDefinitionRepo::new(db.db_pool.clone()));
+    let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
+        Arc::new(api_deployment::DbApiDeploymentRepo::new(db.db_pool.clone()));
 
-    let db_pool = SqlitePool::configured(&db_config).await.unwrap();
-
-    let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo> =
-        Arc::new(api_definition::DbApiDefinitionRepo::new(db_pool.clone()));
-
-    let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo> =
-        Arc::new(api_deployment::DbApiDeploymentRepo::new(db_pool.clone()));
-
-    let security_scheme_repo: Arc<dyn SecuritySchemeRepo> =
-        Arc::new(DbSecuritySchemeRepo::new(db_pool.clone()));
+    let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
+        Arc::new(DbSecuritySchemeRepo::new(db.db_pool.clone()));
 
     let api_certificate_repo: Arc<dyn ApiCertificateRepo> =
-        Arc::new(DbApiCertificateRepo::new(db_pool.clone()));
+        Arc::new(DbApiCertificateRepo::new(db.db_pool.clone()));
 
-    let api_domain_repo: Arc<dyn ApiDomainRepo> = Arc::new(DbApiDomainRepo::new(db_pool.clone()));
+    let api_domain_repo: Arc<dyn ApiDomainRepo> = Arc::new(DbApiDomainRepo::new(db.db_pool.clone()));
 
     test_services(
         api_definition_repo,

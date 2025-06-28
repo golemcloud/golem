@@ -39,6 +39,12 @@ impl SpawnedRedis {
         )
     }
 
+    #[cfg(windows)]
+    pub fn new(_port: u16, _prefix: String, _out_level: Level, _err_level: Level) -> Self {
+        panic!( "Not supported on windows" );
+    }
+
+    #[cfg(not(windows))]
     pub fn new(port: u16, prefix: String, out_level: Level, err_level: Level) -> Self {
         info!("Starting Redis on port {}", port);
 

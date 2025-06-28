@@ -17,7 +17,9 @@ use async_trait::async_trait;
 use aws_config::meta::region::RegionProviderChain;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
+use aws_sdk_s3::types::{Delete, ObjectIdentifier};
 use aws_sdk_s3::Client;
+use aws_sdk_s3::{error::SdkError, Error};
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
@@ -32,16 +34,22 @@ use golem_service_base::storage::blob::*;
 use golem_service_base::storage::blob::{fs, memory, s3, BlobStorage, BlobStorageNamespace};
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::Debug;
+use std::io::empty;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
-use std::time::Duration;
 use tempfile::{tempdir, TempDir};
-use test_r::{define_matrix_dimension, test, test_dep};
+use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::ContainerAsync;
+use testcontainers::{ContainerAsync, ImageExt};
+use testcontainers::core::ContainerPort;
 use testcontainers_modules::minio::MinIO;
+use tracing::warn;
+use unix_path::Path as UnixPath;
+use unix_path::PathBuf as UnixPathBuf;
 use uuid::Uuid;
+use golem_service_base::storage::blob::as_std_path;
+use crate::Tracing;
 
 #[async_trait]
 trait GetBlobStorage: Debug {
@@ -110,36 +118,92 @@ impl Debug for S3Test {
 #[async_trait]
 impl GetBlobStorage for S3Test {
     async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
-        let container = tryhard::retry_fn(|| MinIO::default().start())
-            .retries(5)
-            .exponential_backoff(Duration::from_millis(10))
-            .max_delay(Duration::from_secs(10))
-            .await
-            .expect("Failed to start MinIO");
-        let host_port = container
-            .get_host_port_ipv4(9000)
-            .await
-            .expect("Failed to get host port");
+        let host_port = if let Some(port) = opt_env_var("MINIO_PORT") {
+            port.parse().expect("Failed to parse MINIO_PORT")
+        } else {
+            9000
+        };
+        let host_string_option = opt_env_var("MINIO_HOST");
+        let host = if let Some(path) = &host_string_option {
+            path.as_str()
+        } else {
+            "127.0.0.1"
+        };
 
         let config = S3BlobStorageConfig {
             retries: Default::default(),
             region: "us-east-1".to_string(),
             object_prefix: self.prefixed.clone().unwrap_or_default(),
-            aws_endpoint_url: Some(format!("http://127.0.0.1:{host_port}")),
+            aws_endpoint_url: Some(format!("http://{host}:{host_port}")),
             use_minio_credentials: true,
             ..std::default::Default::default()
         };
-        create_buckets(host_port, &config).await;
+        if let Some(golem_docker_services) = opt_env_var_bool("GOLEM_DOCKER_SERVICES") {
+            if golem_docker_services {
+                warn!("MinIO launched via docker at http://{host}:{host_port}");
+                let container = MinIO::default()
+                    .with_mapped_port(host_port, ContainerPort::Tcp(host_port))
+                    .start()
+                    .await
+                    .expect("Failed to start MinIO");
+
+                setup_buckets(host, host_port, &config).await;
+                let storage = s3::S3BlobStorage::new(config).await;
+
+                return Arc::new(S3BlobStorageWithContainer {
+                    storage,
+                    _container: container,
+                });
+            }
+        }
+
+        warn!("MinIO assumed to be provided at http://{host}:{host_port}");
+        setup_buckets(host, host_port, &config).await;
         let storage = s3::S3BlobStorage::new(config).await;
-        Arc::new(S3BlobStorageWithContainer {
-            storage,
-            _container: container,
-        })
+        Arc::new(storage)
     }
 }
 
-async fn create_buckets(host_port: u16, config: &S3BlobStorageConfig) {
-    let endpoint_uri = format!("http://127.0.0.1:{host_port}");
+pub async fn delete_all_objects(client: &Client, bucket_name: &str) -> Result<(), Error> {
+    let mut object_identifiers: Vec<ObjectIdentifier> = Vec::new();
+
+    let list_response = client.list_objects_v2().bucket(bucket_name).send().await?;
+
+    if let Some(contents) = list_response.contents {
+        for object in contents {
+            if let Some(key) = object.key {
+                object_identifiers.push( ObjectIdentifier::builder().key(key).build().unwrap() );
+            }
+        }
+    }
+
+    for chunk in object_identifiers.chunks(1000) {
+        let delete = Delete::builder()
+            .set_objects(Some(chunk.to_vec()))
+            .build()
+            .unwrap();
+
+        client
+            .delete_objects()
+            .bucket(bucket_name)
+            .delete(delete)
+            .send()
+            .await
+            .unwrap();
+    }
+
+    client
+        .delete_bucket()
+        .bucket(bucket_name)
+        .send()
+        .await
+        .ok();
+
+    Ok(())
+}
+
+async fn setup_buckets(host: &str, host_port: u16, config: &S3BlobStorageConfig) {
+    let endpoint_uri = format!("http://{host}:{host_port}");
     let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
     let creds = Credentials::new("minioadmin", "minioadmin", None, None, "test");
     let sdk_config = aws_config::defaults(BehaviorVersion::latest())
@@ -150,6 +214,23 @@ async fn create_buckets(host_port: u16, config: &S3BlobStorageConfig) {
         .await;
 
     let client = Client::new(&sdk_config);
+    // clear previous runs
+    delete_all_objects( &client, &config.compilation_cache_bucket )
+        .await
+        .ok();
+    delete_all_objects( &client, &config.custom_data_bucket )
+        .await
+        .ok();
+    delete_all_objects( &client, &config.oplog_payload_bucket )
+        .await
+        .ok();
+    for bucket in &config.compressed_oplog_buckets {
+        delete_all_objects( &client, bucket )
+            .await
+            .ok();
+    }
+
+    // recreate buckets
     client
         .create_bucket()
         .bucket(&config.compilation_cache_bucket)
@@ -181,6 +262,12 @@ struct S3BlobStorageWithContainer {
 impl Debug for S3BlobStorageWithContainer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "S3BlobStorageWithContainer")
+    }
+}
+
+impl Drop for S3BlobStorageWithContainer {
+    fn drop(&mut self) {
+        futures::executor::block_on(self._container.stop()).expect("TODO: panic message");
     }
 }
 
@@ -705,9 +792,9 @@ async fn list_dir(
 ) {
     let storage = test.get_blob_storage().await;
 
-    let path = Path::new("test-dir");
+    let path = UnixPath::new("test-dir");
     storage
-        .create_dir("list_dir", "create-dir", namespace.clone(), path)
+        .create_dir("list_dir", "create-dir", namespace.clone(), as_std_path(&path).as_path())
         .await
         .unwrap();
     storage
@@ -715,7 +802,7 @@ async fn list_dir(
             "list_dir",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file1"),
+            as_std_path(&path.join("test-file1")).as_path(),
             &Bytes::from("test-data1"),
         )
         .await
@@ -725,7 +812,7 @@ async fn list_dir(
             "list_dir",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file2"),
+            as_std_path(&path.join("test-file2")).as_path(),
             &Bytes::from("test-data2"),
         )
         .await
@@ -735,12 +822,12 @@ async fn list_dir(
             "list_dir",
             "create-dir",
             namespace.clone(),
-            &path.join("inner-dir"),
+            as_std_path(&path.join("inner-dir")).as_path(),
         )
         .await
         .unwrap();
     let mut entries = storage
-        .list_dir("list_dir", "entries", namespace.clone(), path)
+        .list_dir("list_dir", "entries", namespace.clone(), as_std_path(&path).as_path())
         .await
         .unwrap();
 
@@ -969,19 +1056,19 @@ async fn list_dir_same_prefix(
 ) {
     let storage = test.get_blob_storage().await;
 
-    let path1 = Path::new("test-dir");
-    let path2 = Path::new("test-dir2");
-    let path3 = Path::new("test-dir3");
+    let path1 = UnixPath::new("test-dir");
+    let path2 = UnixPath::new("test-dir2");
+    let path3 = UnixPath::new("test-dir3");
     storage
-        .create_dir("list_dir", "create-dir", namespace.clone(), path1)
+        .create_dir("list_dir", "create-dir", namespace.clone(), as_std_path(path1).as_path())
         .await
         .unwrap();
     storage
-        .create_dir("list_dir", "create-dir-2", namespace.clone(), path2)
+        .create_dir("list_dir", "create-dir-2", namespace.clone(), as_std_path(path2).as_path())
         .await
         .unwrap();
     storage
-        .create_dir("list_dir", "create-dir-3", namespace.clone(), path3)
+        .create_dir("list_dir", "create-dir-3", namespace.clone(), as_std_path(path3).as_path())
         .await
         .unwrap();
     storage
@@ -989,7 +1076,7 @@ async fn list_dir_same_prefix(
             "list_dir_same_prefix",
             "put-raw",
             namespace.clone(),
-            &path1.join("test-file1"),
+            as_std_path(&path1.join("test-file1")).as_path(),
             &Bytes::from("test-data1"),
         )
         .await
@@ -999,7 +1086,7 @@ async fn list_dir_same_prefix(
             "list_dir_same_prefix",
             "put-raw",
             namespace.clone(),
-            &path1.join("test-file2"),
+            as_std_path(&path1.join("test-file2")).as_path(),
             &Bytes::from("test-data2"),
         )
         .await
@@ -1009,12 +1096,12 @@ async fn list_dir_same_prefix(
             "list_dir_same_prefix",
             "create-dir",
             namespace.clone(),
-            &path1.join("inner-dir"),
+            as_std_path(&path1.join("inner-dir")).as_path(),
         )
         .await
         .unwrap();
     let mut entries = storage
-        .list_dir("list_dir_same_prefix", "entries", namespace.clone(), path1)
+        .list_dir("list_dir_same_prefix", "entries", namespace.clone(), as_std_path(path1).as_path())
         .await
         .unwrap();
 
@@ -1028,4 +1115,18 @@ async fn list_dir_same_prefix(
                 Path::new("test-dir/test-file2").to_path_buf(),
             ]
     );
+}
+
+fn opt_env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+fn opt_env_var_bool(name: &str) -> Option<bool> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| match value.as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        })
 }

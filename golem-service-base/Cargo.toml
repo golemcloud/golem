@@ -73,6 +73,7 @@ tonic = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+unix_path = "1.0.1"
 
 [dev-dependencies]
 assert2 = { workspace = true }

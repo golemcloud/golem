@@ -21,11 +21,29 @@ use golem_common::model::{AccountId, ComponentId, Timestamp, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
+use unix_path::Path as UnixPath;
+use unix_path::PathBuf as UnixPathBuf;
 
 pub mod fs;
 pub mod memory;
 pub mod s3;
 pub mod sqlite;
+
+pub fn as_std_path(u_path: &UnixPath) -> PathBuf {
+    let mut path = PathBuf::new();
+    for part in u_path.iter() {
+        path = path.join(part.to_str().unwrap());
+    }
+    path
+}
+
+pub fn as_unix_path(path: &Path) -> UnixPathBuf {
+    let mut u_path = UnixPathBuf::new();
+    for part in path.iter() {
+        u_path = u_path.join(part.to_str().unwrap());
+    }
+    u_path
+}
 
 #[async_trait]
 pub trait BlobStorage: Debug + Send + Sync {

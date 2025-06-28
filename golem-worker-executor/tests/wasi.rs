@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext};
+use crate::common::{start, TestContext, TestWorkerExecutor};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{assert, check};
 use axum::response::Response;
@@ -40,10 +40,16 @@ use tokio::spawn;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use tracing::{info, Instrument};
+use golem_test_framework::config::TestDependencies;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
+
+#[cfg(windows)]
+const LINE_ENDING: &'static str = "\r\n";
+#[cfg(not(windows))]
+const LINE_ENDING: &'static str = "\n";
 
 #[test]
 #[tracing::instrument]
@@ -274,16 +280,27 @@ async fn initial_file_read_write(
 
     drop(executor);
 
+    let foo_data = format!("foo{}", LINE_ENDING);
+    let baz_data = format!("baz{}", LINE_ENDING);
+
     check!(
         result
             == vec![Value::Tuple(vec![
-                Value::Option(Some(Box::new(Value::String("foo\n".to_string())))),
+                Value::Option(Some(Box::new(Value::String(foo_data)))),
                 Value::Option(None),
                 Value::Option(None),
-                Value::Option(Some(Box::new(Value::String("baz\n".to_string())))),
+                Value::Option(Some(Box::new(Value::String(baz_data)))),
                 Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
             ])]
     );
+}
+
+async fn get_file_size(executor: &TestWorkerExecutor, path: &str) -> u64 {
+    let source_path = executor.component_directory().join(path);
+    let meta = tokio::fs::metadata(source_path);
+
+    let size = meta.await.unwrap().len();
+    size
 }
 
 #[test]
@@ -295,6 +312,9 @@ async fn initial_file_listing_through_api(
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
+
+    let foo_file_size = get_file_size( &executor, "initial-file-read-write/files/foo.txt" ).await;
+    let baz_file_size = get_file_size( &executor, "initial-file-read-write/files/baz.txt" ).await;
 
     let component_files = executor
         .add_initial_component_files(
@@ -362,7 +382,7 @@ async fn initial_file_listing_through_api(
                     last_modified: SystemTime::UNIX_EPOCH,
                     details: ComponentFileSystemNodeDetails::File {
                         permissions: ComponentFilePermissions::ReadWrite,
-                        size: 4,
+                        size: baz_file_size,
                     }
                 },
                 ComponentFileSystemNode {
@@ -370,7 +390,7 @@ async fn initial_file_listing_through_api(
                     last_modified: SystemTime::UNIX_EPOCH,
                     details: ComponentFileSystemNodeDetails::File {
                         permissions: ComponentFilePermissions::ReadOnly,
-                        size: 4,
+                        size: foo_file_size,
                     }
                 },
             ]
@@ -435,7 +455,9 @@ async fn initial_file_reading_through_api(
 
     drop(executor);
 
-    check!(result1 == "foo\n");
+    let foo_data = format!("foo{}", LINE_ENDING);
+
+    check!(result1 == foo_data);
     check!(result2 == "hello world");
 }
 

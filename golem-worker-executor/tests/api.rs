@@ -2274,7 +2274,19 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
 
     executor.interrupt(&worker_id).await;
 
-    let _ = drain_connection(rx).await;
+    let mut found1 = false;
+    let mut found2 = false;
+    let previous_events = drain_connection(rx).await;
+    {
+        previous_events.into_iter().for_each( |event| {
+            let ev = event.unwrap();
+            if stdout_event_matching(&ev, "Calling the poll endpoint\n") {
+                found1 = true;
+            } else if stdout_event_matching(&ev, "Received initial\n") {
+                found2 = true;
+            }
+        } );
+    }
     let (status2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.resume(&worker_id, false).await;
@@ -2285,8 +2297,6 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
 
     // wait for one loop to finish
     {
-        let mut found1 = false;
-        let mut found2 = false;
         while !(found1 && found2) {
             match rx.recv().await {
                 Some(Some(event)) => {

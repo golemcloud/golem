@@ -64,6 +64,7 @@ use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
 use http::StatusCode;
 use rib::{FullyQualifiedFunctionName, FunctionName, InterfaceName, PackageName};
 use std::collections::{HashMap, HashSet};
+use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, test, test_dep};
@@ -104,7 +105,7 @@ fn component_compilation_service() -> Arc<dyn ComponentCompilationService> {
 #[test_dep]
 async fn blob_storage() -> Arc<dyn BlobStorage + Send + Sync> {
     Arc::new(
-        FileSystemBlobStorage::new(&PathBuf::from(format!("/tmp/blob-{}", Uuid::new_v4())))
+        FileSystemBlobStorage::new(&PathBuf::from(format!("{}/blob-{}", env::temp_dir().display(), Uuid::new_v4())))
             .await
             .expect("Failed to create blob storage"),
     )

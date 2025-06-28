@@ -28,6 +28,7 @@ use crate::components::redis::docker::DockerRedis;
 use crate::components::redis::provided::ProvidedRedis;
 use crate::components::redis::spawned::SpawnedRedis;
 use crate::components::redis::Redis;
+use crate::components::redis_monitor::docker::DockerRedisMonitor;
 use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use crate::components::redis_monitor::RedisMonitor;
 use crate::components::shard_manager::docker::DockerShardManager;
@@ -229,11 +230,19 @@ impl EnvBasedTestDependencies {
         config: Arc<EnvBasedTestDependenciesConfig>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
-        Arc::new(SpawnedRedisMonitor::new(
-            redis,
-            config.redis_monitor_stdout_level(),
-            config.redis_monitor_stderr_level(),
-        ))
+        if config.golem_docker_services {
+            Arc::new(DockerRedisMonitor::new(
+                redis,
+                config.redis_monitor_stdout_level(),
+                config.redis_monitor_stderr_level(),
+            ))
+        } else {
+            Arc::new(SpawnedRedisMonitor::new(
+                redis,
+                config.redis_monitor_stdout_level(),
+                config.redis_monitor_stderr_level(),
+            ))
+        }
     }
 
     async fn make_cloud_service(

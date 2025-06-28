@@ -25,6 +25,10 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
+    if deps.worker_service().client_protocol() != GolemClientProtocol::Http {
+        return assert!(false, "Test requires to select HTTP golem client protocol");
+    }
+
     let security_scheme = new_security_scheme();
 
     let created_security_scheme = deps
@@ -39,6 +43,10 @@ async fn create_api_security_scheme(deps: &EnvBasedTestDependencies) {
 #[test]
 #[tracing::instrument]
 async fn get_api_security_scheme(deps: &EnvBasedTestDependencies) {
+    if deps.worker_service().client_protocol() != GolemClientProtocol::Http {
+        return assert!(false, "Test requires to select HTTP golem client protocol");
+    }
+
     let security_scheme = new_security_scheme();
 
     deps.worker_service()

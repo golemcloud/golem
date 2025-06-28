@@ -31,22 +31,15 @@ use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
-use test_r::{test, test_dep};
+use test_r::{test, test_dep, timeout};
 use tokio::task::JoinSet;
 use tracing::{info, Instrument};
 use uuid::Uuid;
-
-#[test_dep]
-async fn postgres() -> DockerPostgresRdb {
-    let unique_network_id = Uuid::new_v4().to_string();
-    DockerPostgresRdb::new(&unique_network_id).await
-}
-
-#[test_dep]
-async fn mysql() -> DockerMysqlRdb {
-    let unique_network_id = Uuid::new_v4().to_string();
-    DockerMysqlRdb::new(&unique_network_id).await
-}
+use golem_test_framework::components::rdb::provided_postgres::ProvidedPostgresRdb;
+use golem_test_framework::components::rdb::{DbInfo, MysqlInfo, PostgresInfo, Rdb, RdbConnection};
+use golem_test_framework::components::rdb::provided_mysql::ProvidedMysqlRdb;
+use crate::common::{mysql_host, new_worker_id, postgres_host};
+use crate::compatibility::v1::worker_id;
 
 #[test_dep]
 fn rdbms_service() -> RdbmsServiceDefault {
@@ -206,10 +199,11 @@ impl<T: RdbmsType + Clone> RdbmsTest<T> {
 }
 
 #[test]
+#[timeout(300_000)]
 async fn postgres_transaction_tests(
-    postgres: &DockerPostgresRdb,
     rdbms_service: &RdbmsServiceDefault,
 ) {
+    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
@@ -326,10 +320,11 @@ async fn postgres_transaction_tests(
 }
 
 #[test]
+#[timeout(300_000)]
 async fn postgres_create_insert_select_test(
-    postgres: &DockerPostgresRdb,
     rdbms_service: &RdbmsServiceDefault,
 ) {
+    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
@@ -982,10 +977,11 @@ async fn postgres_create_insert_select_test(
 }
 
 #[test]
+#[timeout(300_000)]
 async fn postgres_create_insert_select_array_test(
-    postgres: &DockerPostgresRdb,
     rdbms_service: &RdbmsServiceDefault,
 ) {
+    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
@@ -1855,7 +1851,11 @@ async fn postgres_create_insert_select_array_test(
 }
 
 #[test]
-async fn postgres_schema_test(postgres: &DockerPostgresRdb, rdbms_service: &RdbmsServiceDefault) {
+#[timeout(300_000)]
+async fn postgres_schema_test(
+    rdbms_service: &RdbmsServiceDefault
+) {
+    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
     let rdbms = rdbms_service.postgres();
     let db_address = postgres.public_connection_string();
 
@@ -1888,7 +1888,11 @@ async fn postgres_schema_test(postgres: &DockerPostgresRdb, rdbms_service: &Rdbm
 }
 
 #[test]
-async fn mysql_transaction_tests(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefault) {
+#[timeout(300_000)]
+async fn mysql_transaction_tests(
+    rdbms_service: &RdbmsServiceDefault
+) {
+    let mysql = mysql_host( Some(rdbms_service.mysql().clone()) ).await;
     let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
 
@@ -2001,10 +2005,11 @@ async fn mysql_transaction_tests(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsSe
 }
 
 #[test]
+#[timeout(300_000)]
 async fn mysql_create_insert_select_test(
-    mysql: &DockerMysqlRdb,
     rdbms_service: &RdbmsServiceDefault,
 ) {
+    let mysql = mysql_host( Some(rdbms_service.mysql().clone()) ).await;
     let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
     let create_table_statement = r#"
@@ -2597,6 +2602,7 @@ fn check_test_results<T: RdbmsType + Clone>(
 }
 
 #[test]
+#[timeout(300_000)]
 async fn postgres_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
     rdbms_connection_err_test(
         rdbms_service.postgres(),
@@ -2614,10 +2620,11 @@ async fn postgres_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
 }
 
 #[test]
+#[timeout(300_000)]
 async fn postgres_query_err_test(
-    postgres: &DockerPostgresRdb,
     rdbms_service: &RdbmsServiceDefault,
 ) {
+    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
@@ -2656,10 +2663,11 @@ async fn postgres_query_err_test(
 }
 
 #[test]
+#[timeout(300_000)]
 async fn postgres_execute_err_test(
-    postgres: &DockerPostgresRdb,
     rdbms_service: &RdbmsServiceDefault,
 ) {
+    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
@@ -2690,7 +2698,11 @@ async fn postgres_execute_err_test(
 }
 
 #[test]
-async fn mysql_query_err_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefault) {
+#[timeout(300_000)]
+async fn mysql_query_err_test(
+    rdbms_service: &RdbmsServiceDefault
+) {
+    let mysql = mysql_host( Some(rdbms_service.mysql().clone()) ).await;
     let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
 
@@ -2717,7 +2729,11 @@ async fn mysql_query_err_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServi
 }
 
 #[test]
-async fn mysql_execute_err_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefault) {
+#[timeout(300_000)]
+async fn mysql_execute_err_test(
+    rdbms_service: &RdbmsServiceDefault
+) {
+    let mysql = mysql_host( Some(rdbms_service.mysql().clone()) ).await;
     let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
 
@@ -2735,6 +2751,7 @@ async fn mysql_execute_err_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsSer
 }
 
 #[test]
+#[timeout(300_000)]
 async fn mysql_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
     rdbms_connection_err_test(
         rdbms_service.mysql(),
@@ -2835,7 +2852,8 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
 }
 
 #[test]
-fn test_rdbms_pool_key_masked_address() {
+#[timeout(300_000)]
+async fn test_rdbms_pool_key_masked_address() {
     let key = RdbmsPoolKey::from("mysql://user:password@localhost:3306").unwrap();
     check!(key.masked_address() == "mysql://user:*****@localhost:3306");
     let key = RdbmsPoolKey::from("mysql://user@localhost:3306").unwrap();
@@ -2851,7 +2869,11 @@ fn test_rdbms_pool_key_masked_address() {
 }
 
 #[test]
-async fn mysql_par_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefault) {
+#[timeout(300_000)]
+async fn mysql_par_test(
+    rdbms_service: &RdbmsServiceDefault
+) {
+    let mysql = mysql_host( Some(rdbms_service.mysql().clone()) ).await;
     let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
     let mut db_addresses = create_test_databases(rdbms.clone(), &db_address, 3, |db_name| {
@@ -2873,7 +2895,11 @@ async fn mysql_par_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefa
 }
 
 #[test]
-async fn postgres_par_test(postgres: &DockerPostgresRdb, rdbms_service: &RdbmsServiceDefault) {
+#[timeout(60_000)]
+async fn postgres_par_test(
+    rdbms_service: &RdbmsServiceDefault
+) {
+    let postgres = postgres_host( Some(rdbms_service.postgres().clone()) ).await;
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
     let mut db_addresses = create_test_databases(rdbms.clone(), &db_address, 3, |db_name| {
@@ -2991,12 +3017,5 @@ async fn rdbms_par_test<T: RdbmsType + Clone + 'static>(
 
     for (worker_id, result) in workers_results {
         check_test_results(&worker_id, test.clone(), result);
-    }
-}
-
-fn new_worker_id() -> WorkerId {
-    WorkerId {
-        component_id: ComponentId::new_v4(),
-        worker_name: "test".to_string(),
     }
 }

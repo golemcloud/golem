@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ErasedReplayableStream;
+use super::{as_unix_path, ErasedReplayableStream};
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -24,6 +24,8 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
 };
+use unix_path::Path as UnixPath;
+use unix_path::PathBuf as UnixPathBuf;
 
 #[derive(Debug)]
 pub struct InMemoryBlobStorage {
@@ -59,11 +61,12 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Bytes>, String> {
-        let dir = path
+        let u_path = as_unix_path(path);
+        let dir = u_path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let key = path
+        let key = u_path
             .file_name()
             .expect("Path must have a file name")
             .to_string_lossy()
@@ -82,11 +85,12 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
-        let dir = path
+        let u_path = as_unix_path(path);
+        let dir = u_path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let key = path
+        let key = u_path
             .file_name()
             .expect("Path must have a file name")
             .to_string_lossy()
@@ -113,11 +117,12 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, String> {
-        let dir = path
+        let u_path = as_unix_path(path);
+        let dir = u_path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let key = path
+        let key = u_path
             .file_name()
             .expect("Path must have a file name")
             .to_string_lossy()
@@ -137,11 +142,12 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), String> {
-        let dir = path
+        let u_path = as_unix_path(path);
+        let dir = u_path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let key = path
+        let key = u_path
             .file_name()
             .expect("Path must have a file name")
             .to_string_lossy()
@@ -170,12 +176,13 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
     ) -> Result<(), String> {
-        let dir = path
+        let u_path = as_unix_path(path);
+        let dir = u_path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        let key = path
+        let key = u_path
             .file_name()
             .expect("Path must have a file name")
             .to_string_lossy()
@@ -211,11 +218,12 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), String> {
-        let dir = path
+        let u_path = as_unix_path(path);
+        let dir = u_path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let key = path
+        let key = u_path
             .file_name()
             .expect("Path must have a file name")
             .to_string_lossy()
@@ -236,7 +244,8 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), String> {
-        let dir = path.to_string_lossy().to_string();
+        let u_path = as_unix_path(path);
+        let dir = u_path.to_string_lossy().to_string();
         self.data
             .entry(namespace)
             .or_default()
@@ -252,7 +261,8 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, String> {
-        let dir = path.to_string_lossy().to_string();
+        let u_path = as_unix_path(path);
+        let dir = u_path.to_string_lossy().to_string();
 
         if let Some(namespace_data) = self.data.get(&namespace) {
             let mut result: Vec<PathBuf> = Vec::new();
@@ -260,9 +270,11 @@ impl BlobStorage for InMemoryBlobStorage {
                 let file_result: Vec<PathBuf> = directory
                     .iter()
                     .map(|entry| {
-                        let mut path = path.to_path_buf();
-                        path.push(entry.key());
-                        path
+                        let mut pathnew = UnixPathBuf::new();
+                        pathnew.push(path.to_str().unwrap());
+                        pathnew.push(entry.key().as_str());
+                        // this does not re-convert the path to os-separator, keeps expected unix
+                        Path::new(pathnew.to_str().unwrap()).to_path_buf()
                     })
                     .collect();
                 result.extend(file_result);
@@ -277,7 +289,12 @@ impl BlobStorage for InMemoryBlobStorage {
                 .iter()
                 .filter(|entry| entry.key() != &dir && entry.key().starts_with(&prefix))
                 .for_each(|entry| {
-                    result.push(Path::new(entry.key()).to_path_buf());
+                    let mut pathnew = UnixPathBuf::new();
+                    pathnew.push(entry.key().as_str());
+
+                    // this does not re-convert the path to os-separator, keeps expected unix
+                    let std_pathnew = Path::new(pathnew.to_str().unwrap()).to_path_buf();
+                    result.push( std_pathnew );
                 });
 
             Ok(result)
@@ -293,7 +310,8 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, String> {
-        let dir = path.to_string_lossy().to_string();
+        let u_path = as_unix_path(path);
+        let dir = u_path.to_string_lossy().to_string();
         let result = self
             .data
             .get(&namespace)
@@ -308,27 +326,28 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, String> {
+        let u_path = as_unix_path(path);
         if self
             .data
             .get(&namespace)
             .map(|namespace_data| {
-                namespace_data.contains_key::<str>(path.to_string_lossy().as_ref())
+                namespace_data.contains_key::<str>(u_path.to_string_lossy().as_ref())
             })
             .unwrap_or_default()
         {
             Ok(ExistsResult::Directory)
-        } else if path == Path::new("") {
+        } else if u_path == UnixPath::new("") {
             if self.data.get(&namespace).is_some() {
                 Ok(ExistsResult::Directory)
             } else {
                 Ok(ExistsResult::DoesNotExist)
             }
         } else {
-            let dir = path
+            let dir = u_path
                 .parent()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
-            let key = path
+            let key = u_path
                 .file_name()
                 .expect("Path must have a file name")
                 .to_string_lossy()

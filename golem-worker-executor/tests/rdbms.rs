@@ -15,10 +15,11 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::time::Duration;
-use test_r::{inherit_test_dep, test, test_dep};
+use test_r::{inherit_test_dep, test, test_dep, timeout};
 use tracing::Instrument;
 
-use crate::common::{start, TestContext, TestWorkerExecutor};
+use crate::common::{mysql_host, postgres_host, start, RdbMysqlHost, RdbPostgresHost, TestContext, TestWorkerExecutor};
+use golem_test_framework::components::rdb::RdbConnection;
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
@@ -27,8 +28,7 @@ use golem_common::model::public_oplog::{
     PublicOplogEntry, TimestampParameter, WriteRemoteBatchedParameters,
 };
 use golem_common::model::{ComponentId, IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
-use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
-use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
+use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type;
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -43,18 +43,6 @@ use uuid::Uuid;
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
-
-#[test_dep]
-async fn postgres() -> DockerPostgresRdb {
-    let unique_network_id = Uuid::new_v4().to_string();
-    DockerPostgresRdb::new(&unique_network_id).await
-}
-
-#[test_dep]
-async fn mysql() -> DockerMysqlRdb {
-    let unique_network_id = Uuid::new_v4().to_string();
-    DockerMysqlRdb::new(&unique_network_id).await
-}
 
 #[repr(u8)]
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
@@ -178,13 +166,14 @@ impl RdbmsTest {
 }
 
 #[test]
+#[timeout(300_000)]
 #[tracing::instrument]
 async fn rdbms_postgres_crud(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
+    let postgres = postgres_host( None ).await;
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
@@ -319,13 +308,14 @@ async fn rdbms_postgres_crud(
 }
 
 #[test]
+#[timeout(300_000)]
 #[tracing::instrument]
 async fn rdbms_postgres_idempotency(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
+    let postgres = postgres_host( None ).await;
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
@@ -525,13 +515,14 @@ fn postgres_get_expected(expected_values: Vec<(Uuid, String, String)>) -> serde_
 }
 
 #[test]
+#[timeout(300_000)]
 #[tracing::instrument]
 async fn rdbms_postgres_select1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
+    let postgres = postgres_host( None ).await;
     let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(1));
 
     let expected_rows: Vec<serde_json::Value> = vec![json!({
@@ -564,13 +555,14 @@ async fn rdbms_postgres_select1(
 }
 
 #[test]
+#[timeout(300_000)]
 #[tracing::instrument]
 async fn rdbms_mysql_crud(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
+    let mysql = mysql_host( None ).await;
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
@@ -707,13 +699,14 @@ async fn rdbms_mysql_crud(
 }
 
 #[test]
+#[timeout(300_000)]
 #[tracing::instrument]
 async fn rdbms_mysql_idempotency(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
+    let mysql = mysql_host( None ).await;
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
@@ -895,13 +888,14 @@ fn mysql_get_expected(expected_values: Vec<(String, String)>) -> serde_json::Val
 }
 
 #[test]
+#[timeout(300_000)]
 #[tracing::instrument]
 async fn rdbms_mysql_select1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
+    let mysql = mysql_host( None ).await;
     let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(0));
 
     let expected_rows: Vec<serde_json::Value> = vec![json!({

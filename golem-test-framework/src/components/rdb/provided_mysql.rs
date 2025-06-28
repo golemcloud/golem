@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::rdb::{DbInfo, PostgresInfo, Rdb};
+use crate::components::rdb::{DbInfo, MysqlInfo, Rdb, RdbConnection};
 use async_trait::async_trait;
 use tracing::info;
 
-pub struct ProvidedPostgresRdb {
-    info: PostgresInfo,
+pub struct ProvidedMysqlRdb {
+    info: MysqlInfo,
 }
 
-impl ProvidedPostgresRdb {
-    pub fn new(info: PostgresInfo) -> Self {
-        info!("Using provided Postgres database");
+impl ProvidedMysqlRdb {
+    pub fn new(info: MysqlInfo) -> Self {
+        info!("Using provided Mysql database");
 
         Self { info }
     }
@@ -32,7 +32,7 @@ impl ProvidedPostgresRdb {
     }
 
     pub fn public_connection_string_to_db(&self, db_name: &str) -> String {
-        let db_info = PostgresInfo {
+        let db_info = MysqlInfo {
             database_name: db_name.to_string(),
             ..self.info.clone()
         };
@@ -46,9 +46,9 @@ impl ProvidedPostgresRdb {
 }
 
 #[async_trait]
-impl Rdb for ProvidedPostgresRdb {
+impl Rdb for ProvidedMysqlRdb {
     fn info(&self) -> DbInfo {
-        DbInfo::Postgres(self.info.clone())
+        DbInfo::Mysql(self.info.clone())
     }
 
     async fn kill(&self) {}

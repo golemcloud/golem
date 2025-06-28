@@ -1,0 +1,7 @@
+{
+  "name": "golem",
+  "version": "1.0.0",
+  "dependencies": [
+    "protobuf"
+  ]
+}
