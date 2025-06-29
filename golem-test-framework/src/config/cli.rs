@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::cloud_service::docker::DockerCloudService;
 use crate::components::cloud_service::k8s::K8sCloudService;
 use crate::components::cloud_service::provided::ProvidedCloudService;
 use crate::components::cloud_service::spawned::SpawnedCloudService;
@@ -380,10 +379,10 @@ impl CliTestDependencies {
             Arc::new(DockerPostgresRdb::new(&unique_network_id).await);
 
         let cloud_service: Arc<dyn CloudService> = Arc::new(
-            DockerCloudService::new(
-                &unique_network_id,
-                rdb.clone(),
-                params.service_verbosity(),
+            ProvidedCloudService::new(
+                unique_network_id.clone(),
+                8084,
+                9095,
                 params.golem_client_protocol,
             )
             .await,

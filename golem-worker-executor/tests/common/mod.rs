@@ -52,7 +52,7 @@ use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
-    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
+    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig, RdbmsConfig,
     IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, ProjectServiceConfig,
     ProjectServiceDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
 };
@@ -103,14 +103,14 @@ use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::components::rdb::provided_mysql::ProvidedMysqlRdb;
 use golem_test_framework::components::rdb::provided_postgres::ProvidedPostgresRdb;
-use golem_worker_executor_base::services::rdbms::{Rdbms, RdbmsServiceDefault};
-use golem_worker_executor_base::services::rdbms::postgres::{
+use golem_worker_executor::services::rdbms::{Rdbms, RdbmsServiceDefault};
+use golem_worker_executor::services::rdbms::postgres::{
     types as postgres_types, PostgresType,
 };
-use golem_worker_executor_base::services::rdbms::mysql::{
+use golem_worker_executor::services::rdbms::mysql::{
     types as mysql_types, MysqlType
 };
-use golem_worker_executor_base::services::rdbms::RdbmsService;
+use golem_worker_executor::services::rdbms::RdbmsService;
 
 pub struct TestWorkerExecutor {
     _join_set: Option<JoinSet<anyhow::Result<()>>>,
@@ -1157,7 +1157,7 @@ pub async fn postgres_host( rdbms: Option<Arc<dyn Rdbms<PostgresType> + Send + S
     };
     let host = RdbPostgresHost {
         rdbms: if !rdbms.is_some() { PostgresType::new_rdbms( RdbmsConfig::default() ) } else { rdbms.unwrap() },
-        container: if docker_active { Some(futures::executor::block_on(DockerPostgresRdb::new())) } else { None },
+        container: if docker_active { Some(futures::executor::block_on(DockerPostgresRdb::new("test-net"))) } else { None },
         provided : if !docker_active {
             Some(ProvidedPostgresRdb::new(PostgresInfo {
                 public_host: "localhost".to_string(),
@@ -1183,7 +1183,7 @@ pub async fn mysql_host( rdbms: Option<Arc<dyn Rdbms<MysqlType> + Send + Sync>> 
     };
     let host = RdbMysqlHost {
         rdbms: if !rdbms.is_some() { MysqlType::new_rdbms( RdbmsConfig::default() ) } else { rdbms.unwrap() },
-        container: if docker_active { Some(futures::executor::block_on(DockerMysqlRdb::new())) } else { None },
+        container: if docker_active { Some(futures::executor::block_on(DockerMysqlRdb::new("test-net"))) } else { None },
         provided : if !docker_active {
             Some(ProvidedMysqlRdb::new(MysqlInfo {
                 private_host: "localhost".to_string(),

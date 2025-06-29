@@ -35,6 +35,7 @@ use http_body::SizeHint;
 use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
 use std::error::Error;
+use std::ffi::OsStr;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -142,7 +143,9 @@ impl S3BlobStorage {
                 let account_id_string = account_id.to_string();
                 base.push(account_id_string);
             }
-            BlobStorageNamespace::Components => Path::new(&self.config.object_prefix).to_path_buf(),
+            BlobStorageNamespace::Components => {
+                // none
+            },
             BlobStorageNamespace::PluginWasmFiles { account_id } => {
                 let account_id_string = account_id.to_string();
                 base.push(account_id_string);

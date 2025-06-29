@@ -15,7 +15,7 @@
 use crate::Tracing;
 use assert2::assert;
 use golem_client::model::{Provider, SecuritySchemeData};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::config::{EnvBasedTestDependencies, GolemClientProtocol, TestDependencies};
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 

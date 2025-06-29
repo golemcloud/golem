@@ -12,6 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{sequential_suite, test_dep};
+use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+
 pub mod blob_storage;
 
 test_r::enable!();
+
+sequential_suite!(blob_storage);
+
+#[derive(Debug)]
+pub struct Tracing;
+
+impl Tracing {
+    pub fn init() -> Self {
+        init_tracing_with_default_debug_env_filter(
+            &TracingConfig::test_pretty_without_time("service-base-tests")
+                .with_env_overrides(),
+        );
+        Self
+    }
+}
+
+#[test_dep]
+fn tracing() -> Tracing {
+    Tracing::init()
+}

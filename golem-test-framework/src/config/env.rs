@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::cloud_service::docker::DockerCloudService;
+use crate::components::cloud_service::provided::ProvidedCloudService;
 use crate::components::cloud_service::spawned::SpawnedCloudService;
 use crate::components::cloud_service::CloudService;
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
@@ -251,10 +251,10 @@ impl EnvBasedTestDependencies {
     ) -> Arc<dyn CloudService> {
         if config.golem_docker_services {
             Arc::new(
-                DockerCloudService::new(
-                    &config.unique_network_id,
-                    rdb,
-                    config.default_verbosity(),
+                ProvidedCloudService::new(
+                    config.unique_network_id.to_string(),
+                    8084,
+                    9095,
                     config.golem_client_protocol,
                 )
                 .await,
