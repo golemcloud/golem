@@ -467,7 +467,6 @@ async fn rdbms_postgres_idempotency(
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
-    // println!("{}", oplog_json.unwrap());
 
     check_transaction_oplog_entries::<PostgresType>(
         oplog,
@@ -547,7 +546,6 @@ async fn postgres_transaction_recovery_test(
 
     check_test_result(&worker_id, result1.clone(), insert_test.clone());
 
-    // println!("after insert");
     let select_test = if transaction_end == TransactionEnd::Commit {
         RdbmsTest::new(
             postgres_select_statements(&table_name, expected_values),
@@ -566,17 +564,14 @@ async fn postgres_transaction_recovery_test(
     .await;
 
     check_test_result(&worker_id, result1.clone(), select_test.clone());
-    // println!("after select");
+
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
-    // println!("{}", oplog_json.unwrap());
-
     workers_interrupt_test(&executor, worker_ids.clone()).await;
 
     drop(executor);
-    // println!("after executor drop");
 
     let executor = start(deps, &context).await.unwrap().into_admin();
 
@@ -607,8 +602,6 @@ async fn postgres_transaction_recovery_test(
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
-
-    // println!("{}", oplog_json.unwrap());
 
     check_transaction_oplog_entries::<PostgresType>(oplog, Some(expected_oplog_ends));
 
@@ -1184,7 +1177,6 @@ async fn rdbms_mysql_idempotency(
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
-    // println!("{}", oplog.unwrap());
 
     check_transaction_oplog_entries::<MysqlType>(
         oplog,
@@ -1317,7 +1309,6 @@ async fn mysql_transaction_recovery_test(
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
-    // println!("{}", oplog_json.unwrap());
 
     check_transaction_oplog_entries::<MysqlType>(oplog, Some(expected_oplog_ends));
 
