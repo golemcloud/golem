@@ -21,7 +21,7 @@ use sqlx::query::{Query, QueryAs};
 use sqlx::sqlite::{SqliteArguments, SqlitePoolOptions, SqliteQueryResult, SqliteRow};
 use sqlx::{Connection, Error, FromRow, IntoArguments, Sqlite, SqliteConnection};
 use std::time::Instant;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[derive(Clone, Debug)]
 pub struct SqlitePool {
@@ -72,7 +72,6 @@ impl SqlitePool {
 #[async_trait]
 impl super::Pool for SqlitePool {
     type LabelledApi = SqliteLabelledApi;
-    type LabelledTransaction = SqliteLabelledTransaction;
     type QueryResult = SqliteQueryResult;
     type Db = Sqlite;
     type Args<'a> = SqliteArguments<'a>;
@@ -87,6 +86,8 @@ impl super::Pool for SqlitePool {
 }
 
 pub struct SqliteLabelledTransaction {
+    svc_name: &'static str,
+    api_name: &'static str,
     tx: sqlx::Transaction<'static, Sqlite>,
     start: Instant,
 }
@@ -131,12 +132,27 @@ impl SqliteLabelledTransaction {
         Ok(query_as.fetch_all(&mut *self.tx).await?)
     }
 
-    async fn commit(self) -> Result<(), Error> {
-        self.tx.commit().await
+    pub async fn commit(self) -> Result<(), RepoError> {
+        SqliteLabelledApi::record(
+            self.svc_name,
+            self.api_name,
+            self.start,
+            self.tx.commit().await,
+        )
     }
 
-    async fn rollback(self) -> Result<(), Error> {
-        self.tx.rollback().await
+    pub async fn rollback(self) -> Result<(), RepoError> {
+        warn!(
+            svc_name = self.svc_name,
+            api_name = self.api_name,
+            "DB transaction rollback",
+        );
+        SqliteLabelledApi::record(
+            self.svc_name,
+            self.api_name,
+            self.start,
+            self.tx.rollback().await,
+        )
     }
 }
 
@@ -188,7 +204,30 @@ impl super::PoolApi for SqliteLabelledTransaction {
 }
 
 #[async_trait]
-impl super::LabelledPoolTransaction for SqliteLabelledTransaction {}
+impl super::LabelledPoolTransaction for SqliteLabelledTransaction {
+    async fn commit(self) -> Result<(), RepoError> {
+        SqliteLabelledApi::record(
+            self.svc_name,
+            self.api_name,
+            self.start,
+            self.tx.commit().await,
+        )
+    }
+
+    async fn rollback(self) -> Result<(), RepoError> {
+        warn!(
+            svc_name = self.svc_name,
+            api_name = self.api_name,
+            "DB transaction rollback",
+        );
+        SqliteLabelledApi::record(
+            self.svc_name,
+            self.api_name,
+            self.start,
+            self.tx.rollback().await,
+        )
+    }
+}
 
 pub struct SqliteLabelledApi {
     svc_name: &'static str,
@@ -202,7 +241,7 @@ impl SqliteLabelledApi {
         query: Query<'a, Sqlite, SqliteArguments<'a>>,
     ) -> Result<SqliteQueryResult, RepoError> {
         let start = Instant::now();
-        self.record(start, query.execute(&self.pool).await)
+        self.record_self(start, query.execute(&self.pool).await)
     }
 
     pub async fn fetch_optional<'a, A>(
@@ -213,7 +252,7 @@ impl SqliteLabelledApi {
         A: 'a + IntoArguments<'a, Sqlite>,
     {
         let start = Instant::now();
-        self.record(start, query.fetch_optional(&self.pool).await)
+        self.record_self(start, query.fetch_optional(&self.pool).await)
     }
 
     pub async fn fetch_optional_as<'a, O, A>(
@@ -225,7 +264,7 @@ impl SqliteLabelledApi {
         O: 'a + Send + Unpin + for<'r> FromRow<'r, SqliteRow>,
     {
         let start = Instant::now();
-        self.record(start, query_as.fetch_optional(&self.pool).await)
+        self.record_self(start, query_as.fetch_optional(&self.pool).await)
     }
 
     pub async fn fetch_all<'a, O, A>(
@@ -237,53 +276,47 @@ impl SqliteLabelledApi {
         O: 'a + Send + Unpin + for<'r> FromRow<'r, SqliteRow>,
     {
         let start = Instant::now();
-        self.record(start, query_as.fetch_all(&self.pool).await)
+        self.record_self(start, query_as.fetch_all(&self.pool).await)
     }
 
     pub async fn begin(&self) -> Result<SqliteLabelledTransaction, RepoError> {
         let tx = self.pool.begin().await?;
         Ok(SqliteLabelledTransaction {
+            svc_name: self.svc_name,
+            api_name: self.api_name,
             tx,
             start: Instant::now(),
         })
     }
 
-    pub async fn commit(&self, tx: SqliteLabelledTransaction) -> Result<(), RepoError> {
-        let start = tx.start;
-        let result = tx.commit().await;
-        self.record(start, result)
-    }
-
-    pub async fn rollback(&self, tx: SqliteLabelledTransaction) -> Result<(), RepoError> {
-        let start = tx.start;
-        let result = tx.rollback().await;
-        self.record(start, result)
-    }
-
-    fn record<R>(&self, start: Instant, result: Result<R, Error>) -> Result<R, RepoError> {
+    fn record<R>(
+        svc_name: &'static str,
+        api_name: &'static str,
+        start: Instant,
+        result: Result<R, Error>,
+    ) -> Result<R, RepoError> {
         let end = Instant::now();
         match result {
             Ok(result) => {
-                record_db_success(
-                    "sqlite",
-                    self.svc_name,
-                    self.api_name,
-                    end.duration_since(start),
-                );
+                record_db_success("sqlite", svc_name, api_name, end.duration_since(start));
                 Ok(result)
             }
             Err(err) => {
                 error!(
-                    svc_name = self.svc_name,
-                    api_name = self.api_name,
+                    svc_name = svc_name,
+                    api_name = api_name,
                     duration = end.duration_since(start).as_millis(),
                     error = format!("{err:#}"),
                     "DB query failed",
                 );
-                record_db_failure("sqlite", self.svc_name, self.api_name);
+                record_db_failure("sqlite", svc_name, api_name);
                 Err(err.into())
             }
         }
+    }
+
+    fn record_self<R>(&self, start: Instant, result: Result<R, Error>) -> Result<R, RepoError> {
+        Self::record(self.svc_name, self.api_name, start, result)
     }
 }
 
@@ -340,14 +373,6 @@ impl super::LabelledPoolApi for SqliteLabelledApi {
 
     async fn begin(&self) -> Result<Self::LabelledTransaction, RepoError> {
         SqliteLabelledApi::begin(self).await
-    }
-
-    async fn commit(&self, tx: Self::LabelledTransaction) -> Result<(), RepoError> {
-        SqliteLabelledApi::commit(self, tx).await
-    }
-
-    async fn rollback(&self, tx: Self::LabelledTransaction) -> Result<(), RepoError> {
-        SqliteLabelledApi::rollback(self, tx).await
     }
 }
 

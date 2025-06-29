@@ -28,7 +28,7 @@ use golem_common::model::{
 use golem_common::repo::ComponentOwnerRow;
 use golem_common::repo::ComponentPluginInstallationRow;
 use golem_common::repo::PluginOwnerRow;
-use golem_service_base::db::{Pool, PoolApi};
+use golem_service_base::db::{LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::model::ComponentName;
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
@@ -712,10 +712,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             let namespace: String = result.get("namespace");
             let name: String = result.get("name");
             if namespace != component.namespace || name != component.name {
-                self.db_pool
-                    .with_rw("component", "create")
-                    .rollback(transaction)
-                    .await?;
+                transaction.rollback().await?;
                 return Err(RepoError::Internal(
                     "Component namespace and name invalid".to_string(),
                 ));
@@ -738,10 +735,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             if let Err(err) = result {
                 // Without this explicit rollback, sqlite seems to be remain locked when a next
                 // incoming request comes in.
-                self.db_pool
-                    .with_rw("component", "create")
-                    .rollback(transaction)
-                    .await?;
+                transaction.rollback().await?;
                 return Err(err);
             }
         }
@@ -787,10 +781,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             transaction.execute(query).await?;
         }
 
-        self.db_pool
-            .with_rw("component", "create")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -816,10 +807,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         if let Some(result) = result {
             let existing_namespace: String = result.get("namespace");
             if existing_namespace != namespace {
-                self.db_pool
-                    .with_rw("component", "update")
-                    .rollback(transaction)
-                    .await?;
+                transaction.rollback().await?;
                 Err(RepoError::Internal(
                     "Component namespace invalid".to_string(),
                 ))
@@ -932,10 +920,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                     transaction.execute(query).await?;
                 }
 
-                self.db_pool
-                    .with_rw("component", "update")
-                    .commit(transaction)
-                    .await?;
+                transaction.commit().await?;
 
                 let component = self
                     .get_by_version(namespace, component_id, new_version as u64)
@@ -946,10 +931,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                 ))
             }
         } else {
-            self.db_pool
-                .with_rw("component", "update")
-                .rollback(transaction)
-                .await?;
+            transaction.rollback().await?;
             Err(RepoError::Internal(
                 "Component not found for update".to_string(),
             ))
@@ -1685,11 +1667,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                 .bind(component_id);
 
         transaction.execute(query).await?;
-
-        self.db_pool
-            .with_rw("component", "delete")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -1762,10 +1740,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             }
         }
 
-        self.db_pool
-            .with_rw("component", "delete_constraints")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
 
         Ok(())
     }
@@ -1839,10 +1814,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             transaction.execute(query).await?;
         }
 
-        self.db_pool
-            .with_rw("component", "create_or_update_constraint")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
 
         Ok(())
     }
@@ -2020,10 +1992,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             transaction.execute(query).await?;
         }
 
-        self.db_pool
-            .with_rw("component", "apply_plugin_installation_changes")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
 
         Ok(new_version as u64)
     }

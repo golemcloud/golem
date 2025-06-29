@@ -1,19 +1,12 @@
 [package]
-name = "golem-component-service"
+name = "golem-registry-service"
 version = "0.0.0"
 edition = "2021"
 
-homepage = "https://golem.cloud"
-repository = "https://github.com/golemcloud/golem"
-description = "Golem Component Service"
-
-license-file = "../LICENSE"
-
 [[bin]]
-name = "golem-component-service"
+name = "golem-registry-service"
 path = "src/server.rs"
 harness = false
-test = false
 
 [lib]
 path = "src/lib.rs"
@@ -21,6 +14,7 @@ harness = false
 
 [[test]]
 name = "tests"
+path = "tests/lib.rs"
 harness = false
 
 [dependencies]
@@ -31,10 +25,12 @@ golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
 golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
 golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
 
-anyhow = { workspace = true }
+assert2 = { workspace = true }
 async-trait = { workspace = true }
-async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
-bincode = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+bigdecimal = "0.4.2"
+blake3 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
@@ -45,24 +41,30 @@ futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
-include_dir = { workspace = true }
+hyper = { workspace = true }
+indoc = { workspace = true }
+jsonwebtoken = "9.2.0"
 lazy_static = { workspace = true }
-mappable-rc = { workspace = true }
+mappable-rc = "0.1.1"
+num-traits = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
-poem = { workspace = true, features = ["prometheus", "opentelemetry"] }
+poem = { workspace = true, features = [
+    "prometheus",
+    "opentelemetry",
+    "cookie",
+    "test",
+] }
 poem-derive = { workspace = true }
 poem-openapi = { workspace = true }
 poem-openapi-derive = { workspace = true }
 prometheus = { workspace = true }
-prost = { workspace = true }
-prost-types = { workspace = true }
-reqwest = { workspace = true }
-sanitize-filename = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sqlx = { workspace = true, features = [
+serde_with = "3.5.0"
+sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "sqlite",
     "postgres",
@@ -70,6 +72,8 @@ sqlx = { workspace = true, features = [
     "migrate",
     "chrono",
 ] }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 tap = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
@@ -81,13 +85,12 @@ tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-tracing-futures = { workspace = true, features = ["futures-03"] }
+tryhard = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-wac-graph = { workspace = true }
 
 [dev-dependencies]
+futures = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
-tryhard = { workspace = true }

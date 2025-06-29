@@ -22,7 +22,7 @@ use sqlx::postgres::{PgArguments, PgPoolOptions, PgQueryResult, PgRow};
 use sqlx::query::{Query, QueryAs};
 use sqlx::{Connection, Error, Executor, FromRow, IntoArguments, PgConnection, Postgres};
 use std::time::Instant;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 #[derive(Clone, Debug)]
 pub struct PostgresPool {
@@ -69,7 +69,6 @@ impl PostgresPool {
 #[async_trait]
 impl super::Pool for PostgresPool {
     type LabelledApi = PostgresLabelledApi;
-    type LabelledTransaction = ();
     type QueryResult = PgQueryResult;
     type Db = Postgres;
     type Args<'a> = PgArguments;
@@ -84,6 +83,8 @@ impl super::Pool for PostgresPool {
 }
 
 pub struct PostgresLabelledTransaction {
+    svc_name: &'static str,
+    api_name: &'static str,
     tx: sqlx::Transaction<'static, Postgres>,
     start: Instant,
 }
@@ -126,14 +127,6 @@ impl PostgresLabelledTransaction {
         O: 'a + Send + Unpin + for<'r> FromRow<'r, PgRow>,
     {
         Ok(query_as.fetch_all(&mut *self.tx).await?)
-    }
-
-    async fn commit(self) -> Result<(), Error> {
-        self.tx.commit().await
-    }
-
-    async fn rollback(self) -> Result<(), Error> {
-        self.tx.rollback().await
     }
 }
 
@@ -185,7 +178,30 @@ impl super::PoolApi for PostgresLabelledTransaction {
 }
 
 #[async_trait]
-impl super::LabelledPoolTransaction for PostgresLabelledTransaction {}
+impl super::LabelledPoolTransaction for PostgresLabelledTransaction {
+    async fn commit(self) -> Result<(), RepoError> {
+        PostgresLabelledApi::record(
+            self.svc_name,
+            self.api_name,
+            self.start,
+            self.tx.commit().await,
+        )
+    }
+
+    async fn rollback(self) -> Result<(), RepoError> {
+        warn!(
+            svc_name = self.svc_name,
+            api_name = self.api_name,
+            "DB transaction rollback",
+        );
+        PostgresLabelledApi::record(
+            self.svc_name,
+            self.api_name,
+            self.start,
+            self.tx.rollback().await,
+        )
+    }
+}
 
 pub struct PostgresLabelledApi {
     svc_name: &'static str,
@@ -199,7 +215,7 @@ impl PostgresLabelledApi {
         query: Query<'_, Postgres, PgArguments>,
     ) -> Result<PgQueryResult, RepoError> {
         let start = Instant::now();
-        self.record(start, query.execute(&self.pool).await)
+        self.record_self(start, query.execute(&self.pool).await)
     }
 
     pub async fn fetch_optional<'a, A>(
@@ -210,7 +226,7 @@ impl PostgresLabelledApi {
         A: 'a + IntoArguments<'a, Postgres>,
     {
         let start = Instant::now();
-        self.record(start, query.fetch_optional(&self.pool).await)
+        self.record_self(start, query.fetch_optional(&self.pool).await)
     }
 
     pub async fn fetch_optional_as<'a, O, A>(
@@ -222,7 +238,7 @@ impl PostgresLabelledApi {
         O: 'a + Send + Unpin + for<'r> FromRow<'r, PgRow>,
     {
         let start = Instant::now();
-        self.record(start, query_as.fetch_optional(&self.pool).await)
+        self.record_self(start, query_as.fetch_optional(&self.pool).await)
     }
 
     pub async fn fetch_all<'a, O, A>(
@@ -234,59 +250,53 @@ impl PostgresLabelledApi {
         O: 'a + Send + Unpin + for<'r> FromRow<'r, PgRow>,
     {
         let start = Instant::now();
-        self.record(start, query_as.fetch_all(&self.pool).await)
+        self.record_self(start, query_as.fetch_all(&self.pool).await)
     }
 
     pub async fn begin(&self) -> Result<PostgresLabelledTransaction, RepoError> {
         let tx = self.pool.begin().await?;
         Ok(PostgresLabelledTransaction {
+            svc_name: self.svc_name,
+            api_name: self.api_name,
             tx,
             start: Instant::now(),
         })
     }
 
-    pub async fn commit(&self, tx: PostgresLabelledTransaction) -> Result<(), RepoError> {
-        let start = tx.start;
-        let result = tx.commit().await;
-        self.record(start, result)
-    }
-
-    pub async fn rollback(&self, tx: PostgresLabelledTransaction) -> Result<(), RepoError> {
-        let start = tx.start;
-        let result = tx.rollback().await;
-        self.record(start, result)
-    }
-
-    fn record<R>(&self, start: Instant, result: Result<R, Error>) -> Result<R, RepoError> {
+    fn record<R>(
+        svc_name: &'static str,
+        api_name: &'static str,
+        start: Instant,
+        result: Result<R, Error>,
+    ) -> Result<R, RepoError> {
         let end = Instant::now();
         match result {
             Ok(result) => {
                 debug!(
-                    svc_name = self.svc_name,
-                    api_name = self.api_name,
+                    svc_name,
+                    api_name,
                     duration = end.duration_since(start).as_millis(),
                     "DB query executed successfully"
                 );
-                record_db_success(
-                    "postgres",
-                    self.svc_name,
-                    self.api_name,
-                    end.duration_since(start),
-                );
+                record_db_success("postgres", svc_name, api_name, end.duration_since(start));
                 Ok(result)
             }
             Err(err) => {
                 error!(
-                    svc_name = self.svc_name,
-                    api_name = self.api_name,
+                    svc_name,
+                    api_name,
                     duration = end.duration_since(start).as_millis(),
                     error = format!("{err:#}"),
                     "DB query failed",
                 );
-                record_db_failure("postgres", self.svc_name, self.api_name);
+                record_db_failure("postgres", svc_name, api_name);
                 Err(err.into())
             }
         }
+    }
+
+    fn record_self<R>(&self, start: Instant, result: Result<R, Error>) -> Result<R, RepoError> {
+        Self::record(self.svc_name, self.api_name, start, result)
     }
 }
 
@@ -344,14 +354,6 @@ impl super::LabelledPoolApi for PostgresLabelledApi {
     async fn begin(&self) -> Result<Self::LabelledTransaction, RepoError> {
         PostgresLabelledApi::begin(self).await
     }
-
-    async fn commit(&self, tx: Self::LabelledTransaction) -> Result<(), RepoError> {
-        PostgresLabelledApi::commit(self, tx).await
-    }
-
-    async fn rollback(&self, tx: Self::LabelledTransaction) -> Result<(), RepoError> {
-        PostgresLabelledApi::rollback(self, tx).await
-    }
 }
 
 pub async fn migrate(
@@ -369,6 +371,8 @@ pub async fn migrate(
     conn.execute(sqlx::query(&sql)).await?;
     let sql = format!("SET SCHEMA '{schema}';");
     conn.execute(sqlx::query(&sql)).await?;
+
+    // TODO: why? do we not trust the code above?
     // check if schema exists
     let sql = format!(
         "SELECT schema_name FROM information_schema.schemata WHERE schema_name = '{schema}';"
