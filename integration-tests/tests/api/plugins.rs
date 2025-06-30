@@ -34,7 +34,7 @@ use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use reqwest::StatusCode;
 use std::collections::HashMap;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, tag, test};
 use tracing::{debug, info};
 use wac_graph::types::Package;
 use wac_graph::{plug, CompositionGraph, EncodeOptions, Processor};
@@ -856,6 +856,7 @@ async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing:
 }
 
 #[test]
+#[tag(http_only)]
 async fn querying_plugins_return_only_plugins_valid_in_scope(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -1032,6 +1033,7 @@ async fn querying_plugins_return_only_plugins_valid_in_scope(
 }
 
 #[test]
+#[tag(http_only)]
 async fn install_global_plugin_in_shared_project(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -1087,6 +1089,7 @@ async fn install_global_plugin_in_shared_project(
 }
 
 #[test]
+#[tag(http_only)]
 async fn install_project_plugin_in_shared_project(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -1148,6 +1151,7 @@ async fn install_project_plugin_in_shared_project(
 }
 
 #[test]
+#[tag(http_only)]
 async fn install_component_plugin_in_shared_project(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
