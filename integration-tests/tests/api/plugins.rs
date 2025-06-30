@@ -18,6 +18,7 @@ use axum::extract::Multipart;
 use axum::routing::post;
 use axum::Router;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
+use golem_client::api::PluginClient;
 use golem_common::model::plugin::{
     AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
     OplogProcessorDefinition, PluginTypeSpecificDefinition,
@@ -848,4 +849,126 @@ async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing:
         .await;
 
     assert_eq!(response, Ok(vec![Value::U64(2)]))
+}
+
+#[test]
+async fn querying_plugins_return_only_plugins_valid_in_scope(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
+    let user = deps.user().await;
+
+    let project_1 = user.create_project().await;
+    let project_2 = user.create_project().await;
+
+    let plugin_component_id = user.component("oplog-processor").unique().store().await;
+    let component_id = user
+        .component("shopping-cart")
+        .unique()
+        .with_project(project_1.clone())
+        .store()
+        .await;
+
+    user.create_plugin(PluginDefinitionCreation {
+        name: "oplog-processor-1".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
+            component_id: plugin_component_id.clone(),
+            component_version: 0,
+        }),
+        scope: PluginScope::Global(Empty {}),
+    })
+    .await;
+
+    user.create_plugin(PluginDefinitionCreation {
+        name: "oplog-processor-2".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
+            component_id: plugin_component_id.clone(),
+            component_version: 0,
+        }),
+        scope: PluginScope::project(project_1.clone()),
+    })
+    .await;
+
+    user.create_plugin(PluginDefinitionCreation {
+        name: "oplog-processor-3".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
+            component_id: plugin_component_id.clone(),
+            component_version: 0,
+        }),
+        scope: PluginScope::project(project_2.clone()),
+    })
+    .await;
+
+    user.create_plugin(PluginDefinitionCreation {
+        name: "oplog-processor-4".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
+            component_id: plugin_component_id.clone(),
+            component_version: 0,
+        }),
+        scope: PluginScope::component(component_id.clone()),
+    })
+    .await;
+
+    // querying for project should only return plugins in the project and global scope
+    {
+        let mut plugins = deps
+            .component_service()
+            .plugin_http_client(&user.token)
+            .await
+            .list_plugins(Some(&PluginScope::project(project_1)))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|p| p.name)
+            .collect::<Vec<_>>();
+        plugins.sort();
+
+        assert_eq!(
+            plugins,
+            vec![
+                "oplog-processor-1".to_string(),
+                "oplog-processor-2".to_string()
+            ]
+        );
+    }
+
+    // querying for component should only return plugins in the component, the owning project and global scope
+    {
+        let mut plugins = deps
+            .component_service()
+            .plugin_http_client(&user.token)
+            .await
+            .list_plugins(Some(&PluginScope::component(component_id)))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|p| p.name)
+            .collect::<Vec<_>>();
+        plugins.sort();
+
+        assert_eq!(
+            plugins,
+            vec![
+                "oplog-processor-1".to_string(),
+                "oplog-processor-2".to_string(),
+                "oplog-processor-4".to_string()
+            ]
+        );
+    }
 }
