@@ -935,7 +935,7 @@ async fn querying_plugins_return_only_plugins_valid_in_scope(
             .component_service()
             .plugin_http_client(&user.token)
             .await
-            .list_plugins(Some(&PluginScope::project(project_1.clone())))
+            .list_plugins(&PluginScope::project(project_1.clone()))
             .await
             .unwrap()
             .into_iter()
@@ -958,7 +958,7 @@ async fn querying_plugins_return_only_plugins_valid_in_scope(
             .component_service()
             .plugin_http_client(&user.token)
             .await
-            .list_plugins(Some(&PluginScope::component(component_id.clone())))
+            .list_plugins(&PluginScope::component(component_id.clone()))
             .await
             .unwrap()
             .into_iter()
@@ -988,7 +988,7 @@ async fn querying_plugins_return_only_plugins_valid_in_scope(
                 .component_service()
                 .plugin_http_client(&user_2.token)
                 .await
-                .list_plugins(Some(&PluginScope::project(project_1)))
+                .list_plugins(&PluginScope::project(project_1))
                 .await
                 .unwrap()
                 .into_iter()
@@ -1011,7 +1011,7 @@ async fn querying_plugins_return_only_plugins_valid_in_scope(
                 .component_service()
                 .plugin_http_client(&user_2.token)
                 .await
-                .list_plugins(Some(&PluginScope::component(component_id)))
+                .list_plugins(&PluginScope::component(component_id))
                 .await
                 .unwrap()
                 .into_iter()
